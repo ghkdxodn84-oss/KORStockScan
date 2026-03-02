@@ -13,6 +13,7 @@ import FinanceDataReader as fdr
 import kiwoom_utils
 
 from constants import TRADING_RULES
+from src.feature_engineer import calculate_all_features
 
 # ==========================================
 # 1. 경로 설정 (상대 참조)
@@ -261,16 +262,22 @@ def run_integrated_scanner():
             if sum([stock_5d_return > kospi_5d_return, (current_price > ma5 > ma20),
                     current_price >= (high_20d * 0.90)]) < 2:
                 continue
-
+            # ----------------------------------------------------
+            # [기존 로직: 삭제]
             # 지표 계산 및 AI 예측
-            df['Vol_Change'] = df['Volume'].pct_change()
-            df['MA_Ratio'] = df['Close'] / (df['MA20'] + 1e-9)
-            df['BB_Pos'] = (df['Close'] - df['BBL']) / (df['BBU'] - df['BBL'] + 1e-9)
-            df['RSI_Slope'] = df['RSI'].diff()
-            df['Range_Ratio'] = (df['High'] - df['Low']) / (df['Close'] + 1e-9)
-            df['Vol_Momentum'] = df['Volume'] / (df['Volume'].rolling(5).mean() + 1e-9)
-            df['Dist_MA5'] = df['Close'] / (df['MA5'] + 1e-9)
-            df['Up_Trend_2D'] = ((df['Close'].diff(1) > 0) & (df['Close'].shift(1).diff(1) > 0)).astype(int)
+            # df['Vol_Change'] = df['Volume'].pct_change()
+            # df['MA_Ratio'] = df['Close'] / (df['MA20'] + 1e-9)
+            # df['BB_Pos'] = (df['Close'] - df['BBL']) / (df['BBU'] - df['BBL'] + 1e-9)
+            # df['RSI_Slope'] = df['RSI'].diff()
+            # df['Range_Ratio'] = (df['High'] - df['Low']) / (df['Close'] + 1e-9)
+            # df['Vol_Momentum'] = df['Volume'] / (df['Volume'].rolling(5).mean() + 1e-9)
+            # df['Dist_MA5'] = df['Close'] / (df['MA5'] + 1e-9)
+            # df['Up_Trend_2D'] = ((df['Close'].diff(1) > 0) & (df['Close'].shift(1).diff(1) > 0)).astype(int)
+            # ----------------------------------------------------
+            # [새로운 로직: 추가]
+            # 이미 feature_engineer 모듈 안에 결측치 처리(bfill, fillna) 방어 로직과
+            # 모델용 파생 피처 계산이 모두 들어있으므로 함수 하나면 끝납니다.
+            df = calculate_all_features(df)
 
             h60, l60 = df['High'].tail(60).max(), df['Low'].tail(60).min()
             pos_tag = 'BREAKOUT' if (current_price - l60) / (h60 - l60 + 1e-9) >= 0.8 else (

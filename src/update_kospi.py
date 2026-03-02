@@ -2,12 +2,12 @@ import os
 import sqlite3
 import pandas as pd
 import FinanceDataReader as fdr
-import pandas_ta as ta  # pandas_ta를 ta로 임포트
 import json
 import time
 # 💡 핵심: datetime과 timedelta를 명확하게 임포트해야 합니다.
 from datetime import datetime, timedelta
 import kiwoom_utils
+from src.feature_engineer import calculate_all_features
 
 # ==========================================
 # 1. 경로 설정 (상대 참조)
@@ -211,24 +211,29 @@ def update_database():
 
             # --- [지표 연산 및 저장] ---
             if not df.empty:
+                # ----------------------------------------------------
+                # [기존 로직: 삭제]
                 # 보조지표 (pandas_ta 활용)
-                df['MA5'] = ta.sma(df['Close'], length=5)
-                df['MA20'] = ta.sma(df['Close'], length=20)
-                df['MA60'] = ta.sma(df['Close'], length=60)
-                df['MA120'] = ta.sma(df['Close'], length=120)
-                df['RSI'] = ta.rsi(df['Close'], length=14)
+                # df['MA5'] = ta.sma(df['Close'], length=5)
+                # df['MA20'] = ta.sma(df['Close'], length=20)
+                # df['MA60'] = ta.sma(df['Close'], length=60)
+                # df['MA120'] = ta.sma(df['Close'], length=120)
+                # df['RSI'] = ta.rsi(df['Close'], length=14)
 
-                macd = ta.macd(df['Close'])
-                if macd is not None:
-                    df['MACD'], df['MACD_Hist'], df['MACD_Sig'] = macd.iloc[:, 0], macd.iloc[:, 1], macd.iloc[:, 2]
+                # if macd is not None:
+                #     df['MACD'], df['MACD_Hist'], df['MACD_Sig'] = macd.iloc[:, 0], macd.iloc[:, 1], macd.iloc[:, 2]
+                #
+                # bb = ta.bbands(df['Close'], length=20)
+                # if bb is not None:
+                #     df['BBL'], df['BBM'], df['BBU'], df['BBB'], df['BBP'] = bb.iloc[:, 0], bb.iloc[:, 1], bb.iloc[:, 2], bb.iloc[:, 3], bb.iloc[:, 4]
+                #
+                # df['VWAP'] = ta.vwap(df['High'], df['Low'], df['Close'], df['Volume'])
+                # df['OBV'] = ta.obv(df['Close'], df['Volume'])
+                # df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
 
-                bb = ta.bbands(df['Close'], length=20)
-                if bb is not None:
-                    df['BBL'], df['BBM'], df['BBU'], df['BBB'], df['BBP'] = bb.iloc[:, 0], bb.iloc[:, 1], bb.iloc[:, 2], bb.iloc[:, 3], bb.iloc[:, 4]
-
-                df['VWAP'] = ta.vwap(df['High'], df['Low'], df['Close'], df['Volume'])
-                df['OBV'] = ta.obv(df['Close'], df['Volume'])
-                df['ATR'] = ta.atr(df['High'], df['Low'], df['Close'], length=14)
+                # [새로운 로직: 추가]
+                # feature_engineer 모듈을 통해 모든 지표와 파생 피처를 한 번에 계산
+                df = calculate_all_features(df)
                 df['Return'] = df['Close'].pct_change()
                 df['Code'], df['Name'], df['Marcap'] = code, name, int(marcap)
 
