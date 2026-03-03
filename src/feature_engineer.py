@@ -34,7 +34,7 @@ def calculate_all_features(df: pd.DataFrame) -> pd.DataFrame:
     else:
         df['MACD'] = df['MACD_Hist'] = df['MACD_Sig'] = 0
 
-    bb_df = ta.bbands(df['Close'], length=20, std=2)
+    bb_df = ta.bbands(df['Close'], length=20, std=2, ddof=1)
     if bb_df is not None and not bb_df.empty:
         df['BBL'] = bb_df.iloc[:, 0]
         df['BBM'] = bb_df.iloc[:, 1]

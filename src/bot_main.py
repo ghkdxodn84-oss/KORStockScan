@@ -440,4 +440,11 @@ if __name__ == '__main__':
     threading.Thread(target=monitor_exit_time, daemon=True).start()
 
     print("📱 텔레그램 봇 폴링 시작 (명령어 대기 중)...")
-    bot.infinity_polling()
+    # 🚀 [수정] 강력한 네트워크 끊김(10054) 발생 시 5초 후 무한 자동 재시작
+    while True:
+        try:
+            # timeout 설정을 주어 연결이 좀비 상태가 되는 것을 방지
+            bot.infinity_polling(timeout=10, long_polling_timeout=5)
+        except Exception as e:
+            print(f"⚠️ 텔레그램 서버 연결 순단 발생 ({e}). 5초 후 재접속을 시도합니다...")
+            time.sleep(5)

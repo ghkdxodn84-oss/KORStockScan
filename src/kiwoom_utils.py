@@ -7,8 +7,6 @@ import requests
 import sqlite3
 import pandas as pd
 import numpy as np
-
-import datetime
 import holidays
 
 # --- [신규] 경로 설정 (상대 참조) ---
@@ -392,7 +390,7 @@ def is_trading_day():
     """
     외부 API 통신 없이 오프라인 연산만으로 한국 주식시장 개장일인지 확인합니다.
     """
-    today_dt = datetime.date.today()
+    today_dt = datetime.now().date()
 
     # 1. 주말 필터링 (5: 토요일, 6: 일요일)
     if today_dt.weekday() >= 5:
@@ -445,3 +443,90 @@ def is_valid_stock(code, name):
             return False
 
     return True
+
+
+def get_investor_daily_ka10059_df(token, code, base_dt=None):
+    """[ka10059] 종목별투자자기관별요청 (수급 데이터)"""
+    if not base_dt:
+        base_dt = datetime.now().strftime("%Y%m%d")
+    else:
+        base_dt = base_dt.replace("-", "")
+
+    url = "https://api.kiwoom.com/api/dostk/stkinfo"
+    headers = {
+        'Content-Type': 'application/json;charset=UTF-8',
+        'authorization': f'Bearer {token}',
+        'cont-yn': 'N',
+        'api-id': 'ka10059'
+    }
+    payload = {"dt": base_dt, "stk_cd": str(code), "amt_qty_tp": "2", "trde_tp": "0", "unit_tp": "1"}
+
+    try:
+        res = requests.post(url, headers=headers, json=payload, timeout=10)
+        if res.status_code == 200:
+            res_json = res.json()
+            if str(res_json.get('return_code', '')) != '0':
+                print(f"🚨 [{code}] 수급 API 에러: {res_json.get('return_msg')}")
+
+            data = res_json.get('stk_invsr_orgn', [])
+            if data:
+                df = pd.DataFrame(data)
+                df.rename(columns={
+                    'dt': 'Date', 'ind_invsr': 'Retail_Net',
+                    'frgnr_invsr': 'Foreign_Net', 'orgn': 'Inst_Net'
+                }, inplace=True)
+
+                df = df[['Date', 'Retail_Net', 'Foreign_Net', 'Inst_Net']]
+
+                # 💡 [핵심] astype(str)을 추가하여 어떤 형태의 값이 오든 에러 없이 콤마 제거
+                for col in ['Retail_Net', 'Foreign_Net', 'Inst_Net']:
+                    df[col] = pd.to_numeric(
+                        df[col].astype(str).str.replace('+', '', regex=False).str.replace(',', '', regex=False),
+                        errors='coerce').fillna(0)
+
+                df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d')
+                df.set_index('Date', inplace=True)
+                return df
+    except Exception as e:
+        print(f"🚨 ka10059 수급 데이터 호출 실패 ({code}): {e}")
+    return pd.DataFrame()
+
+
+def get_margin_daily_ka10013_df(token, code, base_dt=None):
+    """[ka10013] 신용매매동향요청 (신용 잔고율 데이터)"""
+    if not base_dt:
+        base_dt = datetime.now().strftime("%Y%m%d")
+    else:
+        base_dt = base_dt.replace("-", "")
+
+    url = "https://api.kiwoom.com/api/dostk/stkinfo"
+    headers = {
+        'Content-Type': 'application/json;charset=UTF-8',
+        'authorization': f'Bearer {token}',
+        'cont-yn': 'N',
+        'api-id': 'ka10013'
+    }
+    payload = {"stk_cd": str(code), "dt": base_dt, "qry_tp": "1"}
+
+    try:
+        res = requests.post(url, headers=headers, json=payload, timeout=10)
+        if res.status_code == 200:
+            res_json = res.json()
+            if str(res_json.get('return_code', '')) != '0':
+                print(f"🚨 [{code}] 신용 API 에러: {res_json.get('return_msg')}")
+
+            data = res_json.get('crd_trde_trend', [])
+            if data:
+                df = pd.DataFrame(data)
+                df.rename(columns={'dt': 'Date', 'remn_rt': 'Margin_Rate'}, inplace=True)
+                df = df[['Date', 'Margin_Rate']]
+
+                # 💡 [핵심] astype(str) 방어 로직 추가
+                df['Margin_Rate'] = pd.to_numeric(df['Margin_Rate'].astype(str).replace('', '0'),
+                                                  errors='coerce').fillna(0)
+                df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d')
+                df.set_index('Date', inplace=True)
+                return df
+    except Exception as e:
+        print(f"🚨 ka10013 신용 데이터 호출 실패 ({code}): {e}")
+    return pd.DataFrame()
