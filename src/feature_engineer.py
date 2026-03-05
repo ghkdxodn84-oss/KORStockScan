@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 import pandas_ta as ta
+# 🚀 판다스 경고 숨김 및 미래 규칙 적용 선언 (import 바로 아래에 추가)
+pd.set_option('future.no_silent_downcasting', True)
 
 
 def calculate_all_features(df: pd.DataFrame) -> pd.DataFrame:

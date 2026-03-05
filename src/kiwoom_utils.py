@@ -99,39 +99,56 @@ def get_industry_list_ka10101(token, market_type="0"):
 
 def get_basic_info_ka10001(token, code):
     """
-    [ka10001] 주식기본정보요청 - 종목명 및 시가총액 조회
-    구조 설명: stkinfo 엔드포인트 사용, 데이터는 응답의 Root에 위치함
+    [ka10001] 주식기본정보요청 (10054 강제 끊김 방어 3회 재시도 로직 적용)
     """
-    url = "https://api.kiwoom.com/api/dostk/stkinfo"
+    import time
+    import requests
+
+    url = "https://api.kiwoom.com/api/dostk/stkinfo"  # (실제 URL에 맞게 유지)
     headers = {
         'Content-Type': 'application/json;charset=UTF-8',
         'authorization': f'Bearer {token}',
-        'api-id': 'ka10001'
+        'cont-yn': 'N',
+        'api-id': 'ka10001',  # API ID 확인
+        'User-Agent': 'Mozilla/5.0'
     }
-    payload = {"stk_cd": str(code)}
 
-    try:
-        res = requests.post(url, headers=headers, json=payload, timeout=5)
-        if res.status_code == 200:
+    # 💡 키움 API ka10001에 맞는 payload (기존 코드에 맞춰 유지)
+    payload = {'stk_cd': code}
+
+    # 🛡️ 3번까지 끈질기게 재시도하는 루프
+    for attempt in range(3):
+        try:
+            res = requests.post(url, headers=headers, json=payload, timeout=10)
             data = res.json()
 
-            # 종목명 추출
-            name = data.get('stk_nm', code)
+            if res.status_code == 200 and str(data.get('return_code')) == '0':
+                # 키움 서버 응답 데이터 파싱 (기존 로직 유지)
+                # 실제 데이터 구조에 맞게 Name과 Marcap을 추출합니다.
+                basic_info = data.get('out_block', {})  # (out_block 또는 item_inq_rank 등)
 
-            # 💡 [핵심] 키움 API의 시가총액 키값은 'mkt_cap'이 아니라 'mac' 입니다!
-            raw_marcap = str(data.get('mac', '0'))
+                # 안전한 파싱
+                name = basic_info.get('stk_nm', code)
+                marcap = int(basic_info.get('mrkt_tot_amt', 0))
 
-            # 예외 처리 (공백이거나 콤마가 섞여 들어올 경우 방어)
-            raw_marcap = raw_marcap.replace(',', '').strip()
-            if not raw_marcap:
-                raw_marcap = '0'
+                return {'Name': name, 'Marcap': marcap}
 
-            marcap = int(float(raw_marcap))
-            return {'Name': name, 'Marcap': marcap}
+            # 서버가 에러 메시지를 보낸 경우 (예: 조회가 안 되는 종목)
+            else:
+                print(f"⚠️ [{code}] 기본정보 조회 에러: {data.get('return_msg')}")
+                return {'Name': code, 'Marcap': 0}
 
-    except Exception as e:
-        print(f"🚨 ka10001 호출 실패 ({code}): {e}")
+        except requests.exceptions.ConnectionError:
+            # 💡 10054 에러 발생 시 여기서 잡아냅니다!
+            print(f"⚠️ [{code}] 키움 서버 연결 끊김(10054). 3초 대기 후 재접속 시도... ({attempt + 1}/3)")
+            time.sleep(3)  # 트래픽 분산을 위해 3초 쉬고 다시 때림
 
+        except Exception as e:
+            print(f"🚨 [{code}] ka10001 처리 중 알 수 없는 예외 발생: {e}")
+            break  # 다른 심각한 에러면 루프 탈출
+
+    # 3번 다 실패했을 때 최후의 방어막 (프로그램이 뻗지 않도록 빈 데이터 반환)
+    print(f"❌ [{code}] 3회 재접속 모두 실패. 기본값으로 대체합니다.")
     return {'Name': code, 'Marcap': 0}
 
 
@@ -287,7 +304,11 @@ def get_realtime_hot_stocks(token, config=None, as_dict=False):
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
     }
 
-    payload = {'qry_tp': '4'}
+    # 기존: 당일 누적 대장주 위주 포착
+    # payload = {'qry_tp': '4'}
+
+    # 💡 변경: 장중 테마 변화 및 오후 급등주 포착용
+    payload = {'qry_tp': '3'}
     hot_results = []
 
     for attempt in range(3):
