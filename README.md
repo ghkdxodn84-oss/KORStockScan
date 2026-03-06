@@ -1,96 +1,108 @@
-# 🚀 KORStockScan V3.1 - AI 기반 코스피 퀀트 스나이퍼
+# 🚀 KORStockScan V13.0 - 완전 자동화 멀티 엔진 퀀트 스나이퍼
 
-![Python](https://img.shields.io/badge/Python-3.8%2B-blue?style=flat-square&logo=python&logoColor=white)
-![Kiwoom API](https://img.shields.io/badge/API-Kiwoom_Open%2B-green?style=flat-square)
+![Python](https://img.shields.io/badge/Python-3.13%2B-blue?style=flat-square&logo=python&logoColor=white)
+![Kiwoom API](https://img.shields.io/badge/API-Kiwoom_REST-green?style=flat-square)
 ![Machine Learning](https://img.shields.io/badge/ML-XGBoost_%7C_LightGBM-orange?style=flat-square)
 ![Telegram](https://img.shields.io/badge/Bot-Telegram-blueviolet?style=flat-square&logo=telegram)
+![Security](https://img.shields.io/badge/Security-Fernet_Encrypted-red?style=flat-square)
 
-**KORStockScan**은 키움증권 REST API와 머신러닝(Stacking Ensemble)을 활용하여 코스피(KOSPI) 우량주를 스캐닝하고, 실시간 웹소켓을 통해 최적의 타점을 잡아내어 완전 자동매매를 수행하는 퀀트 트레이딩 봇입니다. 
+**KORStockScan**은 키움증권 REST API와 머신러닝(Stacking Ensemble)을 활용하여 주식 시장을 스캐닝하고, 실시간 웹소켓을 통해 최적의 타점을 잡아내어 완전 자동매매를 수행하는 퀀트 트레이딩 봇입니다. 
 
-단순한 기술적 지표를 넘어 **'스마트 머니 가속도(외인/기관 매집 속도)'**와 **'시장 상태(Regime) 판독'**을 통해 블랙스완(폭락장)에서도 살아남는 강력한 생존력을 목표로 설계되었습니다.
+V13.0 업데이트를 통해 기존 코스피 우량주 스윙 매매를 넘어, **코스닥 주도주(하이브리드 온디맨드 방식)**와 **초단타 스캘핑**까지 동시에 감시하고 매매하는 **'3-Way 멀티 스레드 아키텍처'**로 진화했습니다. 철저하게 분리된 정찰병(Scanner)과 격수(Sniper) 시스템을 통해 무호흡 무인 매매를 집행합니다.
 
 ---
 
 ## ✨ 핵심 기능 (Key Features)
 
 * 🧠 **콰트로 앙상블 AI (Stacking Meta Model)**
-  * XGBoost와 LightGBM을 기반으로 상승장(Bull) 전용 모델과 범용 하이브리드 모델을 혼합하여 단기 상승 확률(Prob)을 0~100%로 수치화합니다.
-* 📊 **스마트 머니 가속도 필터 (Smart Money Accel)**
-  * 외국인과 기관의 단순 순매수를 넘어, MACD 원리를 응용한 '단기/장기 매집 가속도'를 계산하여 폭락장 속 세력의 은밀한 매집을 포착합니다.
-* 🔫 **0.1초 반응 실시간 스나이퍼 (WebSocket)**
-  * `WATCHING` -> `PENDING` -> `HOLDING` -> `COMPLETED` 4단계 상태 머신을 통해 미체결 주문 취소, 최유리지정가 매수 등을 안정적으로 처리합니다.
-  * 단순히 AI 점수만 높다고 매수하지 않으며, **실시간 체결강도 100(매수 우위) 이상**일 때만 방아쇠를 당기는 2중 안전장치가 탑재되어 있습니다.
-* 🛡️ **동적 트레일링 스탑 & 가변 손절선 (Drawdown Defense)**
-  * 시장이 '상승장(BULL)'인지 '조정장(BEAR)'인지 봇이 스스로 판독하여 손절선을 타이트하게 조절합니다.
-  * 고점 도달 후 꺾일 때 슬리피지(Slippage)를 최소화하여 이익을 보존하는 강력한 가변 익절(Trailing Stop) 로직이 실전 검증되었습니다.
-* 📱 **텔레그램 관제 센터 (Admin & VIP Auth)**
-  * 장중 스캐너 결과 및 실시간 매수/매도 체결 알림을 마크다운 리포트로 전송합니다.
-  * SQLite(`users.db`)를 통한 권한 제어(A: 어드민, V: VIP)를 지원하며, 수동 종목 추가 시 즉각적으로 **차트 기반 저항대(20일 전고점 & 볼린저밴드 상단) 목표가**를 브리핑합니다.
-
-* 🌍 **글로벌 매크로 위기 감지 시스템 (Circuit Breaker)**
-  * 전쟁, 테러, 팬데믹 등 거시 경제(Macro)를 뒤흔드는 글로벌 위기가 발생했을 때, 이를 가장 먼저 감지하여 신규 매수를 차단하고 보유 자산을 현금화하는 조기 경보 방어막을 가동합니다.
-  * **최상위 포식자 소스 크롤링:** Al Jazeera(중동 분쟁 1타), UN ReliefWeb(공식 재난 보고서), WHO DONs(팬데믹 조짐) 등 퀀트 기관들이 1순위로 모니터링하는 원천(Raw) 피드를 수집합니다.
-  * **교차 검증 및 장중 대응:** NYT, BBC 등 메이저 언론사의 속보와 교차 검증하여 누적 리스크가 임계치를 넘는 순간 텔레그램으로 즉각적인 장중 대응(오버나잇 회피 등)을 권고합니다.
+  * XGBoost와 LightGBM을 기반으로 상승장(Bull) 전용 모델과 범용 하이브리드 모델을 혼합하여 단기 상승 확률(Prob)을 0.1초 만에 판독합니다.
+* ⚡ **3-Way 정찰 시스템 (멀티 스캐너)**
+  * **KOSPI 우량주 스윙 (`final_ensemble_scanner.py`):** 외인/기관의 매집 가속도를 분석해 안정적인 우량주를 타겟팅합니다.
+  * **KOSDAQ 하이브리드 (`kosdaq_scanner.py`):** 당일 수급이 터진 코스닥 종목만 1차 선별(ka10027)한 뒤, 실시간 일봉 데이터를 수집(ka10081)해 AI로 분석하는 효율적인 온디맨드 방식을 채택했습니다.
+  * **초단타 스캘핑 (`scalping_scanner.py`):** 실시간 등락률, 체결강도, 거래대금을 분석하여 1초 단위로 시장가 급등주를 낚아챕니다.
+* 🔫 **통합 스나이퍼 매매 엔진 (`kiwoom_sniper_v2.py`)**
+  * 스캐너가 물어온 타겟의 전략 태그(`KOSPI_ML`, `KOSDAQ_ML`, `SCALPING`)를 인식하여, 각기 다른 손절선과 트레일링 스탑, 타임아웃 룰(Time-Stop)을 다르게 적용해 스마트하게 청산합니다.
+* 🛡️ **철통 보안 시스템 (Fernet 대칭키 암호화)**
+  * API Key와 텔레그램 토큰이 담긴 설정 파일을 `config_prod.enc`로 암호화하여, 소스코드가 유출되어도 시스템 환경변수 마스터 키(`KORSTOCK_KEY`) 없이는 절대 접근할 수 없습니다.
 
 ---
 
 ## 🏗️ 시스템 아키텍처 (Architecture)
 
-시스템은 철저하게 단일 진실 공급원(`constants.py`)의 룰을 따르며, 3개의 핵심 스크립트가 스케줄에 맞춰 유기적으로 동작합니다.
+시스템은 `bot_main.py`의 지휘 아래 3개의 독립적인 모듈이 유기적으로 동작합니다.
 
-1. **`update_kospi.py` (데이터 파이프라인)**
-   * 매일 정규장 마감 후, 네이버 모바일 API와 키움 API를 혼합하여 KOSPI 전 종목의 일봉, 거래량, 수급 데이터를 수집 및 정제하여 SQLite에 적재합니다.
-2. **`final_ensemble_scanner.py` (전략 스캐너)**
-   * 적재된 DB를 바탕으로 AI 모델이 분석을 수행합니다. 장전(정규) 스캔과 장중(Intraday) 실시간 급등주 스캔을 병행하며, 생존 종목의 정확한 'AI 확신지수'를 DB에 장전합니다.
-3. **`kiwoom_sniper_v2.py` (실시간 트레이딩 봇)**
-   * 스캐너가 장전해 둔 타겟을 웹소켓에 등록하여 실시간 호가창을 감시하며, 조건 도달 시 즉시 무인 매매를 집행합니다.
+1.  **관제탑 (`bot_main.py`):** 텔레그램 봇 폴링 및 멀티 스레드(매매 엔진, 스캐너 1/2)를 백그라운드 데몬으로 동시 가동하고 야간 자동 셧다운을 관리합니다.
+2.  **정찰병 (Scanners):** 각자의 영역(코스피, 코스닥, 스캘핑)에서 타겟을 찾아 DB(`recommendation_history`)에 전략 태그와 함께 기록합니다.
+3.  **격수 (Sniper):** DB를 15초 단위로 감시하다가 타겟이 들어오면 즉시 웹소켓 호가창에 연결, 체결강도(VPW) 폭발 시 **시장가 매수**를 집행하고 독립적인 룰에 따라 청산합니다.
+4.  **중앙 통제소 (`constants.py`):** 모든 매매 기준(타겟 수익률, 손절선, 쿨타임 등)을 단일 진실 공급원에서 통제합니다.
+
+---
+
+## 📂 주요 디렉토리 구조 (Directory Structure)
+
+```text
+KORStockScan/
+│
+├── data/
+│   ├── config_prod.enc           # 암호화된 API 설정 파일
+│   ├── kospi_stock_data.db       # 종목 발굴 이력 및 상태 관리 DB
+│   └── *.pkl                     # AI 앙상블 학습 모델 파일들
+│
+├── src/
+│   ├── bot_main.py               # 🚀 메인 관제탑 (실행 파일)
+│   ├── constants.py              # ⚙️ 중앙 통제소 (매매 룰, 변수 설정)
+│   ├── encrypt_config.py         # 🛡️ 보안 키 암호화 스크립트
+│   │
+│   ├── final_ensemble_scanner.py # 🔍 KOSPI 스윙 스캐너 & AI 판독 모듈
+│   ├── kosdaq_scanner.py         # 🔍 KOSDAQ 하이브리드 스캐너
+│   ├── scalping_scanner.py       # 🔍 SCALPING 급등주 스캐너
+│   │
+│   ├── kiwoom_sniper_v2.py       # 🔫 실시간 매매 집행 엔진 (웹소켓 연동)
+│   ├── kiwoom_orders.py          # 🛒 키움증권 매수/매도 API 통신
+│   └── kiwoom_utils.py           # 🛠️ 각종 공통 유틸리티 (API 호출 등)
+```
 
 ---
 
 ## ⚙️ 설치 및 설정 (Installation & Setup)
 
 ### 1. 환경 준비
-* **Windows/LINUX OS** (키움증권 REST API 구동 필수 환경)
+* **Windows / Linux OS** (키움증권 REST API는 OS 제약이 비교적 적습니다.)
 * **Python 3.13+**
 
 ### 2. 패키지 설치
 ```bash
-git clone [https://github.com/your-username/KORStockScan.git](https://github.com/your-username/KORStockScan.git)
+git clone https://github.com/your-username/KORStockScan.git
 cd KORStockScan
 pip install -r requirements.txt
 ```
 
-### 3. 설정파일 셋업
-```json
-{
-  "TELEGRAM_TOKEN": "your_bot_token_here",
-  "ADMIN_ID": "your_telegram_chat_id",
-  "KIWOOM_ACCOUNT": "your_8_digit_account_number"
-}
+### 3. 보안 파일 암호화 셋업
+보안을 위해 `config_prod.json` 원본 파일을 만들고 암호화 스크립트를 실행해야 합니다.
+
+```bash
+# 1. 암호화 스크립트 실행하여 config_prod.enc 생성 및 마스터 키 발급
+python src/encrypt_config.py 
+
+# 2. 발급받은 마스터 키를 환경변수에 등록 (Windows CMD 예시)
+set KORSTOCK_KEY=발급받은_마스터_키_문자열
+```
+*(주의: 원본 json 파일은 암호화 완료 후 반드시 삭제하거나 안전한 오프라인 저장소에 백업하세요.)*
+
+### 4. 전략 튜닝 (`constants.py`)
+시장 상황에 맞게 `constants.py`의 수치들을 자유롭게 튜닝하세요.
+* `SCALP_TARGET` / `SCALP_STOP`: 초단타 익절/손절선 (예: +2.0% / -2.5%)
+* `SCALP_TIME_LIMIT_MIN`: 초단타 타임아웃 청산 시간 (예: 30분)
+* `KOSDAQ_TARGET` / `KOSDAQ_STOP`: 코스닥 전용 타이트 룰 (예: 트레일링 +4.0% / 손절 -2.0%)
+* `TRAILING_START_PCT`: 코스피 스윙 가변 익절 방어선 가동 시작점 (예: +3.5%)
+
+### 5. 통합 시스템 기동
+환경변수가 세팅된 터미널에서 아래 명령어 한 줄로 모든 시스템(텔레그램, 매매 엔진, 3대 스캐너)을 기동합니다.
+```bash
+python src/bot_main.py
 ```
 
-### 4. 전략 튜닝 (constants.py)
-
-모든 매매 기준은 단일 진실 공급원(`constants.py`)에서 중앙 통제됩니다. 시장 상황에 맞게 수치를 조절하세요.
-
-1. **`TRAILING_START_PCT` (가변 익절 방어선 가동 시작점 (예: 3.5%))**  
-2. **`TRAILING_DRAWDOWN_PCT` (고점 대비 하락 허용폭 (예: 1.5%))**
-3. **`STOP_LOSS_BULL / STOP_LOSS_BEAR` (시장 상태에 따른 탄력적 손절선)**
-4. **`PROB_RUNNER_PICK` (AI 최소 매수 확신도 임계값)**
-
-
-## ⏰ 실행 가이드 (Daily Schedule)
-
-성공적인 무인 자동화를 위해 Windows 작업 스케줄러(Task Scheduler)를 활용한 아래의 구동 스케줄을 권장합니다.
-| 모듈명 (스크립트) | 권장 실행 시간 | 핵심 역할 |
-| :--- | :---: | :--- |
-| `update_kospi.py` | **16:00 ~ 17:00** | 정규장 마감 후 당일 데이터 DB 적재 |
-| `final_ensemble_scanner.py` | **08:00 ~ 08:30** | 장 시작 전 전종목 AI 스캐닝 및 타겟 DB 장전 |
-| `kiwoom_sniper_v2.py` | **08:50 ~ 15:30** | 텔레그램 관제소 기동 및 실시간 매매 체결 |
-
+---
 
 ## ⚠️ 면책 조항 (Disclaimer)
-
-본 레포지토리의 코드는 알고리즘 트레이딩 연구 및 학습 목적으로 작성되었습니다.
-제공되는 AI 모델과 매매 로직은 수익을 보장하지 않으며, 실제 투자에 적용하여 발생하는 모든 금전적 손실에 대한 책임은 전적으로 사용자(투자자) 본인에게 있습니다.
-반드시 모의투자를 통해 충분한 검증을 거친 후 소액으로 실전에 적용하시기 바랍니다.
+본 프로젝트는 알고리즘 트레이딩 및 AI 모델링 학습 목적으로 개발되었습니다. 본 시스템을 사용하여 발생하는 모든 금전적 손실과 법적 책임은 전적으로 사용자 본인에게 있습니다. 실전 투자 전 반드시 모의투자를 통해 충분히 검증하시기 바랍니다.
