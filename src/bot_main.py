@@ -29,7 +29,6 @@ os.makedirs(DATA_DIR, exist_ok=True)
 CONFIG_PATH = os.path.join(DATA_DIR, 'config_prod.json')
 USERS_DB_PATH = os.path.join(DATA_DIR, 'users.db')
 STOCK_DB_PATH = os.path.join(DATA_DIR, 'kospi_stock_data.db')
-
 # 전역 DB 매니저 인스턴스 생성
 db_manager = DBManager()
 
@@ -314,11 +313,14 @@ def start_engine():
 
 def monitor_exit_time():
     while True:
-        if datetime.now().time() >= datetime.strptime("23:50:00", "%H:%M:%S").time():
-            print("🌙 시스템 안전 종료")
+        now_t = datetime.now()
+        # 💡 [핵심 교정] 23:50분이 되면 딱 1번만 재시작되도록 수정
+        if now_t.hour == 23 and now_t.minute == 50:
+            print("🌙 시스템 일일 초기화를 위해 봇을 재가동합니다.")
+            # 죽기 전에 65초를 대기하여, 배치파일이 다시 살려냈을 때 23:51분이 되게 만듦 (무한루프 원천 차단)
+            time.sleep(65)
             os.kill(os.getpid(), signal.SIGTERM)
-        time.sleep(60)
-
+        time.sleep(30)
 # ==========================================
 # 🎯 5. 메인 키보드 버튼 전용 핸들러들 (우선순위 높음)
 # ==========================================
@@ -598,36 +600,13 @@ def handle_reload(message):
     except Exception as e:
         bot.send_message(chat_id, f"❌ 새로고침 오류: {e}")
 
-
-@bot.message_handler(commands=['긴급종료', 'kill'])
-def handle_emergency_kill(message):
-    """🚨 관리자 전용 패닉 버튼: 봇 프로세스를 즉시 강제 종료합니다."""
-
-    # 1. 철저한 신원 확인 (관리자 ID가 아니면 무시)
-    if str(message.chat.id) != str(CONF.get('ADMIN_ID')):  # (config나 constants에서 가져오는 변수명에 맞게 수정하세요)
-        bot.reply_to(message, "⛔ [경고] 허가되지 않은 사용자의 시스템 종료 시도가 감지되었습니다.")
-        return
-
-    # 2. 사망(?) 전 마지막 유언(메시지) 발송
-    warning_msg = (
-        "🚨 **[긴급명령 수신] KORStockScan 킬 스위치 가동!**\n\n"
-        "즉시 모든 매매 엔진과 스캐너의 작동을 강제 차단하고 프로세스를 소멸시킵니다. "
-        "서버에 접속하여 수동으로 재가동하기 전까지 봇은 응답하지 않습니다."
-    )
-    bot.send_message(message.chat.id, warning_msg, parse_mode="Markdown")
-    print(f"🚨 [{message.chat.id}] 관리자에 의한 긴급 종료(Kill Signal) 발동!")
-
-    # 3. 자비 없는 즉시 종료 (모든 스레드와 메모리 강제 반환)
-    os._exit(0)
-
 @bot.message_handler(commands=['restart'])
 def cmd_restart(message):
     admin_id = str(CONF.get('ADMIN_ID'))
     if str(message.chat.id) == admin_id:
-        bot.reply_to(message, "🔄 스나이퍼 엔진에 우아한 종료 신호를 보냈습니다. 진행 중인 턴이 끝나면 재시작됩니다.")
-        # 재시작 깃발 파일 생성
-        with open("restart.flag", "w") as f:
-            f.write("restart_requested")
+        bot.reply_to(message, "🔄 텔레그램 명령 수신: 시스템을 재시작합니다. 잠시 후 봇이 다시 켜집니다.")
+        # 💡 [핵심 교정] 복잡한 깃발 대신 그냥 파이썬을 종료시킴. (어차피 배치파일이 5초 뒤에 완벽하게 살려줌)
+        os._exit(0)
     else:
         bot.reply_to(message, "⛔ 권한이 없습니다.")
 
