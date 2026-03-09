@@ -140,6 +140,12 @@ def run_scalper():
         # 🚀 5. DB 저장 및 스나이퍼 대기열 전송 로직
         for code, t in all_targets.items():
             if code not in already_picked:
+                
+                # 💡 [핵심 방어막 추가] ETF, 스팩, 우선주 등 위험 종목 걸러내기
+                if not kiwoom_utils.is_valid_stock(code, t['Name']):
+                    already_picked.add(code)  # 다음 1분 루프에서도 잡히지 않도록 블랙리스트에 넣어버림
+                    continue                  # 이번 타겟에서는 깔끔하게 무시!
+
                 print(f"🎯 [타겟 포착] {t['Name']} (등락/급증률: +{t['ChangeRate']}%, 체결강도: {t['CntrStr']})")
                 already_picked.add(code)
 

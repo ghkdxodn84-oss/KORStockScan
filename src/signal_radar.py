@@ -1,6 +1,7 @@
 import time
 import requests
 import pandas as pd
+import FinanceDataReader as fdr
 from datetime import datetime
 
 # 기존 유틸리티에서 로깅 등 순수 도구만 빌려옵니다.
@@ -400,7 +401,7 @@ class SniperRadar:
                         name = stock.get('stockName')
 
                         # 스팩, 우선주, ETF 등 불순물 제거 로직 통과 후 적재
-                        if is_valid_stock(code, name):
+                        if kiwoom_utils.is_valid_stock(code, name):
                             target_codes.append(code)
 
                             # 목표 개수(300개)를 채우면 즉시 반환
