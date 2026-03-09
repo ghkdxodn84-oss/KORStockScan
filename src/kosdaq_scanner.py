@@ -1,5 +1,5 @@
 # ==========================================
-# # 🚀 코스닥 하이브리드 AI 스캐너
+# 🚀 코스닥 하이브리드 AI 스캐너 (v12.2 정비 버전)
 # ==========================================
 
 import os
@@ -13,42 +13,21 @@ import numpy as np
 import requests
 
 import kiwoom_utils
+from signal_radar import SniperRadar  # 📡 레이더 모듈 추가
 from db_manager import DBManager
-import final_ensemble_scanner  # 💡 기존 KOSPI의 AI 예측 로직과 모델을 재활용하기 위해 임포트
+import final_ensemble_scanner 
 
-# ==========================================
-# 1. 경로 및 환경 설정
-# ==========================================
+# 1. 경로 및 설정 로드 (기존 동일)
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR = os.path.abspath(os.path.join(CURRENT_DIR, '..', 'data'))
 CONFIG_PATH = os.path.join(DATA_DIR, 'config_prod.json')
 
-
 def load_config():
-    # 암호화된 설정 파일(config_prod.enc)을 사용하는 로직이 있다면 그에 맞게 수정해주세요.
-    # 여기서는 범용적인 JSON 로드 방식을 사용합니다.
-    try:
-        from cryptography.fernet import Fernet
-        enc_path = os.path.join(DATA_DIR, 'config_prod.enc')
-        master_key = os.environ.get('KORSTOCK_KEY')
-        if master_key and os.path.exists(enc_path):
-            cipher_suite = Fernet(master_key.encode('utf-8'))
-            with open(enc_path, 'rb') as f:
-                decrypted_data = cipher_suite.decrypt(f.read())
-            return json.loads(decrypted_data.decode('utf-8'))
-    except:
-        pass
-
     with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
         return json.load(f)
 
-
-# ==========================================
-# 2. 텔레그램 브로드캐스트 (코스닥 전용)
-# ==========================================
 def broadcast_kosdaq_picks(conf, picks):
     if not picks: return
-
     token = conf.get('TELEGRAM_TOKEN')
     db = DBManager()
     chat_ids = db.get_telegram_chat_ids()
@@ -59,21 +38,15 @@ def broadcast_kosdaq_picks(conf, picks):
 
     for r in picks:
         msg += f"🥇 <b>{r['Name']}</b> ({r['Code']})\n"
-        msg += f"   • 현재가: {r['Price']:,}원\n"
-        msg += f"   • AI 확신지수: <b>{r['Prob']:.1%}</b>\n"
-        msg += f"   • 체결강도: {r['CntrStr']}%\n"
+        msg += f"   • 현재가: {r['Price']:,}원 (AI 확신: <b>{r['Prob']:.1%}</b>)\n"
+        msg += f"   • 프로그램: {r['ProgramStatus']} | 체결강도: {r['CntrStr']}%\n"
         msg += f"   • 전략 태그: <code>KOSDAQ_ML</code>\n\n"
 
     for cid in chat_ids:
         try:
-            requests.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                data={"chat_id": cid, "text": msg, "parse_mode": "HTML"},
-                timeout=5
-            )
-        except Exception as e:
-            print(f"텔레그램 전송 에러: {e}")
-
+            requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+                          data={"chat_id": cid, "text": msg, "parse_mode": "HTML"}, timeout=5)
+        except Exception as e: print(f"텔레그램 전송 에러: {e}")
 
 # ==========================================
 # 3. 메인 스캐너 엔진 (하이브리드 온디맨드 방식)
@@ -82,22 +55,15 @@ def run_kosdaq_scanner():
     print("🚀 [KOSDAQ 스캐너] 코스닥 하이브리드 AI 감시 가동...")
     conf = load_config()
     db = DBManager()
-    today = datetime.now().strftime('%Y-%m-%d')
-
-    # AI 모델 로드 (기존 final_ensemble_scanner 의 모델 재활용)
+    
     models = final_ensemble_scanner.load_models()
-    if not models:
-        print("❌ AI 모델을 불러오지 못했습니다. 스캐너를 종료합니다.")
-        return
+    if not models: return
 
     while True:
         now = datetime.now()
-        now_time = now.time()
-
-        # 장중(09:05 ~ 15:20)에만 동작 (장 초반 5분은 데이터 안정화를 위해 대기)
-        if not (datetime.strptime("09:05:00", "%H:%M:%S").time() <= now_time <= datetime.strptime("15:20:00",
-                                                                                                  "%H:%M:%S").time()):
-            print("🌙 [KOSDAQ] 장 마감 혹은 개장 전입니다. 대기 중...")
+        # 장중(09:05 ~ 15:20) 동작 체크
+        if not (datetime.strptime("09:05:00", "%H:%M:%S").time() <= now.time() <= datetime.strptime("15:20:00", "%H:%M:%S").time()):
+            print("🌙 [KOSDAQ] 대기 중...")
             time.sleep(60)
             continue
 
@@ -106,108 +72,91 @@ def run_kosdaq_scanner():
             time.sleep(10)
             continue
 
-        print(f"\n🔍 [{now.strftime('%H:%M:%S')}] KOSDAQ 수급 주도주 1차 필터링 중...")
+        # 🚀 1. 레이더 가동 및 1차 필터링
+        radar = SniperRadar(token)
+        print(f"\n🔍 [{now.strftime('%H:%M:%S')}] KOSDAQ 수급 주도주 정밀 스캔 중...")
 
-        # 🚀 1단계: 코스닥(101) 거래대금/상승률 상위 종목 추출 (기존 유틸리티 활용)
-        raw_targets = kiwoom_utils.get_top_fluctuation_ka10027(token, mrkt_tp="101", trde_qty_cnd="0100", limit=50)
+        # 트랙 A: 코스닥(101) 등락률 상위
+        raw_targets = radar.get_top_fluctuation_ka10027(mrkt_tp="101", limit=40)
+        
+        # 트랙 B: 코스닥(101) 초신성 수급 폭발 종목만 추출
+        supernova = radar.find_supernova_targets(mrkt_tp="101")
+        
+        # 두 리스트 합치기
+        all_candidate_codes = {t['Code']: t for t in raw_targets}
+        for s in supernova:
+            if s['code'] not in all_candidate_codes:
+                all_candidate_codes[s['code']] = {'Code': s['code'], 'Name': s['name'], 'Price': 0} # Price는 나중에 업데이트
 
         kosdaq_picks = []
 
-        # 🚀 2단계: 하드 필터링 및 실시간 일봉 차트(ka10081) 수집
-        for item in raw_targets:
-            code = item['Code']
-            name = item['Name']
-            price = item['Price']
-            volume = item['Volume']
-            cntr_str = item['CntrStr']
-
-            transaction_amount = (price * volume) / 100_000_000
-
-            # [안전장치] 동전주(1500원 미만), 거래대금 30억 미만, 체결강도 100 미만 컷트
-            if price < 1500 or transaction_amount < 30.0 or cntr_str < 100.0:
+        # 🚀 2. 개별 종목 정밀 분석 루프
+        for code, item in all_candidate_codes.items():
+            name = item.get('Name', 'Unknown')
+            
+            # 💡 [방어막 1] 불량 종목(ETF, 스팩, 우선주) 필터링
+            if not kiwoom_utils.is_valid_stock(code, name):
                 continue
 
-            print(f"   📥 [{name}] 실시간 일봉 및 수급 데이터 수집 및 AI 분석 중...")
+            # 💡 [방어막 2] 프로그램 매수세 확인 (ka90008 활용)
+            # 코스닥 상위주는 외국인 프로그램이 사줘야 진짜입니다.
+            is_program_buying = radar.check_program_buying_ka90008(code)
+            p_status = "🔥 매수중" if is_program_buying else "⚪ 관망"
 
-            # 🚀 3단계: 차트(OHLCV), 수급, 신용 3대 데이터 수집 및 병합 (근본적 해결책)
-            # 1. 차트 데이터 수집
+            # 💡 [데이터 수집] 차트, 수급, 신용
             df_ohlcv = kiwoom_utils.get_daily_ohlcv_ka10081_df(token, code)
-            time.sleep(0.5)  # 💡 키움 API 차단 방지를 위해 0.3 -> 0.5초로 연장!
-
-            if df_ohlcv is None or len(df_ohlcv) < 60:
-                continue  # 상장한지 얼마 안 된 신규 상장주 등은 AI 분석 불가로 패스
-
-            # 2. 외국인/기관 수급 데이터 수집
+            if df_ohlcv is None or len(df_ohlcv) < 60: continue
+            
+            curr_price = int(df_ohlcv['Close'].iloc[-1])
+            
             df_investor = kiwoom_utils.get_investor_daily_ka10059_df(token, code)
-            time.sleep(0.5)  # 💡 트래픽 차단 방지 여유 시간 확보
-
-            # 3. 신용 잔고 데이터 수집
             df_margin = kiwoom_utils.get_margin_daily_ka10013_df(token, code)
-            time.sleep(0.5)  # 💡 트래픽 차단 방지 여유 시간 확보
-
-            # 4. 💡 [대표님 DB 스크립트 로직 완벽 이식] 빈 데이터 Join 시 컬럼 증발 버그 원천 차단
+            
+            # 데이터 병합 및 NaN 처리 (이사 완료)
             df = df_ohlcv
-            if not df_investor.empty:
-                df = df.join(df_investor, how='left')
-            else:
-                print(f"      ⚠️ [{name}] 수급 데이터 수신 불가 (키움 API 트래픽 초과 또는 장중 미제공)")
-                df['Retail_Net'] = 0.0
-                df['Foreign_Net'] = 0.0
-                df['Inst_Net'] = 0.0
+            if not df_investor.empty: df = df.join(df_investor, how='left')
+            else: df[['Retail_Net', 'Foreign_Net', 'Inst_Net']] = 0.0
+            
+            if not df_margin.empty: df = df.join(df_margin, how='left')
+            else: df['Margin_Rate'] = 0.0
+            
+            df.fillna(0.0, inplace=True)
 
-            if not df_margin.empty:
-                df = df.join(df_margin, how='left')
-            else:
-                df['Margin_Rate'] = 0.0
-
-            # 5. 수급/신용 데이터가 없는 과거 날짜의 빈칸(NaN)을 0으로 채워서 에러 원천 차단
-            df.fillna({'Retail_Net': 0.0, 'Foreign_Net': 0.0, 'Inst_Net': 0.0, 'Margin_Rate': 0.0}, inplace=True)
-
-            # 🚀 4단계: 완벽하게 조립된 실시간 DF를 AI 앙상블 로직에 통과시켜 확신지수(Prob) 추출
+            # 🚀 3. AI 앙상블 분석
             try:
-                # final_ensemble_scanner 내부의 피처 엔지니어링 및 예측 함수 재활용
                 prob = final_ensemble_scanner.predict_prob_for_df(df, models)
 
-                # 코스닥은 리스크가 크므로 확신도 80% 이상일 때만 타겟팅
+                # 코스닥 스윙은 '확신도 80% 이상' + '프로그램 매수'일 때 최적의 승률을 보입니다.
                 if prob >= 0.80:
-                    print(f"   🎯 [KOSDAQ AI 포착!] {name} (확신도: {prob:.1%})")
+                    print(f"   🎯 [KOSDAQ 포착] {name} (확신: {prob:.1%}, 프로그램: {p_status})")
                     kosdaq_picks.append({
-                        'Code': code, 'Name': name, 'Price': price,
-                        'Prob': prob, 'CntrStr': cntr_str, 'Position': 'MIDDLE'
+                        'Code': code, 'Name': name, 'Price': curr_price,
+                        'Prob': prob, 'CntrStr': 100, 'Position': 'MIDDLE',
+                        'ProgramStatus': p_status
                     })
             except Exception as e:
-                print(f"⚠️ {name} AI 분석 중 에러: {e}")
-                continue
+                print(f"⚠️ {name} AI 분석 실패: {e}")
 
-        # 🚀 5단계: DB 저장 및 스나이퍼 엔진 호출
+            time.sleep(0.3) # API 제한 방어
+
+        # 🚀 4. DB 저장 및 브로드캐스트
         if kosdaq_picks:
-            new_picks_for_broadcast = []
+            new_picks = []
+            today_str = datetime.now().strftime('%Y-%m-%d')
             for r in kosdaq_picks:
                 try:
                     with db._get_connection() as conn:
-                        # 이미 오늘 추천된 종목인지 확인 (중복 알림 방지)
-                        cur = conn.execute("SELECT COUNT(*) FROM recommendation_history WHERE date=? AND code=?",
-                                           (today, r['Code']))
+                        cur = conn.execute("SELECT COUNT(*) FROM recommendation_history WHERE date=? AND code=?", (today_str, r['Code']))
                         if cur.fetchone()[0] == 0:
-                            # 💡 핵심: strategy='KOSDAQ_ML' 태그를 달아 스나이퍼가 인식하게 함
                             conn.execute('''
-                                         INSERT INTO recommendation_history (date, code, name, buy_price, type, position_tag, prob, strategy)
-                                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                                         ''',
-                                         (today, r['Code'], r['Name'], r['Price'], 'MAIN', r['Position'], r['Prob'],
-                                          'KOSDAQ_ML'))
+                                INSERT INTO recommendation_history (date, code, name, buy_price, type, position_tag, prob, strategy)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            ''', (today_str, r['Code'], r['Name'], r['Price'], 'MAIN', r['Position'], r['Prob'], 'KOSDAQ_ML'))
+                            new_picks.append(r)
+                except Exception as e: print(f"DB 저장 에러: {e}")
+            
+            if new_picks:
+                broadcast_kosdaq_picks(conf, new_picks)
 
-                            new_picks_for_broadcast.append(r) # 💡 알림용 바구니에 담기
-                except Exception as e:
-                    print(f"DB 저장 에러: {e}")
-
-            # 💡 [최적화] 루프가 다 끝난 후, 새로운 종목들을 하나로 묶어서 딱 1번만 발송!
-            if new_picks_for_broadcast:
-                broadcast_kosdaq_picks(conf, new_picks_for_broadcast)
-
-        # 코스닥 스캐너는 15분마다 한 번씩 묵직하게 돕니다.
+        print(f"✅ [{now.strftime('%H:%M:%S')}] KOSDAQ 스캔 완료. 15분 대기...")
         time.sleep(900)
-
-
-if __name__ == "__main__":
-    run_kosdaq_scanner()

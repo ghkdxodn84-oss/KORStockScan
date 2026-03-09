@@ -24,15 +24,19 @@ class SniperRadar:
     # ==========================================
     # 🕸️ [1단계: 투망] 시장 전체 이상 징후 포착
     # ==========================================
-    def scan_volume_spike_ka10023(self):
+    def scan_volume_spike_ka10023(self, mrkt_tp="101"): # 기본값을 코스닥으로 설정하되 인자로 받음
         """[ka10023] 최근 n분간 거래량이 전일 대비 급증한 종목 스캔"""
         self.headers_rkinfo['api-id'] = 'ka10023'
         url = "https://api.kiwoom.com/api/dostk/rkinfo"
         
-        # 명세서 기준: 코스닥(101), 상승(1), 5분(5), 5만주이상(50)
+        # payload의 mrkt_tp를 인자로 받은 값으로 설정
         payload = {
-            "mrkt_tp": "101", "updown_tp": "1", "tm_tp": "5",
-            "trde_qty_tp": "50", "stk_cnd": "0", "stex_tp": "1"
+            "mrkt_tp": mrkt_tp, 
+            "updown_tp": "1", 
+            "tm_tp": "5",
+            "trde_qty_tp": "50", 
+            "stk_cnd": "0", 
+            "stex_tp": "3" # 통합 거래소
         }
         
         candidates = []
@@ -108,14 +112,15 @@ class SniperRadar:
     # ==========================================
     # 🎯 [최종: 융합 및 지시] 메인 스캐너로 넘길 타겟 추출
     # ==========================================
-    def find_supernova_targets(self):
+    def find_supernova_targets(self, mrkt_tp="101"):
         """
-        투망과 현미경을 결합하여 '지금 당장 진입할' 초정밀 타겟을 반환합니다.
+        시장 구분을 인자로 받아 해당 시장의 초신성 타겟을 반환합니다.
+        mrkt_tp: "001"(코스피), "101"(코스닥)
         """
         final_targets = []
         
-        # 1. 넓게 던지기 (거래량 급증 종목 1차 추출)
-        vol_spikes = self.scan_volume_spike_ka10023()
+        # 인자로 받은 mrkt_tp를 하위 스캔 함수에 전달
+        vol_spikes = self.scan_volume_spike_ka10023(mrkt_tp=mrkt_tp)
         
         # 2. 좁히기 (현미경 검증)
         for stock in vol_spikes:

@@ -115,12 +115,11 @@ def run_scalper():
 
         print(f"🔍 [{now.strftime('%H:%M:%S')}] 실시간 수급 쏠림 & 폭발 전조 종목 스캔 중...")
         
-        # 🚀 2. 트랙 A: 기존의 '이미 급등을 시작한' 대장주 포착 (ka10027)
-        # (기존 유틸에서 이사 온 함수 사용)
-        soaring_targets = radar.get_top_fluctuation_ka10027(mrkt_tp="101", limit=30)
-        
-        # 🚀 3. 트랙 B: [핵심] 오르기 직전, 거래량/수급 폭발 전조 포착 (7개 API 콤보)
-        supernova_targets = radar.find_supernova_targets()
+        # 트랙 A: 시장 전체 등락률 상위 50개 포착
+        soaring_targets = radar.get_top_fluctuation_ka10027(mrkt_tp="000", limit=30)
+
+        # 트랙 B: 시장 전체에서 수급 폭발(초신성) 종목 탐색
+        supernova_targets = radar.find_supernova_targets(mrkt_tp="000")
 
         # 🚀 4. 두 타겟 리스트를 하나로 합치기 (중복 제거)
         all_targets = {}
