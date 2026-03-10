@@ -102,9 +102,6 @@ def get_basic_info_ka10001(token, code):
     """
     [ka10001] 주식기본정보요청 (10054 강제 끊김 방어 3회 재시도 로직 적용)
     """
-    import time
-    import requests
-
     url = "https://api.kiwoom.com/api/dostk/stkinfo"
     headers = {
         'Content-Type': 'application/json;charset=UTF-8',
@@ -168,7 +165,6 @@ def get_daily_ohlcv_ka10081_df(token, code, end_date=""):
     }
 
     if not end_date:
-        from datetime import datetime
         end_date = datetime.now().strftime("%Y%m%d")
 
     # 💡 파라미터 이름이 base_dt 와 upd_stkpc_tp(수정주가) 로 변경되었습니다.
@@ -186,7 +182,7 @@ def get_daily_ohlcv_ka10081_df(token, code, end_date=""):
                 data = res.json()
 
                 if str(data.get('return_code', '0')) != '0':
-                    print(f"      🚨 [키움서버 거절 사유] {data.get('return_msg', '알 수 없는 에러')}")
+                    print(f"🚨 [키움서버 거절 사유] {data.get('return_msg', '알 수 없는 에러')}")
 
                 # 💡 응답 리스트의 Key가 stk_dt_pole_chart_qry 로 변경되었습니다.
                 output = data.get('stk_dt_pole_chart_qry', [])
@@ -212,10 +208,10 @@ def get_daily_ohlcv_ka10081_df(token, code, end_date=""):
                     df.set_index('Date', inplace=True)
                     return df.sort_index()
             else:
-                print(f"      🚨 [HTTP 에러] {res.status_code} - {res.text}")
+                print(f"🚨 [HTTP 에러] {res.status_code} - {res.text}")
             break
         except Exception as e:
-            print(f"      🚨 [파이썬 시스템 에러] {e}")
+            print(f"🚨 [파이썬 시스템 에러] {e}")
             time.sleep(2)
 
     return pd.DataFrame()
@@ -225,8 +221,6 @@ def get_item_info_ka10100(token, code):
     ka10100(종목 기본정보) API를 호출하여 전체 데이터를 반환합니다.
     시가총액 계산용 상장주식수, 종가 및 시장 구분 정보를 모두 포함합니다.
     """
-    import requests
-
     url = "https://api.kiwoom.com/api/dostk/stkinfo"
     headers = {
         'Content-Type': 'application/json;charset=UTF-8',
@@ -259,9 +253,6 @@ def get_index_daily_ka20006(token, inds_cd="001"):
     [ka20006] 업종일봉조회요청 API를 호출하여 최근 6거래일 지수 데이터를 가져옵니다.
     반환값: (최신 지수, 5거래일 전 지수) - 실패 시 (None, None) 반환
     """
-    import requests
-    from datetime import datetime
-
     url = "https://api.kiwoom.com/api/dostk/chart"
     headers = {
         'Content-Type': 'application/json;charset=UTF-8',
@@ -366,9 +357,6 @@ def get_top_marketcap_stocks(limit=300):
     네이버 모바일 증권 API가 허용하는 최대 호출량(60개)에 맞춰
     여러 페이지를 안전하게 순회하며 우량주 종목을 수집합니다.
     """
-    import requests
-    import time
-
     # 💡 [해결 1] 평범한 크롬 웹 브라우저인 것처럼 신분증(헤더) 위조
     headers = {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
@@ -604,34 +592,35 @@ def is_trading_day():
 
     return True, "정상거래일"
 
-
-# 1. 파일 최상단에 TRADING_RULES를 임포트합니다.
-from constants import TRADING_RULES
-
-def is_valid_stock(code, name, kiwoom):
+def is_valid_stock(code, name, token=None, current_price=0):
     """
     [공통 필터] 불순물 종목 및 저가주를 완벽하게 걸러냅니다.
     스팩(SPAC), ETF(KODEX 포함), ETN, 우선주, 리츠 등을 제외하여 순수 상장 주식만 매매 엔진에 전달합니다.
     """
     name_upper = name.upper()
-    
+    min_price_limit = TRADING_RULES.get('MIN_PRICE', 5000)
+
     # ==========================================
     # 🚨 1. 가격 필터링 (동전주/저가주 제외)
     # ==========================================
-    # 💡 TRADING_RULES 딕셔너리에서 MIN_PRICE 값을 가져옵니다. (기본값 5000)
-    min_price_limit = TRADING_RULES.get('MIN_PRICE', 5000)
-    
-    try:
-        # GetMasterLastPrice는 전일 종가를 반환하며, 기호(+, -)가 포함될 수 있어 abs() 처리합니다.
-        raw_price = kiwoom.GetMasterLastPrice(code)
-        last_price = abs(int(raw_price)) if raw_price else 0
-        
-        # 설정된 MIN_PRICE보다 낮은 종목은 제외합니다.
-        if last_price < min_price_limit:
-            # print(f"🚫 [가격 필터] {name}({code}): {last_price}원 (기준 {min_price_limit}원 미만)")
+    # 방법 A: 스캐너에서 가격을 넘겨준 경우 (초고속 컷오프)
+    if current_price > 0:
+        if current_price < min_price_limit:
             return False
-    except (ValueError, TypeError):
-        return False # 가격 정보를 알 수 없는 경우 안전하게 제외
+            
+    # 방법 B: 가격은 안 넘어왔지만 token이 있는 경우 (API 직접 호출)
+    elif token:
+        try:
+            # 같은 모듈 내의 일봉 차트 함수 호출
+            df = get_daily_ohlcv_ka10081_df(token, code)
+            if not df.empty:
+                # 가장 최근 날짜의 종가를 가져옵니다
+                last_price = df['Close'].iloc[-1]
+                if last_price < min_price_limit:
+                    return False
+        except Exception as e:
+            # 통신 에러 시 봇이 멈추지 않도록 일단 통과시킵니다 (실시간 웹소켓이 나중에 걸러줌)
+            pass 
 
     # ==========================================
     # 2. 이름 기반 필터링 (KODEX 포함 제외 목록)
@@ -823,8 +812,6 @@ def get_top_fluctuation_ka10027(token, mrkt_tp="000", trde_qty_cnd="0100", limit
     - mrkt_tp: "000"(전체), "001"(코스피), "101"(코스닥)
     - trde_qty_cnd: "0100"(10만주 이상) 등
     """
-    import requests
-
     url = "https://api.kiwoom.com/api/dostk/rkinfo"
     headers = {
         'Content-Type': 'application/json;charset=UTF-8',

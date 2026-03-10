@@ -1,6 +1,6 @@
 import requests
 import kiwoom_utils
-
+import json
 
 def calc_buy_qty(current_price, total_deposit, ratio=0.1):
     """
@@ -15,6 +15,70 @@ def calc_buy_qty(current_price, total_deposit, ratio=0.1):
     qty = int(safe_budget // current_price)
     return qty
 
+def get_my_inventory(token, config):
+    """
+    [kt00018] 계좌평가잔고내역을 조회합니다.
+    SOR 주문을 고려하여 KRX(한국거래소)와 NXT(넥스트트레이드)의 잔고를 모두 합산합니다.
+    """
+    host = 'https://api.kiwoom.com'  # 실전투자
+    endpoint = '/api/dostk/acnt'
+    url = host + endpoint
+
+    headers = {
+        'Content-Type': 'application/json;charset=UTF-8',
+        'authorization': f'Bearer {token}',
+        'cont-yn': 'N',
+        'next-key': '',
+        'api-id': 'kt00018',
+    }
+
+    # 💡 [핵심] 종목 코드를 키(Key)로 사용하여 양쪽 거래소의 수량을 합산할 딕셔너리
+    aggregated_inventory = {}
+
+    # KRX와 NXT를 순차적으로 조회합니다.
+    exchanges = ['KRX', 'NXT']
+    
+    for exchange in exchanges:
+        params = {
+            'qry_tp': '1',             # 조회구분 1:합산
+            'dmst_stex_tp': exchange   # 국내거래소구분
+        }
+
+        try:
+            response = requests.post(url, headers=headers, json=params)
+            data = response.json()
+            
+            if data.get('return_code') == 0:
+                stock_list = data.get('acnt_evlt_remn_indv_tot', [])
+                
+                for item in stock_list:
+                    # "A005930" -> "005930" 변환
+                    raw_code = item.get('stk_cd', '')
+                    code = raw_code[1:] if raw_code.startswith('A') else raw_code
+                    
+                    qty = int(item.get('rmnd_qty', 0))
+                    name = item.get('stk_nm', '')
+                    
+                    if qty > 0:
+                        if code in aggregated_inventory:
+                            # 이미 다른 거래소에서 조회된 수량이 있다면 누적해서 더합니다.
+                            aggregated_inventory[code]['qty'] += qty
+                        else:
+                            # 처음 발견된 종목이면 딕셔너리에 신규 등록합니다.
+                            aggregated_inventory[code] = {
+                                'code': code,
+                                'name': name,
+                                'qty': qty
+                            }
+            else:
+                err_msg = data.get('return_msg', '알 수 없는 오류')
+                print(f"⚠️ [API 경고] {exchange} 잔고 조회 실패: {err_msg}")
+
+        except Exception as e:
+            print(f"❌ [API 에러] {exchange} 잔고 통신 실패: {e}")
+
+    # 딕셔너리의 Value들만 뽑아서 리스트 형태로 반환합니다.
+    return list(aggregated_inventory.values())
 
 def send_buy_order_market(code, qty, token, config=None, order_type="6", price=0):
     """
@@ -100,7 +164,7 @@ def send_sell_order_market(code, qty, token, config=None):
         data = res.json()
 
         # 🚀 [핵심 수정] 성공 판단 로직 통일
-        is_success = data.get('rt_cd') == '0' or data.get('return_code') == 0
+        is_success = str(data.get('rt_cd', '')) == '0' or str(data.get('return_code', '')) == '0'
 
         if res.status_code == 200 and is_success:
             return data
@@ -170,10 +234,11 @@ def send_cancel_order(code, orig_ord_no, token, qty=0, config=None):
         data = res.json()
 
         # return_code 0이 성공
-        if res.status_code == 200 and data.get('return_code') == 0:
-            cncl_qty_result = data.get('cncl_qty', '')
+        if res.status_code == 200 and str(data.get('return_code', '')) == '0':
+            cncl_qty_result = data.get('cncl_qty', '전량') # 빈 값이면 '전량'으로 표기
             new_ord_no = data.get('ord_no', '')
-            kiwoom_utils.log_error(f"✅ [취소접수] {clean_code} 전량 취소 성공 (새주문번호:{new_ord_no})", config=config)
+            # 메시지에 cncl_qty_result 활용!
+            print(f"✅ [취소접수] {clean_code} {cncl_qty_result}주 취소 성공 (새주문번호:{new_ord_no})")
             return data
         else:
             err_msg = data.get('return_msg', '상세 사유 없음')

@@ -1,4 +1,3 @@
-import sqlite3
 import pandas as pd
 import numpy as np
 import joblib
@@ -210,19 +209,20 @@ def run_integrated_scanner():
         drop_stats = {'low_price': 0, 'quality': 0, 'ai_prob': 0, 'trend': 0, 'supply': 0, 'error': 0}
 
         for stock in target_list:
-            # 💡 [안전장치] DB에서 가져온 종목코드의 앞자리 '0'이 날아가는 현상 방어
             code = str(stock['Code']).strip().zfill(6)
             name = stock['Name']
-            if not kiwoom_utils.is_valid_stock(code, name): continue
-
+            
+            # 🚀 1. DB에서 데이터와 가격을 딱 한 번만 가져옵니다.
             df = db.get_stock_data(code, limit=60)
             if len(df) < 30: continue
             df = df.sort_values('Date')
 
-            # 💡 대표님이 지적하신 부분! (들여쓰기 완벽 교정 완료)
             current_price = df.iloc[-1]['Close']
-            if current_price < TRADING_RULES['MIN_PRICE']:
-                drop_stats['low_price'] += 1
+
+            # 🚀 2. 알아낸 가격으로 필터링과 통계 집계를 동시에 처리합니다.
+            if not kiwoom_utils.is_valid_stock(code, name, current_price=current_price):
+                if current_price < TRADING_RULES['MIN_PRICE']:
+                    drop_stats['low_price'] += 1
                 continue
 
             # Quality 필터 (상대강도 등)
@@ -379,7 +379,7 @@ def run_intraday_scanner(token):
         print("📈 키움 API를 통해 실시간 주도주 데이터를 확보했습니다.")
         for s in raw_hot_stocks:
             # 💡 수정: is_valid_stock을 통과하고, 동시에 가격이 설정한 최소 금액 이상인 종목만 발탁
-            if kiwoom_utils.is_valid_stock(s['code'], s['name']) and s['price'] >= TRADING_RULES['MIN_PRICE']:
+            if kiwoom_utils.is_valid_stock(s['code'], s['name'], current_price=s['price']):
                 hot_stocks.append(s)
 
     # [2차 시도 - Fallback] 키움 API 3회 모두 실패 시 FDR 실시간 거래량 상위 활용
@@ -393,8 +393,7 @@ def run_intraday_scanner(token):
             for _, row in top_vol.iterrows():
                 current_price = int(row['Close'])
                 # 💡 수정: FDR 우회 시에도 가격 필터 동일하게 적용
-                if kiwoom_utils.is_valid_stock(row['Code'], row['Name']) and current_price >= TRADING_RULES[
-                    'MIN_PRICE']:
+                if kiwoom_utils.is_valid_stock(row['Code'], row['Name'], current_price=current_price):
                     hot_stocks.append({
                         'code': row['Code'],
                         'name': row['Name'],
@@ -509,8 +508,8 @@ def run_intraday_scanner(token):
 
             # 모든 필터를 뚫은 종목만 추가
             new_targets.append(
-                {'Name': name, 'Prob': p_final, 'Price': int(current_price), 'Code': code, 'Position': pos_tag})
-
+                {'Name': name, 'Prob': p_final, 'Price': int(curr_price), 'Code': code, 'Position': pos_tag}
+            )
         except Exception as e:
             drop_stats['error'] += 1  # 카운터 증가
             continue

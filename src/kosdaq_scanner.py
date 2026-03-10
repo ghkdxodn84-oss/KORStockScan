@@ -1,21 +1,18 @@
 # ==========================================
-# 🚀 코스닥 하이브리드 AI 스캐너 (v12.2 정비 버전)
+# 🚀 코스닥 하이브리드 AI 스캐너 (v13 정비 버전)
 # ==========================================
 
 import os
 import time
 import json
-import threading
 from datetime import datetime
-
-import pandas as pd
-import numpy as np
 import requests
 
 import kiwoom_utils
 from signal_radar import SniperRadar  # 📡 레이더 모듈 추가
 from db_manager import DBManager
 import final_ensemble_scanner 
+from constants import TRADING_RULES # constants.py에 정의된 상수를 가져옵니다.
 
 # 1. 경로 및 설정 로드 (기존 동일)
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -94,26 +91,26 @@ def run_kosdaq_scanner():
         for code, item in all_candidate_codes.items():
             name = item.get('Name', 'Unknown')
             
-            # 💡 [방어막 1] 불량 종목(ETF, 스팩, 우선주) 필터링
-            if not kiwoom_utils.is_valid_stock(code, name):
+            # 💡 [교정] 가격 정보 추출 최적화
+            curr_p = float(item.get('Price', item.get('cur_prc', item.get('price', 0))))
+            if not kiwoom_utils.is_valid_stock(code, name, current_price=curr_p):
                 continue
 
-            # 💡 [방어막 2] 프로그램 매수세 확인 (ka90008 활용)
-            # 코스닥 상위주는 외국인 프로그램이 사줘야 진짜입니다.
             is_program_buying = radar.check_program_buying_ka90008(code)
             p_status = "🔥 매수중" if is_program_buying else "⚪ 관망"
 
-            # 💡 [데이터 수집] 차트, 수급, 신용
-            df_ohlcv = kiwoom_utils.get_daily_ohlcv_ka10081_df(token, code)
-            if df_ohlcv is None or len(df_ohlcv) < 60: continue
+            # 💡 [교정] 데이터 로드 로직 단순화
+            df = kiwoom_utils.get_daily_ohlcv_ka10081_df(token, code)
+            if df is None or len(df) < 60: continue
             
-            curr_price = int(df_ohlcv['Close'].iloc[-1])
+            curr_price = int(df['Close'].iloc[-1])
+            if curr_price < TRADING_RULES.get('MIN_PRICE', 5000):
+                continue
             
+            # 수급/신용 데이터 병합
             df_investor = kiwoom_utils.get_investor_daily_ka10059_df(token, code)
             df_margin = kiwoom_utils.get_margin_daily_ka10013_df(token, code)
             
-            # 데이터 병합 및 NaN 처리 (이사 완료)
-            df = df_ohlcv
             if not df_investor.empty: df = df.join(df_investor, how='left')
             else: df[['Retail_Net', 'Foreign_Net', 'Inst_Net']] = 0.0
             

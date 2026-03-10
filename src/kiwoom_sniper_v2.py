@@ -74,24 +74,74 @@ def send_admin_msg(text):
     except Exception as e:
         print(f"❌ 관리자 메시지 전송 실패: {e}")
 
+def sync_balance_with_db():
+    """봇 시작 시 실제 계좌 잔고와 DB의 HOLDING 기록을 대조하여 정합성을 맞춥니다."""
+    print("🔄 [데이터 동기화] 실제 계좌 잔고와 DB를 대조합니다...")
+    
+    # 💡 [교정 1] 전역 변수와 이미 임포트된 모듈을 직접 사용합니다.
+    real_inventory = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN, CONF) 
+    
+    # 🚨 [방어막 1] API 통신 실패 시 (None 반환 등) DB 강제 초기화 대참사 방지
+    if real_inventory is None:
+        print("⚠️ [동기화 보류] 잔고 조회 API 통신에 실패하여 DB 동기화를 건너뜁니다.")
+        return
 
-def update_stock_status(code, status, buy_price=None, buy_qty=None, buy_time=None):
-    try:
-        today = datetime.now().strftime('%Y-%m-%d')
-        nxt = kiwoom_utils.get_stock_market_ka10100(code, KIWOOM_TOKEN)
+    real_codes = {item['code']: item for item in real_inventory}
 
-        with DB._get_connection() as conn:
-            # 💡 [핵심 수정] 0이나 빈 문자열이 들어와도 정상적으로 업데이트하도록 명시적 확인
-            if buy_price is not None and buy_qty is not None and buy_time is not None:
-                conn.execute(
-                    "UPDATE recommendation_history SET status=?, buy_price=?, buy_qty=?, buy_time=?, nxt=? WHERE code=? AND date=?",
-                    (status, buy_price, buy_qty, buy_time, nxt, code, today))
-            else:
-                conn.execute("UPDATE recommendation_history SET status=?, nxt=? WHERE date=? AND code=?",
-                             (status, nxt, today, code))
-            conn.commit()
-    except Exception as e:
-        print(f"⚠️ DB 업데이트 실패: {e}")
+    # 💡 [교정 2] 전역 인스턴스인 DB.execute_query를 사용합니다.
+    db_holdings = DB.execute_query(
+        "SELECT code, name, buy_qty FROM recommendation_history WHERE status = 'HOLDING'"
+    ) 
+    
+    if not db_holdings:
+        db_holdings = []
+
+    # 3. 대조 및 강제 교정 시작
+    for row in db_holdings:
+        code, name, db_qty = row[0], row[1], row[2]
+        
+        # 🚨 [방어막 2] db_qty가 비어있거나 NULL일 경우 다운되는 현상 방지
+        try:
+            safe_db_qty = int(db_qty) if db_qty else 0
+        except ValueError:
+            safe_db_qty = 0
+            
+        if code not in real_codes:
+            # 실제 계좌에 없다면? 이미 팔았는데 DB만 쥐고 있는 상태!
+            print(f"⚠️ [동기화] {name}({code}): 실제 잔고 0주. 상태를 COMPLETED로 강제 변경.")
+            DB.execute_query(
+                "UPDATE recommendation_history SET status = 'COMPLETED' WHERE code = ? AND status = 'HOLDING'", 
+                (code,)
+            )
+        else:
+            # 계좌에 있는데 수량이 다르다면? (수동 매도, 혹은 이전 에러로 인한 누락)
+            real_qty = real_codes[code]['qty']
+            if safe_db_qty != real_qty:
+                print(f"⚠️ [동기화] {name}({code}): 수량 불일치 교정 (DB: {safe_db_qty}주 -> 실제: {real_qty}주)")
+                DB.execute_query(
+                    "UPDATE recommendation_history SET buy_qty = ? WHERE code = ? AND status = 'HOLDING'", 
+                    (real_qty, code)
+                )
+
+    print("✅ [데이터 동기화] 완료. 봇 메모리가 실제 계좌와 완벽히 일치합니다.")
+
+#def update_stock_status(code, status, buy_price=None, buy_qty=None, buy_time=None):
+#    try:
+#        today = datetime.now().strftime('%Y-%m-%d')
+#        nxt = kiwoom_utils.get_stock_market_ka10100(code, KIWOOM_TOKEN)
+#
+#        with DB._get_connection() as conn:
+#            # 💡 [핵심 수정] 0이나 빈 문자열이 들어와도 정상적으로 업데이트하도록 명시적 확인
+#            if buy_price is not None and buy_qty is not None and buy_time is not None:
+#                conn.execute(
+#                    "UPDATE recommendation_history SET status=?, buy_price=?, buy_qty=?, buy_time=?, nxt=? WHERE code=? AND date=?",
+#                    (status, buy_price, buy_qty, buy_time, nxt, code, today))
+#            else:
+#                conn.execute("UPDATE recommendation_history SET status=?, nxt=? WHERE date=? AND code=?",
+#                             (status, nxt, today, code))
+#            conn.commit()
+#    except Exception as e:
+#        print(f"⚠️ DB 업데이트 실패: {e}")
 
 def get_active_targets():
     targets = []
@@ -289,17 +339,33 @@ def handle_real_execution(exec_data):
                     # 실제 수익률 계산 (슬리피지 모두 반영됨)
                     profit_rate = round(((exec_price - buy_price) / buy_price) * 100, 2)
 
-                    # 전략 태그를 가져와서 스캘핑 부활 여부 결정
                     cursor.execute("SELECT strategy FROM recommendation_history WHERE code = ?", (code,))
                     strategy_row = cursor.fetchone()
                     
-                    # 💡 [교정] DB 쪽에서도 15:15 이전인지 시간을 체크해야 완벽하게 동기화됩니다.
+                    # 💡 [핵심 1] 무조건 현재 매매 사이클은 'COMPLETED'로 쾅 닫아서 기록을 영구 보존합니다!
+                    db.update_sell_record(code, exec_price, profit_rate, status='COMPLETED')
+                    print(f"🎉 [매매 완료] {code} 실매도가 {exec_price:,}원 / 최종 수익률: {profit_rate}% (기록 보존 완료)")
+
+                    # 💡 [핵심 2] 스캘핑 부활 조건이 맞으면, 덮어쓰지 않고 '새로운 줄'을 만들어냅니다.
                     is_scalp_revive = (strategy_row and strategy_row[0] == 'SCALPING') and (now_t < datetime.strptime("15:15:00", "%H:%M:%S").time())
-                    final_status = 'WATCHING' if is_scalp_revive else 'COMPLETED'
-                    
-                    # db_manager의 함수에 status 인자 전달
-                    db.update_sell_record(code, exec_price, profit_rate, status=final_status)
-                    print(f"🎉 [매매 완료] {code} 실매도가 {exec_price:,}원 / 최종 수익률: {profit_rate}% ({final_status})")
+                    if is_scalp_revive:
+                        today = datetime.now().strftime('%Y-%m-%d')
+                        # 메모리에서 종목의 기본 정보를 가져옵니다.
+                        global ACTIVE_TARGETS
+                        stock_info = next((s for s in ACTIVE_TARGETS if s['code'] == code), None)
+                        
+                        if stock_info:
+                            name = stock_info.get('name', code)
+                            prob = stock_info.get('prob', 0.8)
+                            
+                            # 완전히 새로운 WATCHING 레코드를 INSERT 합니다.
+                            insert_query = """
+                                INSERT INTO recommendation_history 
+                                (date, code, name, status, strategy, prob)
+                                VALUES (?, ?, ?, 'WATCHING', 'SCALPING', ?)
+                            """
+                            db.execute_query(insert_query, (today, code, name, prob))
+                            print(f"♻️ [스캘핑 재진입 준비] {name}({code}) 새로운 매매를 위해 DB에 신규 감시(WATCHING) 등록!")
 
         except Exception as e:
             print(f"🚨 매도 체결 영수증 처리 중 에러: {e}")
@@ -334,6 +400,8 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback):
     db = DBManager()
     # 💡 [핵심] TRADING_RULES 딕셔너리에서 MIN_PRICE 값을 안전하게 가져옵니다.
     MIN_PRICE = TRADING_RULES.get('MIN_PRICE', 5000)
+    MAX_SURGE = TRADING_RULES.get('MAX_SCALP_SURGE_PCT', 15.0) 
+    MIN_LIQUIDITY = TRADING_RULES.get('MIN_SCALP_LIQUIDITY', 300_000_000)
 
     # 🚀 1. 쿨타임(휴식기) 검사
     if code in cooldowns and time.time() < cooldowns[code]:
@@ -378,7 +446,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback):
         fluctuation = float(ws_data.get('fluctuation', 0.0)) # 💡 등락률 가져오기
         
         liquidity_value = (ask_tot + bid_tot) * curr_price
-        MIN_SCALP_LIQUIDITY = 100_000_000
 
         # ==========================================
         # 🔍 [디버깅 영역] 왜 안 사고 있을까? (1분마다 1회 출력)
@@ -395,13 +462,13 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback):
         #        print(f"   - ⚠️ 경고: 현재가(curr) 데이터가 수신되지 않고 있습니다.")
         # ==========================================
 
-        # 🚨 [신규 방어막] 이미 20% 이상 급등한 종목은 스캘핑 진입 전면 금지!
-        if fluctuation >= 20.0:
+        # 🚨 [신규 방어막] 이미 15% 이상 급등한 종목은 스캘핑 진입 전면 금지!
+        if fluctuation >= MAX_SURGE:
             if time.time() % 60 < 1: # 터미널 도배 방지
-                print(f"🚫 [SCALP 제외] {stock['name']} | 등락률 {fluctuation}% (20% 초과 급등주 위험)")
+                print(f"🚫 [SCALP 제외] {stock['name']} | 등락률 {fluctuation}% (15% 초과 급등주 위험)")
             return # 즉시 함수를 종료하여 매수 프로세스 차단
         
-        if current_vpw >= TRADING_RULES.get('VPW_SCALP_LIMIT', 120) and liquidity_value >= MIN_SCALP_LIQUIDITY:
+        if current_vpw >= TRADING_RULES.get('VPW_SCALP_LIMIT', 120) and liquidity_value >= MIN_LIQUIDITY:
             scanner_price = stock.get('buy_price', 0)
             if scanner_price > 0:
                 gap_pct = (curr_price - scanner_price) / scanner_price * 100
@@ -516,9 +583,9 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback):
             })
             highest_prices[code] = curr_price
 
-            # 2. DB 업데이트 (영수증 콜백이 찾을 수 있도록 BUY_ORDERED로 설정)
+            # 2. DB 업데이트 (영수증 콜백이 찾을 수 있도록 BUY_ORDERED로 설정) [수정] AND status = 'WATCHING' 추가 하여 이미 매수 주문이 들어간 종목은 중복 업데이트 방지   
             db.execute_query(
-                "UPDATE recommendation_history SET status = 'BUY_ORDERED', buy_price = ? WHERE code = ?", 
+                "UPDATE recommendation_history SET status = 'BUY_ORDERED', buy_price = ? WHERE code = ? AND status = 'WATCHING'", 
                 (final_price if final_price > 0 else curr_price, code)
             )
 
@@ -545,7 +612,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, broadcast_callback, mar
     # 🚀 [멀티 전략] 보유 종목 청산 분기 처리
     # ==========================================
     # 1️⃣ 초단타 (SCALPING) 전략
-    if strategy in ['SCALPING', 'SCALP']:
+    if strategy == 'SCALPING':
         held_time_min = 0
         if 'order_time' in stock:
             held_time_min = (time.time() - stock['order_time']) / 60
@@ -644,16 +711,17 @@ def handle_holding_state(stock, code, ws_data, admin_id, broadcast_callback, mar
         if not admin_id:
             print(f"🚨 [매도실패] {stock['name']}: 관리자 ID(admin_id)가 설정되지 않았습니다.")
         elif int(buy_qty) <= 0:
-            print(f"🚨 [매도실패] {stock['name']}: 매도 신호가 떴으나, 메모리상 보유 수량(buy_qty)이 {buy_qty}주입니다!")
+            print(f"🚨 [매도실패] {stock['name']}: 수량이 0주입니다! 강제 완료(COMPLETED) 처리합니다.")
+            db.execute_query("UPDATE recommendation_history SET status = 'COMPLETED' WHERE code = ?", (code,))
+            stock['status'] = 'COMPLETED'
         else:
-            # 💡 [핵심 방어 1] 주문 쏘기 전에 미리 장부(DB/메모리)를 SELL_ORDERED로 잠금! (웹소켓 레이스 방지)
-            db.execute_query("UPDATE recommendation_history SET status = 'SELL_ORDERED' WHERE code = ?", (code,))
+            # 💡 [핵심 방어 1] 주문 쏘기 전에 미리 장부(DB/메모리)를 SELL_ORDERED로 잠금! (웹소켓 레이스 방지) [수정] AND status = 'HOLDING' 추가하여 감시중 매도완료 종목 업데이트 방지
+            db.execute_query("UPDATE recommendation_history SET status = 'SELL_ORDERED' WHERE code = ? AND status = 'HOLDING'", (code,))
             stock['status'] = 'SELL_ORDERED'
             try: highest_prices.pop(code, None)
             except: pass
 
             # 💡 [핵심 방어 2] 장부 세팅이 끝났으니 안심하고 실제 매도 전송
-            print(f"💥 [{stock['name']}] 매도 주문 전송 중...")
             res = kiwoom_orders.send_sell_order_market(code, int(buy_qty), KIWOOM_TOKEN, config=CONF)
             
             if isinstance(res, dict):
@@ -703,8 +771,8 @@ def handle_buy_ordered_state(stock, code):
             stock['status'] = 'WATCHING'
             stock.pop('order_time', None)
             
-            # DB 상태 동기화 (원복)
-            db.execute_query("UPDATE recommendation_history SET status = 'WATCHING', buy_price = 0 WHERE code = ?", (code,))
+            # DB 상태 동기화 [수정] AND status = 'BUY_ORDERED' 추가하여 이미 체결된 종목의 상태 변경 방지 
+            db.execute_query("UPDATE recommendation_history SET status = 'WATCHING', buy_price = 0 WHERE code = ? AND status = 'BUY_ORDERED'", (code,))
 
             if strategy == 'SCALPING':
                 # 여기서 alerted_stocks가 에러를 낼 수 있으므로 안전하게 처리
@@ -736,8 +804,8 @@ def handle_buy_ordered_state(stock, code):
             try: highest_prices.pop(code, None)
             except: pass
             
-            # DB 상태 동기화 (원복)
-            db.execute_query("UPDATE recommendation_history SET status = 'WATCHING', buy_price = 0 WHERE code = ?", (code,))
+            # DB 상태 동기화 [수정] AND status = 'BUY_ORDERED' 추가하여 이미 체결된 종목의 상태 변경 방지 
+            db.execute_query("UPDATE recommendation_history SET status = 'WATCHING', buy_price = 0 WHERE code = ? AND status = 'BUY_ORDERED'", (code,))
 
             # 🚀 [초단타 부활 로직] 호가가 도망가서 취소한 경우, 추격매수 안하고 20분 대기!
             if strategy == 'SCALPING':
@@ -746,24 +814,14 @@ def handle_buy_ordered_state(stock, code):
                 cooldowns[code] = time.time() + 1200
                 print(f"♻️ [{stock['name']}] 스캘핑 취소 완료. 20분 쿨타임 진입.")
 
-        # 4. 취소 실패 시 (이미 체결되었거나, 애초에 돈이 부족해서 주문이 안 들어갔던 유령 주문)
+        # 4. 취소 실패 시 (이미 체결되었거나, 주문 상태가 변경된 경우)
         else:
             print(f"🚨 [{stock['name']}] 매수 취소 실패! (에러응답: {res_str})")
-            print(f"♻️ 무한 루프 방지를 위해 감시망 복귀 및 쿨타임을 적용합니다.")
+            print(f"💡 이미 체결되었을 확률이 높으므로, 강제 초기화하지 않고 웹소켓 영수증을 대기합니다.")
             
-            # 무한 루프 10초 연장을 삭제하고, 확실하게 상태를 초기화합니다!
-            stock['status'] = 'WATCHING'
-            stock.pop('odno', None)
-            stock.pop('order_time', None)
-            
-            # DB 상태 동기화 (원복)
-            db.execute_query("UPDATE recommendation_history SET status = 'WATCHING', buy_price = 0 WHERE code = ?", (code,))
-            
-            # 스캘핑인 경우 20분 쿨타임 먹여서 당분간 귀찮게 안 하도록 처리
-            if strategy == 'SCALPING':
-                try: alerted_stocks.discard(code)
-                except: pass
-                cooldowns[code] = time.time() + 1200
+            # 💡 [핵심 교정] 메모리(stock['status'])를 건드리지 않고 그대로 둡니다!
+            # 체결 영수증이 오면 handle_real_execution이 알아서 HOLDING으로 바꿔줄 것입니다.
+            # 만약 정말로 돈이 없어서 생긴 유령 주문이었다면, 다음 루프에서 다시 취소를 시도하거나 수동 정리가 필요합니다.
 
 
 # ==============================================================================
@@ -788,10 +846,8 @@ def run_sniper(broadcast_callback):
         kiwoom_utils.log_error("❌ 토큰 발급 실패로 엔진을 중단합니다.", config=CONF, send_telegram=True)
         return
 
-    # 기존 코드 어딘가에 있는 선언부:
-    # WS_MANAGER = KiwoomWSManager(KIWOOM_TOKEN) 
-
-    # 👇 아래와 같이 변경합니다.
+    # 👇 [여기입니다!] 토큰 발급 직후에 동기화를 먼저 싹 돌립니다.
+    sync_balance_with_db()
     WS_MANAGER = KiwoomWSManager(KIWOOM_TOKEN, on_execution_callback=handle_real_execution)
     WS_MANAGER.start()
     time.sleep(2)

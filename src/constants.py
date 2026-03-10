@@ -40,9 +40,11 @@ TRADING_RULES = {
     # 💡 [신규] 초단타 스캐너 설정
     'SCALP_TIME_LIMIT_MIN': 30,  # 최대 보유 허용 시간 (30분)
     'MIN_FEE_COVER': 0.3,        # 세금(0.2%) + 수수료 보존용 최소 익절선 (0.3%)
-    'VPW_SCALP_LIMIT': 120,         # 확신도가 낮을 때 매수를 강행하기 위한 체결강도 허들(%)
-    'SCALP_TARGET': 1.5,  # 초단타 익절 1.5%
-    'SCALP_STOP': -2.5,  # 초단타 손절 -2.5%
+    'VPW_SCALP_LIMIT': 120,      # 확신도가 낮을 때 매수를 강행하기 위한 체결강도 허들(%)
+    'SCALP_TARGET': 1.5,         # 초단타 익절 1.5%
+    'SCALP_STOP': -2.5,          # 초단타 손절 -2.5%
+    'MIN_SCALP_LIQUIDITY': 300_000_000,  # 최소 호가 잔량 대금 (3억)
+    'MAX_SCALP_SURGE_PCT': 15.0,         # 초단타 진입 금지 급등률 (15%)
 
     # 💡 [신규] 코스닥 스캐너 설정
     'KOSDAQ_TARGET': 4.0, # 코스닥은 조금 더 높게 목표 (예: 4.0%)
