@@ -58,28 +58,28 @@ def load_config():
 #    return soaring_list
 
 # ==========================================
-# 3. 텔레그램 브로드캐스트
+# 3. 텔레그램 브로드캐스트 너무 스팸으로 도배됨
 # ==========================================
-def broadcast_scalping_target(conf, target):
-    token = conf.get('TELEGRAM_TOKEN')
-    db = DBManager()
-    chat_ids = db.get_telegram_chat_ids()
-
-    msg = f"⚡ <b>[초단타(SCALP) 레이더 포착]</b>\n"
-    msg += f"• <b>{target['Name']}</b> ({target['Code']})\n"
-    msg += f"• 현재가: <code>{target['Price']:,}원</code> (<b>+{target['ChangeRate']}%</b>)\n"
-    msg += f"• 체결강도: <b>{target['CntrStr']}%</b> (수급 폭발🔥)\n"
-    msg += "🎯 <b>전략: +2.0% 익절 / -2.5% 칼손절</b>"
-
-    for cid in chat_ids:
-        try:
-            requests.post(
-                f"https://api.telegram.org/bot{token}/sendMessage",
-                data={"chat_id": cid, "text": msg, "parse_mode": "HTML"},
-                timeout=5
-            )
-        except:
-            pass
+#def broadcast_scalping_target(conf, target):
+#    token = conf.get('TELEGRAM_TOKEN')
+#    db = DBManager()
+#    chat_ids = db.get_telegram_chat_ids()
+#
+#    msg = f"⚡ <b>[초단타(SCALP) 레이더 포착]</b>\n"
+#    msg += f"• <b>{target['Name']}</b> ({target['Code']})\n"
+#    msg += f"• 현재가: <code>{target['Price']:,}원</code> (<b>+{target['ChangeRate']}%</b>)\n"
+#    msg += f"• 체결강도: <b>{target['CntrStr']}%</b> (수급 폭발🔥)\n"
+#    msg += "🎯 <b>전략: +2.0% 익절 / -2.5% 칼손절</b>"
+#
+#    for cid in chat_ids:
+#        try:
+#            requests.post(
+#                f"https://api.telegram.org/bot{token}/sendMessage",
+#                data={"chat_id": cid, "text": msg, "parse_mode": "HTML"},
+#                timeout=5
+#            )
+#        except:
+#            pass
 
 
 # ==========================================
@@ -159,7 +159,7 @@ def run_scalper():
                 except Exception as e:
                     print(f"⚠️ DB 저장 실패: {e}")
 
-                broadcast_scalping_target(conf, t)
+                #broadcast_scalping_target(conf, t) 너무 스팸으로 도배됨
 
         time.sleep(60)
 

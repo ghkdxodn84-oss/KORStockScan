@@ -11,6 +11,7 @@ import lightgbm as lgb
 from datetime import datetime, timedelta
 import FinanceDataReader as fdr
 import kiwoom_utils
+from signal_radar import SniperRadar  # 1. 레이더 모듈 추가
 
 from constants import TRADING_RULES
 from feature_engineer import calculate_all_features
@@ -133,7 +134,7 @@ FEATURES_LGBM = ['BB_Pos', 'RSI', 'RSI_Slope', 'Range_Ratio', 'Vol_Momentum', 'V
 
 
 def run_integrated_scanner():
-    print(f"=== KORStockScan v12.1 (Stacking Ensemble + Quality Filter) ===")
+    print(f"=== KORStockScan v13 (Stacking Ensemble + Quality Filter) ===")
     db = DBManager()
 
     try:
@@ -370,7 +371,7 @@ def run_intraday_scanner(token):
     # ==========================================
     # 1. 실시간 주도주 목록 수집 (Kiwoom -> FDR 방어)
     # ==========================================
-    raw_hot_stocks = kiwoom_utils.get_realtime_hot_stocks(token, CONF, as_dict=True)
+    raw_hot_stocks = SniperRadar(token).get_realtime_hot_stocks_ka00198(CONF, as_dict=True)
     hot_stocks = []
 
     # [1차 시도] 키움 API 결과 정제 (불순물 제거 및 🚀 가격 컷오프)

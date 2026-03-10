@@ -371,7 +371,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback):
             scanner_price = stock.get('buy_price', 0)
             if scanner_price > 0:
                 gap_pct = (curr_price - scanner_price) / scanner_price * 100
-                if gap_pct >= 0.5:
+                if gap_pct >= 1.5: #1.5% 이상 오르면 추격매수 포기
                     if code not in cooldowns:
                         print(f"⚠️ [{stock['name']}] 포착가 대비 너무 오름 (갭 +{gap_pct:.1f}%). 추격매수 포기 및 쿨타임 진입.")
                         cooldowns[code] = time.time() + 1200
@@ -763,8 +763,8 @@ def run_sniper(broadcast_callback):
             # 1. 내부 장중 스캐너 가동 (KOSPI)
             last_scan_time = check_and_run_intraday_scanner(targets, last_scan_time, broadcast_callback)
 
-            # 🚀 2. [신규 추가] 15초마다 외부(초단타 스캐너 등)에서 DB에 새로 넣은 종목이 있는지 확인
-            if time.time() - last_db_poll_time > 15:
+            # 🚀 2. [신규 추가] 5초마다 외부(초단타 스캐너 등)에서 DB에 새로 넣은 종목이 있는지 확인
+            if time.time() - last_db_poll_time > 5:
                 db_targets = get_active_targets()
                 for dt in db_targets:
                     if not any(t['code'] == dt['code'] for t in targets):

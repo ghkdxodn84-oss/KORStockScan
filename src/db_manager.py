@@ -92,14 +92,60 @@ class DBManager:
             conn.commit()
 
     # --------------------------------------------------------
-    # 3. 텔레그램 유저 조회 (users.db 전용)
+    # 3. 텔레그램 유저 관리 (users.db 전용)
     # --------------------------------------------------------
+    def init_user_db(self):
+        """사용자 관리 DB를 초기화하고 테이블을 생성합니다."""
+        with sqlite3.connect(USER_DB_PATH) as conn:
+            # auth_group 컬럼을 기본적으로 포함하도록 안전하게 구성합니다.
+            conn.execute('''
+                CREATE TABLE IF NOT EXISTS users (
+                    chat_id INTEGER PRIMARY KEY,
+                    user_level INTEGER DEFAULT 0,
+                    joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    auth_group TEXT DEFAULT 'U'
+                )
+            ''')
+            conn.commit()
+
     def get_telegram_chat_ids(self) -> list:
         """텔레그램 알림을 수신할 유저들의 chat_id 목록을 반환합니다."""
         with sqlite3.connect(USER_DB_PATH) as conn:
             rows = conn.execute("SELECT chat_id FROM users WHERE chat_id IS NOT NULL").fetchall()
             return [row[0] for row in rows]
 
+    def check_special_auth(self, chat_id: str) -> bool:
+        """DB에서 권한 그룹을 조회하여 특수 권한(A: 어드민, V: VIP) 여부를 반환합니다."""
+        try:
+            with sqlite3.connect(USER_DB_PATH) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT auth_group FROM users WHERE chat_id = ?", (str(chat_id),))
+                result = cursor.fetchone()
+                return bool(result and result[0] in ['A', 'V'])
+        except Exception as e:
+            print(f"⚠️ 권한 체크 중 DB 에러 발생: {e}")
+            return False
+
+    def get_user_level(self, chat_id: int) -> int:
+        """사용자의 등급 레벨을 반환합니다."""
+        try:
+            with sqlite3.connect(USER_DB_PATH) as conn:
+                row = conn.execute("SELECT user_level FROM users WHERE chat_id = ?", (chat_id,)).fetchone()
+                return row[0] if row else 0
+        except Exception:
+            return 0
+
+    def add_new_user(self, chat_id: int):
+        """신규 사용자를 등록합니다."""
+        with sqlite3.connect(USER_DB_PATH) as conn:
+            conn.execute('INSERT OR IGNORE INTO users (chat_id) VALUES (?)', (chat_id,))
+            conn.commit()
+
+    def upgrade_user_level(self, chat_id: int, level: int = 1):
+        """사용자의 등급을 업데이트합니다."""
+        with sqlite3.connect(USER_DB_PATH) as conn:
+            conn.execute("UPDATE users SET user_level = ? WHERE chat_id = ?", (level, chat_id))
+            conn.commit()
     # --------------------------------------------------------
     # 4. 매매 일지 기록 (매도 완료 시)
     # --------------------------------------------------------

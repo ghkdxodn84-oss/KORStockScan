@@ -53,29 +53,18 @@ engine_thread = None
 
 
 def has_special_auth(chat_id):
-    """
-    요청한 사용자가 최고관리자(ADMIN_ID)이거나,
-    users.db 상에서 auth_group이 'A'(어드민) 또는 'V'(VIP)인 사용자인지 판별합니다.
-    """
+    """최고관리자이거나 DB 상의 특수 권한인지 판별"""
     chat_id_str = str(chat_id)
-
-    # 1. 최고 관리자(config.json의 ADMIN_ID)는 무조건 프리패스 (안전장치)
     admin_id = str(CONF.get('ADMIN_ID', ''))
-    if chat_id_str == admin_id:
-        return True
-
-    # 2. DB에서 권한 그룹 조회 (A: 어드민, V: VIP)
+    
     try:
-        # USER_DB_PATH 변수가 봇 파일 상단에 정의되어 있어야 합니다.
-        with sqlite3.connect(USERS_DB_PATH) as conn:
-            cursor = conn.cursor()
+        # 1. 최고 관리자는 무조건 프리패스
+        if chat_id_str == admin_id:
+            return True
 
-            cursor.execute("SELECT auth_group FROM users WHERE chat_id = ?", (chat_id_str,))
-            result = cursor.fetchone()
-
-            # 💡 [핵심] 결과가 'A' 이거나 'V' 이면 통과!
-            if result and result[0] in ['A', 'V']:
-                return True
+        # 2. DBManager를 통해 권한 확인
+        return db_manager.check_special_auth(chat_id_str)
+    
     except Exception as e:
         print(f"⚠️ 권한 체크 중 DB 에러 발생: {e}")
 
@@ -87,19 +76,8 @@ def has_special_auth(chat_id):
 # ==========================================
 def init_db():
     """사용자 관리 DB 초기화"""
-    with sqlite3.connect(USERS_DB_PATH) as conn:
-        conn.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                chat_id INTEGER PRIMARY KEY,
-                user_level INTEGER DEFAULT 0,
-                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
-
-def get_db_connection(db_path):
-    """함수 내에서 개별적으로 연결하여 스레드 충돌 방지"""
-    return sqlite3.connect(db_path, timeout=10)
-
+    db_manager.init_user_db()
+        
 # ==========================================
 # 4. 유틸리티 및 UI 함수 (핸들러보다 무조건 위에 위치!)
 # ==========================================
@@ -112,13 +90,8 @@ def get_main_keyboard():
     return markup
 
 def get_user_badge(chat_id):
-    try:
-        temp_conn = sqlite3.connect(USERS_DB_PATH)
-        row = temp_conn.execute("SELECT user_level FROM users WHERE chat_id = ?", (chat_id,)).fetchone()
-        temp_conn.close()
-        return "👑 [VIP 후원자] " if row and row[0] == 1 else "👤 [일반] "
-    except:
-        return ""
+    level = db_manager.get_user_level(chat_id)
+    return "👑 [VIP 후원자] " if level == 1 else "👤 [일반] "
 
 def process_manual_add_logic(message, code):
     stock_name = code
@@ -206,17 +179,17 @@ def process_manual_add_logic(message, code):
     except Exception as e:
         bot.reply_to(message, f"❌ DB 저장 중 시스템 에러 발생: {e}")
 
-def broadcast_alert(message_text, parse_mode='HTML'): # 💡 기본값을 HTML로 변경!
-    temp_conn = sqlite3.connect(USERS_DB_PATH)
-    rows = temp_conn.execute('SELECT chat_id FROM users').fetchall()
-    for row in rows:
+def broadcast_alert(message_text, parse_mode='HTML'): 
+    # db_manager.py에 이미 있는 get_telegram_chat_ids() 활용
+    chat_ids = db_manager.get_telegram_chat_ids()
+    
+    for chat_id in chat_ids:
         try:
-            bot.send_message(row[0], message_text, parse_mode=parse_mode)
+            bot.send_message(chat_id, message_text, parse_mode=parse_mode)
             time.sleep(0.05)
         except Exception as e:
-            print(f"⚠️ 브로드캐스트 전송 실패: {e}")
+            print(f"⚠️ 브로드캐스트 전송 실패 (Chat ID: {chat_id}): {e}")
             pass
-    temp_conn.close()
 
 def broadcast_today_picks():
     """
@@ -509,11 +482,12 @@ def handle_manual_add_cmd(message):
 @bot.message_handler(commands=['start', 'help'])
 def handle_start(message):
     chat_id = message.chat.id
-    with sqlite3.connect(USERS_DB_PATH) as conn:
-        conn.execute('INSERT OR IGNORE INTO users (chat_id) VALUES (?)', (chat_id,))
+    
+    # DBManager를 통한 유저 등록
+    db_manager.add_new_user(chat_id)
 
     welcome_msg = (
-        "🚀 **KORStockScan v12.1 관제 시스템 기동**\n\n"
+        "🚀 **KORStockScan v13.0 관제 시스템 기동**\n\n"
         "백테스트 **승률 63.3%**의 AI 앙상블이 실시간 감시 중입니다.\n\n"
         "📈 **스나이퍼 매매 원칙**\n"
         "• 장중 가변 익절 / 손절 시스템 적용\n"
@@ -521,6 +495,7 @@ def handle_start(message):
         "• AI 확신도 기반 정예 종목 선별"
     )
     bot.send_message(chat_id, welcome_msg, parse_mode='Markdown', reply_markup=get_main_keyboard())
+
 
 @bot.message_handler(commands=['상태', 'status'])
 def handle_status(message):
@@ -579,10 +554,10 @@ def process_pre_checkout(pre_checkout_query):
 @bot.message_handler(content_types=['successful_payment'])
 def handle_payment_success(message):
     chat_id = message.chat.id
-    temp_conn = sqlite3.connect(USERS_DB_PATH)
-    temp_conn.execute("UPDATE users SET user_level = 1 WHERE chat_id = ?", (chat_id,))
-    temp_conn.commit()
-    temp_conn.close()
+    
+    # DBManager를 통한 등급 업데이트
+    db_manager.upgrade_user_level(chat_id, level=1)
+    
     bot.send_message(chat_id, "🎊 **VIP 등급으로 승격되었습니다!**")
 
 @bot.message_handler(commands=['reload'])
