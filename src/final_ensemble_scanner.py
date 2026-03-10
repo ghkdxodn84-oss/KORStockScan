@@ -205,24 +205,29 @@ def run_integrated_scanner():
         print(f"🚀 [2/4] AI 콰트로 앙상블 분석 시작 ({len(target_list)} 종목)...")
         all_results = []
         
-        # 💡 [복구] 지워졌던 탈락 사유 추적 카운터 부활!
-        drop_stats = {'low_price': 0, 'quality': 0, 'ai_prob': 0, 'trend': 0, 'supply': 0, 'error': 0}
+        # 💡 [추가] 누락되었던 '데이터 부족', '불량 종목(ETF 등)' 카운터 추가!
+        drop_stats = {'short_data': 0, 'invalid_type': 0, 'low_price': 0, 'quality': 0, 'ai_prob': 0, 'trend': 0, 'supply': 0, 'error': 0}
 
         for stock in target_list:
             code = str(stock['Code']).strip().zfill(6)
             name = stock['Name']
             
-            # 🚀 1. DB에서 데이터와 가격을 딱 한 번만 가져옵니다.
             df = db.get_stock_data(code, limit=60)
-            if len(df) < 30: continue
-            df = df.sort_values('Date')
 
+            # 🚀 [추가] 데이터 부족으로 탈락한 종목 카운트
+            if len(df) < 30: 
+                drop_stats['short_data'] += 1
+                continue
+
+            df = df.sort_values('Date')
             current_price = df.iloc[-1]['Close']
 
-            # 🚀 2. 알아낸 가격으로 필터링과 통계 집계를 동시에 처리합니다.
+            # 🚀 [추가] 저가주와 이름 불량(ETF, 스팩 등) 탈락 사유 세분화
             if not kiwoom_utils.is_valid_stock(code, name, current_price=current_price):
                 if current_price < TRADING_RULES['MIN_PRICE']:
                     drop_stats['low_price'] += 1
+                else:
+                    drop_stats['invalid_type'] += 1
                 continue
 
             # Quality 필터 (상대강도 등)
@@ -230,7 +235,6 @@ def run_integrated_scanner():
             ma5, ma20 = df['Close'].rolling(5).mean().iloc[-1], df['Close'].rolling(20).mean().iloc[-1]
             high_20d = df['High'].tail(20).max()
 
-            # 💡 [완화 적용] 3개 조건 중 '1개'만 만족해도 통과
             if sum([stock_5d_return > kospi_5d_return, (current_price > ma5 > ma20),
                     current_price >= (high_20d * 0.90)]) < 1:
                 drop_stats['quality'] += 1  
@@ -286,10 +290,11 @@ def run_integrated_scanner():
             f"🛑 *[스캐너 필터링 결과 분석]*\n"
             f"총 {len(target_list)}개 중 *{len(all_results)}개 생존*\n\n"
             f"📉 *탈락 사유 통계*\n"
+            f" • 데이터 30일 미만: {drop_stats['short_data']}개\n"
+            f" • ETF/우선주/스팩: {drop_stats['invalid_type']}개\n"
             f" • 동전주/저가주: {drop_stats['low_price']}개\n"
             f" • 기초 품질 미달: {drop_stats['quality']}개\n"
             f" • AI 확신도 부족(<70%): {drop_stats['ai_prob']}개\n"
-            f" • 역배열(20일선 아래): {drop_stats['trend']}개\n"
             f" • 수급 부재(이탈): {drop_stats['supply']}개\n"
             f" • 데이터 계산 에러: {drop_stats['error']}개"
         )
