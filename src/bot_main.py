@@ -2,7 +2,10 @@
 # 1. 임포트 및 전역 변수 설정 (TOKEN, CONF, DBManager 등)
 # ==========================================
 import json
+import sys
 import os
+import logging
+from logging.handlers import TimedRotatingFileHandler
 import signal
 import sqlite3
 import threading
@@ -18,6 +21,51 @@ import kiwoom_utils
 from signal_radar import SniperRadar  # 1. 레이더 모듈 추가
 from db_manager import DBManager
 from constants import TRADING_RULES
+
+# ==========================================
+# 📝 모든 print()를 가로채서 파일로 저장하는 로거
+# ==========================================
+class DualLogger:
+    def __init__(self):
+        # 1. logs 폴더가 없으면 자동 생성
+        if not os.path.exists('logs'):
+            os.makedirs('logs')
+        
+        # 2. 로거 설정 (매일 자정마다 새 파일 생성, 최근 7일치 보관)
+        self.logger = logging.getLogger('SniperBot')
+        self.logger.setLevel(logging.INFO)
+        
+        # 파일 핸들러 셋팅
+        file_handler = TimedRotatingFileHandler(
+            filename='logs/bot_history.log',
+            when='midnight',
+            interval=1,
+            backupCount=7,  # 7일 지나면 가장 오래된 파일 자동 삭제
+            encoding='utf-8'
+        )
+        
+        # 파일에 적힐 포맷 (시간이 앞에 자동으로 붙습니다)
+        formatter = logging.Formatter('[%(asctime)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+        file_handler.setFormatter(formatter)
+        
+        self.logger.addHandler(file_handler)
+        self.terminal = sys.stdout
+
+    def write(self, message):
+        # 1. 터미널에 그대로 출력 
+        # (터미널 출력을 아예 끄고 파일만 남기려면 아래 줄을 주석(#) 처리하세요)
+        self.terminal.write(message)
+        
+        # 2. 텍스트 파일에 기록 (빈 줄바꿈은 무시)
+        if message.strip():
+            self.logger.info(message.strip())
+
+    def flush(self):
+        self.terminal.flush()
+
+# 🚀 파이썬의 기본 출력을 우리가 만든 로거로 교체!
+sys.stdout = DualLogger()
+sys.stderr = sys.stdout  # 빨간색 에러 메시지도 파일에 같이 기록
 
 # ==========================================
 # 2. 경로 및 환경 설정 (상대 참조 고정)

@@ -9,6 +9,7 @@ import pandas as pd
 import numpy as np
 import holidays
 import requests
+from constants import TRADING_RULES # constants.py에 정의된 상수를 가져옵니다.
 
 
 
@@ -604,38 +605,60 @@ def is_trading_day():
     return True, "정상거래일"
 
 
-def is_valid_stock(code, name):
+# 1. 파일 최상단에 TRADING_RULES를 임포트합니다.
+from constants import TRADING_RULES
+
+def is_valid_stock(code, name, kiwoom):
     """
-    [공통 필터] 불순물 종목을 완벽하게 걸러냅니다.
-    스팩(SPAC), ETF, ETN, 우선주, 리츠 등을 제외하여 순수 상장 주식만 AI 모델과 매매 엔진에 전달합니다.
-    KODEX 는 포함합니다.
+    [공통 필터] 불순물 종목 및 저가주를 완벽하게 걸러냅니다.
+    스팩(SPAC), ETF(KODEX 포함), ETN, 우선주, 리츠 등을 제외하여 순수 상장 주식만 매매 엔진에 전달합니다.
     """
-    # 1. 이름 기반 필터링 (대소문자 무관하게 체크)
+    name_upper = name.upper()
+    
+    # ==========================================
+    # 🚨 1. 가격 필터링 (동전주/저가주 제외)
+    # ==========================================
+    # 💡 TRADING_RULES 딕셔너리에서 MIN_PRICE 값을 가져옵니다. (기본값 5000)
+    min_price_limit = TRADING_RULES.get('MIN_PRICE', 5000)
+    
+    try:
+        # GetMasterLastPrice는 전일 종가를 반환하며, 기호(+, -)가 포함될 수 있어 abs() 처리합니다.
+        raw_price = kiwoom.GetMasterLastPrice(code)
+        last_price = abs(int(raw_price)) if raw_price else 0
+        
+        # 설정된 MIN_PRICE보다 낮은 종목은 제외합니다.
+        if last_price < min_price_limit:
+            # print(f"🚫 [가격 필터] {name}({code}): {last_price}원 (기준 {min_price_limit}원 미만)")
+            return False
+    except (ValueError, TypeError):
+        return False # 가격 정보를 알 수 없는 경우 안전하게 제외
+
+    # ==========================================
+    # 2. 이름 기반 필터링 (KODEX 포함 제외 목록)
+    # ==========================================
     invalid_keywords = [
-        '스팩', 'ETF', 'ETN', 'TIGER', 'KBSTAR', 'KODEX',
+        '스팩', 'ETF', 'ETN', 'TIGER', 'KBSTAR', 'KODEX', 
         'KINDEX', 'ARIRANG', 'KOSEF', '리츠', 'HANARO'
     ]
-    name_upper = name.upper()
+    
     for keyword in invalid_keywords:
         if keyword in name_upper:
             return False
 
-    # 2. 우선주 필터링 (이름 끝자리 및 코드 번호 규칙)
-    # 한국 주식시장에서 우선주는 보통 이름 끝이 '우', '우B' 등으로 끝나거나, 종목코드 끝자리가 '0'이 아닙니다.
-    if name.endswith('우') or name.endswith('우B') or name.endswith('우C'):
+    # 3. 우선주 필터링 (이름 끝자리 및 코드 번호 규칙)
+    if name.endswith(('우', '우B', '우C')):
         return False
 
     if len(str(code)) == 6 and str(code)[-1] != '0':
         return False
 
-    # 3. ETN 및 기타 예외 처리 (이름에 '선물', '레버리지' 포함) 
+    # 4. 파생상품 및 기타 예외 처리
     derivative_keywords = ['선물', '레버리지', '블룸버그', 'VIX', '인버스']
     for keyword in derivative_keywords:
         if keyword in name_upper:
             return False
 
     return True
-
 
 def get_investor_daily_ka10059_df(token, code, base_dt=None):
     """[ka10059] 수급 데이터 (재시도 로직 및 누락 방어 적용)"""

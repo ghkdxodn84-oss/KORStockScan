@@ -5,7 +5,6 @@ import threading
 from datetime import datetime
 
 class KiwoomWSManager:
-    # 💡 1. 초기화 함수에 체결 통보용 콜백(on_execution_callback) 추가
     def __init__(self, token, on_execution_callback=None):
         self.uri = 'wss://api.kiwoom.com:10000/api/dostk/websocket'
         self.token = token
@@ -20,35 +19,38 @@ class KiwoomWSManager:
         while True:
             try:
                 print("🔌 [WS] 키움 서버에 연결을 시도합니다...")
-                async with websockets.connect(self.uri) as ws:
+                # ping_interval=None으로 설정하여 키움 서버의 PING 패킷을 수동으로 처리합니다.
+                async with websockets.connect(self.uri, ping_interval=None) as ws:
                     self.websocket = ws
                     print("✅ [WS] 웹소켓 연결 성공!")
 
-                    # 로그인 패킷 전송
+                    # 1. 로그인 패킷 전송
                     login_packet = {'trnm': 'LOGIN', 'token': self.token}
                     await ws.send(json.dumps(login_packet))
                     print("🔑 [WS] 로그인 패킷 전송 완료")
+                    
+                    await asyncio.sleep(1) # 로그인 처리 대기
 
-                    # 🚀 2. [핵심] 계좌 전체 주문체결(00) 감시 등록 (빈 배열 전송)
+                    # 🚀 2. 계좌 전체 주문체결(00) 감시 명시적 등록
                     exec_reg_packet = {
                         "trnm": "REG",
-                        "grp_no": "2",  # 기존 호가/체결(1)과 분리하기 위해 2 사용
+                        "grp_no": "2",  # 기존 호가 감시(1)와 충돌하지 않도록 그룹번호 2 사용
                         "refresh": "1",
                         "data": [
                             {
-                                "item": [""],   # 종목코드 불필요
-                                "type": ["00"]  # 주문체결 타입
+                                "item": [""],   # 전체 종목
+                                "type": ["00"]  # 주문/체결 통보
                             }
                         ]
                     }
                     await ws.send(json.dumps(exec_reg_packet))
                     print("📝 [WS] 🚨 계좌 주문/체결통보(00) 감시망 등록 완료!")
 
-                    # 기존 감시 종목 재등록
+                    # 3. 기존 감시 종목 재등록 (네트워크 끊김 복구용)
                     if self.subscribed_codes:
                         await self._send_reg(list(self.subscribed_codes))
 
-                    # 메시지 수신 루프
+                    # 4. 메시지 수신 무한 루프
                     while True:
                         message = await ws.recv()
                         await self._handle_message(message)
@@ -65,57 +67,92 @@ class KiwoomWSManager:
     async def _handle_message(self, message):
         try:
             msg_dict = json.loads(message)
+            trnm = msg_dict.get('trnm')
             
-            # 💡 3. 데이터 파싱 로직
-            if 'data' in msg_dict:
+            # 🛡️ [생존 신고] 키움 서버의 PING에 PONG으로 응답하여 연결 끊김 방지
+            if trnm == 'PING':
+                if self.websocket:
+                    await self.websocket.send(message)
+                return
+            
+            if trnm == 'REAL' and 'data' in msg_dict:
                 for d in msg_dict['data']:
                     values = d.get('values', {})
                     if not values: continue
 
+                    real_type = d.get('type')
+                    
                     # ===================================================
-                    # [트랙 A] 🚨 주문/체결 통보 가로채기 (type: 00)
+                    # [트랙 A] 🚨 주문/체결 통보 가로채기
                     # ===================================================
-                    if '913' in values:  # 913은 키움증권 '주문상태' FID입니다.
-                        status = values.get('913')
-                        code = values.get('9001', '').replace('A', '') # 종목코드 정제
-                        order_no = values.get('9203', '')              # 주문번호
-                        order_type = values.get('905', '')             # '+매수' or '-매도'
+                    if real_type == '00' or d.get('name') == '주문체결':
+                        status = str(values.get('913', '')).strip()      
+                        code = str(values.get('9001', '')).replace('A', '').strip()
+                        order_no = str(values.get('9203', '')).strip()   
+                        order_type_str = str(values.get('905', '')).strip() 
                         
-                        # 오직 '체결'이 발생했을 때만 영수증(콜백)을 보냅니다. (접수/취소는 무시)
+                        print(f"📩 [WS 주문상태] {code} | 상태: '{status}' | 구분: '{order_type_str}'")
+
                         if status == '체결':
-                            raw_price = values.get('910', '0').replace('+', '').replace('-', '')
-                            raw_qty = values.get('911', '0').replace('+', '').replace('-', '')
+                            raw_price = str(values.get('910', '0')).replace('+', '').replace('-', '').strip()
+                            raw_qty = str(values.get('911', '0')).replace('+', '').replace('-', '').strip()
                             
-                            exec_price = int(raw_price) if raw_price.isdigit() else 0
-                            exec_qty = int(raw_qty) if raw_qty.isdigit() else 0
+                            exec_price = int(raw_price) if raw_price.isdigit() and raw_price else 0
+                            exec_qty = int(raw_qty) if raw_qty.isdigit() and raw_qty else 0
+                            exec_type = 'BUY' if '매수' in order_type_str else 'SELL'
                             
-                            print(f"🔔 [WS 실제체결] {code} {order_type} {exec_qty}주 @ {exec_price}원 (주문번호: {order_no})")
+                            print(f"🔔 [WS 실제체결] {code} {exec_type} {exec_qty}주 @ {exec_price}원 (주문번호: {order_no})")
                             
-                            # 스나이퍼 엔진으로 확실한 영수증 전송
                             if exec_price > 0 and self.on_execution_callback:
                                 self.on_execution_callback({
                                     'code': code,
                                     'order_no': order_no,
-                                    'type': 'BUY' if '매수' in order_type else 'SELL',
+                                    'type': exec_type,
                                     'price': exec_price,
                                     'qty': exec_qty,
                                     'time': datetime.now().strftime('%H:%M:%S')
                                 })
-                        continue # 체결 통보 파싱이 끝났으므로 아래 가격 파싱은 건너뜀
+                        continue 
 
                     # ===================================================
-                    # [트랙 B] 기존 실시간 주가/호가 처리 (type: 0B, 0D)
+                    # [트랙 B] 실시간 주가/호가 데이터 처리
                     # ===================================================
                     item_code = d.get('item', '')
-                    if item_code and '10' in values: # 10은 '현재가' FID입니다.
-                        raw_curr = values.get('10', '0').replace('+', '').replace('-', '')
-                        curr_price = int(raw_curr) if raw_curr.isdigit() else 0
-                        if curr_price > 0:
-                            with self.lock:
+                    if item_code and real_type != '00': 
+                        with self.lock:
+                            if item_code not in self.realtime_data:
                                 self.realtime_data[item_code] = {
-                                    'curr': curr_price,
-                                    'time': datetime.now().strftime('%H:%M:%S')
+                                    'curr': 0, 'v_pw': 0, 'ask_tot': 0, 'bid_tot': 0, 'time': '',
+                                    'fluctuation': 0.0 # 20% 등락률 방어용
                                 }
+                            
+                            target = self.realtime_data[item_code]
+
+                            # 10: 현재가
+                            if '10' in values:
+                                raw_curr = values['10'].replace('+', '').replace('-', '')
+                                target['curr'] = int(raw_curr) if raw_curr.isdigit() else target['curr']
+                                
+                            # 12: 전일 대비 등락률
+                            if '12' in values:
+                                raw_rate = values['12'].replace('+', '')
+                                try: target['fluctuation'] = float(raw_rate)
+                                except ValueError: pass
+                            
+                            # 228: 체결강도
+                            if '228' in values:
+                                target['v_pw'] = float(values['228'])
+                                
+                            # 121: 매도호가 총잔량
+                            if '121' in values:
+                                target['ask_tot'] = int(values['121'])
+                                
+                            # 125: 매수호가 총잔량
+                            if '125' in values:
+                                target['bid_tot'] = int(values['125'])
+                            
+                            target['time'] = datetime.now().strftime('%H:%M:%S')
+
         except Exception as e:
             pass # 불필요한 에러 로그 방지
 

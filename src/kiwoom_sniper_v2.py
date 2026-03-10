@@ -332,19 +332,31 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback):
     strategy = stock.get('strategy', 'KOSPI_ML')
     now_t = datetime.now().time()
     db = DBManager()
+    # 💡 [핵심] TRADING_RULES 딕셔너리에서 MIN_PRICE 값을 안전하게 가져옵니다.
+    MIN_PRICE = TRADING_RULES.get('MIN_PRICE', 5000)
 
     # 🚀 1. 쿨타임(휴식기) 검사
     if code in cooldowns and time.time() < cooldowns[code]:
         return  # 아직 쿨타임이 안 지났으면 무시
 
-    # 🚀 2. 초단타 장 후반 진입 금지 (15:15 이후에는 새로 사지 않음)
-    if strategy == 'SCALPING' and now_t >= datetime.strptime("15:15:00", "%H:%M:%S").time():
+    # 🚀 2. 초단타 장 후반 진입 금지 (15:00 이후에는 새로 사지 않음)
+    if strategy == 'SCALPING' and now_t >= datetime.strptime("15:00:00", "%H:%M:%S").time():
         return
 
     if code in alerted_stocks: return
 
     curr_price = ws_data.get('curr', 0)
     current_vpw = ws_data.get('v_pw', 0)
+
+    # ==========================================
+    # 🚨 3. 실시간 동전주/저가주 컷오프 (MIN_PRICE 방어막)
+    # ==========================================
+    if 0 < curr_price < MIN_PRICE:
+        # 💡 [정확한 코드] 60초(1분)에 딱 1번만 터미널에 보고하고 매수 로직을 차단합니다.
+        if time.time() % 60 < 1: 
+            print(f"🚫 [저가주 방어] {stock['name']} 현재가 {curr_price:,}원. (5,000원 미만 진입 금지)")
+        return 
+    # ==========================================
 
     is_trigger = False
     msg = ""
@@ -354,24 +366,46 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback):
     buy_threshold = TRADING_RULES.get('BUY_SCORE_THRESHOLD', 80)
     strong_vpw = TRADING_RULES.get('VPW_STRONG_LIMIT', 120)
 
-    # ==========================================
-    # 🚀 [멀티 전략] 진입 분기 처리 (SCALP / KOSDAQ / KOSPI)
-    # ==========================================
-    
     # 1️⃣ 초단타 (SCALPING) 전략
     if strategy == 'SCALPING':
         ratio = TRADING_RULES.get('INVEST_RATIO_SCALPING', 0.05)
         
+        # 💡 [데이터 확인] 웹소켓 데이터가 정상인지 먼저 체크
         ask_tot = ws_data.get('ask_tot', 0)
         bid_tot = ws_data.get('bid_tot', 0)
+        curr_price = ws_data.get('curr', 0)
+        current_vpw = ws_data.get('v_pw', 0)
+        fluctuation = float(ws_data.get('fluctuation', 0.0)) # 💡 등락률 가져오기
+        
         liquidity_value = (ask_tot + bid_tot) * curr_price
         MIN_SCALP_LIQUIDITY = 100_000_000
 
+        # ==========================================
+        # 🔍 [디버깅 영역] 왜 안 사고 있을까? (1분마다 1회 출력)
+        # ==========================================
+        #if time.time() % 60 < 1:  # 루프 속도가 빠르므로 1분 주기로 상태 보고
+        #    vpw_limit = TRADING_RULES.get('VPW_SCALP_LIMIT', 120)
+        #    status_check = "✅ 통과" if (current_vpw >= vpw_limit and liquidity_value >= MIN_SCALP_LIQUIDITY) else "❌ 미달"
+        #    
+        #    print(f"🔎 [SCALP 감시] {stock['name']}({code}) | {status_check}")
+        #    print(f"   - 수급강도: {current_vpw:.1f}% (기준: {vpw_limit}%)")
+        #    print(f"   - 호가잔량: {liquidity_value / 100_000_000:.2f}억 (기준: 1.0억)")
+        #    
+        #    if curr_price == 0:
+        #        print(f"   - ⚠️ 경고: 현재가(curr) 데이터가 수신되지 않고 있습니다.")
+        # ==========================================
+
+        # 🚨 [신규 방어막] 이미 20% 이상 급등한 종목은 스캘핑 진입 전면 금지!
+        if fluctuation >= 20.0:
+            if time.time() % 60 < 1: # 터미널 도배 방지
+                print(f"🚫 [SCALP 제외] {stock['name']} | 등락률 {fluctuation}% (20% 초과 급등주 위험)")
+            return # 즉시 함수를 종료하여 매수 프로세스 차단
+        
         if current_vpw >= TRADING_RULES.get('VPW_SCALP_LIMIT', 120) and liquidity_value >= MIN_SCALP_LIQUIDITY:
             scanner_price = stock.get('buy_price', 0)
             if scanner_price > 0:
                 gap_pct = (curr_price - scanner_price) / scanner_price * 100
-                if gap_pct >= 1.5: #1.5% 이상 오르면 추격매수 포기
+                if gap_pct >= 1.5: # 1.5% 이상 오르면 추격매수 포기
                     if code not in cooldowns:
                         print(f"⚠️ [{stock['name']}] 포착가 대비 너무 오름 (갭 +{gap_pct:.1f}%). 추격매수 포기 및 쿨타임 진입.")
                         cooldowns[code] = time.time() + 1200
@@ -428,7 +462,9 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback):
         real_buy_qty = kiwoom_orders.calc_buy_qty(curr_price, deposit, ratio)
 
         if real_buy_qty <= 0:
-            print(f"⚠️ [매수보류] {stock['name']}: 매수 수량이 0주입니다.")
+            print(f"⚠️ [매수보류] {stock['name']}: 매수 수량이 0주입니다. (자금 부족으로 20분 제외)")
+            # 💡 [교정] 0주일 때도 쿨타임을 적용해 무한 루프 차단
+            cooldowns[code] = time.time() + 1200 
             return
 
         # 🚀 [상호 검증 반영] 전략별 주문 세팅
@@ -509,7 +545,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, broadcast_callback, mar
     # 🚀 [멀티 전략] 보유 종목 청산 분기 처리
     # ==========================================
     # 1️⃣ 초단타 (SCALPING) 전략
-    if strategy == 'SCALPING':
+    if strategy in ['SCALPING', 'SCALP']:
         held_time_min = 0
         if 'order_time' in stock:
             held_time_min = (time.time() - stock['order_time']) / 60
@@ -521,12 +557,15 @@ def handle_holding_state(stock, code, ws_data, admin_id, broadcast_callback, mar
             except:
                 pass
 
-        if profit_rate >= TRADING_RULES['SCALP_TARGET']:
+        target_pct = TRADING_RULES.get('SCALP_TARGET', 2.0)
+        stop_pct = TRADING_RULES.get('SCALP_STOP', -2.5)
+
+        if profit_rate >= target_pct:
             is_sell_signal = True
-            reason = f"⚡ 초단타 목표 수익 컷 (+{TRADING_RULES['SCALP_TARGET']}%)"
-        elif profit_rate <= TRADING_RULES['SCALP_STOP']:
+            reason = f"⚡ 초단타 목표 수익 컷 (+{target_pct}%)"
+        elif profit_rate <= stop_pct:
             is_sell_signal = True
-            reason = f"🔪 초단타 무호흡 칼손절 ({TRADING_RULES['SCALP_STOP']}%)"
+            reason = f"🔪 초단타 무호흡 칼손절 ({stop_pct}%)"
         elif held_time_min >= TRADING_RULES['SCALP_TIME_LIMIT_MIN'] and profit_rate >= TRADING_RULES['MIN_FEE_COVER']:
             is_sell_signal = True
             reason = f"⏱️ {TRADING_RULES['SCALP_TIME_LIMIT_MIN']}분 타임아웃 (기회비용 확보용 약익절)"
@@ -591,7 +630,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, broadcast_callback, mar
             reason = f"🛑 손절선 도달 ({regime_name} 기준 {current_stop_loss}%)"
 
     # ==========================================
-    # 🎯 매도 실행 공통 로직 (State Machine 적용)
+    # 🎯 매도 실행 공통 로직 (Race Condition 완벽 방지)
     # ==========================================
     if is_sell_signal:
         sign = "🎊 [익절 주문]" if profit_rate > 0 else "📉 [손절 주문]"
@@ -599,11 +638,24 @@ def handle_holding_state(stock, code, ws_data, admin_id, broadcast_callback, mar
                f"현재가 기준 수익: `{profit_rate:+.2f}%` (고점: {peak_profit:.1f}%)")
 
         is_success = False
+        buy_qty = stock.get('buy_qty', 0)
 
-        if admin_id and stock.get('buy_qty', 0) > 0:
-            res = kiwoom_orders.send_sell_order_market(code, stock['buy_qty'], KIWOOM_TOKEN, config=CONF)
+        # 💡 [수정] 수량이 없으면 왜 못 파는지 터미널에 고래고래 소리치게 만듭니다!
+        if not admin_id:
+            print(f"🚨 [매도실패] {stock['name']}: 관리자 ID(admin_id)가 설정되지 않았습니다.")
+        elif int(buy_qty) <= 0:
+            print(f"🚨 [매도실패] {stock['name']}: 매도 신호가 떴으나, 메모리상 보유 수량(buy_qty)이 {buy_qty}주입니다!")
+        else:
+            # 💡 [핵심 방어 1] 주문 쏘기 전에 미리 장부(DB/메모리)를 SELL_ORDERED로 잠금! (웹소켓 레이스 방지)
+            db.execute_query("UPDATE recommendation_history SET status = 'SELL_ORDERED' WHERE code = ?", (code,))
+            stock['status'] = 'SELL_ORDERED'
+            try: highest_prices.pop(code, None)
+            except: pass
+
+            # 💡 [핵심 방어 2] 장부 세팅이 끝났으니 안심하고 실제 매도 전송
+            print(f"💥 [{stock['name']}] 매도 주문 전송 중...")
+            res = kiwoom_orders.send_sell_order_market(code, int(buy_qty), KIWOOM_TOKEN, config=CONF)
             
-            # 💡 [교정] 매수 때와 동일하게 응답값 꼼꼼히 체크
             if isinstance(res, dict):
                 rt_cd = str(res.get('return_code', res.get('rt_cd', '')))
                 if rt_cd == '0':
@@ -613,27 +665,26 @@ def handle_holding_state(stock, code, ws_data, admin_id, broadcast_callback, mar
             elif res:
                 is_success = True
 
-        if is_success:
-            print(f"💥 [{stock['name']}] 매도 주문 전송 완료. 체결 영수증 대기 중...")
-            broadcast_callback(msg)
-            
-            # 💡 핵심 1: DB 상태를 'SELL_ORDERED'로 바꿔 콜백이 찾을 수 있게 함! (아직 COMPLETED 아님)
-            db.execute_query("UPDATE recommendation_history SET status = 'SELL_ORDERED' WHERE code = ?", (code,))
-            
-            # 💡 핵심 2: 메모리 상태도 대기 상태로 변경
-            stock['status'] = 'SELL_ORDERED'
-            highest_prices.pop(code, None)
+            if is_success:
+                print(f"✅ [{stock['name']}] 매도 주문 전송 완료. 체결 영수증 처리 대기 중...")
+                broadcast_callback(msg)
 
-            # 💡 핵심 3: 스캘핑 부활용 쿨타임 먹이기 (메모리 단에서만 사전 처리)
-            if strategy == 'SCALPING' and now_t < datetime.strptime("15:15:00", "%H:%M:%S").time():
-                cooldowns[code] = time.time() + 1200
-                alerted_stocks.discard(code)
-                print(f"♻️ [{stock['name']}] 스캘핑 청산 완료 후 20분 쿨타임 진입.")
+                # 스캘핑 쿨타임 (기존 로직 유지)
+                if strategy in ['SCALPING', 'SCALP'] and now_t < datetime.strptime("15:15:00", "%H:%M:%S").time():
+                    cooldowns[code] = time.time() + 1200
+                    try: alerted_stocks.discard(code)
+                    except: pass
+                    print(f"♻️ [{stock['name']}] 스캘핑 청산 완료 후 20분 쿨타임 진입.")
+            else:
+                # 💡 [복구] 키움 서버에서 튕겼다면(예: 증거금 부족 등) 다시 HOLDING으로 원상복구
+                print(f"🚨 [{stock['name']}] 매도 전송 실패! 상태를 다시 HOLDING으로 원상복구합니다.")
+                db.execute_query("UPDATE recommendation_history SET status = 'HOLDING' WHERE code = ?", (code,))
+                stock['status'] = 'HOLDING'
 
 def handle_buy_ordered_state(stock, code):
     """
     주문 전송 후(BUY_ORDERED) 일정 시간 동안 체결 영수증이 오지 않으면(미체결) 
-    주문을 취소하고 상태를 되돌립니다.
+    주문을 취소하고 상태를 되돌리거나, 체결 확정 시 HOLDING으로 넘깁니다.
     """
     order_time = stock.get('order_time', 0)
     time_elapsed = time.time() - order_time
@@ -656,7 +707,9 @@ def handle_buy_ordered_state(stock, code):
             db.execute_query("UPDATE recommendation_history SET status = 'WATCHING', buy_price = 0 WHERE code = ?", (code,))
 
             if strategy == 'SCALPING':
-                alerted_stocks.discard(code)
+                # 여기서 alerted_stocks가 에러를 낼 수 있으므로 안전하게 처리
+                try: alerted_stocks.discard(code) 
+                except: pass
                 cooldowns[code] = time.time() + 1200 # 20분 쿨타임
             return
 
@@ -666,6 +719,8 @@ def handle_buy_ordered_state(stock, code):
         )
 
         is_success = False
+        res_str = str(res) # 응답 결과를 문자열로 변환하여 에러 메시지 파악 용이하게 함
+
         if isinstance(res, dict):
             if str(res.get('return_code', res.get('rt_cd', ''))) == '0':
                 is_success = True
@@ -678,24 +733,37 @@ def handle_buy_ordered_state(stock, code):
             stock['status'] = 'WATCHING'
             stock.pop('odno', None)
             stock.pop('order_time', None)
-            highest_prices.pop(code, None)
+            try: highest_prices.pop(code, None)
+            except: pass
             
             # DB 상태 동기화 (원복)
             db.execute_query("UPDATE recommendation_history SET status = 'WATCHING', buy_price = 0 WHERE code = ?", (code,))
 
             # 🚀 [초단타 부활 로직] 호가가 도망가서 취소한 경우, 추격매수 안하고 20분 대기!
             if strategy == 'SCALPING':
-                alerted_stocks.discard(code)
+                try: alerted_stocks.discard(code)
+                except: pass
                 cooldowns[code] = time.time() + 1200
                 print(f"♻️ [{stock['name']}] 스캘핑 취소 완료. 20분 쿨타임 진입.")
 
-        # 4. 취소 실패 시 (이미 체결되었을 확률이 매우 높음)
+        # 4. 취소 실패 시 (이미 체결되었거나, 애초에 돈이 부족해서 주문이 안 들어갔던 유령 주문)
         else:
-            print(f"🚨 [{stock['name']}] 매수 취소 실패! (이미 체결되었거나 키움 서버 지연)")
-            # 💡 [가장 중요한 수정] 여기서 강제로 'HOLDING'으로 넘기지 않습니다!
-            # 이미 체결되었다면 웹소켓 체결 통보가 날아와서 콜백 함수가 정확한 가격을 적고 HOLDING으로 바꿔줍니다.
-            # 영원히 루프에 갇히는 것을 막기 위해 확인 시간(order_time)만 10초 뒤로 연장해 둡니다.
-            stock['order_time'] = time.time() - timeout_sec + 10
+            print(f"🚨 [{stock['name']}] 매수 취소 실패! (에러응답: {res_str})")
+            print(f"♻️ 무한 루프 방지를 위해 감시망 복귀 및 쿨타임을 적용합니다.")
+            
+            # 무한 루프 10초 연장을 삭제하고, 확실하게 상태를 초기화합니다!
+            stock['status'] = 'WATCHING'
+            stock.pop('odno', None)
+            stock.pop('order_time', None)
+            
+            # DB 상태 동기화 (원복)
+            db.execute_query("UPDATE recommendation_history SET status = 'WATCHING', buy_price = 0 WHERE code = ?", (code,))
+            
+            # 스캘핑인 경우 20분 쿨타임 먹여서 당분간 귀찮게 안 하도록 처리
+            if strategy == 'SCALPING':
+                try: alerted_stocks.discard(code)
+                except: pass
+                cooldowns[code] = time.time() + 1200
 
 
 # ==============================================================================
@@ -786,7 +854,11 @@ def run_sniper(broadcast_callback):
                 status = stock['status']
 
                 ws_data = WS_MANAGER.get_latest_data(code)
-                if not ws_data or ws_data.get('curr', 0) == 0: continue
+                if not ws_data or ws_data.get('curr', 0) == 0: 
+                    # 1분에 한 번 정도만 출력되게 하거나, 특정 종목 하나만 지정해서 확인 (디버깅용)
+                    #if time.time() % 60 < 1: 
+                    #    print(f"❓ [{stock['name']}] 데이터를 기다리는 중... (현재가: {ws_data.get('curr')})")
+                    continue
 
                 if status == 'WATCHING':
                     handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback)

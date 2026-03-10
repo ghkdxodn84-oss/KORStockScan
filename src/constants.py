@@ -41,7 +41,7 @@ TRADING_RULES = {
     'SCALP_TIME_LIMIT_MIN': 30,  # 최대 보유 허용 시간 (30분)
     'MIN_FEE_COVER': 0.3,        # 세금(0.2%) + 수수료 보존용 최소 익절선 (0.3%)
     'VPW_SCALP_LIMIT': 120,         # 확신도가 낮을 때 매수를 강행하기 위한 체결강도 허들(%)
-    'SCALP_TARGET': 2.0,  # 초단타 익절 2.0%
+    'SCALP_TARGET': 1.5,  # 초단타 익절 1.5%
     'SCALP_STOP': -2.5,  # 초단타 손절 -2.5%
 
     # 💡 [신규] 코스닥 스캐너 설정
