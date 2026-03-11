@@ -22,8 +22,8 @@ TRADING_RULES = {
     
     # [매매 비중 설정] 전략별 주문 가능 현금 대비 1회 매수 투입 비율
     'INVEST_RATIO_KOSPI': 0.20,   # 1. 코스피 우량주 (20% - 묵직하게 스윙)
-    'INVEST_RATIO_KOSDAQ': 0.10,   # 2. 코스닥 주도주 (10% - 중간 비중)
-    'INVEST_RATIO_SCALPING': 0.05,   # 3. 초단타 스캘핑 (5% - 리스크 최소화, 가볍게)
+    'INVEST_RATIO_KOSDAQ': 0.15,   # 2. 코스닥 주도주 (15% - 중간 비중)
+    'INVEST_RATIO_SCALPING': 0.10,   # 3. 초단타 스캘핑 (10% - 리스크 최소화, 가볍게)
 
     # 💡 [변경] 스윙 손절선 (백테스트 기준 -3.0% 반영)
     'STOP_LOSS_BULL': -3.0,          # 🏆 상승장 손절선 (최적화 결과 -3.0 반영)
@@ -44,7 +44,8 @@ TRADING_RULES = {
     'SCALP_TARGET': 1.5,         # 초단타 익절 1.5%
     'SCALP_STOP': -2.5,          # 초단타 손절 -2.5%
     'MIN_SCALP_LIQUIDITY': 300_000_000,  # 최소 호가 잔량 대금 (3억)
-    'MAX_SCALP_SURGE_PCT': 15.0,         # 초단타 진입 금지 급등률 (15%)
+    'MAX_SCALP_SURGE_PCT': 20.0,         # 초단타 진입 금지 급등률 (20%)
+    'MAX_INTRADAY_SURGE': 15.0,    # 당일 시가 대비 최대 급등률 (15%)
 
     # 💡 [신규] 코스닥 스캐너 설정
     'KOSDAQ_TARGET': 4.0, # 코스닥은 조금 더 높게 목표 (예: 4.0%)

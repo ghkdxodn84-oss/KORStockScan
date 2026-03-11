@@ -123,7 +123,8 @@ class KiwoomWSManager:
                             if item_code not in self.realtime_data:
                                 self.realtime_data[item_code] = {
                                     'curr': 0, 'v_pw': 0, 'ask_tot': 0, 'bid_tot': 0, 'time': '',
-                                    'fluctuation': 0.0 # 20% 등락률 방어용
+                                    'fluctuation': 0.0,
+                                    'open': 0  # 💡 [여기 추가] 시가를 담을 빈 공간
                                 }
                             
                             target = self.realtime_data[item_code]
@@ -132,6 +133,11 @@ class KiwoomWSManager:
                             if '10' in values:
                                 raw_curr = values['10'].replace('+', '').replace('-', '')
                                 target['curr'] = int(raw_curr) if raw_curr.isdigit() else target['curr']
+                            
+                            # 16: 시가
+                            if '16' in values:
+                                raw_open = values['16'].replace('+', '').replace('-', '')
+                                target['open'] = int(raw_open) if raw_open.isdigit() else target.get('open', 0)
                                 
                             # 12: 전일 대비 등락률
                             if '12' in values:

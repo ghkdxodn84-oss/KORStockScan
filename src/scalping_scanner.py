@@ -88,8 +88,14 @@ def run_scalper():
                 try:
                     with db._get_connection() as conn:
                         conn.execute('''
-                                     INSERT INTO recommendation_history (date, code, name, buy_price, type, strategy)
-                                     VALUES (?, ?, ?, ?, ?, ?)
+                                     INSERT INTO recommendation_history 
+                                     (date, code, name, buy_price, type, strategy, status)
+                                     VALUES (?, ?, ?, ?, ?, ?, 'WATCHING')
+                                     ON CONFLICT(date, code) DO UPDATE SET 
+                                         strategy = excluded.strategy,
+                                         buy_price = excluded.buy_price,
+                                         status = 'WATCHING'
+                                     WHERE status IN ('WATCHING', 'COMPLETED')
                                      ''', (today, code, t['Name'], 0, 'SCALP', 'SCALPING'))
                         conn.commit()
                 except Exception as e:

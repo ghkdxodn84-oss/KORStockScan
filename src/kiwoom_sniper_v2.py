@@ -35,6 +35,7 @@ KIWOOM_TOKEN = None
 WS_MANAGER = None
 SHEET_MANAGER = GoogleSheetsManager(CREDENTIALS_PATH, 'KOSPIScanner')
 DB = DBManager()  # 💡 전역 객체 생성
+global ACTIVE_TARGETS
 ACTIVE_TARGETS = []
 # -------------------------------------------------------------------
 
@@ -124,24 +125,6 @@ def sync_balance_with_db():
                 )
 
     print("✅ [데이터 동기화] 완료. 봇 메모리가 실제 계좌와 완벽히 일치합니다.")
-
-#def update_stock_status(code, status, buy_price=None, buy_qty=None, buy_time=None):
-#    try:
-#        today = datetime.now().strftime('%Y-%m-%d')
-#        nxt = kiwoom_utils.get_stock_market_ka10100(code, KIWOOM_TOKEN)
-#
-#        with DB._get_connection() as conn:
-#            # 💡 [핵심 수정] 0이나 빈 문자열이 들어와도 정상적으로 업데이트하도록 명시적 확인
-#            if buy_price is not None and buy_qty is not None and buy_time is not None:
-#                conn.execute(
-#                    "UPDATE recommendation_history SET status=?, buy_price=?, buy_qty=?, buy_time=?, nxt=? WHERE code=? AND date=?",
-#                    (status, buy_price, buy_qty, buy_time, nxt, code, today))
-#            else:
-#                conn.execute("UPDATE recommendation_history SET status=?, nxt=? WHERE date=? AND code=?",
-#                             (status, nxt, today, code))
-#            conn.commit()
-#    except Exception as e:
-#        print(f"⚠️ DB 업데이트 실패: {e}")
 
 def get_active_targets():
     targets = []
@@ -350,8 +333,6 @@ def handle_real_execution(exec_data):
                     is_scalp_revive = (strategy_row and strategy_row[0] == 'SCALPING') and (now_t < datetime.strptime("15:15:00", "%H:%M:%S").time())
                     if is_scalp_revive:
                         today = datetime.now().strftime('%Y-%m-%d')
-                        # 메모리에서 종목의 기본 정보를 가져옵니다.
-                        global ACTIVE_TARGETS
                         stock_info = next((s for s in ACTIVE_TARGETS if s['code'] == code), None)
                         
                         if stock_info:
@@ -374,7 +355,7 @@ def handle_real_execution(exec_data):
     # 2️⃣ 스나이퍼 메모리(ACTIVE_TARGETS) 즉시 동기화
     # ==========================================
     # 💡 [핵심 교정] if exec_type == 'BUY': 밖으로 빼서 무조건 실행되게 함!
-    global ACTIVE_TARGETS
+    
     for stock in ACTIVE_TARGETS:
         if stock['code'] == code:
             if exec_type == 'BUY':
@@ -400,7 +381,9 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback):
     db = DBManager()
     # 💡 [핵심] TRADING_RULES 딕셔너리에서 MIN_PRICE 값을 안전하게 가져옵니다.
     MIN_PRICE = TRADING_RULES.get('MIN_PRICE', 5000)
-    MAX_SURGE = TRADING_RULES.get('MAX_SCALP_SURGE_PCT', 15.0) 
+    MAX_SURGE = TRADING_RULES.get('MAX_SCALP_SURGE_PCT', 20.0) 
+    MAX_INTRADAY_SURGE = TRADING_RULES.get('MAX_INTRADAY_SURGE', 15.0)
+
     MIN_LIQUIDITY = TRADING_RULES.get('MIN_SCALP_LIQUIDITY', 300_000_000)
 
     # 🚀 1. 쿨타임(휴식기) 검사
@@ -444,28 +427,23 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback):
         curr_price = ws_data.get('curr', 0)
         current_vpw = ws_data.get('v_pw', 0)
         fluctuation = float(ws_data.get('fluctuation', 0.0)) # 💡 등락률 가져오기
+        open_price = float(ws_data.get('open', curr_price))
+
+        # 당일 시가 대비 등락률
+        if open_price > 0:
+            intraday_surge = ((curr_price - open_price) / open_price) * 100
+        else:
+            intraday_surge = fluctuation
         
         liquidity_value = (ask_tot + bid_tot) * curr_price
 
         # ==========================================
-        # 🔍 [디버깅 영역] 왜 안 사고 있을까? (1분마다 1회 출력)
+        # 🚨 [완벽해진 이중 방어막 적용]
+        # 전일 대비로는 20%까지 넓게 허용해주되, 당일 시가 대비 15% 이상 치솟은 종목은 매수 금지!
         # ==========================================
-        #if time.time() % 60 < 1:  # 루프 속도가 빠르므로 1분 주기로 상태 보고
-        #    vpw_limit = TRADING_RULES.get('VPW_SCALP_LIMIT', 120)
-        #    status_check = "✅ 통과" if (current_vpw >= vpw_limit and liquidity_value >= MIN_SCALP_LIQUIDITY) else "❌ 미달"
-        #    
-        #    print(f"🔎 [SCALP 감시] {stock['name']}({code}) | {status_check}")
-        #    print(f"   - 수급강도: {current_vpw:.1f}% (기준: {vpw_limit}%)")
-        #    print(f"   - 호가잔량: {liquidity_value / 100_000_000:.2f}억 (기준: 1.0억)")
-        #    
-        #    if curr_price == 0:
-        #        print(f"   - ⚠️ 경고: 현재가(curr) 데이터가 수신되지 않고 있습니다.")
-        # ==========================================
-
-        # 🚨 [신규 방어막] 이미 15% 이상 급등한 종목은 스캘핑 진입 전면 금지!
-        if fluctuation >= MAX_SURGE:
-            if time.time() % 60 < 1: # 터미널 도배 방지
-                print(f"🚫 [SCALP 제외] {stock['name']} | 등락률 {fluctuation}% (15% 초과 급등주 위험)")
+        if fluctuation >= MAX_SURGE or intraday_surge >= MAX_INTRADAY_SURGE:
+            if time.time() % 60 < 1: # 터미널 도배 방지 (1분에 1회 출력)
+                print(f"🚫 [SCALP 제외] {stock['name']} | 전일대비: +{fluctuation}%, 시가대비: +{intraday_surge:.1f}% (과매수 위험)")
             return # 즉시 함수를 종료하여 매수 프로세스 차단
         
         if current_vpw >= TRADING_RULES.get('VPW_SCALP_LIMIT', 120) and liquidity_value >= MIN_LIQUIDITY:
@@ -478,12 +456,12 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback):
                         cooldowns[code] = time.time() + 1200
                     return
 
-            target_buy_price = kiwoom_utils.get_price_ticks_down(curr_price, ticks=2)
+            target_buy_price = kiwoom_utils.get_target_price_by_percent(curr_price, drop_percent=0.5)
             stock['target_buy_price'] = target_buy_price
 
             is_trigger = True
             msg = (f"⚡ **[{stock['name']}]({code}) 초단타(SCALP) 그물망 투척!**\n"
-                   f"현재가: `{curr_price:,}원` ➡️ **매수대기: `{target_buy_price:,}원` (2호가 아래)**\n"
+                   f"현재가: `{curr_price:,}원` ➡️ **매수대기: `{target_buy_price:,}원` (-0.5% 눌림목)**\n"
                    f"호가잔량대금: `{liquidity_value / 100_000_000:.1f}억` | 수급강도: `{current_vpw:.1f}%`")
 
     # 2️⃣ 코스닥 우량주 스윙 (KOSDAQ_ML) 전략
@@ -744,10 +722,17 @@ def handle_holding_state(stock, code, ws_data, admin_id, broadcast_callback, mar
                     except: pass
                     print(f"♻️ [{stock['name']}] 스캘핑 청산 완료 후 20분 쿨타임 진입.")
             else:
-                # 💡 [복구] 키움 서버에서 튕겼다면(예: 증거금 부족 등) 다시 HOLDING으로 원상복구
-                print(f"🚨 [{stock['name']}] 매도 전송 실패! 상태를 다시 HOLDING으로 원상복구합니다.")
-                db.execute_query("UPDATE recommendation_history SET status = 'HOLDING' WHERE code = ?", (code,))
-                stock['status'] = 'HOLDING'
+                # 💡 [핵심 교정] 에러 메시지를 읽고 영구 탈출(COMPLETED)할지, 복구(HOLDING)할지 결정합니다.
+                err_msg = res.get('return_msg', '') if isinstance(res, dict) else ''
+                
+                if '매도가능수량' in err_msg:
+                    print(f"🚨 [{stock['name']}] 잔고 0주(이미 매도됨). 무한루프를 막기 위해 COMPLETED로 강제 전환합니다.")
+                    db.execute_query("UPDATE recommendation_history SET status = 'COMPLETED' WHERE code = ?", (code,))
+                    stock['status'] = 'COMPLETED'
+                else:
+                    print(f"🚨 [{stock['name']}] 일시적 매도 전송 실패! 상태를 다시 HOLDING으로 원상복구합니다.")
+                    db.execute_query("UPDATE recommendation_history SET status = 'HOLDING' WHERE code = ?", (code,))
+                    stock['status'] = 'HOLDING'
 
 def handle_buy_ordered_state(stock, code):
     """
@@ -817,11 +802,18 @@ def handle_buy_ordered_state(stock, code):
         # 4. 취소 실패 시 (이미 체결되었거나, 주문 상태가 변경된 경우)
         else:
             print(f"🚨 [{stock['name']}] 매수 취소 실패! (에러응답: {res_str})")
-            print(f"💡 이미 체결되었을 확률이 높으므로, 강제 초기화하지 않고 웹소켓 영수증을 대기합니다.")
             
-            # 💡 [핵심 교정] 메모리(stock['status'])를 건드리지 않고 그대로 둡니다!
-            # 체결 영수증이 오면 handle_real_execution이 알아서 HOLDING으로 바꿔줄 것입니다.
-            # 만약 정말로 돈이 없어서 생긴 유령 주문이었다면, 다음 루프에서 다시 취소를 시도하거나 수동 정리가 필요합니다.
+            # 💡 [핵심 교정] 이미 샀는데 또 취소하려고 해서 나는 에러면 강제로 HOLDING으로 넘깁니다.
+            err_msg = res.get('return_msg', '') if isinstance(res, dict) else res_str
+            
+            if '취소가능수량' in err_msg:
+                print(f"💡 [{stock['name']}] 이미 전량 체결되었을 확률이 99%입니다. 무한루프 방지를 위해 HOLDING으로 강제 전환합니다.")
+                
+                # 메모리와 DB를 보유 상태로 돌려 다음 루프부터 매도(익절/손절)를 감시하게 만듭니다.
+                stock['status'] = 'HOLDING'
+                db.execute_query("UPDATE recommendation_history SET status = 'HOLDING' WHERE code = ? AND status = 'BUY_ORDERED'", (code,))
+            else:
+                print(f"💡 시스템 일시 오류일 수 있으므로 상태를 유지하고 웹소켓 영수증을 대기합니다.")
 
 
 # ==============================================================================
