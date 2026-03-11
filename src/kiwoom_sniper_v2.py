@@ -463,6 +463,10 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback):
             msg = (f"⚡ **[{stock['name']}]({code}) 초단타(SCALP) 그물망 투척!**\n"
                    f"현재가: `{curr_price:,}원` ➡️ **매수대기: `{target_buy_price:,}원` (-0.5% 눌림목)**\n"
                    f"호가잔량대금: `{liquidity_value / 100_000_000:.1f}억` | 수급강도: `{current_vpw:.1f}%`")
+            
+            # 💡 [핵심 추가] 매수 로직과 별개로, 텔레그램 발송용 타겟 오디언스 꼬리표를 붙입니다.
+            # 호가잔량이 5억(500,000,000) 이상이면 VIP 포함 전체 발송, 미만이면 ADMIN 전용으로 분류
+            stock['msg_audience'] = 'VIP_ALL' if liquidity_value >= TRADING_RULES.get('VIP_LIQUIDITY_THRESHOLD', 500_000_000) else 'ADMIN_ONLY'
 
     # 2️⃣ 코스닥 우량주 스윙 (KOSDAQ_ML) 전략
     elif strategy == 'KOSDAQ_ML':
@@ -546,7 +550,10 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback):
         # 💡 [핵심 교정] 주문이 "정상 접수" 되었을 때만 메모리와 DB 상태를 'BUY_ORDERED'로 변경!
         if is_success:
             print(f"🛒 [{stock['name']}] 매수 주문 전송 완료. 체결 영수증 대기 중...")
-            broadcast_callback(msg)
+            # 💡 [신규 추가] 스윙 종목 등 꼬리표가 없는 애들은 기본적으로 모두(VIP_ALL)에게 보냅니다.
+            audience = stock.get('msg_audience', 'VIP_ALL')
+            # 콜백 함수에 발송 권한 정보를 함께 넘겨줍니다.
+            broadcast_callback(msg, audience=audience)
             alerted_stocks.add(code)
             
             kiwoom_utils.log_error(f"💰 [주문접수] {stock['name']} {real_buy_qty}주 (전략: {strategy})", config=CONF)

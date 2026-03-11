@@ -99,7 +99,6 @@ if not TOKEN:
 bot = telebot.TeleBot(TOKEN)
 engine_thread = None
 
-
 def has_special_auth(chat_id):
     """최고관리자이거나 DB 상의 특수 권한인지 판별"""
     chat_id_str = str(chat_id)
@@ -118,6 +117,40 @@ def has_special_auth(chat_id):
 
     # 권한이 없거나 에러가 나면 False 반환
     return False
+
+def smart_broadcast(msg, audience='VIP_ALL'):
+    """
+    DB의 유저 레벨('A', 'V')과 스나이퍼의 꼬리표(audience)를 대조하여
+    텔레그램 메시지 발송 대상을 필터링하는 전용 콜백 함수
+    """
+    db = DBManager()
+    
+    try:
+        # 1. users 테이블에서 알림을 받을 수 있는 모든 유저 정보를 한 번에 가져옵니다.
+        # USER_DB_PATH 등을 참조하는 방식에 맞게 db._get_connection() 등을 사용하세요.
+        with db._get_connection() as conn: 
+            users = conn.execute("SELECT chat_id, user_level FROM users").fetchall()
+            
+        for chat_id, level in users:
+            # 2. 관리자('A') 발송 로직: 꼬리표 무관하게 0순위로 100% 수신
+            if level == 'A':
+                try:
+                    bot.send_message(chat_id, msg, parse_mode='Markdown')
+                except Exception as e:
+                    print(f"⚠️ ADMIN({chat_id}) 발송 실패: {e}")
+                    
+            # 3. VIP('V') 발송 로직: 스나이퍼가 'VIP_ALL' (잔량 5억 이상) 꼬리표를 줬을 때만 수신
+            elif level == 'V':
+                if audience == 'VIP_ALL':
+                    try:
+                        bot.send_message(chat_id, msg, parse_mode='Markdown')
+                    except Exception as e:
+                        print(f"⚠️ VIP({chat_id}) 발송 실패: {e}")
+                        
+            # (만약 일반 유저도 있다면 여기에 elif level == 'U' 같은 로직을 추가하시면 됩니다)
+
+    except Exception as e:
+        print(f"🚨 스마트 브로드캐스트 DB 조회/발송 중 에러: {e}")
 
 # ==========================================
 # 3. 데이터베이스 유틸리티 (Thread-safe)
@@ -227,17 +260,36 @@ def process_manual_add_logic(message, code):
     except Exception as e:
         bot.reply_to(message, f"❌ DB 저장 중 시스템 에러 발생: {e}")
 
-def broadcast_alert(message_text, parse_mode='HTML'): 
+def broadcast_alert(message_text, audience='VIP_ALL', parse_mode='HTML'): 
+    # 💡 [수정 1] 스나이퍼에서 넘겨주는 꼬리표(audience) 파라미터를 추가했습니다. 
+    # 기본값을 'VIP_ALL'로 두어 다른 곳에서 이 함수를 그냥 호출해도 에러가 나지 않게 방어합니다.
+
     # db_manager.py에 이미 있는 get_telegram_chat_ids() 활용
     chat_ids = db_manager.get_telegram_chat_ids()
     
     for chat_id in chat_ids:
-        try:
-            bot.send_message(chat_id, message_text, parse_mode=parse_mode)
-            time.sleep(0.05)
-        except Exception as e:
-            print(f"⚠️ 브로드캐스트 전송 실패 (Chat ID: {chat_id}): {e}")
-            pass
+        # 💡 [수정 2] db_manager를 통해 해당 유저의 권한('A' 또는 'V')을 가져옵니다.
+        user_level = db_manager.get_user_level(chat_id)
+        
+        # 💡 [수정 3] 권한에 따른 발송 여부(should_send)를 결정합니다.
+        if user_level == 'A':
+            # 관리자(Admin)는 잔량 5억 미만이든 이상이든 모든 알림을 무조건 수신합니다.
+            should_send = True
+        elif user_level == 'V' and audience == 'VIP_ALL':
+            # VIP 유저는 잔량 5억 이상(VIP_ALL 꼬리표)일 때만 수신합니다.
+            should_send = True
+        else:
+            # 그 외의 경우 (잔량 5억 미만인데 VIP인 경우 등) 발송을 스킵합니다.
+            should_send = False
+
+        # 필터링을 통과한 유저에게만 텔레그램을 발송합니다.
+        if should_send:
+            try:
+                bot.send_message(chat_id, message_text, parse_mode=parse_mode)
+                time.sleep(0.05) # 텔레그램 API 도배 방지 (아주 좋은 습관입니다!)
+            except Exception as e:
+                print(f"⚠️ 브로드캐스트 전송 실패 (Chat ID: {chat_id}): {e}")
+                pass
 
 def broadcast_today_picks():
     """
