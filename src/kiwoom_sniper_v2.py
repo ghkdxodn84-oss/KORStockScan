@@ -320,6 +320,9 @@ def handle_real_execution(exec_data):
                 cursor = conn.cursor()
                 cursor.execute("SELECT buy_price FROM recommendation_history WHERE code = ? AND status IN ('HOLDING', 'SELL_ORDERED')", (code,))
                 row = cursor.fetchone()
+
+                buy_price = 0
+                profit_rate = 0.0
                 
                 if row and row[0] > 0:
                     buy_price = row[0]
@@ -498,7 +501,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback, ra
                     LAST_AI_CALL_TIMES[code] = time.time()
             # =========================================================
 
-            target_buy_price = kiwoom_utils.get_target_price_by_percent(curr_price, drop_percent=0.5)
+            target_buy_price = kiwoom_utils.get_smart_target_price(curr_price, current_vpw)
             stock['target_buy_price'] = target_buy_price
 
             is_trigger = True

@@ -28,8 +28,8 @@ class GeminiSniperEngine:
         """설정 파일에서 읽어온 API 키로 Gemini 엔진을 가동합니다."""
         genai.configure(api_key=api_key)
         # 스캘핑은 스피드가 생명이므로 flash 모델 사용
-        self.model = genai.GenerativeModel('gemini-1.5-flash')
-        print("🧠 [AI 엔진] Gemini 1.5 Flash 스나이퍼 두뇌 로드 완료!")
+        self.model = genai.GenerativeModel('gemini-2.5-flash')
+        print("🧠 [AI 엔진] Gemini 2.5 Flash 스나이퍼 두뇌 로드 완료!")
 
     # ==========================================
     # 3. 🛠️ 데이터 포맷팅 (AI 전용 번역기)

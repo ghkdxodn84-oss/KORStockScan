@@ -906,3 +906,26 @@ def get_target_price_by_percent(curr_price, drop_percent=0.5):
         price -= tick
         
     return price
+
+def get_smart_target_price(curr_price, v_pw=100):
+    if curr_price <= 0: return 0
+    
+    # VPW에 따른 조건 설정
+    if v_pw >= 200:
+        drop_percent, tick_count = 0.2, 3
+    elif v_pw >= 150:
+        drop_percent, tick_count = 0.35, 4
+    else:
+        drop_percent, tick_count = 0.5, 5
+        
+    # 💡 [핵심] 기존 함수를 호출해서 퍼센트 가격을 가져옵니다. (중복 제거)
+    pct_price = get_target_price_by_percent(curr_price, drop_percent)
+    
+    # 틱(Tick) 기준 가격 계산
+    tick_price = curr_price
+    for _ in range(tick_count):
+        tick = get_tick_size(tick_price - 1)
+        tick_price -= tick
+        
+    # 두 기준 중 더 낮은(안전한) 가격 선택
+    return min(pct_price, tick_price)
