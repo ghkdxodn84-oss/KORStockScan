@@ -710,10 +710,17 @@ def handle_holding_state(stock, code, ws_data, admin_id, broadcast_callback, mar
         target_pct = TRADING_RULES.get('SCALP_TARGET', 2.0)
         stop_pct = TRADING_RULES.get('SCALP_STOP', -2.5)
 
-        # 🚀 [우선순위 1] 기계적 목표 도달 (AI 무시하고 무조건 익절/손절)
+        # 🚀 [우선순위 1] AI 가변 트레일링 익절 (수익 극대화)
         if profit_rate >= target_pct:
-            is_sell_signal = True
-            reason = f"⚡ 초단타 목표 수익 컷 (+{target_pct}%)"
+            if current_ai_score >= 75:  
+                # AI가 아직 힘이 넘친다고 판단하면 팔지 않고 버틴다! (수익 극대화)
+                if time.time() % 15 < 1: # 15초마다 로그 출력
+                    print(f"🔥 [AI 트레일링 가동] {stock['name']} +{profit_rate:.2f}% 돌파! 수급 폭발로 홀딩 유지 (점수: {current_ai_score})")
+                # is_sell_signal을 True로 바꾸지 않고 그대로 통과시킴
+            else:
+                # 목표가는 넘었는데 AI 점수가 평범하거나 떨어지기 시작하면 즉시 익절!
+                is_sell_signal = True
+                reason = f"🏆 AI 트레일링 익절 (+{profit_rate:.2f}% / 모멘텀 둔화)"
         elif profit_rate <= stop_pct:
             is_sell_signal = True
             reason = f"🔪 초단타 무호흡 칼손절 ({stop_pct}%)"
