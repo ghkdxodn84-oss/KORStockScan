@@ -470,8 +470,8 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback, ra
             global LAST_AI_CALL_TIMES
             last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
             
-            # 엔진과 레이더가 정상적으로 넘어왔고, 종목당 3초 쿨타임이 지났을 때만 실행
-            if ai_engine and radar and (time.time() - last_ai_time > 3.0):
+            # 💡 30초로 늘려서 API 과부하 방지 (보유 종목 수에 따라 60초로 늘려도 무방합니다)
+            if ai_engine and radar and (time.time() - last_ai_time > 30.0):
                 
                 # 1. 틱 데이터 수집
                 recent_ticks = radar.get_tick_history_ka10003(code, limit=10)
@@ -492,13 +492,15 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback, ra
                     print(f"🤖 [AI 섀도우 모드: {stock['name']}] {action} | 점수: {ai_score}점 | {reason}")
                     
                     if action in ["BUY", "DROP"]:
-                        ai_msg = f"🤖 <b>[AI 스나이퍼 모의판단]</b>\n"
+                        ai_msg = f"🤖 <b>[제미나이 실시간 판단]</b>\n"
                         ai_msg += f"🎯 종목: {stock['name']}\n"
                         ai_msg += f"⚡ 행동: <b>{action} ({ai_score}점)</b>\n"
                         ai_msg += f"🧠 사유: {reason}"
                         
+                        target_audience = 'VIP_ALL' if liquidity_value >= TRADING_RULES.get('VIP_LIQUIDITY_THRESHOLD', 500_000_000) else 'ADMIN_ONLY'
+
                         try:
-                            broadcast_callback(ai_msg, audience='ADMIN_ONLY', parse_mode='HTML')
+                            broadcast_callback(ai_msg, audience=target_audience, parse_mode='HTML')
                         except Exception as e:
                             print(f"AI 알림 발송 실패: {e}")
                             

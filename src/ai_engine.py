@@ -29,8 +29,24 @@ class GeminiSniperEngine:
         """설정 파일에서 읽어온 API 키로 Gemini 엔진을 가동합니다."""
         genai.configure(api_key=api_key)
         # 스캘핑은 스피드가 생명이므로 flash 모델 사용
-        self.model = genai.GenerativeModel('gemini-2.5-flash')
-        print("🧠 [AI 엔진] Gemini 2.5 Flash 스나이퍼 두뇌 로드 완료!")
+        # 💡 [핵심 1] 사용할 모델들의 우선순위 리스트 (가장 좋은 모델부터 배치)
+        self.model_list = [
+            'gemini-2.5-flash',
+            'gemini-3-flash-preview',        # 3.0 플래시
+            'gemini-2.5-flash-lite',         # 2.5 라이트
+            'gemini-3.1-flash-lite-preview',  # 3.1 라이트
+            'gemini-2.5-flash-lite-preview-09-2025'
+        ]
+        
+        # 현재 사용 중인 모델의 인덱스
+        self.current_idx = 0 
+        self._set_current_model()
+        print(f"🧠 [AI 엔진] 멀티 모델 로테이션 가동! (선봉장: {self.model_list[0]})")
+    
+    def _set_current_model(self):
+        """현재 인덱스에 맞는 모델로 교체합니다."""
+        model_name = self.model_list[self.current_idx]
+        self.model = genai.GenerativeModel(model_name)
 
     # ==========================================
     # 3. 🛠️ 데이터 포맷팅 (AI 전용 번역기)
@@ -66,22 +82,50 @@ class GeminiSniperEngine:
     # ==========================================
     # 4. 🚀 실전 분석 실행 (스나이퍼가 호출할 메인 함수)
     # ==========================================
+    # 💡 [핵심 2] 장전된 모델의 개수만큼 최대 재시도(Retry)를 허용합니다.
     def analyze_target(self, target_name, ws_data, recent_ticks):
         formatted_data = self._format_market_data(ws_data, recent_ticks)
-        try:
-            response = self.model.generate_content([SCALPING_SYSTEM_PROMPT, formatted_data])
-            cleaned_text = response.text.strip().replace("```json", "").replace("```", "")
-            
-            result = json.loads(cleaned_text)
-            
-            # 💡 [안전장치] AI가 score를 빼먹거나 문자로 줬을 경우를 대비한 보정
-            if 'score' not in result:
-                result['score'] = 50
-            else:
-                result['score'] = int(result['score'])
+        
+        # 💡 [핵심 2] 장전된 모델의 개수만큼 최대 재시도(Retry)를 허용합니다.
+        max_retries = len(self.model_list)
+        
+        for attempt in range(max_retries):
+            try:
+                # 1. 현재 설정된 모델로 호출 시도
+                response = self.model.generate_content([SCALPING_SYSTEM_PROMPT, formatted_data])
+                cleaned_text = response.text.strip().replace("```json", "").replace("```", "")
                 
-            return result
-            
-        except Exception as e:
-            print(f"🚨 [{target_name}] AI 통신/파싱 에러: {e}")
-            return {"action": "WAIT", "score": 50, "reason": "API 통신 또는 파싱 에러"}
+                result = json.loads(cleaned_text)
+                
+                if 'score' not in result:
+                    result['score'] = 50
+                else:
+                    result['score'] = int(result['score'])
+                    
+                return result
+                
+            except Exception as e:
+                error_msg = str(e).lower()
+                
+                # 2. 쿼타 초과(429) 에러인지 확인
+                if "429" in error_msg or "quota" in error_msg:
+                    current_name = self.model_list[self.current_idx]
+                    print(f"⚠️ [{target_name}] {current_name} 한도 초과! 바통 터치 준비...")
+                    
+                    # 3. 다음 모델로 인덱스 이동 (끝에 도달하면 다시 0번으로)
+                    self.current_idx = (self.current_idx + 1) % len(self.model_list)
+                    self._set_current_model()
+                    
+                    next_name = self.model_list[self.current_idx]
+                    print(f"🔄 [AI 교체 완료] 이제부터 {next_name} 모델이 투입됩니다!")
+                    
+                    # continue를 통해 바뀐 모델로 for 문을 다시 돕니다(재시도).
+                    continue 
+                else:
+                    # 쿼타 에러가 아닌 진짜 통신/파싱 에러면 그냥 대기(WAIT) 처리
+                    print(f"🚨 [{target_name}] AI 통신/파싱 에러: {e}")
+                    return {"action": "WAIT", "score": 50, "reason": "API 통신 또는 파싱 에러"}
+        
+        # 4. 모든 모델이 다 뻗어버린 최악의 경우
+        print(f"🚨 [{target_name}] 준비된 모든 AI 모델의 총알(쿼타)이 소진되었습니다.")
+        return {"action": "WAIT", "score": 50, "reason": "전체 AI 쿼타 소진"}
