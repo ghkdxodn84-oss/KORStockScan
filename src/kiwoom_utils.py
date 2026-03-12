@@ -949,3 +949,38 @@ def get_smart_target_price(curr_price, v_pw=100, ai_prob=0.8, market_trend='NORM
     
     # 💡 수정 완료: 최종 타점과 함께, 최종적으로 결정된 눌림목(drop_percent)을 리턴합니다.
     return final_target, round(drop_percent, 2)
+
+def calculate_micro_indicators(candles):
+    """
+    최근 1분봉 데이터를 바탕으로 스캘핑용 단기 지표를 계산합니다.
+    
+    # 📝 TODO [V14.0 업데이트 예정사항]
+    # 향후 RSI(14) 및 MACD 지표를 추가하려면 아래 작업이 선행되어야 함:
+    # 1. signal_radar.py의 get_minute_candles_ka10080 함수에서 limit=5 를 limit=30 이상으로 수정
+    # 2. pandas-ta 또는 ta 라이브러리를 활용하여 EMA 기반 지표 계산 로직 추가
+    """
+    if not candles or len(candles) < 5:
+        return {"MA5": 0, "Micro_VWAP": 0}
+
+    # 1. 5분 이동평균선 (5-MA)
+    # 캔들은 최신순(앞)부터 정렬되어 있다고 가정합니다.
+    closes = [c['현재가'] for c in candles[:5]]
+    ma5 = sum(closes) / 5
+
+    # 2. Micro-VWAP (최근 5분간의 거래량 가중 평균 주가)
+    # 공식: Sum(전형적 주가 * 거래량) / Sum(거래량)
+    # *전형적 주가(Typical Price) = (고가 + 저가 + 종가) / 3
+    total_vol = 0
+    total_price_vol = 0
+    
+    for c in candles[:5]:
+        typical_price = (c['고가'] + c['저가'] + c['현재가']) / 3
+        total_price_vol += typical_price * c['거래량']
+        total_vol += c['거래량']
+
+    micro_vwap = total_price_vol / total_vol if total_vol > 0 else closes[0]
+
+    return {
+        "MA5": int(ma5), 
+        "Micro_VWAP": int(micro_vwap)
+    }

@@ -141,6 +141,73 @@ class SniperRadar:
             
         return ticks
 
+    # 📝 TODO: 추후 RSI/MACD 보조지표 계산이 필요할 경우, 
+    # AI 속도 최적화를 위해 걸어둔 limit=5를 30~50으로 넉넉하게 늘려줄 것.
+    def get_minute_candles_ka10080(self, code, limit=5):
+        """
+        [REST API] ka10080: 주식분봉차트조회 (POST 방식)
+        최근 N개의 1분봉 데이터를 가져와 AI가 읽기 쉬운 형태로 정제하여 리턴합니다.
+        """
+        host = 'https://api.kiwoom.com'  # 실전투자 URL (모의투자면 https://openapivts.openapi.kiwoom.com 등)
+        endpoint = '/api/dostk/chart'
+        url = host + endpoint
+
+        # 오늘 날짜를 YYYYMMDD 포맷으로 자동 생성
+        base_dt = datetime.now().strftime('%Y%m%d')
+
+        headers = {
+            'Content-Type': 'application/json;charset=UTF-8',
+            'authorization': f'Bearer {self.access_token}',  # 봇이 발급받아둔 토큰 사용
+            'cont-yn': 'N',
+            'next-key': '',
+            'api-id': 'ka10080',
+        }
+
+        data = {
+            'stk_cd': code,
+            'tic_scope': '1',       # 1분봉
+            'upd_stkpc_tp': '1',    # 수정주가 반영
+            'base_dt': base_dt      # 당일 기준
+        }
+
+        try:
+            response = requests.post(url, headers=headers, json=data, timeout=3)
+            response.raise_for_status()
+            res_data = response.json()
+
+            # 💡 [핵심] 응답 데이터에서 분봉 배열(stk_min_pole_chart_qry) 추출
+            candle_list = res_data.get('stk_min_pole_chart_qry', [])
+            if not candle_list:
+                return []
+
+            # 최신 분봉(배열 앞쪽)부터 limit 개수만큼 자르기
+            recent_candles = candle_list[:limit]
+
+            refined_candles = []
+            for candle in recent_candles:
+                # 1. 시간 포맷팅 (예: "20250917132000" -> "13:20:00")
+                raw_time = candle.get('cntr_tm', '')
+                if len(raw_time) >= 14:
+                    formatted_time = f"{raw_time[8:10]}:{raw_time[10:12]}:{raw_time[12:14]}"
+                else:
+                    formatted_time = raw_time
+
+                # 2. 가격 절댓값 처리 (키움증권 마이너스 부호 제거) 및 매핑
+                refined_candles.append({
+                    "체결시간": formatted_time,
+                    "시가": abs(int(candle.get("open_pric", 0))),
+                    "고가": abs(int(candle.get("high_pric", 0))),
+                    "저가": abs(int(candle.get("low_pric", 0))),
+                    "현재가": abs(int(candle.get("cur_prc", 0))),  # 종가 역할
+                    "거래량": int(candle.get("trde_qty", 0))
+                })
+
+            return refined_candles
+
+        except Exception as e:
+            print(f"🚨 [ka10080] 1분봉 데이터 수신 실패 ({code}): {e}")
+            return []
+
     # ==========================================
     # 🎯 [최종: 융합 및 지시] 메인 스캐너로 넘길 타겟 추출
     # ==========================================

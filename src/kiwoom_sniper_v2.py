@@ -465,32 +465,32 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback, ra
                     return
                 
             # =========================================================
-            # 🤖 [섀도우 모드] 제미나이 판단 및 텔레그램 콜백 전송
+            # 🤖 [섀도우 모드] 제미나이 실시간 판단 및 점수 갱신
             # =========================================================
             global LAST_AI_CALL_TIMES
             last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
             
-            # 💡 30초로 늘려서 API 과부하 방지 (보유 종목 수에 따라 60초로 늘려도 무방합니다)
-            if ai_engine and radar and (time.time() - last_ai_time > 30.0):
+            # 💡 1. AI API 호출은 10초에 한 번만 실행하여 과부하 방지
+            if ai_engine and radar and (time.time() - last_ai_time > 10.0):
                 
-                # 1. 틱 데이터 수집
                 recent_ticks = radar.get_tick_history_ka10003(code, limit=10)
+                recent_candles = radar.get_minute_candles_ka10080(code, limit=5)
                 
                 if ws_data.get('orderbook') and recent_ticks:
                    
-                    # 2. AI 두뇌 호출
-                    ai_decision = ai_engine.analyze_target(stock['name'], ws_data, recent_ticks)
+                    ai_decision = ai_engine.analyze_target(stock['name'], ws_data, recent_ticks, recent_candles)
                     
                     action = ai_decision.get('action', 'WAIT')
-                    ai_score = ai_decision.get('score', 50)  # 💡 AI가 직접 산정한 0~100 점수!
+                    ai_score = ai_decision.get('score', 50)  
                     reason = ai_decision.get('reason', '사유 없음')
                     
-                    # 💡 [NEW] AI 점수(100점 만점)를 내부 확률(0.0~1.0)로 변환하여 덮어씌움
+                    # AI 점수(100점 만점)를 내부 확률(0.0~1.0)로 변환하여 stock 메모리에 갱신
                     rt_score = ai_score / 100.0
                     stock['rt_ai_prob'] = rt_score 
                     
                     print(f"🤖 [AI 섀도우 모드: {stock['name']}] {action} | 점수: {ai_score}점 | {reason}")
-                    
+
+                    # 텔레그램으로도 차단/매수 내역을 관리자에게 알림 (BUY, DROP일 때만)
                     if action in ["BUY", "DROP"]:
                         ai_msg = f"🤖 <b>[제미나이 실시간 판단]</b>\n"
                         ai_msg += f"🎯 종목: {stock['name']}\n"
@@ -504,11 +504,32 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback, ra
                         except Exception as e:
                             print(f"AI 알림 발송 실패: {e}")
                             
-                    # 마지막 호출 시간 기록
                     LAST_AI_CALL_TIMES[code] = time.time()
             # =========================================================
 
-            target_buy_price, used_drop_pct = kiwoom_utils.get_smart_target_price(curr_price, v_pw=current_vpw)
+            # =========================================================
+            # 💡 [핵심] 2. 매 틱마다 실행되는 AI 거부권(Veto Power) 및 타점 로직
+            # API 호출 여부와 상관없이, 현재 봇이 기억하는 가장 최신의 AI 점수를 가져옴
+            # =========================================================
+            current_ai_score = stock.get('rt_ai_prob', 0.5) * 100 
+            
+            # 🚨 AI 거부권 발동 (40점 이하): 이 종목은 현재 틱에서 절대 매수하지 못함!
+            if current_ai_score <= 40:
+                # 너무 자주 출력되면 터미널이 도배되므로 10초에 한 번만 경고
+                if time.time() - last_ai_time < 1.0: 
+                    print(f"🚫 [AI 매수 차단 유지] {stock['name']} 진입 불가! (최근 AI 점수: {current_ai_score}점)")
+                
+                # 3분(180초) 쿨타임 부여로 쓸데없는 API 호출과 뇌동매매 방지
+                cooldowns[code] = time.time() + 180 
+                return  # 🚀 여기서 함수 강제 종료. 아래 타점 계산 및 매수 로직 무력화.
+            
+            # 무사히 거부권을 통과한 종목만 수급(v_pw)과 AI 점수(current_ai_score)를 반영해 동적 눌림목 세팅
+            target_buy_price, used_drop_pct = kiwoom_utils.get_smart_target_price(
+                curr_price, 
+                v_pw=current_vpw, 
+                ai_score=current_ai_score 
+            )
+
             stock['target_buy_price'] = target_buy_price
 
             is_trigger = True
@@ -825,21 +846,23 @@ def handle_buy_ordered_state(stock, code):
                 cooldowns[code] = time.time() + 1200 # 20분 쿨타임
             return
 
-        # 2. 정상적인 미체결 주문 취소 전송 (kiwoom_orders.send_cancel_order 활용)
+        # 2. 정상적인 미체결 주문 취소 전송
         res = kiwoom_orders.send_cancel_order(
             code=code, orig_ord_no=orig_ord_no, token=KIWOOM_TOKEN, qty=0, config=CONF
         )
 
         is_success = False
-        res_str = str(res) # 응답 결과를 문자열로 변환하여 에러 메시지 파악 용이하게 함
+        res_str = str(res)
 
         if isinstance(res, dict):
             if str(res.get('return_code', res.get('rt_cd', ''))) == '0':
                 is_success = True
+            err_msg = res.get('return_msg', '') # 딕셔너리일 때 안전하게 추출
         elif res:
             is_success = True
+            err_msg = res_str # 아닐 경우 결과 문자열 그대로 사용
 
-        # 3. 취소 접수 성공 시 부활 로직 (주문이 아직 안 체결되어서 정상 취소됨)
+        # 3. 취소 접수 성공 시
         if is_success:
             print(f"✅ [{stock['name']}] 미체결 매수 취소 성공. 감시 상태로 복귀합니다.")
             stock['status'] = 'WATCHING'
@@ -848,31 +871,24 @@ def handle_buy_ordered_state(stock, code):
             try: highest_prices.pop(code, None)
             except: pass
             
-            # DB 상태 동기화 [수정] AND status = 'BUY_ORDERED' 추가하여 이미 체결된 종목의 상태 변경 방지 
             db.execute_query("UPDATE recommendation_history SET status = 'WATCHING', buy_price = 0 WHERE code = ? AND status = 'BUY_ORDERED'", (code,))
 
-            # 🚀 [초단타 부활 로직] 호가가 도망가서 취소한 경우, 추격매수 안하고 20분 대기!
             if strategy == 'SCALPING':
                 try: alerted_stocks.discard(code)
                 except: pass
                 cooldowns[code] = time.time() + 1200
                 print(f"♻️ [{stock['name']}] 스캘핑 취소 완료. 20분 쿨타임 진입.")
 
-        # 4. 취소 실패 시 (이미 체결되었거나, 주문 상태가 변경된 경우)
+        # 4. 취소 실패 시
         else:
-            print(f"🚨 [{stock['name']}] 매수 취소 실패! (에러응답: {res_str})")
+            print(f"🚨 [{stock['name']}] 매수 취소 실패! (에러응답: {err_msg})")
             
-            # 💡 [핵심 교정] 이미 샀는데 또 취소하려고 해서 나는 에러면 강제로 HOLDING으로 넘깁니다.
-            err_msg = res.get('return_msg', '') if isinstance(res, dict) else res_str
-            
-            if '취소가능수량' in err_msg:
-                print(f"💡 [{stock['name']}] 이미 전량 체결되었을 확률이 99%입니다. 무한루프 방지를 위해 HOLDING으로 강제 전환합니다.")
-                
-                # 메모리와 DB를 보유 상태로 돌려 다음 루프부터 매도(익절/손절)를 감시하게 만듭니다.
+            if '취소가능수량' in err_msg or '잔고' in err_msg: # '잔고' 키워드 추가
+                print(f"💡 [{stock['name']}] 이미 전량 체결되었을 확률이 높습니다. HOLDING으로 강제 전환합니다.")
                 stock['status'] = 'HOLDING'
                 db.execute_query("UPDATE recommendation_history SET status = 'HOLDING' WHERE code = ? AND status = 'BUY_ORDERED'", (code,))
             else:
-                print(f"💡 시스템 일시 오류일 수 있으므로 상태를 유지하고 웹소켓 영수증을 대기합니다.")
+                print(f"💡 시스템 오류일 수 있으므로 상태를 유지합니다.")
 
 
 # ==============================================================================
@@ -1002,6 +1018,9 @@ def run_sniper(broadcast_callback):
                 # 👇 [수정] PENDING 대신 BUY_ORDERED 로 확인하고, 방금 만든 새 함수를 호출합니다!
                 elif status == 'BUY_ORDERED':
                     handle_buy_ordered_state(stock, code)
+                    
+            # 💡 [신규] 매매가 끝난 종목(COMPLETED)은 메모리(targets)에서 제거하여 속도 저하 방지
+            targets = [t for t in targets if t['status'] != 'COMPLETED']
 
             time.sleep(1)
 
