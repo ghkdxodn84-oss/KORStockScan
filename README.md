@@ -3,27 +3,34 @@
 ![Python](https://img.shields.io/badge/Python-3.13%2B-blue?style=flat-square&logo=python&logoColor=white)
 ![Kiwoom API](https://img.shields.io/badge/API-Kiwoom_REST-green?style=flat-square)
 ![Machine Learning](https://img.shields.io/badge/ML-XGBoost_%7C_LightGBM-orange?style=flat-square)
+![Generative AI](https://img.shields.io/badge/AI-Gemini_2.5_Flash-FF1493?style=flat-square&logo=google)
 ![Telegram](https://img.shields.io/badge/Bot-Telegram-blueviolet?style=flat-square&logo=telegram)
 ![Security](https://img.shields.io/badge/Security-Fernet_Encrypted-red?style=flat-square)
 
-**KORStockScan**은 키움증권 REST API와 머신러닝(Stacking Ensemble)을 활용하여 주식 시장을 스캐닝하고, 실시간 웹소켓을 통해 최적의 타점을 잡아내어 완전 자동매매를 수행하는 퀀트 트레이딩 봇입니다.
+**KORStockScan**은 키움증권 REST API와 머신러닝(Stacking Ensemble), 그리고 **생성형 AI(Gemini 2.5 Flash)**를 결합하여 주식 시장을 스캐닝하고, 실시간 웹소켓을 통해 최적의 타점을 잡아내어 완전 자동매매를 수행하는 **지능형 퀀트 트레이딩 봇**입니다.
 
-V13.0 업데이트를 통해 기존 코스피 우량주 스윙 매매를 넘어, **코스닥 주도주(하이브리드 방식)**와 **초단타 스캘핑**까지 동시에 감시하고 매매하는 **'3-Way 멀티 스레드 아키텍처'**로 진화했습니다. 철저하게 분리된 정찰병(Scanner)과 격수(Sniper) 시스템을 통해 무호흡 무인 매매를 집행합니다.
+최신 업데이트를 통해 기존 코스피 우량주 스윙 매매를 넘어, 코스닥 주도주(하이브리드)와 초단타 스캘핑까지 동시에 감시하는 **'3-Way 멀티 스레드 아키텍처'**로 진화했습니다. 
+
+특히, 시스템의 전두엽 역할을 하는 **'Gemini-Brain(`ai_engine.py`)'**이 도입되어, 단순한 조건 검색을 넘어 호가창의 뎁스(Depth)와 틱 체결 흐름을 AI가 실시간으로 판독합니다. 수급강도(VPW)라는 기계적 기준에 AI의 직관(Score)을 더한 **동적 타점 제어(Dynamic Pullback Matrix)** 시스템을 통해, 시장 상황에 맞춰 매수 그물의 깊이를 스스로 조절하는 진정한 의미의 무호흡 무인 매매를 집행합니다.
 
 ---
 
 ## 🛰️ 스캐너 엔진 비교 (Scanner Comparison)
 
-시스템은 `SniperRadar` 모듈을 공유하지만, 전략적 목적에 따라 두 가지 상이한 스캐닝 방식을 운용합니다.
+시스템은 `SniperRadar` 모듈을 공유하지만, 시장의 특성과 매매 호흡에 따라 **3가지의 독립적인 AI 스캐닝 엔진**을 가동합니다. 모든 엔진은 **Gemini 2.5 Flash 기반의 AI 두뇌(`ai_engine.py`)**와 결합되어 있습니다.
 
-| 구분 | 초단타 스캘핑 스캐너 (Scalping) | 코스닥 AI 하이브리드 스캐너 (KOSDAQ) |
-| :--- | :--- | :--- |
-| **감시 대상** | 시장 전체 (`000`: 코스피 + 코스닥) | 코스닥 시장 전용 (`101`) |
-| **스캔 주기** | **1분 주기** (초고속 탐색) | **15분 주기** (정밀 분석) |
-| **분석 깊이** | 실시간 수급 및 가격 급증 (SniperRadar) | **AI 앙상블 모델** + 수급/신용 데이터 결합 |
-| **진입 기준** | 등락률 상위 혹은 수급 폭발 (Supernova) | 1차 필터링 후 **AI 확신도 80% 이상** |
-| **전략 태그** | `SCALPING` (초단타 전술) | `KOSDAQ_ML` (AI 기반 스윙 전술) |
-| **매매 목표** | **+2.0% 익절 / -2.5% 칼손절** | 전략별 가변 익절 및 트레일링 스탑 적용 |
+| 구분 | ⚡ 초단타 스캘핑 + AI (Scalping) | 🏢 코스피 AI 앙상블 (KOSPI) | 🚀 코스닥 AI 하이브리드 (KOSDAQ) |
+| :--- | :--- | :--- | :--- |
+| **감시 대상** | 시장 전체 (`000`: 코스피 + 코스닥) | 코스피 대형/우량주 중심 (`001`) | 코스닥 중소형/테마주 중심 (`101`) |
+| **스캔 주기** | **1분 주기** (초고속 틱/호가 탐색) | **15분 주기** (추세 및 패턴 분석) | **15분 주기** (수급 및 테마 분석) |
+| **분석 깊이** | 실시간 수급(VPW) + **Gemini-Brain 틱 흐름 분석** | 기술적 지표(MACD/RSI) + **AI 펀더멘털 판독** | 외국인/기관 수급 및 신용잔고 + **AI 테마 판독** |
+| **매수 타점** | **[스마트 눌림목]** AI 점수 + 지수 연동 가변 타점 (-0.35% 등) | **[스윙 타점]** 1차 스캔 통과 + AI 확신도 80점 이상 | **[스윙 타점]** 1차 스캔 통과 + AI 확신도 80점 이상 |
+| **전략 태그** | `SCALPING_AI` (지능형 초단타) | `KOSPI_ML` (안정형 스윙 전술) | `KOSDAQ_ML` (탄력형 스윙 전술) |
+| **매매 목표** | **+2.0% 익절 / -2.5% 칼손절** | 전략별 가변 익절 및 트레일링 스탑 적용 | 전략별 가변 익절 및 트레일링 스탑 적용 |
+| **핵심 모듈** | `scalping_scanner.py` | `final_ensemble_scanner.py` | `kosdaq_scanner.py` |
+
+> **※ Scalping 3.0: 지능형 타점 제어 시스템 (Dynamic Pullback Matrix)**
+> 스캘핑 모듈은 단순히 지정된 퍼센트(-0.5%)에서 기계적으로 대기하지 않습니다. 실시간 체결강도(VPW)와 Gemini-Brain이 산정한 **AI 확신도(0~100점)**를 융합하여, AI가 강하게 추천하는 종목은 얕은 눌림목(-0.1%)에서 공격적으로 낚아채고, 위험 요소가 감지된 종목(DROP)은 심해(-1.5%)로 그물을 내려 방어적으로 대응합니다.
 
 ---
 
