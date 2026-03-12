@@ -42,6 +42,19 @@ V13.0 업데이트를 통해 기존 코스피 우량주 스윙 매매를 넘어,
 * **눌림목 자동 진입**: 스캘핑 포착 시 현재가 대비 정확한 호가 단위를 계산하여 2호가 아래에 매수 대기 주문을 넣어 안전한 진입을 도모합니다.
 * **성과 추적**: 매수/매도가, 매매 시간, 수익률을 DB에 영구 기록하여 전략별 승률과 성과를 관리합니다.
 
+## 🚀 주요 기능 (New Updates!)
+
+### 🤖 AI 트레이딩 엔진 고도화
+- **Gemini 2.5 Flash 모델 탑재**: 시장 상황에 대한 초고속 판단 및 종목 분석 수행.
+- **AI 섀도우 모드**: 실매매 전 AI의 판단을 기록하고 검증하는 로직 안정화.
+
+### ⚡ 스마트 스캘핑 시스템 (Scalping 2.0)
+- **수급강도(VPW) 연동**: 거래량과 체결 강도에 따라 매수 눌림목 깊이를 자동으로 조절.
+- **호가 단위(Tick) 최적화**: 종목의 가격대별 호가 규격을 계산하여 최적의 체결 가격 산출.
+
+### 🛠️ 시스템 안정성 개선
+- **DB 동기화 무결성**: 매도 체결 영수증 처리 로직 개선으로 실시간 잔고와 DB 상태 불일치 해결.
+- **권한별 알림 시스템**: Admin 및 VIP 등급에 따른 차등 텔레그램 알림 발송.
 ---
 
 ## 📂 프로젝트 구조 (Project Structure)
@@ -49,20 +62,28 @@ V13.0 업데이트를 통해 기존 코스피 우량주 스윙 매매를 넘어,
 ```text
 /KORStockScan
 ├── src/
-│   ├── bot_main.py               # 🤖 텔레그램 봇 및 전체 시스템 제어 센터
-│   ├── signal_radar.py           # 📡 SniperRadar (통합 정보국 모듈)
+│   ├── bot_main.py             # 🤖 메인 컨트롤러 (시스템 가동 및 텔레그램 인터페이스)
+│   ├── signal_radar.py         # 📡 SniperRadar (전체 스캐닝 스케줄 및 데이터 흐름 제어)
 │   │
-│   ├── final_ensemble_scanner.py # 🧠 KOSPI 스윙 스캐너 & AI 판독 모듈
-│   ├── kosdaq_scanner.py         # 🔍 KOSDAQ 하이브리드 AI 스캐너
-│   ├── scalping_scanner.py       # 🔍 SCALPING 수급 급등주 스캐너
+│   ├── ai_engine.py            # 🧠 [NEW] AI core (Gemini 2.5 Flash API 통신 및 프롬프트 관리)
+│   ├── final_ensemble_scanner.py # 🔍 KOSPI 스윙 분석 (ai_engine 호출 및 기술적 지표 결합)
+│   ├── kosdaq_scanner.py       # 🔍 KOSDAQ 하이브리드 AI 스캐너
+│   ├── scalping_scanner.py     # 🔍 SCALPING 수급 급등주 추출 엔진
 │   │
-│   ├── kiwoom_sniper_v2.py       # 🔫 실시간 매매 집행 엔진 (멀티 전략 대응)
-│   ├── kiwoom_orders.py          # 🛒 키움증권 REST API 주문 통신 모듈
-│   ├── kiwoom_utils.py           # 🛠️ 공통 유틸리티 및 API 연동 라이브러리
-│   └── db_manager.py             # 🗄️ SQLite 데이터베이스 통합 관리
-└── data/
-    ├── config_prod.json          # ⚙️ 시스템 설정 및 API 키 관리
-    └── kospi_stock_data.db       # 📊 주가 데이터 및 추천 히스토리 저장
+│   ├── kiwoom_sniper_v2.py     # 🔫 매매 집행 엔진 (Scalping 2.0: 수급 연동 스마트 매매)
+│   ├── kiwoom_websocket.py     # 🔌 실시간 데이터 센터 (호가 수신 & '00' TR 체결 감시)
+│   ├── kiwoom_orders.py        # 🛒 주문 통신 모듈 (REST API 기반 매수/매도 집행)
+│   ├── kiwoom_utils.py         # 🛠️ 유틸리티 (get_smart_target_price: 호가/수급 최적화)
+│   ├── db_manager.py           # 🗄️ SQLite 통합 관리 (상태 동기화 및 VIP 권한 관리)
+│   └── constants.py            # 📏 시스템 상수 (매매 규칙 및 전략 파라미터 정의)
+│
+├── data/
+│   ├── config_prod.json        # ⚙️ 설정 파일 (API 키, ADMIN_ID, 모델 설정)
+│   ├── user_data.db            # 👤 사용자 DB (VIP 권한 및 텔레그램 유저 관리)
+│   └── kospi_stock_data.db     # 📊 매매 DB (추천 히스토리, 수익률, 체결 기록)
+│
+├── README.md                   # 📝 프로젝트 문서 (AI 모델 사양 및 매매 로직 가이드)
+└── .gitignore                  # 🙈 보안 파일 및 DB 캐시 제외 설정
 ```
 
 ---

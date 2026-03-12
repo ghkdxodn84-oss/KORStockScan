@@ -174,7 +174,7 @@ class DBManager:
                         sell_price  = ?, \
                         sell_time   = ?, \
                         profit_rate = ?
-                    WHERE code = ? AND date = ? \
+                    WHERE code = ? AND status IN ('HOLDING', 'SELL_ORDERED') \
                     """
-            cursor.execute(query, (status, sell_price, sell_time, profit_rate, code, today))
+            cursor.execute(query, (status, sell_price, sell_time, profit_rate, code))
             conn.commit()

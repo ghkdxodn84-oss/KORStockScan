@@ -14,6 +14,9 @@ from constants import TRADING_RULES
 from google_sheets_utils import GoogleSheetsManager
 from kiwoom_websocket import KiwoomWSManager
 from db_manager import DBManager
+from bot_main import broadcast_alert # 💡 제미나이 판단결과 텔레그램 수신용
+from ai_engine import GeminiSniperEngine # 💡 새로 만든 두뇌 파일 임포트
+from signal_radar import SniperRadar  # 💡 레이더 부품 가져오기
 
 # ==========================================
 # 1. 경로 설정 (상대 참조 통일)
@@ -37,6 +40,7 @@ SHEET_MANAGER = GoogleSheetsManager(CREDENTIALS_PATH, 'KOSPIScanner')
 DB = DBManager()  # 💡 전역 객체 생성
 global ACTIVE_TARGETS
 ACTIVE_TARGETS = []
+LAST_AI_CALL_TIMES = {}
 # -------------------------------------------------------------------
 
 def load_config():
@@ -316,6 +320,9 @@ def handle_real_execution(exec_data):
                 cursor = conn.cursor()
                 cursor.execute("SELECT buy_price FROM recommendation_history WHERE code = ? AND status IN ('HOLDING', 'SELL_ORDERED')", (code,))
                 row = cursor.fetchone()
+
+                buy_price = 0
+                profit_rate = 0.0
                 
                 if row and row[0] > 0:
                     buy_price = row[0]
@@ -375,7 +382,8 @@ def handle_real_execution(exec_data):
             break
         
 
-def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback):
+def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback, radar=None, ai_engine=None):
+    
     strategy = stock.get('strategy', 'KOSPI_ML')
     now_t = datetime.now().time()
     db = DBManager()
@@ -455,8 +463,45 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback):
                         print(f"⚠️ [{stock['name']}] 포착가 대비 너무 오름 (갭 +{gap_pct:.1f}%). 추격매수 포기 및 쿨타임 진입.")
                         cooldowns[code] = time.time() + 1200
                     return
+                
+            # =========================================================
+            # 🤖 [섀도우 모드] 제미나이 판단 및 텔레그램 콜백 전송
+            # =========================================================
+            global LAST_AI_CALL_TIMES
+            last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
+            
+            # 엔진과 레이더가 정상적으로 넘어왔고, 종목당 3초 쿨타임이 지났을 때만 실행
+            if ai_engine and radar and (time.time() - last_ai_time > 3.0):
+                
+                # 1. 틱 데이터 수집
+                recent_ticks = radar.get_tick_history_ka10003(code, limit=10)
+                
+                if ws_data.get('orderbook') and recent_ticks:
+                    # 2. AI 두뇌 호출 (넘겨받은 ai_engine 인스턴스 사용)
+                    ai_decision = ai_engine.analyze_target(stock['name'], ws_data, recent_ticks)
+                    
+                    action = ai_decision.get('action', 'WAIT')
+                    reason = ai_decision.get('reason', '사유 없음')
+                    
+                    print(f"🤖 [AI 섀도우 모드: {stock['name']}] {action} | {reason}")
+                    
+                    if action in ["BUY", "DROP"]:
+                        ai_msg = f"🤖 <b>[AI 스나이퍼 모의판단]</b>\n"
+                        ai_msg += f"🎯 종목: {stock['name']}\n"
+                        ai_msg += f"⚡ 행동: <b>{action}</b>\n"
+                        ai_msg += f"🧠 사유: {reason}"
+                        
+                        # 3. 어드민에게만 발송
+                        try:
+                            broadcast_callback(ai_msg, audience='ADMIN_ONLY', parse_mode='HTML')
+                        except Exception as e:
+                            print(f"AI 알림 발송 실패: {e}")
+                            
+                    # 마지막 호출 시간 기록
+                    LAST_AI_CALL_TIMES[code] = time.time()
+            # =========================================================
 
-            target_buy_price = kiwoom_utils.get_target_price_by_percent(curr_price, drop_percent=0.5)
+            target_buy_price = kiwoom_utils.get_smart_target_price(curr_price, current_vpw)
             stock['target_buy_price'] = target_buy_price
 
             is_trigger = True
@@ -844,12 +889,24 @@ def run_sniper(broadcast_callback):
     if not KIWOOM_TOKEN:
         kiwoom_utils.log_error("❌ 토큰 발급 실패로 엔진을 중단합니다.", config=CONF, send_telegram=True)
         return
+    
+    radar = SniperRadar(KIWOOM_TOKEN)
 
     # 👇 [여기입니다!] 토큰 발급 직후에 동기화를 먼저 싹 돌립니다.
     sync_balance_with_db()
     WS_MANAGER = KiwoomWSManager(KIWOOM_TOKEN, on_execution_callback=handle_real_execution)
     WS_MANAGER.start()
     time.sleep(2)
+
+    # ==========================================
+    # 🤖 [신규] 제미나이 엔진 가동
+    # ==========================================
+    api_key = CONF.get('GEMINI_API_KEY')
+    if api_key:
+        ai_engine = GeminiSniperEngine(api_key=api_key)
+    else:
+        ai_engine = None
+        print("⚠️ 설정에 GEMINI_API_KEY가 없어 AI 섀도우 모드가 꺼집니다.")
 
     # 💡 DB에서 가져온 타겟을 전역 변수에 연결합니다.
     ACTIVE_TARGETS = get_active_targets()
@@ -916,9 +973,24 @@ def run_sniper(broadcast_callback):
                     continue
 
                 if status == 'WATCHING':
-                    handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback)
+                    handle_watching_state(
+                        stock, 
+                        code, 
+                        ws_data, 
+                        admin_id, 
+                        broadcast_alert, 
+                        radar=radar,         # 🚀 추가
+                        ai_engine=ai_engine  # 🚀 추가
+                    )
                 elif status == 'HOLDING':
-                    handle_holding_state(stock, code, ws_data, admin_id, broadcast_callback, current_market_regime)
+                    handle_holding_state(
+                        stock, 
+                        code, 
+                        ws_data, 
+                        admin_id, 
+                        broadcast_callback, 
+                        current_market_regime
+                    )
                 
                 # 👇 [수정] PENDING 대신 BUY_ORDERED 로 확인하고, 방금 만든 새 함수를 호출합니다!
                 elif status == 'BUY_ORDERED':
