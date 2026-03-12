@@ -16,6 +16,7 @@ from kiwoom_websocket import KiwoomWSManager
 from db_manager import DBManager
 from bot_main import broadcast_alert # 💡 제미나이 판단결과 텔레그램 수신용
 from ai_engine import GeminiSniperEngine # 💡 새로 만든 두뇌 파일 임포트
+from signal_radar import SniperRadar  # 💡 레이더 부품 가져오기
 
 # ==========================================
 # 1. 경로 설정 (상대 참조 통일)
@@ -885,6 +886,8 @@ def run_sniper(broadcast_callback):
     if not KIWOOM_TOKEN:
         kiwoom_utils.log_error("❌ 토큰 발급 실패로 엔진을 중단합니다.", config=CONF, send_telegram=True)
         return
+    
+    radar = SniperRadar(KIWOOM_TOKEN)
 
     # 👇 [여기입니다!] 토큰 발급 직후에 동기화를 먼저 싹 돌립니다.
     sync_balance_with_db()
