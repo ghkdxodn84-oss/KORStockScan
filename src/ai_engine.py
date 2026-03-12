@@ -27,6 +27,21 @@ SCALPING_SYSTEM_PROMPT = """
 }
 """
 
+# ==========================================
+# 2. 🎯 [신규] 일일 시장 진단 프롬프트 (텔레그램 브리핑용)
+# ==========================================
+MARKET_ANALYSIS_PROMPT = """
+너는 15년 경력의 베테랑 퀀트 트레이더이자 수석 애널리스트야.
+오늘의 주식 스캐너 필터링 통계 데이터와 어제 미국 S&P 500 및 나스닥 시장상황을 보고, 현재 코스피 시장의 상태를 진단하고 트레이딩 전략을 브리핑해줘.
+
+[요구사항]
+1. 친근하지만 전문적인 어투를 사용하고, 텔레그램에서 읽기 좋게 이모지를 적절히 섞어줘.
+2. 0개 또는 극소수만 살아남았다면, 봇이 고장난 것이 아니라 "시장에 돈이 마른 조정장/하락장"이기 때문에 현금을 지킨 것이라고 명확히 해석해줘.
+3. '기초 품질 미달'이 많다면 차트 붕괴(역배열) 장세, 'AI 확신도 부족'이 많다면 수급 부재(눈치보기) 장세로 해석해.
+4. 마지막엔 오늘의 행동 지침을 1~2줄로 요약해줘 (예: "철저한 현금 관망", "오후장 초단타 위주 대응" 등).
+5. 출력은 JSON이 아니라, 텔레그램에 바로 전송할 수 있는 마크다운 텍스트 형식으로 작성해. (총 300자 내외)
+"""
+
 class GeminiSniperEngine:
     # ==========================================
     # 2. ⚙️ 엔진 초기화
@@ -57,26 +72,26 @@ class GeminiSniperEngine:
     # ==========================================
     # 3. 🛠️ 데이터 포맷팅 (AI 전용 번역기)
     # ==========================================
-    # 💡 [수정 1] 파라미터에 recent_candles 추가! (기본값도 []로 주어 에러 방지)
     def _format_market_data(self, ws_data, recent_ticks, recent_candles=None):
+        """키움 API의 딕셔너리 데이터를 AI가 읽을 수 있는 텍스트로 예쁘게 포장합니다."""
         if recent_candles is None:
             recent_candles = []
-        """키움 API의 딕셔너리 데이터를 AI가 읽을 수 있는 텍스트로 예쁘게 포장합니다."""
+            
         curr_price = ws_data.get('curr', 0)
         v_pw = ws_data.get('v_pw', 0)
+        fluctuation = ws_data.get('fluctuation', 0.0)  # 💡 [NEW] 등락률 추가
         orderbook = ws_data.get('orderbook', {'asks': [], 'bids': []})
 
         # 호가창 조립
         ask_str = "\n".join([f"매도 {5-i}호가: {a['price']}원 ({a['volume']}주)" for i, a in enumerate(orderbook['asks'])])
         bid_str = "\n".join([f"매수 {i+1}호가: {b['price']}원 ({b['volume']}주)" for i, b in enumerate(orderbook['bids'])])
         
-        # 틱 흐름 조립 (최신순이 아래로 가도록 역순 배치)
+        # 틱 흐름 조립
         tick_str = "\n".join([f"[{t['time']}] {t['dir']} 체결: {t['price']}원 ({t['volume']}주)" for t in reversed(recent_ticks)])
 
-        # 1분봉 차트 조립 (최근 5~10봉만)
+        # 1분봉 차트 조립
         candle_str = ""
         if recent_candles:
-            # 시간순(과거->현재)으로 정렬하여 텍스트화
             candle_str = "\n".join([
                 f"[{c['체결시간']}] 시가:{c['시가']} 고가:{c['고가']} 저가:{c['저가']} 종가:{c['현재가']} 거래량:{c['거래량']}" 
                 for c in recent_candles
@@ -84,27 +99,44 @@ class GeminiSniperEngine:
         else:
             candle_str = "분봉 데이터 없음"
 
-        # 💡 [NEW] 지표 계산 및 텍스트화
+        # 💡 [NEW] 직전 캔들 대비 거래량 폭증 여부 계산
+        volume_analysis = "비교 불가 (데이터 부족)"
+        if recent_candles and len(recent_candles) >= 2:
+            current_volume = recent_candles[-1]['거래량']  # 가장 최근 1분봉 거래량
+            prev_volumes = [c['거래량'] for c in recent_candles[:-1]] # 그 이전 캔들들
+            avg_prev_volume = sum(prev_volumes) / len(prev_volumes) if prev_volumes else 0
+            
+            if avg_prev_volume > 0:
+                vol_ratio = (current_volume / avg_prev_volume) * 100
+                if vol_ratio >= 200:
+                    volume_analysis = f"🔥 폭증! (이전 평균 대비 {vol_ratio:.0f}% 수준 / 현재 {current_volume:,}주)"
+                elif vol_ratio >= 100:
+                    volume_analysis = f"상승 추세 (이전 평균 대비 {vol_ratio:.0f}% 수준)"
+                else:
+                    volume_analysis = f"감소 추세 (이전 평균 대비 {vol_ratio:.0f}% 수준)"
+
+        # 지표 계산
         indicators_str = "지표 계산 불가"
         if recent_candles and len(recent_candles) >= 5:
-            # ⭕ 올바른 부분: import한 kiwoom_utils 모듈에서 함수를 직접 호출!
             ind = kiwoom_utils.calculate_micro_indicators(recent_candles)
-            
-            # AI가 현재가와 비교하기 쉽게 문자열 생성
             ma5_status = "상회" if curr_price > ind['MA5'] else "하회"
             vwap_status = "상회 (수급강세)" if curr_price > ind['Micro_VWAP'] else "하회 (수급약세)"
             
             indicators_str = f"- 단기 5-MA: {ind['MA5']:,}원 (현재가 {ma5_status})\n"
             indicators_str += f"- Micro-VWAP: {ind['Micro_VWAP']:,}원 (현재가 {vwap_status})"
 
-        # 💡 [수정] user_input에 기술적 지표 섹션 추가!
+        # 💡 [NEW] user_input에 등락률 및 거래량 분석 결과 추가
         user_input = f"""
 [현재 상태]
 - 현재가: {curr_price:,}원
+- 전일대비 등락률: {fluctuation}%
 - 체결강도: {v_pw}%
 
 [초단타 기술적 지표 (최근 5분 기준)]
 {indicators_str}
+
+[거래량 분석]
+- {volume_analysis}
 
 [최근 1분봉 흐름 (opt10080)]
 {candle_str}
@@ -173,3 +205,36 @@ class GeminiSniperEngine:
         # 4. 모든 모델이 다 뻗어버린 최악의 경우
         print(f"🚨 [{target_name}] 준비된 모든 AI 모델의 총알(쿼타)이 소진되었습니다.")
         return {"action": "WAIT", "score": 50, "reason": "전체 AI 쿼타 소진"}
+    
+    # ==========================================
+    # 5. 📢 [신규] 스캐너 결과 통계 분석 및 브리핑
+    # ==========================================
+    def analyze_scanner_results(self, total_count, survived_count, stats_text):
+        """스캐너의 필터링 결과를 AI에게 던져주고 시장 진단 텍스트를 받아옵니다."""
+        
+        data_input = f"""
+[오늘의 스캐너 필터링 통계]
+- 총 스캔 대상: {total_count}개 종목
+- 최종 생존(매수 감시 대상): {survived_count}개 종목
+- 상세 탈락 사유:
+{stats_text}
+"""
+        max_retries = len(self.model_list)
+        
+        for attempt in range(max_retries):
+            try:
+                # 💡 여기서는 JSON 강제 옵션(response_mime_type)을 쓰지 않습니다! (자연어 출력이므로)
+                response = self.model.generate_content([MARKET_ANALYSIS_PROMPT, data_input])
+                return response.text.strip()
+                
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "429" in error_msg or "quota" in error_msg:
+                    self.current_idx = (self.current_idx + 1) % len(self.model_list)
+                    self._set_current_model()
+                    continue 
+                else:
+                    print(f"🚨 [AI 브리핑 에러] {e}")
+                    return f"⚠️ AI 시장 진단 중 에러가 발생했습니다. (사유: {e})"
+                    
+        return "⚠️ 모든 AI 모델의 쿼타가 소진되어 시장 진단을 생성할 수 없습니다."

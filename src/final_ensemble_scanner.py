@@ -15,6 +15,7 @@ from signal_radar import SniperRadar  # 1. 레이더 모듈 추가
 from constants import TRADING_RULES
 from feature_engineer import calculate_all_features
 from db_manager import DBManager
+from ai_engine import GeminiSniperEngine  # 💡 [NEW] AI 브리핑을 위해 추가!
 
 # ==========================================
 # 1. 경로 설정 (상대 참조)
@@ -329,7 +330,7 @@ def run_integrated_scanner():
             print(f"⚠️ 관리자 텔레그램 전송 실패: {e}")
 
         # ==========================================
-        # 5. 결과 기록 및 전송
+        # 5. 결과 기록 및 텔레그램 전송 (💡 AI 브리핑 결합)
         # ==========================================
         print("📊 [3/4] 리포트 생성 및 전송 중...")
         today = datetime.now().strftime('%Y-%m-%d')
@@ -338,8 +339,33 @@ def run_integrated_scanner():
         runner_ups = sorted([r for r in all_results if
                              TRADING_RULES['PROB_RUNNER_PICK'] <= r['Prob'] < TRADING_RULES['PROB_MAIN_PICK']],
                             key=lambda x: x['Prob'], reverse=True)[:50]
+        
+        # 💡 [NEW] AI 시장 진단 요청
+        print("🤖 AI 수석 트레이더에게 시장 진단 브리핑을 요청합니다...")
+        ai_briefing = ""
+        try:
+            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
+                conf = json.load(f)
+            api_key = conf.get('GEMINI_API_KEY')
+            
+            if api_key:
+                ai_engine = GeminiSniperEngine(api_key=api_key)
+                # 앞서 생성한 debug_msg(통계)를 AI에게 통째로 넘겨줍니다.
+                ai_briefing = ai_engine.analyze_scanner_results(len(target_list), len(all_results), debug_msg)
+            else:
+                ai_briefing = "⚠️ GEMINI_API_KEY가 설정되지 않아 AI 시장 진단을 생략합니다."
+        except Exception as e:
+            ai_briefing = f"⚠️ AI 브리핑 생성 실패: {e}"
 
-        msg = get_performance_report(db) + f"🏆 <b>[AI 콰트로 Stacking 리포트]</b> {today}\n"
+        # 💡 [메시지 조립] 1. 성과 복기 -> 2. AI 브리핑 -> 3. 추천 종목 리스트
+        msg = get_performance_report(db)
+        
+        # 💡 AI 브리핑 추가
+        msg += f"📊 <b>[AI 수석 트레이더 장전 브리핑]</b>\n"
+        msg += f"{ai_briefing}\n"
+        msg += "-" * 20 + "\n\n"
+        
+        msg += f"🏆 <b>[AI 콰트로 Stacking 리포트]</b> {today}\n"
         msg += "\n🥇 <b>[적극 추천 종목]</b>\n"
         
         if main_picks:
@@ -358,6 +384,7 @@ def run_integrated_scanner():
                 db.save_recommendation(today, r['Code'], r['Name'], r['Price'], 'RUNNER', r['Position'],
                                        prob=r['Prob'])
 
+        # 텔레그램 발송 루프
         chat_ids = db.get_telegram_chat_ids()
         for cid in chat_ids:
             try:

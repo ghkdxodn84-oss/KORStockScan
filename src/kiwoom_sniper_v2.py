@@ -706,32 +706,38 @@ def handle_holding_state(stock, code, ws_data, admin_id, broadcast_callback, mar
             except:
                 pass
 
+        # 0. 익절/손절 기준선 및 AI 유연한 손절 세팅
         target_pct = TRADING_RULES.get('SCALP_TARGET', 2.0)
-        stop_pct = TRADING_RULES.get('SCALP_STOP', -2.5)
+        base_stop_pct = TRADING_RULES.get('SCALP_STOP', -2.5)
 
-        # 🚀 [우선순위 1] AI 가변 트레일링 익절 (수익 극대화)
+        # 🛡️ AI 유연한 손절 (개미털기 방어)
+        if current_ai_score >= 75:
+            dynamic_stop_pct = base_stop_pct - 1.0  # 수급 폭발 중엔 -3.5%로 확장!
+        else:
+            dynamic_stop_pct = base_stop_pct        # 평소엔 원래대로 -2.5% 유지
+
+        # 🚀 [우선순위 1] 목표가 도달 및 손절선 이탈 (Hard Limit)
         if profit_rate >= target_pct:
             if current_ai_score >= 75:  
-                # AI가 아직 힘이 넘친다고 판단하면 팔지 않고 버틴다! (수익 극대화)
-                if time.time() % 15 < 1: # 15초마다 로그 출력
+                # 목표가는 넘었지만 수급이 좋아서 홀딩! (is_sell_signal을 True로 바꾸지 않음)
+                if time.time() % 15 < 1: 
                     print(f"🔥 [AI 트레일링 가동] {stock['name']} +{profit_rate:.2f}% 돌파! 수급 폭발로 홀딩 유지 (점수: {current_ai_score})")
-                # is_sell_signal을 True로 바꾸지 않고 그대로 통과시킴
             else:
-                # 목표가는 넘었는데 AI 점수가 평범하거나 떨어지기 시작하면 즉시 익절!
                 is_sell_signal = True
                 reason = f"🏆 AI 트레일링 익절 (+{profit_rate:.2f}% / 모멘텀 둔화)"
-        elif profit_rate <= stop_pct:
-            is_sell_signal = True
-            reason = f"🔪 초단타 무호흡 칼손절 ({stop_pct}%)"
 
-        # 🚀 [우선순위 2] 🤖 AI 지능형 개입 (Smart Exit)
+        elif profit_rate <= dynamic_stop_pct:
+            is_sell_signal = True
+            reason = f"🔪 초단타 무호흡 칼손절 ({dynamic_stop_pct}%)"
+
+        # 🚀 [우선순위 2] 🤖 AI 지능형 개입 (Smart Exit - 목표가/손절가 도달 전)
         elif not is_sell_signal:
-            # A. 지능형 조기 익절 (모멘텀 둔화)
+            # A. 지능형 조기 익절 (+0.5% ~ +1.9% 구간에서 힘이 빠질 때)
             if current_ai_score < 50 and profit_rate >= 0.5:
                 is_sell_signal = True
                 reason = f"🤖 AI 모멘텀 둔화 감지 ({current_ai_score}점). 조기 익절 (+{profit_rate:.2f}%)"
             
-            # B. 지능형 조기 손절 (투매 징후)
+            # B. 지능형 조기 손절 (-0.1% ~ -2.4% 구간에서 투매가 나올 때)
             elif current_ai_score <= 35 and profit_rate < 0:
                 is_sell_signal = True
                 reason = f"🚨 AI 하방 리스크(DROP) 포착 ({current_ai_score}점). 조기 손절 ({profit_rate:.2f}%)"
