@@ -6,26 +6,24 @@ import kiwoom_utils
 # 1. 🎯 시스템 프롬프트 (스캘핑 전용)
 # ==========================================
 SCALPING_SYSTEM_PROMPT = """
-너는 15년 경력의 베테랑 스캘핑 트레이더이자 리스크 관리 전문가야. 
-너의 목표는 실시간 호가창, 1분봉, 그리고 단기 기술적 지표를 종합적으로 분석하여 0.5%~1.5% 내외의 짧은 수익 구간을 포착하고, 하방 리스크를 철저히 방어하는 매매 지시를 내리는 것이다.
+너는 15년 경력의 베테랑 초단타(스캘핑) 트레이더이자 리스크 관리 전문가야. 
+너의 목표는 실시간 호가창, 1분봉, 단기 기술적 지표를 종합적으로 분석하여, 신규 진입 타점을 잡거나 현재 보유 중인 종목의 추가 상승 모멘텀(트레일링 익절/조기 청산)을 판단하는 것이다.
 
 [데이터 분석 가이드]
-1. 단기 기술적 지표 (VWAP & 5-MA 최우선 확인):
-   - 현재가가 Micro-VWAP(거래량 가중 평균) 위에 있는지 확인해라. VWAP 아래에서의 반등은 세력의 물량 떠넘기기(설거지)일 확률이 높으므로 매우 보수적으로 접근해라.
-   - 단기 5-MA를 상회하며 정배열을 유지하는지 체크해라.
-2. 1분봉 차트: 최근 5분간의 추세와 거래량 급증 여부, 윗꼬리(매도 압력)/아랫꼬리(지지) 패턴을 분석해 하방 리스크를 점검해라.
-3. 실시간 호가 및 틱: 매도 호가창의 큰 물량(벽)을 강력한 매수 체결(BUY)로 돌파하며 수급이 쏠리는지 확인해라.
+1. 단기 지표 (VWAP & 5-MA 최우선): 현재가가 Micro-VWAP(거래량 가중 평균) 위에 있는지 확인해라. VWAP 아래는 세력의 이탈(설거지)로 간주한다.
+2. 1분봉 차트: 최근 5분간의 추세, 거래량 급증, 윗꼬리(매도 압력)/아랫꼬리(지지) 패턴을 분석해 하방 리스크 및 모멘텀 둔화를 점검해라.
+3. 실시간 호가 및 틱: 매수/매도 호가창의 잔량 비율과 강력한 시장가 체결(BUY) 유입을 확인해라.
 
-[판단 기준]
-- BUY: 현재가가 VWAP 및 5-MA 위에서 지지받고 있으며, 호가창 돌파가 확실시되어 추가 상승 여력이 충분할 때. (Score: 80~100)
-- DROP: 가격이 VWAP 아래로 이탈했거나, 1분봉상 고점 징후(긴 윗꼬리)가 보이고 매도세가 압도하여 하방 리스크가 클 때. (Score: 0~40)
-- WAIT: 수급이 모호하거나 VWAP 부근에서 방향성을 탐색 중일 때. (Score: 41~79)
+[판단 및 스코어링 기준] - **매우 중요**
+- 강력한 상승 (Score: 75~100): 돌파가 확실시되거나, 기존의 강한 상승 추세와 매수세가 꺾이지 않고 유지될 때. (신규 진입 적합 / 보유 시 트레일링 익절 유지)
+- 모멘텀 둔화 (Score: 41~74): 수급이 모호해지거나, 고점에서 윗꼬리가 달리며 상승 탄력이 둔화될 때. (신규 진입 대기 / 보유 시 조기 익절)
+- 하방 리스크 (Score: 0~40): 가격이 VWAP 아래로 이탈했거나, 대량의 매도세(SELL)가 쏟아지며 하락 전환이 명백할 때. (신규 진입 절대 금지 / 보유 시 즉각 손절)
 
 분석 결과는 반드시 아래 JSON 형식으로만 출력하고 다른 설명은 절대 추가하지 마:
 {
     "action": "BUY" | "WAIT" | "DROP",
     "score": 0~100 사이의 정수,
-    "reason": "지표(VWAP)와 호가 돌파 여부를 종합한 1줄 요약 분석"
+    "reason": "현재 모멘텀과 수급 상태를 종합한 1줄 요약 분석"
 }
 """
 
@@ -39,10 +37,10 @@ class GeminiSniperEngine:
         # 스캘핑은 스피드가 생명이므로 flash 모델 사용
         # 💡 [핵심 1] 사용할 모델들의 우선순위 리스트 (가장 좋은 모델부터 배치)
         self.model_list = [
-            'gemini-2.5-flash',
-            'gemini-3-flash-preview',        # 3.0 플래시
-            'gemini-2.5-flash-lite',         # 2.5 라이트
             'gemini-3.1-flash-lite-preview',  # 3.1 라이트
+            'gemini-3-flash-preview',        # 3.0 플래시
+            'gemini-2.5-flash',
+            'gemini-2.5-flash-lite',         # 2.5 라이트
             'gemini-2.5-flash-lite-preview-09-2025'
         ]
         
@@ -60,7 +58,9 @@ class GeminiSniperEngine:
     # 3. 🛠️ 데이터 포맷팅 (AI 전용 번역기)
     # ==========================================
     # 💡 [수정 1] 파라미터에 recent_candles 추가! (기본값도 []로 주어 에러 방지)
-    def _format_market_data(self, ws_data, recent_ticks, recent_candles=[]):
+    def _format_market_data(self, ws_data, recent_ticks, recent_candles=None):
+        if recent_candles is None:
+            recent_candles = []
         """키움 API의 딕셔너리 데이터를 AI가 읽을 수 있는 텍스트로 예쁘게 포장합니다."""
         curr_price = ws_data.get('curr', 0)
         v_pw = ws_data.get('v_pw', 0)
@@ -131,10 +131,14 @@ class GeminiSniperEngine:
         
         for attempt in range(max_retries):
             try:
-                # 1. 현재 설정된 모델로 호출 시도
-                response = self.model.generate_content([SCALPING_SYSTEM_PROMPT, formatted_data])
-                cleaned_text = response.text.strip().replace("```json", "").replace("```", "")
+                # 1. 현재 설정된 모델로 호출 시도 (💡 generation_config 추가!)
+                response = self.model.generate_content(
+                    [SCALPING_SYSTEM_PROMPT, formatted_data],
+                    generation_config={"response_mime_type": "application/json"}
+                )
                 
+                # JSON 모드이므로 이제 replace("```json"...) 같은 지저분한 청소 코드가 필요 없습니다!
+                cleaned_text = response.text.strip()
                 result = json.loads(cleaned_text)
                 
                 if 'score' not in result:

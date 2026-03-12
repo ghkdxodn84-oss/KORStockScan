@@ -14,7 +14,6 @@ from constants import TRADING_RULES
 from google_sheets_utils import GoogleSheetsManager
 from kiwoom_websocket import KiwoomWSManager
 from db_manager import DBManager
-from bot_main import broadcast_alert # 💡 제미나이 판단결과 텔레그램 수신용
 from ai_engine import GeminiSniperEngine # 💡 새로 만든 두뇌 파일 임포트
 from signal_radar import SniperRadar  # 💡 레이더 부품 가져오기
 
@@ -471,7 +470,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, broadcast_callback, ra
             last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
             
             # 💡 1. AI API 호출은 10초에 한 번만 실행하여 과부하 방지
-            if ai_engine and radar and (time.time() - last_ai_time > 10.0):
+            if ai_engine and radar and (time.time() - last_ai_time > 3.0):
                 
                 recent_ticks = radar.get_tick_history_ka10003(code, limit=10)
                 recent_candles = radar.get_minute_candles_ka10080(code, limit=5)
@@ -667,14 +666,14 @@ def handle_holding_state(stock, code, ws_data, admin_id, broadcast_callback, mar
     db = DBManager()  # 💡 DB 매니저 로컬 인스턴스화
 
     # =========================================================
-    # 🤖 [AI 보유 종목 실시간 감시] 15초마다 건강 검진
+    # 🤖 [AI 보유 종목 실시간 감시] 5초마다 건강 검진
     # =========================================================
     global LAST_AI_CALL_TIMES
     last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
     current_ai_score = stock.get('rt_ai_prob', 0.8) * 100 # 기본값은 긍정(80점)으로 둠
     
-    # 보유 중일 때는 API 쿼터를 아끼기 위해 15초(또는 20초) 주기로 여유롭게 감시
-    if strategy == 'SCALPING' and ai_engine and radar and (time.time() - last_ai_time > 15.0):
+    # Tier 1 업그레이드로 AI 엔진과 레이더가 모두 준비되어 있고, 마지막 AI 호출로부터 5초 이상 지났을 때만 실행하여 과부하 방지
+    if strategy == 'SCALPING' and ai_engine and radar and (time.time() - last_ai_time > 5.0):
         recent_ticks = radar.get_tick_history_ka10003(code, limit=10)
         recent_candles = radar.get_minute_candles_ka10080(code, limit=5)
         
@@ -1049,7 +1048,7 @@ def run_sniper(broadcast_callback):
                         code, 
                         ws_data, 
                         admin_id, 
-                        broadcast_alert, 
+                        broadcast_callback, 
                         radar=radar,         # 🚀 추가
                         ai_engine=ai_engine  # 🚀 추가
                     )
