@@ -21,8 +21,15 @@ class DBManager:
         self.db_path = db_path
 
     def _get_connection(self):
-        """DB 커넥션을 반환합니다. (with문과 함께 사용 권장)"""
-        return sqlite3.connect(self.db_path)
+        """DB 연결 시 타임아웃을 늘리고 WAL 모드를 활성화합니다."""
+        # 💡 [핵심 1] timeout을 30초로 늘려 대기 시간을 확보합니다.
+        conn = sqlite3.connect(self.db_path, timeout=30)
+        
+        # 💡 [핵심 2] WAL 모드 활성화 (동시성 대폭 향상)
+        conn.execute("PRAGMA journal_mode=WAL;")
+
+        conn.row_factory = sqlite3.Row 
+        return conn
 
     # --------------------------------------------------------
     # 1. 데이터 조회 (Read)

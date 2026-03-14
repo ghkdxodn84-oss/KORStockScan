@@ -907,15 +907,21 @@ def get_target_price_by_percent(curr_price, drop_percent=0.5):
         
     return price
 
-def get_smart_target_price(curr_price, v_pw=100, ai_prob=0.8, market_trend='NORMAL'):
+def get_smart_target_price(curr_price, v_pw=100, ai_score=50, market_trend='NORMAL', ask_tot=0, bid_tot=0):
     """
-    [스캘핑 3.0] 수급강도 + AI 확신도 + 시장 지수 결합형 타점 계산기
+    [스캘핑 4.0] 수급강도 + AI 확신도 + 호가잔량비율 + 라운드피겨 회피가 모두 적용된 궁극의 타점 계산기
     """
     if curr_price <= 0: return 0, 0.0
     
-    # AI 확신도를 0~100 단위로 변환
-    ai_score = ai_prob * 100 if ai_prob <= 1.0 else ai_prob
+    final_ai_score = ai_score * 100 if ai_score <= 1.0 else ai_score
     
+    # ==========================================
+    # 💡 [아이디어 1] AI 초강세(90점 이상) -> 돌파 추격매수
+    # ==========================================
+    if final_ai_score >= 90:
+        # 눌림목을 기다리지 않고 현재가(또는 바로 위 호가)로 직진하여 즉시 체결시킵니다.
+        return curr_price, 0.0 
+        
     # 1. 기본 설정 (수급강도 기준)
     if v_pw >= 200:
         drop_percent, tick_count = 0.2, 3
@@ -924,31 +930,56 @@ def get_smart_target_price(curr_price, v_pw=100, ai_prob=0.8, market_trend='NORM
     else:
         drop_percent, tick_count = 0.5, 5
         
-    # 2. 🚀 가속 페달: AI 확신도 반영
-    if ai_score >= 85:
+    # 2. 🚀 가속 페달: AI 확신도 반영 (75~89점 구간)
+    if final_ai_score >= 85:
         drop_percent = max(0.1, drop_percent - 0.15) 
         tick_count = max(1, tick_count - 1)
-    elif ai_score <= 50: # DROP에 가까운 경우
+    elif final_ai_score <= 50: 
         drop_percent += 0.5   
         tick_count += 3
+
+    # ==========================================
+    # 💡 [아이디어 2] 호가창 잔량 비율(Orderbook Imbalance) 필터링
+    # ==========================================
+    if ask_tot > 0 and bid_tot > 0:
+        if ask_tot >= bid_tot * 1.5:
+            # 매도벽이 두터움 = 세력이 뚫고 올라갈 진짜 상승 신호
+            # 너무 아래에 깔면 안 사지므로 타점을 위로 살짝 올림
+            drop_percent = max(0.1, drop_percent - 0.2)
+            tick_count = max(1, tick_count - 2)
+        elif bid_tot >= ask_tot * 1.5:
+            # 매수벽이 두터움 = 개미 꼬시기용 가짜 지지선일 확률 높음
+            # 훅 빠질 수 있으므로 타점을 더 깊게(안전하게) 내림
+            drop_percent += 0.4
+            tick_count += 4
 
     # 3. 🛑 브레이크: 시장 지수 반영
     if market_trend == 'BAD':
         drop_percent += 0.5
         tick_count += 3
 
-    # 4. 가격 계산
+    # 4. 가격 계산 (퍼센트 방식 vs 틱 방식 중 더 안전한/낮은 가격)
     pct_price = get_target_price_by_percent(curr_price, drop_percent)
     
     tick_price = curr_price
     for _ in range(int(tick_count)):
-        tick = get_tick_size(tick_price - 1)
+        tick = get_tick_size(tick_price - 1) # (get_tick_size 함수가 utils에 있다고 가정)
         tick_price -= tick
         
     final_target = min(pct_price, tick_price)
     
-    # 💡 수정 완료: 최종 타점과 함께, 최종적으로 결정된 눌림목(drop_percent)을 리턴합니다.
-    return final_target, round(drop_percent, 2)
+    # ==========================================
+    # 💡 [아이디어 3] 라운드 피겨(Round Figure) 회피 로직
+    # ==========================================
+    # 1만, 5만, 10만원 등 심리적 저항선 '바로 아래'는 악성 매물대이므로 피합니다.
+    if 9800 <= final_target <= 9990:
+        final_target = 9750   # 1만원 저항 회피 -> 아예 깊게 대기
+    elif 49000 <= final_target <= 49950:
+        final_target = 48800  # 5만원 저항 회피
+    elif 98000 <= final_target <= 99900:
+        final_target = 97500  # 10만원 저항 회피
+        
+    return int(final_target), round(drop_percent, 2)
 
 def calculate_micro_indicators(candles):
     """
@@ -984,3 +1015,29 @@ def calculate_micro_indicators(candles):
         "MA5": int(ma5), 
         "Micro_VWAP": int(micro_vwap)
     }
+
+def calculate_market_leader_score(ws_data):
+    """
+    [v12.4] 주도주 판별을 위한 수급 점수 계산기
+    """
+    if not ws_data:
+        return 0
+    
+    # 1. 전일 대비 등락률 (변동성)
+    fluctuation = float(ws_data.get('fluctuation', 0))
+    
+    # 2. 체결강도 (수급의 질)
+    volume_power = float(ws_data.get('v_pw', 0))
+    
+    # 3. 호가 잔량 대금 (유동성 규모)
+    # (매도잔량 + 매수잔량) * 현재가
+    ask_tot = ws_data.get('ask_tot', 0)
+    bid_tot = ws_data.get('bid_tot', 0)
+    curr_p = ws_data.get('curr', 0)
+    liquidity = (ask_tot + bid_tot) * curr_p / 100_000_000 # 억 단위
+    
+    # 스캘핑용 가중치 공식: 
+    # (등락률 * 10) + (체결강도 * 0.5) + (유동성 * 1.2)
+    score = (fluctuation * 10) + (volume_power * 0.5) + (liquidity * 1.2)
+    
+    return round(score, 2)

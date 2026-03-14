@@ -2,10 +2,10 @@ import time
 import threading
 import json
 import re # 💡 JSON 파싱 전 마크다운 찌꺼기 제거용
-from itertools import cycle # 💡 키 순환을 위해 추가
-from google import genai           # 💡 신규 SDK (google-genai)
-from google.genai import types
+from itertools import cycle
+from openai import OpenAI, RateLimitError  # 💡 신규 SDK (openai)
 import kiwoom_utils
+# from collections import deque
 
 # ==========================================
 # 1. 🎯 시스템 프롬프트 (스캘핑 전용)
@@ -47,22 +47,33 @@ MARKET_ANALYSIS_PROMPT = """
 5. 출력은 JSON이 아니라, 텔레그램에 바로 전송할 수 있는 마크다운 텍스트 형식으로 작성해. (총 300자 내외)
 """
 
-class GeminiSniperEngine:
+class GPTSniperEngine:
+    # ==========================================
+    # 2. ⚙️ 엔진 초기화
+    # ==========================================
     def __init__(self, api_keys):
+        """OpenAI API 키 리스트로 로테이션 시스템을 구축합니다."""
+        if not isinstance(api_keys, list):
+            api_keys = [api_keys]
         self.api_keys = api_keys
-        self.key_cycle = cycle(self.api_keys) 
+        self.key_cycle = cycle(self.api_keys)
+
+        self.current_model_name = 'gpt-4o-mini'
         self._rotate_client()
 
-        # self.current_model_name = 'gemini-flash-lite-latest'
-        self.current_model_name = 'gemini-2.5-flash-lite'
         self.lock = threading.Lock()
         self.last_call_time = 0
-        self.min_interval = 1.5
-        print(f"🧠 [AI 엔진] {len(self.api_keys)}개 키 로테이션 가동! (선봉: {self.current_model_name})")
+        self.min_interval = 0.5
 
+        # 💡 adaptive cooldown 시스템을 위한 변수들 추가!
+        self.rate_limit_history = []  # 최근 발생한 429 time기록 리스트
+        self.dynamic_min_interval = 0.5  # 적응형 interval(초기값)
+        print(f"🧠 [OpenAI 엔진] {len(self.api_keys)}개 키 로테이션 가동! (모델: {self.current_model_name})")
+    
     def _rotate_client(self):
+        """새로운 API 키를 꺼내 OpenAI 클라이언트를 교체합니다."""
         self.current_key = next(self.key_cycle)
-        self.client = genai.Client(api_key=self.current_key)
+        self.client = OpenAI(api_key=self.current_key)
 
     # ==========================================
     # 3. 🛠️ 데이터 포맷팅 (AI 전용 번역기)
@@ -151,50 +162,63 @@ class GeminiSniperEngine:
     # ==========================================
     def analyze_target(self, target_name, ws_data, recent_ticks, recent_candles):
         if not self.lock.acquire(blocking=False):
-            return {"action": "WAIT", "score": 50, "reason": "AI 분석 경합 (다른 종목 분석 중)"}
+            return {"action": "WAIT", "score": 50, "reason": "AI 분석 경합 중"}
             
-        last_error_msg = "응답 파싱 실패"
-        
+        last_error_msg = "초기 상태"
+            
         try:
             elapsed = time.time() - self.last_call_time
             if elapsed < self.min_interval:
-                return {"action": "WAIT", "score": 50, "reason": "AI 쿨타임 대기"}
+                return {"action": "WAIT", "score": 50, "reason": f"AI 쿨타임 대기 ({self.min_interval}초)"}
 
             formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
 
             for attempt in range(len(self.api_keys)):
                 try:
-                    response = self.client.models.generate_content(
+                    # 💡 OpenAI Chat API 호출 방식 적용
+                    response = self.client.chat.completions.create(
                         model=self.current_model_name,
-                        contents=[SCALPING_SYSTEM_PROMPT, formatted_data],
-                        config=types.GenerateContentConfig(response_mime_type="application/json")
+                        messages=[
+                            {"role": "system", "content": SCALPING_SYSTEM_PROMPT},
+                            {"role": "user", "content": formatted_data}
+                        ],
+                        # 💡 강력한 JSON 강제 옵션 (절대 마크다운이나 헛소리를 뱉지 않음)
+                        response_format={"type": "json_object"},
+                        temperature=0.1 # 스캘핑 봇의 일관된 판단을 위해 온도를 낮춤
                     )
                     
                     self.last_call_time = time.time()
+                    
+                    # 응답 텍스트 추출 및 JSON 파싱
+                    content = response.choices[0].message.content
+                    if content:
+                        result = json.loads(content)
+                        if 'score' not in result:
+                            result['score'] = 50
+                        else:
+                            result['score'] = int(result['score'])
+                        return result
+                        
+                    last_error_msg = "빈 응답 수신"
+                    continue
+            
+                # 💡 OpenAI 전용 Rate Limit(429) 에러 처리
+                except RateLimitError as e:
+                    last_error_msg = str(e)
+                    self.rate_limit_history.append(time.time())
+                    if len(self.rate_limit_history) > 20:
+                        self.rate_limit_history = self.rate_limit_history[-20:]
+                    old_key = self.current_key[-5:]
                     self._rotate_client()
-                    print(f"✅ [AI 엔진] 분석 성공 - 다음 대기 키: {self.current_key[-5:]}")
+                    print(f"⚠️ [{target_name}] {old_key} 한도 초과(429) -> {self.current_key[-5:]} 교체 ({attempt+1}/{len(self.api_keys)})")
+                    continue
                     
-                    # 💡 [안정성 강화] AI가 가끔 마크다운 ```json ... ``` 태그를 붙여서 반환할 때를 대비
-                    raw_text = response.text.strip()
-                    clean_json_text = re.sub(r"```json\s*|\s*```", "", raw_text)
-                    result_data = json.loads(clean_json_text)
-                    
-                    return result_data
-
                 except Exception as e:
                     last_error_msg = str(e)
-                    error_msg_lower = last_error_msg.lower()
-                    
-                    if any(x in error_msg_lower for x in ["429", "quota", "resource_exhausted"]):
-                        old_key = self.current_key[-5:]
-                        self._rotate_client() 
-                        print(f"⚠️ [AI 엔진] {old_key} 한도 초과 -> {self.current_key[-5:]} 교체 ({attempt+1}/{len(self.api_keys)})")
-                        continue 
-                    else:
-                        return {"action": "WAIT", "score": 50, "reason": f"API/파싱 에러: {last_error_msg}"}
+                    return {"action": "WAIT", "score": 50, "reason": f"API 에러: {last_error_msg}"}
             
-            return {"action": "WAIT", "score": 50, "reason": f"모든 키 한도 초과. 마지막 에러: {last_error_msg}"}
-                
+            return {"action": "WAIT", "score": 50, "reason": f"모든 키 시도 실패. 에러: {last_error_msg}"}
+            
         except Exception as e:
             return {"action": "WAIT", "score": 50, "reason": f"엔진 치명적 에러: {e}"}
         finally:
@@ -204,72 +228,110 @@ class GeminiSniperEngine:
     # 5. 📢 [신규] 스캐너 결과 통계 분석 및 브리핑
     # ==========================================
     def analyze_scanner_results(self, total_count, survived_count, stats_text):
-        # 💡 [안전성 강화] 텔레그램 브리핑 요청 시에도 Lock을 대기하도록 처리 (blocking=True 기본값)
-        with self.lock:
-            data_input = f"""
+        data_input = f"""
 [오늘의 스캐너 필터링 통계]
 - 총 스캔 대상: {total_count}개 종목
 - 최종 생존(매수 감시 대상): {survived_count}개 종목
 - 상세 탈락 사유:
 {stats_text}
 """
-            for attempt in range(len(self.api_keys)):
-                try:
-                    response = self.client.models.generate_content(
-                        model=self.current_model_name,
-                        contents=[MARKET_ANALYSIS_PROMPT, data_input],
-                        config=types.GenerateContentConfig(response_mime_type="application/json")
-                    )
+        for attempt in range(len(self.api_keys)):
+            try:
+                # 브리핑은 자연어로 받아야 하므로 response_format을 빼고 호출합니다.
+                response = self.client.chat.completions.create(
+                    model=self.current_model_name,
+                    messages=[
+                        {"role": "system", "content": MARKET_ANALYSIS_PROMPT},
+                        {"role": "user", "content": data_input}
+                    ],
+                    temperature=0.7 # 텍스트 생성에는 약간의 창의성을 허용
+                )
+                return response.choices[0].message.content.strip()
+                
+            except RateLimitError:
+                self.rate_limit_history.append(time.time())
+                if len(self.rate_limit_history) > 20:
+                    self.rate_limit_history = self.rate_limit_history[-20:]
+                self._rotate_client()
+                continue
+            except Exception as e:
+                print(f"🚨 [AI 브리핑 에러] {e}")
+                return f"⚠️ AI 시장 진단 중 에러가 발생했습니다. (사유: {e})"
                     
-                    # 💡 [로직 수정] 브리핑 성공 시에도 다음을 위해 키를 교체
-                    if response.text:
-                        self._rotate_client() 
-                        return response.text.strip()
-                    else:
-                        raise ValueError("AI가 빈 문자열을 반환했습니다.") # 강제로 에러를 발생시켜 재시도 유도
-                    
-                except Exception as e:
-                    error_msg = str(e).lower()
-                    if any(x in error_msg for x in ["429", "quota", "resource_exhausted"]):
-                        self._rotate_client()
-                        print(f"⚠️ [시장 진단] 한도 초과. 다음 키로 교체 ({attempt+1}/{len(self.api_keys)})")
-                        continue
-                    else:
-                        print(f"🚨 [AI 브리핑 에러] {e}")
-                        return f"⚠️ AI 시장 진단 생성 중 에러가 발생했습니다.\n(사유: {e})"
-                        
-            return "⚠️ 모든 API 키의 할당량이 소진되어 오늘의 시장 진단을 생성할 수 없습니다."
+        return "⚠️ 모든 AI 모델의 쿼타가 소진되어 시장 진단을 생성할 수 없습니다."
     
     def analyze_morning_leader(self, stock_name, ws_data, recent_ticks, recent_candles):
         """
-        [v12.8] 기존 고도화된 포맷을 활용한 09:05 주도주 분석
+        [v12.8 -> GPT-4o-mini] 기존 고도화된 포맷을 활용한 09:05 주도주 분석
         """
         # 1. 기존 포맷 함수로 데이터 정제
         formatted_context = self._format_market_data(ws_data, recent_ticks, recent_candles)
 
-        # 2. 분석 프롬프트 구성
-        prompt = f"""
+        # 2. 시스템 프롬프트 구성 (역할 및 JSON 구조 강제)
+        system_prompt = """
 너는 대한민국 최고의 스캘핑 전문가이자 데이터 분석가야.
-아래 제공된 [{stock_name}]의 실시간 수급 및 기술적 지표를 분석하여 09:05 이후의 전략을 제시하라.
-
-{formatted_context}
+아래 제공된 실시간 수급 및 기술적 지표를 분석하여 09:05 이후의 전략을 제시하라.
 
 반드시 다음 JSON 구조로만 응답하라:
-{{
+{
     "one_liner": "종목에 대한 한 줄 평 (핵심 수급 요약)",
     "pattern": "현재 차트에서 발견된 기술적 패턴 명칭",
     "scenario": "향후 30분 내 예상 주가 흐름",
     "target_price": "최적의 눌림목 진입 단가 (숫자만)",
     "risk_factor": "진입 시 반드시 체크해야 할 리스크 요소"
-}}
+}
 """
+        # 3. 유저 프롬프트 구성 (실시간 데이터)
+        user_prompt = f"[{stock_name}] 분석 데이터:\n{formatted_context}"
 
-        try:
-            response = self.client.models.generate_content(
-                model=self.current_model_name,
-                contents=[prompt],
-                config=types.GenerateContentConfig(response_mime_type="application/json")
-            )
-            return response.text
-        except Exception as e:
-            return f"{{\"error\": \"{str(e)}\"}}"
+        last_error_msg = "초기 상태"
+
+        # 4. 안전한 로테이션 및 API 호출 루프
+        for attempt in range(len(self.api_keys)):
+            try:
+                response = self.client.chat.completions.create(
+                    model=self.current_model_name,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt}
+                    ],
+                    response_format={"type": "json_object"},  # 💡 강력한 JSON 강제
+                    temperature=0.2 # 객관적이고 일관된 분석을 위해 낮은 온도 유지
+                )
+                
+                content = response.choices[0].message.content
+                if content:
+                    # 💡 원본은 response.text(문자열)를 리턴했지만, 
+                    # 파이썬 딕셔너리로 바로 파싱해서 리턴하는 것이 KORStockScan 로직 처리에 훨씬 안전합니다.
+                    return json.loads(content)
+                    
+                last_error_msg = "빈 응답 수신"
+                continue
+
+            except RateLimitError as e:
+                last_error_msg = str(e)
+                self.rate_limit_history.append(time.time())
+                if len(self.rate_limit_history) > 20:
+                    self.rate_limit_history = self.rate_limit_history[-20:]
+                old_key = self.current_key[-5:]
+                self._rotate_client()
+                print(f"⚠️ [{stock_name} 주도주 분석] {old_key} 한도 초과(429) -> {self.current_key[-5:]} 교체 ({attempt+1}/{len(self.api_keys)})")
+                continue
+
+            except Exception as e:
+                last_error_msg = str(e)
+                # 다른 일반 에러 시 JSON 형태로 에러 사유 반환
+                return {"error": f"API 에러: {last_error_msg}"}
+
+        return {"error": f"모든 키 시도 실패. 마지막 에러: {last_error_msg}"}
+    
+    # ==========================================
+    # 6. 🛠️ 최근 1분간 429 빈도 체크
+    # ==========================================
+    def _recalculate_cooldown(self):
+        # 최근 1분간 429 빈도 체크
+        window = 60
+        now = time.time()
+        recent_rls = [t for t in self.rate_limit_history if now - t < window]
+        boost = 0.5 + 0.25 * min(len(recent_rls), 10)
+        self.min_interval = max(boost, 0.5)  # 0.5~3.0초 가변

@@ -13,10 +13,10 @@ class SniperRadar:
     1차 스캔(투망) -> 2차 검증(현미경) -> 최종 타겟 선정을 전담합니다.
     """
     def __init__(self, token):
-        self.token = token
+        self.access_token = token
         self.headers_rkinfo = {
             'Content-Type': 'application/json;charset=UTF-8',
-            'authorization': f'Bearer {self.token}',
+            'authorization': f'Bearer {self.access_token}',
             'User-Agent': 'Mozilla/5.0'
         }
         self.headers_mrkcond = self.headers_rkinfo.copy()

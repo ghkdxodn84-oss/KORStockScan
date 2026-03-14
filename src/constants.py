@@ -43,6 +43,7 @@ TRADING_RULES = {
     'VPW_SCALP_LIMIT': 120,      # 확신도가 낮을 때 매수를 강행하기 위한 체결강도 허들(%)
     'SCALP_TARGET': 1.5,         # 초단타 익절 1.5%
     'SCALP_STOP': -2.5,          # 초단타 손절 -2.5%
+    'SCALP_TRAILING_LIMIT': 0.5,  # 고가 대비 특정 비율(0.5%) 이상 밀리면 즉시 수익을 확정
     'MIN_SCALP_LIQUIDITY': 300_000_000,  # 최소 호가 잔량 대금 (3억)
     'MAX_SCALP_SURGE_PCT': 20.0,         # 초단타 진입 금지 급등률 (20%)
     'MAX_INTRADAY_SURGE': 15.0,    # 당일 시가 대비 최대 급등률 (15%)
