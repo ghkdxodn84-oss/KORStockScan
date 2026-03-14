@@ -162,17 +162,6 @@ def init_db():
 # ==========================================
 # 4. 유틸리티 및 UI 함수 (핸들러보다 무조건 위에 위치!)
 # ==========================================
-def get_main_keyboard():
-    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
-    markup.add("🏆 오늘의 추천종목", "🔍 실시간 종목분석")
-    markup.add("📜 감시/보유 리스트", "➕ 수동 종목 추가")
-    # 💡 [수정] 후원하기 버튼 옆에 나란히 배치되도록 버튼 추가!
-    markup.add("☕ 서버 운영 후원하기", "🤖 AI 확신지수란?")
-    return markup
-
-def get_user_badge(chat_id):
-    level = db_manager.get_user_level(chat_id)
-    return "👑 [VIP 후원자] " if level == 1 else "👤 [일반] "
 
 def process_manual_add_logic(message, code):
     stock_name = code
@@ -260,90 +249,7 @@ def process_manual_add_logic(message, code):
     except Exception as e:
         bot.reply_to(message, f"❌ DB 저장 중 시스템 에러 발생: {e}")
 
-def broadcast_alert(message_text, audience='VIP_ALL', parse_mode='HTML'): 
-    # 💡 [수정 1] 스나이퍼에서 넘겨주는 꼬리표(audience) 파라미터를 추가했습니다. 
-    # 기본값을 'VIP_ALL'로 두어 다른 곳에서 이 함수를 그냥 호출해도 에러가 나지 않게 방어합니다.
 
-    # db_manager.py에 이미 있는 get_telegram_chat_ids() 활용
-    chat_ids = db_manager.get_telegram_chat_ids()
-    
-    for chat_id in chat_ids:
-        # 💡 [수정 2] db_manager를 통해 해당 유저의 권한('A' 또는 'V')을 가져옵니다.
-        user_level = db_manager.get_user_level(chat_id)
-        
-        # 💡 [수정 3] 권한에 따른 발송 여부(should_send)를 결정합니다.
-        if user_level == 'A':
-            # 관리자(Admin)는 잔량 5억 미만이든 이상이든 모든 알림을 무조건 수신합니다.
-            should_send = True
-        elif user_level == 'V' and audience == 'VIP_ALL':
-            # VIP 유저는 잔량 5억 이상(VIP_ALL 꼬리표)일 때만 수신합니다.
-            should_send = True
-        else:
-            # 그 외의 경우 (잔량 5억 미만인데 VIP인 경우 등) 발송을 스킵합니다.
-            should_send = False
-
-        # 필터링을 통과한 유저에게만 텔레그램을 발송합니다.
-        if should_send:
-            try:
-                bot.send_message(chat_id, message_text, parse_mode=parse_mode)
-                time.sleep(0.05) # 텔레그램 API 도배 방지 (아주 좋은 습관입니다!)
-            except Exception as e:
-                print(f"⚠️ 브로드캐스트 전송 실패 (Chat ID: {chat_id}): {e}")
-                pass
-
-def broadcast_today_picks():
-    """
-    [v12.1 복구] 봇 시작 시, 오늘 날짜의 추천 종목을 모든 가입자에게 브로드캐스트합니다.
-    """
-    try:
-        conn = sqlite3.connect(STOCK_DB_PATH)
-        today = datetime.now().strftime('%Y-%m-%d')
-
-        query = "SELECT name, buy_price, type, code FROM recommendation_history WHERE date=?"
-        picks = conn.execute(query, (today,)).fetchall()
-        conn.close()
-
-        if not picks:
-            print(f"🧐 [{today}] 추천 종목이 아직 생성되지 않아 알림을 대기합니다.")
-            return
-
-        take_profit = TRADING_RULES.get('TRAILING_START_PCT', 3.0)
-        stop_loss = abs(TRADING_RULES.get('STOP_LOSS_BULL', -2.5)) # 💡 엔진과 변수명 동기화!
-
-        # 💡 HTML 태그 <b> </b> 사용
-        msg = f"🌅 <b>[{today}] AI 스태킹 앙상블 리포트</b>\n"
-        msg += f"🎯 <b>전략: 장중 +{take_profit}% 익절(가변익절) / -{stop_loss}% 손절</b>\n"
-        msg += "--------------------------------------\n"
-
-        main_picks = [p for p in picks if p[2] == 'MAIN']
-        runner_picks = [p for p in picks if p[2] == 'RUNNER']
-
-        if main_picks:
-            msg += "🔥 <b>[고확신 종목]</b>\n"
-            for name, price, _, code in main_picks:
-                clean_code = str(code)[:6]
-                msg += f"• <b>{name}</b> ({clean_code}) : <code>{price:,}원</code>\n"
-            msg += "\n"
-
-        if runner_picks:
-            msg += "🥈 <b>[관심 종목 TOP 10]</b>\n"
-            for name, price, _, code in runner_picks[:10]:
-                clean_code = str(code)[:6]
-                msg += f"• <b>{name}</b> ({clean_code}) : <code>{price:,}원</code>\n"
-
-            if len(runner_picks) > 10:
-                msg += f"\n<i>(그 외 {len(runner_picks) - 10}개의 유망 종목 실시간 추적 중)</i>"
-
-        msg += "\n--------------------------------------\n"
-        msg += "💡 /상태 입력 시 엔진 가동 현황을 확인하실 수 있습니다."
-
-        # 🚀 안전한 HTML 모드로 전송
-        broadcast_alert(msg, parse_mode='HTML')
-        print(f"📢 [{today}] 추천 종목 브로드캐스트 완료 (총 {len(picks)}종목)")
-
-    except Exception as e:
-        import kiwoom_utils
-        kiwoom_utils.log_error(f"❌ 아침 브로드캐스트 실패: {e}", config=CONF)
 
 def process_manual_add_step(message):
     code = message.text.strip()
