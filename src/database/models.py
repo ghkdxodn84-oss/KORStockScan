@@ -1,0 +1,107 @@
+from sqlalchemy import Column, Integer, BigInteger, Float, String, Text, Date, DateTime, text
+from sqlalchemy.orm import declarative_base
+
+Base = declarative_base()
+
+class DailyStockQuote(Base):
+    __tablename__ = 'daily_stock_quotes'
+
+    # 💡 [핵심] Date -> quote_date, Code -> stock_code로 명확화 및 복합키 설정
+    quote_date = Column(Date, primary_key=True)
+    stock_code = Column(String(10), primary_key=True)
+    stock_name = Column(Text)
+    
+    # 가격 및 거래량
+    open_price = Column(Float)
+    high_price = Column(Float)
+    low_price = Column(Float)
+    close_price = Column(Float)
+    volume = Column(Float)
+    
+    # 기술적 지표
+    ma5 = Column(Float)
+    ma20 = Column(Float)
+    ma60 = Column(Float)
+    ma120 = Column(Float)
+    rsi = Column(Float)
+    macd = Column(Float)
+    macd_sig = Column(Float)
+    macd_hist = Column(Float)
+
+    # 💡 [신규 추가] sqlite.sql에 명시된 지표들 완벽 동기화
+    bbl = Column(Float)
+    bbm = Column(Float)
+    bbu = Column(Float)
+    bbb = Column(Float)
+    bbp = Column(Float)
+    vwap = Column(Float)
+    obv = Column(Float)
+    atr = Column(Float)
+    
+    # 파이썬 예약어인 'return'과 충돌을 피하기 위해 변수명은 'daily_return'으로 명명
+    daily_return = Column(Float)
+    
+    # 수급 및 기타 지표
+    marcap = Column(BigInteger, server_default=text("0"))
+    retail_net = Column(Float, server_default=text("0"))
+    foreign_net = Column(Float, server_default=text("0"))
+    inst_net = Column(Float, server_default=text("0"))
+    margin_rate = Column(Float, server_default=text("0"))
+
+    def __repr__(self):
+        return f"<DailyStockQuote(quote_date='{self.quote_date}', stock_code='{self.stock_code}')>"
+
+
+class MacroAlert(Base):
+    __tablename__ = 'macro_alerts'
+
+    # 💡 신규 추가된 거시경제 알림 테이블
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    alert_time = Column(DateTime)
+    category = Column(Text)
+    source = Column(Text)
+    title = Column(Text)
+    link = Column(Text, unique=True) # UNIQUE 제약조건 반영
+    severity_score = Column(Integer)
+
+    def __repr__(self):
+        return f"<MacroAlert(id={self.id}, category='{self.category}')>"
+
+
+class RecommendationHistory(Base):
+    __tablename__ = 'recommendation_history'
+
+    # 💡 복합 기본키
+    rec_date = Column(Date, primary_key=True)
+    stock_code = Column(String(10), primary_key=True)
+    
+    stock_name = Column(Text)
+    trade_type = Column(Text)
+    status = Column(Text, server_default=text("'WATCHING'"))
+    strategy = Column(Text, server_default=text("'KOSPI_ML'"))
+    position_tag = Column(Text, server_default=text("'MIDDLE'"))
+    prob = Column(Float, server_default=text("0.70"))
+    nxt = Column(Float)
+    
+    buy_price = Column(Integer)
+    buy_qty = Column(Integer, server_default=text("0"))
+    buy_time = Column(DateTime) # DDL에 맞춰 진정한 DateTime으로 복귀!
+    
+    sell_price = Column(Integer, server_default=text("0"))
+    sell_time = Column(DateTime)
+    profit_rate = Column(Float, server_default=text("0.0"))
+
+    def __repr__(self):
+        return f"<RecommendationHistory(rec_date='{self.rec_date}', stock_code='{self.stock_code}')>"
+
+
+class User(Base):
+    __tablename__ = 'users'
+
+    # 💡 Telegram ID를 위한 BigInteger
+    chat_id = Column(BigInteger, primary_key=True)
+    joined_at = Column(DateTime, server_default=text("CURRENT_TIMESTAMP"))
+    auth_group = Column(Text, server_default=text("'USER'"))
+
+    def __repr__(self):
+        return f"<User(chat_id={self.chat_id}, auth_group='{self.auth_group}')>"

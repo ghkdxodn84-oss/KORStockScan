@@ -1,101 +1,40 @@
-import logging
 import os
+import json
 import time
-from datetime import datetime
-import telebot
-from telebot import types
-
-import FinanceDataReader as fdr
-import sqlite3
+import requests
 import pandas as pd
 import numpy as np
 import holidays
-import requests
-from utils.constants import TRADING_RULES, DATA_DIR, CONFIG_PATH, STOCK_DB_PATH, NOTIFY_DIR
-import utils.db_manager
+from datetime import datetime
 
-# 전역 DB 매니저 인스턴스 생성
-db_manager = DBManager()
-
-# --- [신규] 경로 설정 (상대 참조) ---
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.abspath(os.path.join(CURRENT_DIR, '..', 'data'))
-DB_NAME = os.path.join(DATA_DIR, 'kospi_stock_data.db')
-
-# --- [1. 통합 에러 로깅 및 관제 설정] ---
-def log_error(msg, config=None, send_telegram=False):
-    """
-    중앙 집중형 에러 관리 함수 (호출한 파일명으로 분리 & 상세 원인 자동 기록)
-    """
-    # 1. 🔍 누가 나를 불렀는지 역추적 (예: 'bot_main', 'kiwoom_sniper_v2')
-    caller_frame = inspect.stack()[1]
-    caller_filename = os.path.basename(caller_frame.filename).replace('.py', '')
-
-    # 2. 🗂️ 저장할 폴더 및 파일명 세팅 (KORStockScan/logs/파일명_날짜.log)
-    today_str = datetime.now().strftime('%Y%m%d')
-    log_filepath = os.path.join(LOGS_DIR, f"{caller_filename}_{today_str}.log")
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-
-    # 3. 📝 에러 상세 내용(Traceback) 자동 수집
-    # except 구문 안에서 이 함수가 실행되었다면, 파이썬이 알아서 에러 원인을 긁어옵니다.
-    error_details = msg
-    exc_info = traceback.format_exc()
-    if exc_info and exc_info != "NoneType: None\n":
-        error_details += f"\n{exc_info}"
-
-    # 4. 터미널 출력 (어디서 난 에러인지 태그를 붙여줍니다)
-    print(f"🚨 [{caller_filename}] {error_details}")
-
-    # 5. 파일에 기록 (가장 직관적이고 버그 없는 텍스트 추가 방식)
-    with open(log_filepath, 'a', encoding='utf-8') as f:
-        f.write(f"[{timestamp}] [ERROR] {error_details}\n")
-        f.write("-" * 50 + "\n") # 보기 좋게 구분선 추가
-
-    # 6. 텔레그램 발송 (기존 로직 유지)
-    if send_telegram:
-        try:
-            # 순환 참조 방지를 위해 함수 내부에서 임포트합니다.
-            from notify.telegram_manager import send_to_admin
-            
-            # 메시지 포맷팅
-            alert_msg = f"⚠️ *[{caller_filename} 에러]*\n\n🕒 {timestamp[11:]}\n📝 {msg}"
-            
-            # 🚀 직접 쏘지 않고 매니저에게 맡깁니다!
-            send_to_admin(alert_msg)
-            
-        except Exception as e:
-            # 텔레그램 매니저 호출 자체가 실패한 경우 파일에 유언을 남깁니다.
-            with open(log_filepath, 'a', encoding='utf-8') as f:
-                f.write(f"[{timestamp}] [ERROR] 텔레그램 매니저 연동 실패: {e}\n")
+# 💡 독립 로거 및 전역 상수 사용
+from src.utils.logger import log_error
+from src.utils.constants import CONFIG_PATH, DEV_PATH, TRADING_RULES  # 필요에 따라 상수를 추가/수정해서 사용
 
 # ==========================================
-# 💡 [핵심] 스마트 URL 스위치 (운영/모의투자 자동 감지)
+# 1. API 설정 및 공통 유틸리티
 # ==========================================
 def get_kiwoom_base_url():
     """
+    스마트 URL 스위치 (운영/모의투자 자동 감지)
     config_dev.json 파일의 존재 여부를 파악하여,
     자동으로 모의투자 URL 또는 실투자 URL을 세팅합니다.
     """
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    data_dir = os.path.abspath(os.path.join(current_dir, '..', 'data'))
-    
-    dev_path = os.path.join(data_dir, 'config_dev.json')
-    prod_path = os.path.join(data_dir, 'config_prod.json')
-    
+      
     # GCP에는 dev_path가 있고, AWS에는 없으므로 알아서 분기됩니다!
-    target_path = dev_path if os.path.exists(dev_path) else prod_path
+    target_path = CONFIG_PATH if os.path.exists(CONFIG_PATH) else DEV_PATH
     
     try:
         with open(target_path, 'r', encoding='utf-8') as f:
             conf = json.load(f)
             # config에 명시된 URL이 있으면 가져오고, 없으면 실투자 URL을 기본값으로 씁니다.
             base_url = conf.get("KIWOOM_BASE_URL", "https://api.kiwoom.com")
-            
             # 최초 1회 로드 시 터미널에 현재 모드를 명확히 출력해줍니다.
-            mode_str = "🧪 [MOCK/DEV]" if "dev" in target_path else "🚀 [PROD/REAL]"
+            mode_str = "🧪 [MOCK/DEV]" if "dev" in target_path.name else "🚀 [PROD/REAL]"
             print(f"⚙️ Kiwoom API 스위치 온: {mode_str} 목적지 -> {base_url}")
             return base_url
     except Exception as e:
+        log_error(f"⚠️ 설정 파일 로드 실패: {e}. 실투자 URL로 폴백합니다.")
         print(f"⚠️ 설정 로드 실패. 실투자 기본 URL로 폴백합니다: {e}")
         return "https://api.kiwoom.com"
 
@@ -105,65 +44,63 @@ KIWOOM_BASE_URL = get_kiwoom_base_url()
 def get_api_url(endpoint):
     """엔드포인트를 받아 최종 목적지 URL을 조립합니다."""
     return f"{KIWOOM_BASE_URL}{endpoint}"
-# ==========================================
 
 # ==========================================
-# 💡 텔레그램 공용 발송 함수
+# 2. 인증 및 기초 정보 API (Data Fetching Only)
 # ==========================================
-def broadcast_alert(message_text, audience='VIP_ALL', parse_mode='HTML'): 
-    # 💡 [수정 1] 스나이퍼에서 넘겨주는 꼬리표(audience) 파라미터를 추가했습니다. 
-    # 기본값을 'VIP_ALL'로 두어 다른 곳에서 이 함수를 그냥 호출해도 에러가 나지 않게 방어합니다.
-
-    # db_manager.py에 이미 있는 get_telegram_chat_ids() 활용
-    chat_ids = db_manager.get_telegram_chat_ids()
-    
-    for chat_id in chat_ids:
-        # 💡 [수정 2] db_manager를 통해 해당 유저의 권한('A' 또는 'V')을 가져옵니다.
-        user_level = db_manager.get_user_level(chat_id)
-        
-        # 💡 [수정 3] 권한에 따른 발송 여부(should_send)를 결정합니다.
-        if user_level == 'A':
-            # 관리자(Admin)는 잔량 5억 미만이든 이상이든 모든 알림을 무조건 수신합니다.
-            should_send = True
-        elif user_level == 'V' and audience == 'VIP_ALL':
-            # VIP 유저는 잔량 5억 이상(VIP_ALL 꼬리표)일 때만 수신합니다.
-            should_send = True
-        else:
-            # 그 외의 경우 (잔량 5억 미만인데 VIP인 경우 등) 발송을 스킵합니다.
-            should_send = False
-
-        # 필터링을 통과한 유저에게만 텔레그램을 발송합니다.
-        if should_send:
-            try:
-                bot.send_message(chat_id, message_text, parse_mode=parse_mode)
-                time.sleep(0.05) # 텔레그램 API 도배 방지 (아주 좋은 습관입니다!)
-            except Exception as e:
-                print(f"⚠️ 브로드캐스트 전송 실패 (Chat ID: {chat_id}): {e}")
-                pass
-# ==========================================
-
-
-# --- [2. 키움 API 통신 및 기존 유틸리티] ---
-def get_kiwoom_token(config):
-    """키움 접근 토큰 발급"""
-    url = get_api_url("/oauth2/token")
-    params = {
-        'grant_type': 'client_credentials',
-        'appkey': config.get('KIWOOM_APPKEY'),
-        'secretkey': config.get('KIWOOM_SECRETKEY'),
-    }
-    headers = {'Content-Type': 'application/json;charset=UTF-8'}
-    try:
-        res = requests.post(url, headers=headers, json=params, timeout=10)
-        if res.status_code == 200:
-            return res.json().get('token')
-        else:
-            log_error(f"토큰 발급 실패 (HTTP {res.status_code})", config=config, send_telegram=True)
+def get_kiwoom_token(config=None):
+    """
+    키움 접근 토큰 발급 (환경 자동 감지형)
+    - config가 인자로 오면 우선 사용하고, 없으면 환경에 맞는 파일을 직접 로드합니다.
+    """
+    # 1. 💡 [환경 감지] 인자가 없을 경우 스스로 설정 로드
+    if config is None:
+        target_path = CONFIG_PATH if CONFIG_PATH.exists() else DEV_PATH
+        print(target_path)
+        try:
+            with open(target_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
+        except Exception as e:
+            log_error(f"❌ 토큰 발급용 설정 로드 실패: {e}")
             return None
-    except Exception as e:
-        log_error(f"토큰 발급 중 시스템 예외: {e}", config=config, send_telegram=True)
+
+    url = get_api_url("/oauth2/token")
+    
+    # 2. 💡 [보안/정확성] 해당 환경의 키 추출
+    app_key = config.get('KIWOOM_APPKEY')
+    sec_key = config.get('KIWOOM_SECRETKEY')
+
+    if not app_key or not sec_key:
+        log_error("❌ APP_KEY 또는 SECRET_KEY가 설정 파일에 없습니다.")
         return None
 
+    params = {
+        'grant_type': 'client_credentials',
+        'appkey': app_key,
+        'secretkey': sec_key,
+    }
+    headers = {'Content-Type': 'application/json;charset=UTF-8'}
+
+    try:
+        # 3. 💡 [중요] 타임아웃(timeout)을 설정하여 무한 대기(Hang) 방지
+        # 서버 응답이 5초 이상 없으면 에러를 뱉고 다음 로직으로 넘어가게 합니다.
+        res = requests.post(url, headers=headers, json=params, timeout=5)
+        
+        if res.status_code == 200:
+            token = res.json().get('access_token') or res.json().get('token')
+            # 성공 시 로그를 남겨 흐름 파악을 돕습니다.
+            # print(f"✅ 토큰 발급 성공 (목적지: {url})")
+            return token
+        else:
+            log_error(f"❌ 토큰 발급 실패 (HTTP {res.status_code}): {res.text}")
+            return None
+            
+    except requests.exceptions.Timeout:
+        log_error(f"⏳ 토큰 서버 응답 시간 초과 (5초): {url}")
+        return None
+    except Exception as e:
+        log_error(f"🚨 토큰 발급 중 시스템 예외: {e}")
+        return None
 
 def get_industry_list_ka10101(token, market_type="0"):
     """
@@ -172,491 +109,717 @@ def get_industry_list_ka10101(token, market_type="0"):
     반환값 예시: [{'marketCode': '0', 'code': '001', 'name': '종합(KOSPI)', 'group': '1'}, ...]
     """
     url = get_api_url("/api/dostk/stkinfo")
-    headers = {
-        'Content-Type': 'application/json;charset=UTF-8',
-        'authorization': f'Bearer {token}',
-        'api-id': 'ka10101'
-    }
     payload = {"mrkt_tp": str(market_type)}
 
-    try:
-        res = requests.post(url, headers=headers, json=payload, timeout=5)
-        if res.status_code == 200:
-            # 명세서 응답 예시에 따라 JSON 배열(List) 형태로 반환됨
-            return res.json()
-    except Exception as e:
-        print(f"🚨 ka10101 업종코드 리스트 조회 실패: {e}")
+    # 💡 [핵심] 공통 래퍼 함수 적용 (1회성 조회이므로 use_continuous=False)
+    results = fetch_kiwoom_api_continuous(
+        url=url, 
+        token=token, 
+        api_id='ka10101', 
+        payload=payload, 
+        use_continuous=False
+    )
 
-    return []
+    # 응답이 실패하여 빈 리스트가 넘어온 경우
+    if not results:
+        return []
+
+    # 💡 래퍼 함수는 모든 응답을 리스트(all_results)에 담아서 반환합니다.
+    # 명세서상 ka10101의 JSON 응답 자체가 배열(List) 형태이므로, 
+    # 첫 번째 응답 덩어리인 results[0]을 그대로 반환하면 기존 로직과 100% 호환됩니다.
+    return results[0]
 
 def get_basic_info_ka10001(token, code):
-    """
-    [ka10001] 주식기본정보요청 (10054 강제 끊김 방어 3회 재시도 로직 적용)
-    """
-    url = "https://api.kiwoom.com/api/dostk/stkinfo"
-    headers = {
-        'Content-Type': 'application/json;charset=UTF-8',
-        'authorization': f'Bearer {token}',
-        'cont-yn': 'N',
-        'api-id': 'ka10001',
-        'User-Agent': 'Mozilla/5.0'
-    }
-
-    # 💡 키움 API ka10001에 맞는 payload (명세서 기준 stk_cd)
+    """[ka10001] 주식기본정보요청 (1회성 조회)"""
+    url = get_api_url("/api/dostk/stkinfo")
     payload = {'stk_cd': code}
+    
+    # 공통 함수 호출 (연속조회 안함)
+    results = fetch_kiwoom_api_continuous(url, token, 'ka10001', payload, use_continuous=False)
+    
+    if not results:
+        return {'Name': code, 'Marcap': 0}
+        
+    data = results[0] # 첫 번째 응답값
+    
+    name = data.get('stk_nm', code)
+    raw_mac = data.get('mac', 0)
+    marcap = int(raw_mac) if str(raw_mac).strip() != "" else 0
+    
+    return {'Name': name, 'Marcap': marcap}
 
-    # 🛡️ 3번까지 끈질기게 재시도하는 루프
-    for attempt in range(3):
-        try:
-            res = requests.post(url, headers=headers, json=payload, timeout=10)
-
-            # 1. HTTP 상태 코드가 200(정상)일 때만 파싱 시도
-            if res.status_code == 200:
-                data = res.json()
-
-                # 🚀 [핵심 수정] return_code가 아예 응답에 없을 수 있으므로, 없을 경우 '0'(정상)으로 간주합니다.
-                if str(data.get('return_code', '0')) != '0':
-                    print(f"⚠️ [{code}] 기본정보 조회 에러: {data.get('return_msg', '사유 없음')}")
-                    return {'Name': code, 'Marcap': 0}
-
-                # 🚀 평면 구조의 JSON에서 직접 데이터를 추출합니다.
-                name = data.get('stk_nm', code)
-
-                # 시가총액 필드는 명세서에 따라 'mac' 이며, 값이 빈 문자열("")로 올 수 있으므로 안전하게 변환
-                raw_mac = data.get('mac', 0)
-                marcap = int(raw_mac) if str(raw_mac).strip() != "" else 0
-
-                return {'Name': name, 'Marcap': marcap}
-
-            else:
-                # 429(Too Many Requests), 500(서버 에러) 등 200이 아닌 경우
-                print(f"❌ [{code}] HTTP 응답 에러: {res.status_code}")
-
-        except requests.exceptions.ConnectionError:
-            # 💡 10054 에러 발생 시 여기서 잡아냅니다!
-            print(f"⚠️ [{code}] 키움 서버 연결 끊김. 3초 대기 후 재접속 시도... ({attempt + 1}/3)")
-            time.sleep(3)  # 트래픽 분산을 위해 3초 쉬고 다시 때림
-
-        except Exception as e:
-            print(f"🚨 [{code}] ka10001 처리 중 알 수 없는 예외 발생: {e}")
-            break  # 다른 심각한 에러면 루프 탈출
-
-    # 3번 다 실패했을 때 최후의 방어막 (프로그램이 뻗지 않도록 빈 데이터 반환)
-    print(f"❌ [{code}] 3회 재접속 모두 실패. 기본값으로 대체합니다.")
-    return {'Name': code, 'Marcap': 0}
 
 def get_daily_ohlcv_ka10081_df(token, code, end_date=""):
-    """[ka10081] 주식일봉차트조회요청 - OHLCV 데이터 (실제 명세서 반영 버전)"""
-    # 💡 URL이 chart로 변경되었습니다.
-    url = "https://api.kiwoom.com/api/dostk/chart"
-    headers = {
-        'Content-Type': 'application/json;charset=UTF-8',
-        'authorization': f'Bearer {token}',
-        'api-id': 'ka10081'
-    }
-
+    """[ka10081] 주식일봉차트조회요청 (과거 데이터 연속조회 지원)"""
+    url = get_api_url("/api/dostk/chart")
     if not end_date:
         end_date = datetime.now().strftime("%Y%m%d")
-
-    # 💡 파라미터 이름이 base_dt 와 upd_stkpc_tp(수정주가) 로 변경되었습니다.
+        
     payload = {
         "stk_cd": str(code),
         "base_dt": end_date,
         "upd_stkpc_tp": "1"
     }
+    
+    # 💡 [핵심] use_continuous=True를 넘겨서 100일 이상 과거 데이터까지 쭉 긁어옵니다.
+    results = fetch_kiwoom_api_continuous(url, token, 'ka10081', payload, use_continuous=True)
+    
+    if not results:
+        return pd.DataFrame()
+        
+    # 여러 페이지(연속조회)의 응답 리스트를 하나의 DataFrame으로 합침
+    all_data = []
+    for res in results:
+        output = res.get('stk_dt_pole_chart_qry', [])
+        all_data.extend(output)
+        
+    if not all_data:
+        return pd.DataFrame()
 
-    for attempt in range(3):
-        try:
-            res = requests.post(url, headers=headers, json=payload, timeout=10)
+    df = pd.DataFrame(all_data)
 
-            if res.status_code == 200:
-                data = res.json()
+    df = df.rename(columns={
+        'dt': 'Date',
+        'open_pric': 'Open',
+        'high_pric': 'High',
+        'low_pric': 'Low',
+        'cur_prc': 'Close',  
+        'trde_qty': 'Volume'
+    })
 
-                if str(data.get('return_code', '0')) != '0':
-                    print(f"🚨 [키움서버 거절 사유] {data.get('return_msg', '알 수 없는 에러')}")
+    df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d')
 
-                # 💡 응답 리스트의 Key가 stk_dt_pole_chart_qry 로 변경되었습니다.
-                output = data.get('stk_dt_pole_chart_qry', [])
-                if output:
-                    df = pd.DataFrame(output)
+    for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+        df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').abs()
 
-                    # 💡 명세서에 맞춰 컬럼명을 매핑합니다. (cur_prc -> Close)
-                    df = df.rename(columns={
-                        'dt': 'Date',
-                        'open_pric': 'Open',
-                        'high_pric': 'High',
-                        'low_pric': 'Low',
-                        'cur_prc': 'Close',  # 현재가를 종가로 사용
-                        'trde_qty': 'Volume'
-                    })
-
-                    df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d')
-
-                    # 콤마(,) 제어 및 숫자형 변환
-                    for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-                        df[col] = pd.to_numeric(df[col].astype(str).str.replace(',', ''), errors='coerce').abs()
-
-                    df.set_index('Date', inplace=True)
-                    return df.sort_index()
-            else:
-                print(f"🚨 [HTTP 에러] {res.status_code} - {res.text}")
-            break
-        except Exception as e:
-            print(f"🚨 [파이썬 시스템 에러] {e}")
-            time.sleep(2)
-
-    return pd.DataFrame()
+    df.set_index('Date', inplace=True)
+    
+    # 가장 오래된 과거(오름차순) 순으로 정렬하여 반환
+    return df.sort_index()
 
 def get_item_info_ka10100(token, code):
     """
-    ka10100(종목 기본정보) API를 호출하여 전체 데이터를 반환합니다.
-    시가총액 계산용 상장주식수, 종가 및 시장 구분 정보를 모두 포함합니다.
+    [ka10100] 종목 기본정보 API 호출
+    시가총액 계산용 상장주식수, 종가 및 시장 구분 정보를 모두 포함하여 반환합니다.
     """
-    url = "https://api.kiwoom.com/api/dostk/stkinfo"
-    headers = {
-        'Content-Type': 'application/json;charset=UTF-8',
-        'authorization': f'Bearer {token}',
-        'api-id': 'ka10100'
-    }
-    # 요청 페이로드 키값은 API 규격에 따라 'stk_cd' 또는 'code' 중 정확한 것을 사용하세요.
+    url = get_api_url("/api/dostk/stkinfo")
     payload = {"stk_cd": str(code)}
 
-    try:
-        res = requests.post(url, headers=headers, json=payload, timeout=5)
-        if res.status_code == 200:
-            data = res.json()
-            if data.get('return_code') == 0:
-                # API 응답 원본 데이터를 반환합니다.
-                return data
-    except Exception as e:
-        print(f"⚠️ [kiwoom_utils] ka10100 호출 실패: {e}")
+    # 💡 [핵심] 1회성 조회를 위해 use_continuous=False 적용
+    results = fetch_kiwoom_api_continuous(
+        url=url, 
+        token=token, 
+        api_id='ka10100', 
+        payload=payload, 
+        use_continuous=False
+    )
 
+    # 💡 정상 응답 시 첫 번째 데이터(원본 JSON 딕셔너리) 그대로 반환
+    if results:
+        return results[0]
+        
     return None
-
-def get_stock_market_ka10100(code, token):
-    """기존 함수와 호환성을 유지하면서 통합 함수를 사용합니다."""
-    info = get_item_info_ka10100(token, code)
-    return info.get('nxtEnable') if info else None
-
 
 def get_index_daily_ka20006(token, inds_cd="001"):
     """
     [ka20006] 업종일봉조회요청 API를 호출하여 최근 6거래일 지수 데이터를 가져옵니다.
     반환값: (최신 지수, 5거래일 전 지수) - 실패 시 (None, None) 반환
     """
-    url = "https://api.kiwoom.com/api/dostk/chart"
-    headers = {
-        'Content-Type': 'application/json;charset=UTF-8',
-        'authorization': f'Bearer {token}',
-        'cont-yn': 'N',
-        'api-id': 'ka20006'
-    }
-
+    url = get_api_url("/api/dostk/chart")
     today_str = datetime.now().strftime("%Y%m%d")
     payload = {
         "inds_cd": str(inds_cd),
         "base_dt": today_str
     }
 
-    try:
-        res = requests.post(url, headers=headers, json=payload, timeout=5)
-        if res.status_code == 200:
-            data = res.json()
-            daily_list = data.get('inds_dt_pole_qry', [])
+    # 💡 [핵심] 1회성 조회를 위해 use_continuous=False 적용
+    results = fetch_kiwoom_api_continuous(
+        url=url, 
+        token=token, 
+        api_id='ka20006', 
+        payload=payload, 
+        use_continuous=False
+    )
 
-            # 최소 6일치(오늘 포함 5거래일 전) 데이터가 있어야 RS 계산 가능
-            if daily_list and len(daily_list) >= 6:
-                # 명세서 규칙: 지수 값은 소수점 제거 후 100배 값으로 반환되므로 100.0으로 나눔
-                latest_price = int(daily_list[0].get('cur_prc', 0)) / 100.0
-                before_price = int(daily_list[5].get('cur_prc', 0)) / 100.0
-                return latest_price, before_price
-    except Exception as e:
-        print(f"⚠️ [kiwoom_utils] ka20006 업종일봉 조회 실패: {e}")
+    if results:
+        data = results[0]
+        daily_list = data.get('inds_dt_pole_qry', [])
+
+        # 최소 6일치(오늘 포함 5거래일 전) 데이터가 있어야 RS(상대강도) 등 계산 가능
+        if daily_list and len(daily_list) >= 6:
+            # 명세서 규칙: 지수 값은 소수점 제거 후 100배 값으로 반환되므로 100.0으로 나눔
+            latest_price = int(daily_list[0].get('cur_prc', 0)) / 100.0
+            before_price = int(daily_list[5].get('cur_prc', 0)) / 100.0
+            return latest_price, before_price
 
     return None, None
 
-def get_realtime_hot_stocks(token, config=None, as_dict=False):
+def get_realtime_hot_stocks_ka00198(token, config=None, as_dict=False):
     """
-    [ka00198] 당일 누적 기준 실시간 급등주 검색 (10054 에러 방어 로직 포함)
+    [ka00198] 당일 누적 기준 실시간 급등주 검색
     - as_dict=True 일 경우: [{'code': '...', 'name': '...', 'price': ..., 'vol': ...}] 형태 반환
     - as_dict=False 일 경우: ['005930', '000660'] 형태 반환 (기존 호환성 유지)
     """
-    url = "https://api.kiwoom.com/api/dostk/stkinfo"
-    headers = {
-        'Content-Type': 'application/json;charset=UTF-8',
-        'authorization': f'Bearer {token}',
-        'cont-yn': 'N',
-        'next-key': '',
-        'api-id': 'ka00198',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
-    }
+    url = get_api_url("/api/dostk/stkinfo")
+    payload = {'qry_tp': '3'}  # 장중 테마 변화 및 오후 급등주 포착용
 
-    # 기존: 당일 누적 대장주 위주 포착
-    # payload = {'qry_tp': '4'}
+    # 💡 [핵심] 1회성 조회 래퍼 함수 적용
+    results = fetch_kiwoom_api_continuous(
+        url=url, 
+        token=token, 
+        api_id='ka00198', 
+        payload=payload, 
+        use_continuous=False
+    )
 
-    # 💡 변경: 장중 테마 변화 및 오후 급등주 포착용
-    payload = {'qry_tp': '3'}
     hot_results = []
+    
+    if results:
+        data = results[0]
+        item_list = data.get('item_inq_rank', [])
 
-    for attempt in range(3):
-        try:
-            res = requests.post(url, headers=headers, json=payload, timeout=10)
-            data = res.json()
+        for item in item_list:
+            stk_cd = str(item.get('stk_cd', ''))[:6]
+            if stk_cd:
+                if as_dict:
+                    # 🚀 스캐너를 위한 상세 데이터 추출
+                    stk_nm = item.get('stk_nm', '')
+                    price = item.get('past_curr_prc', 0)
+                    vol = item.get('acml_vol', 0)
+                    hot_results.append({
+                        'code': stk_cd,
+                        'name': stk_nm,
+                        'price': abs(int(price)),
+                        'vol': int(vol)
+                    })
+                else:
+                    # 🚀 기존 스나이퍼 엔진 호환성 유지
+                    hot_results.append(stk_cd)
 
-            # 💡 [핵심] str()을 씌워서 숫자로 오든 문자로 오든 무조건 문자 '0'으로 변환해서 비교합니다!
-            if res.status_code == 200 and str(data.get('return_code')) == '0':
-                item_list = data.get('item_inq_rank', [])
-
-                for item in item_list:
-                    stk_cd = str(item.get('stk_cd'))[:6]
-                    if stk_cd:
-                        if as_dict:
-                            # 🚀 스캐너를 위한 상세 데이터 추출
-                            stk_nm = item.get('stk_nm', '')
-                            price = item.get('past_curr_prc', 0)
-                            vol = item.get('acml_vol', 0)
-                            hot_results.append({
-                                'code': stk_cd,
-                                'name': stk_nm,
-                                'price': abs(int(price)),
-                                'vol': int(vol)
-                            })
-                        else:
-                            # 🚀 기존 스나이퍼 엔진 호환성 유지
-                            hot_results.append(stk_cd)
-
-                return hot_results
-            else:
-                err_msg = data.get('return_msg', '상세 사유 없음')
-                log_error(f"❌ [급등주 조회 실패] {err_msg}", config=config)
-                return []
-
-        except requests.exceptions.ConnectionError:
-            print(f"⚠️ 키움 서버 연결 끊김(10054 에러). 2초 후 재시도합니다... ({attempt + 1}/3)")
-            time.sleep(2)
-        except Exception as e:
-            log_error(f"🔥 [급등주 조회] 시스템 예외: {e}", config=config)
-            return []
-
-    log_error("❌ [급등주 조회] 3회 재시도 모두 실패하여 스캔을 건너뜁니다.", config=config)
-    return []
-
-
-def get_top_marketcap_stocks(limit=300):
-    """
-    [FDR 완벽 대체용] KOSPI 시가총액 상위 종목 코드를 가져옵니다.
-    네이버 모바일 증권 API가 허용하는 최대 호출량(60개)에 맞춰
-    여러 페이지를 안전하게 순회하며 우량주 종목을 수집합니다.
-    """
-    # 💡 [해결 1] 평범한 크롬 웹 브라우저인 것처럼 신분증(헤더) 위조
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
-        'Referer': 'https://m.stock.naver.com/'
-    }
-
-    target_codes = []
-    # 💡 [해결 2] 300개를 한 번에 부르지 않고(400 에러 방지), 60개씩 쪼개서 요청합니다.
-    page_size = 60
-    max_pages = (limit // page_size) + 1
-
-    for page in range(1, max_pages + 1):
-        url = f"https://m.stock.naver.com/api/stocks/marketValue/KOSPI?page={page}&pageSize={page_size}"
-
-        try:
-            res = requests.get(url, headers=headers, timeout=10)
-
-            if res.status_code == 200:
-                data = res.json()
-                stocks = data.get('stocks', [])
-
-                # 더 이상 불러올 종목이 없으면 루프 탈출
-                if not stocks:
-                    break
-
-                for stock in stocks:
-                    code = stock.get('itemCode')
-                    name = stock.get('stockName')
-
-                    # 스팩, 우선주, ETF 등 불순물 제거 로직 통과 후 적재
-                    if is_valid_stock(code, name):
-                        target_codes.append(code)
-
-                        # 목표 개수(300개)를 채우면 즉시 반환
-                        if len(target_codes) >= limit:
-                            return target_codes
-            else:
-                print(f"🚨 네이버 API 접근 거절 (HTTP {res.status_code}) - 페이지: {page}")
-                break
-
-        except Exception as e:
-            print(f"🚨 시가총액 상위 종목 조회 실패: {e}")
-            break
-
-        # 💡 [핵심] 네이버 서버 차단 방지를 위한 짧은 휴식 시간
-        time.sleep(0.3)
-
-    return target_codes
-
-# --- [3. 보조 계산 및 시각화] ---
-def generate_visual_gauge(ratio, label_left="매도", label_right="매수"):
-    """수급 비율 바(Bar) 생성"""
-    size = 10
-    filled = int(round(ratio * size))
-    gauge = "▓" * filled + "░" * (size - filled)
-    return f"[{label_left} {gauge} {label_right}]"
-
-def analyze_signal_integrated(ws_data, ai_prob, threshold=70):
-    """
-    [v12.1 정밀 진단 버전] 실시간 데이터와 수치를 결합한 통합 분석 및 상세 사유 반환
-    """
-    score = ai_prob * 50
-    details = [f"AI({ai_prob:.0%})"]
-    visuals = ""
-    prices = {}
-
-    # 🚀 상세 체크리스트 초기 설정 (반환용)
-    checklist = {
-        "AI 확신도 (75%↑)": {"val": f"{ai_prob:.1%}", "pass": ai_prob >= 0.75},
-        "유동성 (5천만↑)": {"val": "데이터 대기", "pass": False},
-        "체결강도 (100%↑)": {"val": "데이터 대기", "pass": False},
-        "호가잔량비 (1.5~5배)": {"val": "데이터 대기", "pass": False}
-    }
-
-    if not ws_data or ws_data.get('curr', 0) == 0:
-        return 0, "데이터 부족", "", prices, "결론: 데이터 수신 중", checklist
-
-    try:
-        curr_price = ws_data['curr']
-        prices = {'curr': curr_price, 'buy': curr_price, 'sell': int(curr_price * 1.03), 'stop': int(curr_price * 0.97)}
-
-        ask_tot = ws_data.get('ask_tot', 1)
-        bid_tot = ws_data.get('bid_tot', 1)
-        total = ask_tot + bid_tot
-
-        # 1️⃣ 유동성 필터 및 체크리스트 업데이트
-        liquidity_value = (ask_tot + bid_tot) * curr_price
-        MIN_LIQUIDITY = 50_000_000
-        checklist["유동성 (5천만↑)"] = {"val": f"{liquidity_value / 1e6:.1f}백만", "pass": liquidity_value >= MIN_LIQUIDITY}
-
-        ratio_val = (ask_tot / total) * 100 if total > 0 else 0
-        gauge_idx = int(ratio_val / 10)
-
-        visuals += f"📊 잔량비: [{'▓' * gauge_idx:<10}] {ratio_val:.1f}%\n"
-        visuals += f"   (매도: {ask_tot:,} / 매수: {bid_tot:,})\n"
-
-        # 2️⃣ 호가잔량비 분석 및 체크리스트 업데이트
-        imb_ratio = ask_tot / (bid_tot + 1e-9)
-        pass_imb = 1.5 <= imb_ratio <= 5.0
-        checklist["호가잔량비 (1.5~5배)"] = {"val": f"{imb_ratio:.2f}배", "pass": pass_imb}
-
-        if pass_imb:
-            score += 25
-            details.append("호가(적격)")
-
-        # 3️⃣ 체결강도 분석 및 체크리스트 업데이트
-        v_pw = ws_data.get('v_pw', 0.0)
-        visuals += f"⚡ 체결강도: {v_pw:.1f}%\n"
-
-        pass_v_pw = v_pw >= 100
-        checklist["체결강도 (100%↑)"] = {"val": f"{v_pw:.1f}%", "pass": pass_v_pw}
-
-        if v_pw >= 110:
-            score += 25
-            details.append("수급(강)")
-        elif v_pw >= 100:
-            score += 15
-            details.append("수급(중)")
-
-        # 4️⃣ 최종 결론 로직 (보내주신 로직 그대로 유지)
-        if (v_pw < 100 and score < threshold) or (liquidity_value < MIN_LIQUIDITY):
-            conclusion = "🚫 *결론: 매수타이밍이 아닙니다*"
-        else:
-            conclusion = "✅ *결론: 매수를 검토해보십시오*"
-
-    except Exception as e:
-        conclusion = "결론: 분석 오류"
-
-    # 🚀 최종적으로 checklist를 6번째 인자로 추가 반환
-    return score, " + ".join(details), visuals, prices, conclusion, checklist
-
-def register_manual_stock(code, name, config):
-    """
-    [스나이퍼 관제탑] 수동 감시 종목을 DB에 등록합니다.
-    """
-    today = datetime.now().strftime('%Y-%m-%d')
-
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        sql = """
-              INSERT INTO recommendation_history (date, code, name, buy_price, type, status, position_tag)
-              VALUES (?, ?, ?, 0, 'MANUAL', 'WATCHING', 'MIDDLE') ON CONFLICT(date, code) DO \
-              UPDATE SET
-                  status = 'WATCHING', type = 'MANUAL' \
-              """
-        conn.execute(sql, (today, str(code).zfill(6), name))
-        conn.commit()
-        conn.close()
-        return True
-    except Exception as e:
-        print(f"🔥 수동 타겟 DB 등록 오류: {e}")
-        return False
+    return hot_results
 
 def get_daily_data_ka10005_df(token, code):
     """
     [ka10005] 실전투자 API를 호출하여 FDR과 동일한 형태의 일봉 DataFrame을 반환합니다.
     """
-    # 💡 실전투자 도메인 적용
-    url = 'https://api.kiwoom.com/api/dostk/mrkcond'
-    headers = {
-        'Content-Type': 'application/json;charset=UTF-8',
-        'authorization': f'Bearer {token}',
-        'cont-yn': 'N',
-        'next-key': '',
-        'api-id': 'ka10005'
+    url = get_api_url("/api/dostk/mrkcond")
+    payload = {'stk_cd': str(code)}
+
+    # 💡 [핵심] 1회성 조회 래퍼 함수 적용
+    results = fetch_kiwoom_api_continuous(
+        url=url, 
+        token=token, 
+        api_id='ka10005', 
+        payload=payload, 
+        use_continuous=False
+    )
+
+    if not results:
+        return pd.DataFrame()
+
+    market_data = results[0]
+    daily_list = market_data.get('stk_ddwkmm', [])
+
+    if not daily_list:
+        return pd.DataFrame()
+
+    # 1. DataFrame 생성 및 컬럼명 변경 (FDR 포맷에 맞춤)
+    df = pd.DataFrame(daily_list)
+    df.rename(columns={
+        'date': 'Date',
+        'open_pric': 'Open',
+        'high_pric': 'High',
+        'low_pric': 'Low',
+        'close_pric': 'Close',
+        'trde_qty': 'Volume'
+    }, inplace=True)
+
+    # 2. 필요한 컬럼만 추출
+    df = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
+
+    # 3. 데이터 정제 (빈 문자열 처리 및 기호 제거)
+    for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+        df[col] = df[col].replace('', np.nan)
+        df[col] = df[col].astype(str).str.replace(r'[+-]', '', regex=True).astype(float)
+
+    # 4. 날짜 포맷 변경 및 인덱스 설정
+    df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d')
+    df.set_index('Date', inplace=True)
+
+    # 5. 시간순 정렬 (과거 -> 최신)
+    df.sort_index(ascending=True, inplace=True)
+
+    return df
+
+def get_investor_daily_ka10059_df(token, code, base_dt=None):
+    """[ka10059] 수급 데이터 (공통 래퍼 함수 및 누락 방어 적용)"""
+    if not base_dt:
+        base_dt = datetime.now().strftime("%Y%m%d")
+    else:
+        base_dt = base_dt.replace("-", "")
+
+    url = get_api_url("/api/dostk/stkinfo")
+    payload = {"dt": base_dt, "stk_cd": str(code), "amt_qty_tp": "2", "trde_tp": "0", "unit_tp": "1"}
+
+    # 💡 [방어막 1] 빈 데이터 반환 대비용 뼈대
+    empty_df = pd.DataFrame(columns=['Retail_Net', 'Foreign_Net', 'Inst_Net'])
+    empty_df.index.name = 'Date'
+
+    # 💡 [핵심] OHLCV 일봉과 길이를 맞추기 위해 연속조회(True) 적용
+    results = fetch_kiwoom_api_continuous(
+        url=url, 
+        token=token, 
+        api_id='ka10059', 
+        payload=payload, 
+        use_continuous=True
+    )
+
+    if not results:
+        return empty_df
+
+    # 여러 페이지의 응답을 하나의 리스트로 통합
+    all_data = []
+    for res in results:
+        all_data.extend(res.get('stk_invsr_orgn', []))
+
+    if not all_data:
+        return empty_df
+
+    df = pd.DataFrame(all_data)
+    df.rename(columns={'dt': 'Date', 'ind_invsr': 'Retail_Net', 'frgnr_invsr': 'Foreign_Net', 'orgn': 'Inst_Net'}, inplace=True)
+
+    # 💡 [방어막 2] 누락된 수급 주체 0으로 채우기
+    for col in ['Date', 'Retail_Net', 'Foreign_Net', 'Inst_Net']:
+        if col not in df.columns:
+            df[col] = 0
+
+    df = df[['Date', 'Retail_Net', 'Foreign_Net', 'Inst_Net']]
+    for col in ['Retail_Net', 'Foreign_Net', 'Inst_Net']:
+        df[col] = pd.to_numeric(
+            df[col].astype(str).str.replace('+', '', regex=False).str.replace(',', '', regex=False),
+            errors='coerce'
+        ).fillna(0)
+        
+    df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d')
+    df.set_index('Date', inplace=True)
+    
+    # 💡 [안전장치] 키움 연속조회 시 발생할 수 있는 중복 날짜 제거 및 과거순 정렬
+    df = df[~df.index.duplicated(keep='first')]
+    return df.sort_index()
+
+def get_margin_daily_ka10013_df(token, code, base_dt=None):
+    """[ka10013] 신용 잔고율 데이터 (공통 래퍼 함수 및 누락 방어 적용)"""
+    if not base_dt:
+        base_dt = datetime.now().strftime("%Y%m%d")
+    else:
+        base_dt = base_dt.replace("-", "")
+
+    url = get_api_url("/api/dostk/stkinfo")
+    payload = {"stk_cd": str(code), "dt": base_dt, "qry_tp": "1"}
+
+    empty_df = pd.DataFrame(columns=['Margin_Rate'])
+    empty_df.index.name = 'Date'
+
+    # 💡 [핵심] 래퍼 함수 적용 (연속조회 True)
+    results = fetch_kiwoom_api_continuous(
+        url=url, 
+        token=token, 
+        api_id='ka10013', 
+        payload=payload, 
+        use_continuous=True
+    )
+
+    if not results:
+        return empty_df
+
+    all_data = []
+    for res in results:
+        all_data.extend(res.get('crd_trde_trend', []))
+
+    if not all_data:
+        return empty_df
+
+    df = pd.DataFrame(all_data)
+    df.rename(columns={'dt': 'Date', 'remn_rt': 'Margin_Rate'}, inplace=True)
+
+    if 'Margin_Rate' not in df.columns:
+        df['Margin_Rate'] = 0
+
+    df = df[['Date', 'Margin_Rate']]
+    df['Margin_Rate'] = pd.to_numeric(
+        df['Margin_Rate'].astype(str).replace('', '0'), errors='coerce'
+    ).fillna(0)
+    
+    df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d')
+    df.set_index('Date', inplace=True)
+    
+    df = df[~df.index.duplicated(keep='first')]
+    return df.sort_index()
+
+def get_top_fluctuation_ka10027(token, mrkt_tp="000", trde_qty_cnd="0100", limit=50):
+    """
+    [ka10027] 전일대비등락률상위요청
+    - mrkt_tp: "000"(전체), "001"(코스피), "101"(코스닥)
+    - trde_qty_cnd: "0100"(10만주 이상) 등
+    """
+    url = get_api_url("/api/dostk/rkinfo")
+    payload = {
+        "mrkt_tp": mrkt_tp,
+        "sort_tp": "1",
+        "trde_qty_cnd": trde_qty_cnd,
+        "stk_cnd": "0",
+        "crd_cnd": "0",
+        "updown_incls": "1",
+        "pric_cnd": "0",
+        "trde_prica_cnd": "0",
+        "stex_tp": "3"
     }
-    data = {'stk_cd': str(code)}
 
-    try:
-        res = requests.post(url, headers=headers, json=data, timeout=10)
-        if res.status_code == 200:
-            market_data = res.json()
-            daily_list = market_data.get('stk_ddwkmm', [])
+    # 💡 [핵심] 1회성 스캐너 조회 (429 에러 방어 탑재)
+    results = fetch_kiwoom_api_continuous(
+        url=url, 
+        token=token, 
+        api_id='ka10027', 
+        payload=payload, 
+        use_continuous=False
+    )
 
-            if not daily_list:
-                return pd.DataFrame()
+    cleaned_list = []
+    
+    if results:
+        data = results[0]
+        items = data.get('pred_pre_flu_rt_upper', [])
 
-            # 1. DataFrame 생성 및 컬럼명 변경 (FDR 포맷에 맞춤)
-            df = pd.DataFrame(daily_list)
-            df.rename(columns={
-                'date': 'Date',
-                'open_pric': 'Open',
-                'high_pric': 'High',
-                'low_pric': 'Low',
-                'close_pric': 'Close',
-                'trde_qty': 'Volume'
-            }, inplace=True)
+        for item in items[:limit]:
+            code = str(item.get('stk_cd', '')).strip()[:6]
+            name = item.get('stk_nm')
 
-            # 2. 필요한 컬럼만 추출
-            df = df[['Date', 'Open', 'High', 'Low', 'Close', 'Volume']]
+            # 부호 제거 및 형변환 (데이터 정제)
+            raw_price = str(item.get('cur_prc', '0')).replace('+', '').replace('-', '')
+            raw_flu_rt = str(item.get('flu_rt', '0')).replace('+', '').replace('-', '')
 
-            # 3. 데이터 정제 (빈 문자열 처리 및 기호 제거)
-            for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
-                df[col] = df[col].replace('', np.nan)
-                df[col] = df[col].astype(str).str.replace(r'[+-]', '', regex=True).astype(float)
+            price = int(raw_price) if raw_price.isdigit() else 0
+            change_rate = float(raw_flu_rt) if raw_flu_rt else 0.0
+            volume = int(item.get('now_trde_qty', 0))
+            cntr_str = float(item.get('cntr_str', 0.0))
 
-            # 4. 날짜 포맷 변경 및 인덱스 설정
-            df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d')
-            df.set_index('Date', inplace=True)
+            cleaned_list.append({
+                'Code': code, 'Name': name, 'Price': price,
+                'ChangeRate': change_rate, 'Volume': volume, 'CntrStr': cntr_str
+            })
 
-            # 5. 시간순 정렬 (과거 -> 최신)
-            df.sort_index(ascending=True, inplace=True)
+    return cleaned_list
 
-            return df
 
-    except Exception as e:
-        print(f"🚨 키움 API 데이터 변환 실패 ({code}): {e}")
+def scan_volume_spike_ka10023(token, mrkt_tp="101"):
+    """[ka10023] 최근 n분간 거래량이 급증한 종목 스캔 (현재가 포함)"""
+    url = get_api_url("/api/dostk/rkinfo")
+    payload = {
+        "mrkt_tp": mrkt_tp, "updown_tp": "1", "tm_tp": "5", "sort_tp": "1",
+        "trde_qty_tp": "50", "stk_cnd": "0", "stex_tp": "3", "pric_tp": "0"
+    }
+    
+    # 💡 [핵심] 1회성 스캐너 조회 (429 에러 방어 탑재)
+    results = fetch_kiwoom_api_continuous(
+        url=url, 
+        token=token, 
+        api_id='ka10023', 
+        payload=payload, 
+        use_continuous=False
+    )
 
-    return pd.DataFrame()
+    candidates = []
+    
+    if results:
+        data = results[0].get('req_vol_sdnin', [])
+        
+        for item in data:
+            # 💡 가격 추출 (사용자 제안 반영)
+            raw_p = str(item.get('cur_prc', '0')).replace('+', '').replace('-', '')
+            curr_price = int(raw_p) if raw_p.isdigit() else 0
+            
+            candidates.append({
+                'code': item['stk_cd'],
+                'name': item['stk_nm'],
+                'spike_rate': float(str(item.get('sdnin_rt', '0')).replace('+', '')),
+                'Price': curr_price,  # 🚀 스캐너를 위해 'Price' 키로 통일
+                'cur_prc': curr_price # 하위 호환성 유지
+            })
+            
+    return candidates
+
+def scan_orderbook_spike_ka10021(token, mrkt_tp="101"):
+    """[ka10021] 호가창에 갑자기 거대 물량이 쌓인 종목 스캔"""
+    url = get_api_url("/api/dostk/rkinfo")
+    # 명세서 기준: 코스닥(101), 매수호가급증(1), 5분(5), 5만주이상(50)
+    payload = {
+        "mrkt_tp": mrkt_tp, "trde_tp": "1", "tm_tp": "5",
+        "trde_qty_tp": "50", "stk_cnd": "0", "stex_tp": "1"
+    }
+    
+    # 💡 1회성 조회 래퍼 적용 (429 자동 방어)
+    results = fetch_kiwoom_api_continuous(
+        url=url, token=token, api_id='ka10021', payload=payload, use_continuous=False
+    )
+    
+    candidates = []
+    
+    if results:
+        data = results[0].get('req_vol_sdnin', [])
+        for item in data:
+            # 💡 가격 추출 및 정제
+            raw_p = str(item.get('cur_prc', '0')).replace('+', '').replace('-', '')
+            curr_price = int(raw_p) if raw_p.isdigit() else 0
+            
+            candidates.append({
+                'code': item.get('stk_cd', ''),
+                'name': item.get('stk_nm', ''),
+                'spike_rate': float(str(item.get('sdnin_rt', '0')).replace('+', '')),
+                'Price': curr_price,  # 🚀 스캐너를 위해 'Price' 키로 통일
+                'cur_prc': curr_price # 하위 호환성 유지
+            })
+            
+    return candidates
+
+
+def check_program_buying_ka90008(token, code):
+    """[ka90008] 실시간 프로그램 순매수 강도 확인"""
+    url = get_api_url("/api/dostk/mrkcond")
+    today_str = datetime.now().strftime('%Y%m%d')
+    payload = {"amt_qty_tp": "2", "stk_cd": str(code),"date": str(today_str)}
+    
+    results = fetch_kiwoom_api_continuous(
+        url=url, token=token, api_id='ka90008', payload=payload, use_continuous=False
+    )
+    
+    if results:
+        data = results[0].get('prm_trde_trend', [])
+        if data:
+            raw_net = str(data[0].get('prm_netprps_qty', '0'))
+            # 숫자가 아닌 문자열이 섞일 경우를 대비한 안전한 형변환
+            cleaned_net = raw_net.replace('+', '').replace('-', '')
+            net_buy_qty = int(cleaned_net) if cleaned_net.isdigit() else 0
+            
+            # 💡 원본 데이터에 '+' 부호가 있고, 순매수량이 1만 주 초과일 때 True
+            return True if ('+' in raw_net and net_buy_qty > 10000) else False
+            
+    return False
+
+
+def check_execution_strength_ka10046(token, code):
+    """[ka10046] 체결강도 상승 추세 확인"""
+    url = get_api_url("/api/dostk/mrkcond")
+    payload = {"stk_cd": str(code)}
+    
+    results = fetch_kiwoom_api_continuous(
+        url=url, token=token, api_id='ka10046', payload=payload, use_continuous=False
+    )
+    
+    if results:
+        data = results[0].get('cntr_str_trend', [])
+        if data:
+            s5 = float(data[0].get('cntr_str_5min', 0))
+            s20 = float(data[0].get('cntr_str_20min', 0))
+            # 💡 5분 체결강도가 20분보다 높고, 110.0을 초과할 때 True
+            return s5 > s20 and s5 > 110.0
+            
+    return False
+    
+def get_tick_history_ka10003(token, code, limit=10):
+    """
+    [ka10003] 주식체결정보요청 - AI 분석용 최근 틱(Tick) 스냅샷 추출
+    """
+    url = get_api_url("/api/dostk/stkinfo")
+    payload = {"stk_cd": str(code)}
+    
+    # 💡 [핵심] 1회성 조회 래퍼 적용 (429 자동 방어)
+    results = fetch_kiwoom_api_continuous(
+        url=url, token=token, api_id='ka10003', payload=payload, use_continuous=False
+    )
+    
+    ticks = []
+    
+    if results:
+        data = results[0]
+        # 🚀 알려주신 명세의 'cntr_infr' 배열 추출
+        tick_list = data.get('cntr_infr', []) 
+        
+        for item in tick_list[:limit]:
+            raw_price = str(item.get('cur_prc', '0'))
+            
+            # 부호로 매수/매도 주도권 파악 (키움 데이터 종특 활용)
+            direction = "BUY" if "+" in raw_price else "SELL" if "-" in raw_price else "NEUTRAL"
+            
+            ticks.append({
+                'time': item.get('tm', ''),
+                'price': abs(int(raw_price.replace('+', '').replace('-', ''))),
+                'volume': int(item.get('cntr_trde_qty', '0')),
+                'dir': direction
+            })
+            
+    return ticks
+
+
+# 📝 TODO: 추후 RSI/MACD 보조지표 계산이 필요할 경우, 
+# AI 속도 최적화를 위해 걸어둔 limit=5를 30~50으로 넉넉하게 늘려줄 것.
+def get_minute_candles_ka10080(token, code, limit=10):
+    """
+    [REST API] ka10080: 주식분봉차트조회 (POST 방식)
+    최근 N개의 1분봉 데이터를 가져와 AI가 읽기 쉬운 형태로 정제하여 리턴합니다.
+    """
+    url = get_api_url("/api/dostk/chart")
+    base_dt = datetime.now().strftime('%Y%m%d')
+    payload = {
+        'stk_cd': str(code),
+        'tic_scope': '1',       # 1분봉
+        'upd_stkpc_tp': '1',    # 수정주가 반영
+        'base_dt': base_dt      # 당일 기준
+    }
+    
+    # 💡 [핵심] 1회성 조회 래퍼 적용 (429 자동 방어)
+    results = fetch_kiwoom_api_continuous(
+        url=url, token=token, api_id='ka10080', payload=payload, use_continuous=False
+    )
+    
+    refined_candles = []
+    
+    if results:
+        data = results[0]
+        # 💡 [핵심] 응답 데이터에서 분봉 배열(stk_min_pole_chart_qry) 추출
+        candle_list = data.get('stk_min_pole_chart_qry', [])
+        
+        if not candle_list:
+            return []
+            
+        # 최신 분봉(배열 앞쪽)부터 limit 개수만큼 자르기
+        recent_candles = candle_list[:limit]
+        
+        for candle in recent_candles:
+            # 1. 시간 포맷팅 (예: "20250917132000" -> "13:20:00")
+            raw_time = candle.get('cntr_tm', '')
+            if len(raw_time) >= 14:
+                formatted_time = f"{raw_time[8:10]}:{raw_time[10:12]}:{raw_time[12:14]}"
+            else:
+                formatted_time = raw_time
+                
+            # 2. 가격 절댓값 처리 (키움증권 마이너스 부호 제거) 및 매핑
+            refined_candles.append({
+                "체결시간": formatted_time,
+                "시가": abs(int(candle.get("open_pric", 0))),
+                "고가": abs(int(candle.get("high_pric", 0))),
+                "저가": abs(int(candle.get("low_pric", 0))),
+                "현재가": abs(int(candle.get("cur_prc", 0))),  # 종가 역할
+                "거래량": int(candle.get("trde_qty", 0))
+            })
+            
+    return refined_candles
+
+def get_top_marketcap_stocks(self, limit=300):
+    """네이버 API 우회 시총 상위 종목 수집 (구조 정합성 교정)"""
+    headers = {'User-Agent': 'Mozilla/5.0...', 'Referer': 'https://m.stock.naver.com/'}
+    target_list = [] # 💡 코드 리스트가 아닌 딕셔너리 리스트로 변경
+    page_size = 60
+    max_pages = (limit // page_size) + 1
+    for page in range(1, max_pages + 1):
+        url = f"https://m.stock.naver.com/api/stocks/marketValue/KOSPI?page={page}&pageSize={page_size}"
+        try:
+            res = requests.get(url, headers=headers, timeout=10)
+            if res.status_code == 200:
+                stocks = res.json().get('stocks', [])
+                if not stocks: break
+                for s in stocks:
+                    code, name = s.get('itemCode'), s.get('stockName')
+                    raw_p = str(s.get('closePrice', '0')).replace(',', '')
+                    curr_p = int(raw_p) if raw_p.isdigit() else 0
+                    # 💡 [교정] 초고속 필터 적용 및 표준 딕셔너리 반환
+                    if is_valid_stock(code, name, current_price=curr_p):
+                        target_list.append({'Code': code, 'Name': name, 'Price': curr_p})
+                        if len(target_list) >= limit: return target_list
+        except Exception as e:
+            log_error(f"🚨 네이버 수집 실패: {e}")
+            break
+        time.sleep(0.3)
+    return target_list
+
+# =====================================================================
+# 🛡️ 공통 API 호출 래퍼 (429 방어 + 연속조회 통합)
+# =====================================================================
+# 💡 함수 정의부에 use_continuous: bool = False 가 반드시 포함되어야 합니다!
+def fetch_kiwoom_api_continuous(url: str, token: str, api_id: str, payload: dict, max_retries: int = 3, use_continuous: bool = False) -> list:
+    """
+    키움 오픈API 공통 호출 함수 (연속조회 지원)
+    - use_continuous=True: next-key가 끝날 때까지 무한정 과거 데이터를 긁어옵니다.
+    - use_continuous=False: 1회성 조회만 수행합니다. (ka10001 등에 사용)
+    """
+    all_results = []
+    cont_yn = 'N'
+    next_key = ''
+    
+    while True:
+        headers = {
+            'Content-Type': 'application/json;charset=UTF-8',
+            'authorization': f'Bearer {token}',
+            'cont-yn': cont_yn,
+            'next-key': next_key,
+            'api-id': api_id,
+        }
+
+        retry_count = 0
+        response = None
+        
+        # 💡 [핵심 방어] 429 에러 발생 시 백오프(Back-off) 후 재시도
+        while retry_count < max_retries:
+            try:
+                response = requests.post(url, headers=headers, json=payload, timeout=10)
+                
+                if response.status_code == 200:
+                    break  # 성공 시 재시도 루프 탈출
+                elif response.status_code == 429:
+                    wait_sec = (retry_count + 1) * 3
+                    print(f"⚠️ [{api_id}] 429 요청 제한! {wait_sec}초 대기 후 재시도... ({retry_count+1}/{max_retries})")
+                    time.sleep(wait_sec)
+                    retry_count += 1
+                else:
+                    log_error(f"❌ [{api_id}] HTTP 에러 {response.status_code}: {response.text}")
+                    break  # 치명적 에러는 즉시 중단
+                    
+            except requests.exceptions.ConnectionError:
+                log_error(f"⚠️ [{api_id}] 연결 끊김. 3초 대기 후 재접속... ({retry_count+1}/{max_retries})")
+                time.sleep(3)
+                retry_count += 1
+            except Exception as e:
+                log_error(f"🚨 [{api_id}] 알 수 없는 예외: {e}")
+                break
+
+        if response is None or response.status_code != 200:
+            log_error(f"🚨 [{api_id}] 최대 재시도 초과 또는 실패. 조회를 중단합니다.")
+            break
+            
+        res_json = response.json()
+        
+        # return_code 체크 (정상이 아니면 경고 후 응답값 저장)
+        if str(res_json.get('return_code', '0')) != '0':
+            log_error(f"⚠️ [{api_id}] API 거절 사유: {res_json.get('return_msg', '알 수 없는 에러')}")
+            
+        all_results.append(res_json)
+        
+        # 💡 연속조회 모드가 아니면 첫 응답 후 바로 종료
+        if not use_continuous:
+            break
+            
+        cont_yn = response.headers.get('cont-yn', 'N')
+        next_key = response.headers.get('next-key', '')
+        
+        if cont_yn != 'Y':
+            break  # 더 이상 페이지가 없으면 탈출
+            
+        # time.sleep(0.5)  # 연속조회 시 서버 배려를 위한 딜레이(실전서버)
+        time.sleep(1.2)  # 연속조회 시 서버 배려를 위한 딜레이(모의투자서버)
+
+    return all_results
+# ==========================================
+# 3. 오프라인 순수 유틸리티 (외부 통신 없음)
+# ==========================================
 
 def is_trading_day():
     """
@@ -689,7 +852,7 @@ def is_valid_stock(code, name, token=None, current_price=0):
     스팩(SPAC), ETF(KODEX 포함), ETN, 우선주, 리츠 등을 제외하여 순수 상장 주식만 매매 엔진에 전달합니다.
     """
     name_upper = name.upper()
-    min_price_limit = TRADING_RULES.get('MIN_PRICE', 5000)
+    min_price_limit = TRADING_RULES.MIN_PRICE
 
     # ==========================================
     # 🚨 1. 가격 필터링 (동전주/저가주 제외)
@@ -710,6 +873,7 @@ def is_valid_stock(code, name, token=None, current_price=0):
                 if last_price < min_price_limit:
                     return False
         except Exception as e:
+            log_error(f"is_valid_stock 처리 중 예외 발생: {e} (코드: {code})")
             # 통신 에러 시 봇이 멈추지 않도록 일단 통과시킵니다 (실시간 웹소켓이 나중에 걸러줌)
             pass 
 
@@ -739,225 +903,6 @@ def is_valid_stock(code, name, token=None, current_price=0):
             return False
 
     return True
-
-def get_investor_daily_ka10059_df(token, code, base_dt=None):
-    """[ka10059] 수급 데이터 (재시도 로직 및 누락 방어 적용)"""
-    if not base_dt:
-        base_dt = datetime.now().strftime("%Y%m%d")
-    else:
-        base_dt = base_dt.replace("-", "")
-
-    url = "https://api.kiwoom.com/api/dostk/stkinfo"
-    headers = {
-        'Content-Type': 'application/json;charset=UTF-8',
-        'authorization': f'Bearer {token}',
-        'cont-yn': 'N',
-        'api-id': 'ka10059'
-    }
-    payload = {"dt": base_dt, "stk_cd": str(code), "amt_qty_tp": "2", "trde_tp": "0", "unit_tp": "1"}
-
-    # 💡 [방어막 1] 빈 데이터가 반환될 때를 대비한 기본 뼈대 DataFrame 생성
-    empty_df = pd.DataFrame(columns=['Retail_Net', 'Foreign_Net', 'Inst_Net'])
-    empty_df.index.name = 'Date'
-
-    # 💡 [핵심] 최대 3번까지 재시도
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            res = requests.post(url, headers=headers, json=payload, timeout=10)
-            if res.status_code == 200:
-                res_json = res.json()
-                data = res_json.get('stk_invsr_orgn', [])
-                if data:
-                    df = pd.DataFrame(data)
-                    df.rename(columns={'dt': 'Date', 'ind_invsr': 'Retail_Net', 'frgnr_invsr': 'Foreign_Net',
-                                       'orgn': 'Inst_Net'}, inplace=True)
-
-                    # 💡 [방어막 2] API 응답에 특정 수급 주체가 누락되었을 경우 0으로 강제 채움
-                    for col in ['Date', 'Retail_Net', 'Foreign_Net', 'Inst_Net']:
-                        if col not in df.columns:
-                            df[col] = 0
-
-                    df = df[['Date', 'Retail_Net', 'Foreign_Net', 'Inst_Net']]
-                    for col in ['Retail_Net', 'Foreign_Net', 'Inst_Net']:
-                        df[col] = pd.to_numeric(
-                            df[col].astype(str).str.replace('+', '', regex=False).str.replace(',', '', regex=False),
-                            errors='coerce').fillna(0)
-                    df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d')
-                    df.set_index('Date', inplace=True)
-                    return df
-            break  # 성공하거나 명확한 빈 응답이면 루프 탈출
-
-        except requests.exceptions.ConnectionError:
-            # 💡 10054 ConnectionResetError 발생 시 처리
-            print(f"🚨 [{code}] 연결 끊김 (수급). {attempt + 1}/{max_retries} 재시도 중... 3초 대기")
-            time.sleep(3)
-        except Exception as e:
-            print(f"🚨 ka10059 수급 데이터 호출 실패 ({code}): {e}")
-            break
-
-    # 💡 [방어막 3] 실패 시 컬럼 구조가 갖춰진 빈 DataFrame 반환 (KeyError 완벽 차단)
-    return empty_df
-
-
-def get_margin_daily_ka10013_df(token, code, base_dt=None):
-    """[ka10013] 신용 잔고율 데이터 (재시도 로직 및 누락 방어 적용)"""
-    if not base_dt:
-        base_dt = datetime.now().strftime("%Y%m%d")
-    else:
-        base_dt = base_dt.replace("-", "")
-
-    url = "https://api.kiwoom.com/api/dostk/stkinfo"
-    headers = {
-        'Content-Type': 'application/json;charset=UTF-8',
-        'authorization': f'Bearer {token}',
-        'cont-yn': 'N',
-        'api-id': 'ka10013'
-    }
-    payload = {"stk_cd": str(code), "dt": base_dt, "qry_tp": "1"}
-
-    # 💡 [방어막 1] 빈 데이터가 반환될 때를 대비한 기본 뼈대 DataFrame 생성
-    empty_df = pd.DataFrame(columns=['Margin_Rate'])
-    empty_df.index.name = 'Date'
-
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            res = requests.post(url, headers=headers, json=payload, timeout=10)
-            if res.status_code == 200:
-                res_json = res.json()
-                data = res_json.get('crd_trde_trend', [])
-                if data:
-                    df = pd.DataFrame(data)
-                    df.rename(columns={'dt': 'Date', 'remn_rt': 'Margin_Rate'}, inplace=True)
-
-                    # 💡 [방어막 2] API 응답에 Margin_Rate(신용잔고율)가 누락되었을 경우 0으로 강제 채움
-                    if 'Margin_Rate' not in df.columns:
-                        df['Margin_Rate'] = 0
-
-                    df = df[['Date', 'Margin_Rate']]
-                    df['Margin_Rate'] = pd.to_numeric(df['Margin_Rate'].astype(str).replace('', '0'),
-                                                      errors='coerce').fillna(0)
-                    df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d')
-                    df.set_index('Date', inplace=True)
-                    return df
-            break
-
-        except requests.exceptions.ConnectionError:
-            print(f"🚨 [{code}] 연결 끊김 (신용). {attempt + 1}/{max_retries} 재시도 중... 3초 대기")
-            time.sleep(3)
-        except Exception as e:
-            print(f"🚨 ka10013 신용 데이터 호출 실패 ({code}): {e}")
-            break
-
-    # 💡 [방어막 3] 실패 시 컬럼 구조가 갖춰진 빈 DataFrame 반환 (KeyError 완벽 차단)
-    return empty_df
-
-def get_market_regime(token=None):
-    """
-    코스피 지수를 분석하여 현재 시장 상태(BULL/BEAR)를 판별합니다.
-    (1차: FinanceDataReader, 2차: 키움 ka20006 API 우회)
-    기준: 코스피 현재가가 20일 이동평균선 위에 있으면 BULL, 아래면 BEAR
-    """
-    # 1차: FDR 사용 (코스피 지수 KS11)
-    try:
-        df = fdr.DataReader('KS11')
-        if not df.empty and len(df) >= 20:
-            current_close = float(df['Close'].iloc[-1])
-            ma20 = float(df['Close'].tail(20).mean())
-            return 'BULL' if current_close >= ma20 else 'BEAR'
-    except Exception as e:
-        print(f"⚠️ FDR 코스피 조회 실패. 키움 ka20006 API로 우회합니다: {e}")
-
-    # 2차: 키움 ka20006 (업종일봉조회요청) 사용
-    if token:
-        try:
-            url = "https://api.kiwoom.com/api/dostk/mrkcond"
-            headers = {
-                'Content-Type': 'application/json;charset=UTF-8',
-                'authorization': f'Bearer {token}',
-                'cont-yn': 'N',
-                'api-id': 'ka20006'
-            }
-            payload = {"upjong_cd": "001"} # 001: 코스피
-            res = requests.post(url, headers=headers, json=payload, timeout=10)
-            if res.status_code == 200:
-                res_json = res.json()
-                for key, val in res_json.items():
-                    if isinstance(val, list) and len(val) >= 20 and 'cur_prc' in val[0]:
-                        df_k = pd.DataFrame(val)
-                        df_k['cur_prc'] = pd.to_numeric(df_k['cur_prc'].astype(str).str.replace(',', '', regex=False).str.replace('+', '', regex=False).str.replace('-', '', regex=False), errors='coerce')
-                        current_close = df_k['cur_prc'].iloc[0]
-                        ma20 = df_k['cur_prc'].head(20).mean()
-                        return 'BULL' if current_close >= ma20 else 'BEAR'
-        except Exception as e2:
-            print(f"🚨 키움 ka20006 우회 조회 실패: {e2}")
-
-    # 둘 다 실패하면 보수적으로 BEAR(하락장) 모드 전환하여 리스크 관리
-    return 'BEAR'
-
-
-def get_top_fluctuation_ka10027(token, mrkt_tp="000", trde_qty_cnd="0100", limit=50):
-    """
-    [ka10027] 전일대비등락률상위요청
-    - mrkt_tp: "000"(전체), "001"(코스피), "101"(코스닥)
-    - trde_qty_cnd: "0100"(10만주 이상) 등
-    """
-    url = "https://api.kiwoom.com/api/dostk/rkinfo"
-    headers = {
-        'Content-Type': 'application/json;charset=UTF-8',
-        'authorization': f'Bearer {token}',
-        'api-id': 'ka10027',
-        'User-Agent': 'Mozilla/5.0'
-    }
-    payload = {
-        "mrkt_tp": mrkt_tp,
-        "sort_tp": "1",
-        "trde_qty_cnd": trde_qty_cnd,
-        "stk_cnd": "0",
-        "crd_cnd": "0",
-        "updown_incls": "1",
-        "pric_cnd": "0",
-        "trde_prica_cnd": "0",
-        "stex_tp": "3"
-    }
-
-    cleaned_list = []
-    try:
-        res = requests.post(url, headers=headers, json=payload, timeout=10)
-
-        if res.status_code == 200:
-            data = res.json()
-            if str(data.get('return_code', '0')) != '0':
-                print(f"⚠️ [ka10027] 응답 에러: {data.get('return_msg')}")
-                return []
-
-            items = data.get('pred_pre_flu_rt_upper', [])
-
-            for item in items[:limit]:
-                code = str(item.get('stk_cd', '')).strip()[:6]
-                name = item.get('stk_nm')
-
-                # 부호 제거 및 형변환 (데이터 정제)
-                raw_price = str(item.get('cur_prc', '0')).replace('+', '').replace('-', '')
-                raw_flu_rt = str(item.get('flu_rt', '0')).replace('+', '').replace('-', '')
-
-                price = int(raw_price) if raw_price.isdigit() else 0
-                change_rate = float(raw_flu_rt) if raw_flu_rt else 0.0
-                volume = int(item.get('now_trde_qty', 0))
-                cntr_str = float(item.get('cntr_str', 0.0))
-
-                cleaned_list.append({
-                    'Code': code, 'Name': name, 'Price': price,
-                    'ChangeRate': change_rate, 'Volume': volume, 'CntrStr': cntr_str
-                })
-        else:
-            print(f"❌ [ka10027] HTTP 에러: {res.status_code}")
-
-    except Exception as e:
-        print(f"🚨 [ka10027] API 호출 예외 발생: {e}")
-
-    return cleaned_list
 
 def get_tick_size(price):
     """한국 주식시장 호가 단위 계산기 (2023년 코스피/코스닥 통합 규정)"""
@@ -997,139 +942,4 @@ def get_target_price_by_percent(curr_price, drop_percent=0.5):
         price -= tick
         
     return price
-
-def get_smart_target_price(curr_price, v_pw=100, ai_score=50, market_trend='NORMAL', ask_tot=0, bid_tot=0):
-    """
-    [스캘핑 4.0] 수급강도 + AI 확신도 + 호가잔량비율 + 라운드피겨 회피가 모두 적용된 궁극의 타점 계산기
-    """
-    if curr_price <= 0: return 0, 0.0
-    
-    final_ai_score = ai_score * 100 if ai_score <= 1.0 else ai_score
-    
-    # ==========================================
-    # 💡 [아이디어 1] AI 초강세(90점 이상) -> 돌파 추격매수
-    # ==========================================
-    if final_ai_score >= 90:
-        # 눌림목을 기다리지 않고 현재가(또는 바로 위 호가)로 직진하여 즉시 체결시킵니다.
-        return curr_price, 0.0 
-        
-    # 1. 기본 설정 (수급강도 기준)
-    if v_pw >= 200:
-        drop_percent, tick_count = 0.2, 3
-    elif v_pw >= 150:
-        drop_percent, tick_count = 0.35, 4
-    else:
-        drop_percent, tick_count = 0.5, 5
-        
-    # 2. 🚀 가속 페달: AI 확신도 반영 (75~89점 구간)
-    if final_ai_score >= 85:
-        drop_percent = max(0.1, drop_percent - 0.15) 
-        tick_count = max(1, tick_count - 1)
-    elif final_ai_score <= 50: 
-        drop_percent += 0.5   
-        tick_count += 3
-
-    # ==========================================
-    # 💡 [아이디어 2] 호가창 잔량 비율(Orderbook Imbalance) 필터링
-    # ==========================================
-    if ask_tot > 0 and bid_tot > 0:
-        if ask_tot >= bid_tot * 1.5:
-            # 매도벽이 두터움 = 세력이 뚫고 올라갈 진짜 상승 신호
-            # 너무 아래에 깔면 안 사지므로 타점을 위로 살짝 올림
-            drop_percent = max(0.1, drop_percent - 0.2)
-            tick_count = max(1, tick_count - 2)
-        elif bid_tot >= ask_tot * 1.5:
-            # 매수벽이 두터움 = 개미 꼬시기용 가짜 지지선일 확률 높음
-            # 훅 빠질 수 있으므로 타점을 더 깊게(안전하게) 내림
-            drop_percent += 0.4
-            tick_count += 4
-
-    # 3. 🛑 브레이크: 시장 지수 반영
-    if market_trend == 'BAD':
-        drop_percent += 0.5
-        tick_count += 3
-
-    # 4. 가격 계산 (퍼센트 방식 vs 틱 방식 중 더 안전한/낮은 가격)
-    pct_price = get_target_price_by_percent(curr_price, drop_percent)
-    
-    tick_price = curr_price
-    for _ in range(int(tick_count)):
-        tick = get_tick_size(tick_price - 1) # (get_tick_size 함수가 utils에 있다고 가정)
-        tick_price -= tick
-        
-    final_target = min(pct_price, tick_price)
-    
-    # ==========================================
-    # 💡 [아이디어 3] 라운드 피겨(Round Figure) 회피 로직
-    # ==========================================
-    # 1만, 5만, 10만원 등 심리적 저항선 '바로 아래'는 악성 매물대이므로 피합니다.
-    if 9800 <= final_target <= 9990:
-        final_target = 9750   # 1만원 저항 회피 -> 아예 깊게 대기
-    elif 49000 <= final_target <= 49950:
-        final_target = 48800  # 5만원 저항 회피
-    elif 98000 <= final_target <= 99900:
-        final_target = 97500  # 10만원 저항 회피
-        
-    return int(final_target), round(drop_percent, 2)
-
-def calculate_micro_indicators(candles):
-    """
-    최근 1분봉 데이터를 바탕으로 스캘핑용 단기 지표를 계산합니다.
-    
-    # 📝 TODO [V14.0 업데이트 예정사항]
-    # 향후 RSI(14) 및 MACD 지표를 추가하려면 아래 작업이 선행되어야 함:
-    # 1. signal_radar.py의 get_minute_candles_ka10080 함수에서 limit=5 를 limit=30 이상으로 수정
-    # 2. pandas-ta 또는 ta 라이브러리를 활용하여 EMA 기반 지표 계산 로직 추가
-    """
-    if not candles or len(candles) < 5:
-        return {"MA5": 0, "Micro_VWAP": 0}
-
-    # 1. 5분 이동평균선 (5-MA)
-    # 캔들은 최신순(앞)부터 정렬되어 있다고 가정합니다.
-    closes = [c['현재가'] for c in candles[:5]]
-    ma5 = sum(closes) / 5
-
-    # 2. Micro-VWAP (최근 5분간의 거래량 가중 평균 주가)
-    # 공식: Sum(전형적 주가 * 거래량) / Sum(거래량)
-    # *전형적 주가(Typical Price) = (고가 + 저가 + 종가) / 3
-    total_vol = 0
-    total_price_vol = 0
-    
-    for c in candles[:5]:
-        typical_price = (c['고가'] + c['저가'] + c['현재가']) / 3
-        total_price_vol += typical_price * c['거래량']
-        total_vol += c['거래량']
-
-    micro_vwap = total_price_vol / total_vol if total_vol > 0 else closes[0]
-
-    return {
-        "MA5": int(ma5), 
-        "Micro_VWAP": int(micro_vwap)
-    }
-
-def calculate_market_leader_score(ws_data):
-    """
-    [v12.4] 주도주 판별을 위한 수급 점수 계산기
-    """
-    if not ws_data:
-        return 0
-    
-    # 1. 전일 대비 등락률 (변동성)
-    fluctuation = float(ws_data.get('fluctuation', 0))
-    
-    # 2. 체결강도 (수급의 질)
-    volume_power = float(ws_data.get('v_pw', 0))
-    
-    # 3. 호가 잔량 대금 (유동성 규모)
-    # (매도잔량 + 매수잔량) * 현재가
-    ask_tot = ws_data.get('ask_tot', 0)
-    bid_tot = ws_data.get('bid_tot', 0)
-    curr_p = ws_data.get('curr', 0)
-    liquidity = (ask_tot + bid_tot) * curr_p / 100_000_000 # 억 단위
-    
-    # 스캘핑용 가중치 공식: 
-    # (등락률 * 10) + (체결강도 * 0.5) + (유동성 * 1.2)
-    score = (fluctuation * 10) + (volume_power * 0.5) + (liquidity * 1.2)
-    
-    return round(score, 2)
 

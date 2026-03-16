@@ -1,14 +1,37 @@
+"""
+[KORStockScan Feature Engineering Module]
+
+이 모듈은 AI 모델 학습 및 실시간 추론에 필요한 모든 파생 변수(Feature)를 계산하는 
+순수 데이터 전처리(Data Preprocessing) 도구입니다.
+
+💡 아키텍처 관점에서의 독립(Decoupling) 사유:
+1. MLOps '학습-추론 불일치(Training-Serving Skew)' 원천 차단:
+   과거 데이터를 DB에 적재할 때(학습용)와 장중 실시간으로 타점을 계산할 때(추론용),
+   100% 동일한 수학 공식을 사용하도록 보장하는 단일 진실 공급원(SSOT) 역할을 수행합니다.
+2. 무거운 의존성 격리(Isolation):
+   pandas_ta와 같은 무거운 통계/수학 연산 라이브러리를 이 모듈 내부에만 가두어, 
+   단순 통신/스캔 모듈들이 불필요하게 무거운 라이브러리를 메모리에 올리지 않도록 방어합니다.
+3. 전처리 확장성(Scalability):
+   향후 1분봉 데이터 피처, 호가창(Orderbook) 피처 등 시스템이 고도화될 때 
+   모든 데이터 가공 로직이 모이는 중앙 베이스캠프 역할을 합니다.
+"""
 import pandas as pd
 import numpy as np
 import pandas_ta as ta
 # 🚀 판다스 경고 숨김 및 미래 규칙 적용 선언 (import 바로 아래에 추가)
 pd.set_option('future.no_silent_downcasting', True)
 
-
 def calculate_all_features(df: pd.DataFrame) -> pd.DataFrame:
     """
-    OHLCV 데이터프레임을 입력받아 KORStockScan의 모든 기술적 지표와
-    AI 모델용 파생 피처(수급/신용 포함)를 계산하여 반환합니다.
+    OHLCV(고가/저가/종가/거래량) 및 수급/신용 데이터를 입력받아
+    KORStockScan의 AI 앙상블 모델(XGB/LGBM)에 주입할 파생 피처를 일괄 계산하는 순수 함수(Pure Function)입니다.
+
+    Args:
+        df (pd.DataFrame): 'Open', 'High', 'Low', 'Close', 'Volume' 필수 컬럼이 포함된 데이터프레임.
+                           (수급/신용 데이터 컬럼이 존재할 경우 해당 피처도 자동 계산됨)
+
+    Returns:
+        pd.DataFrame: 결측치(NaN) 처리가 완벽히 완료되고, 모든 기술적/수급 지표가 추가된 데이터프레임.
     """
     df = df.copy()
 
@@ -103,6 +126,14 @@ def calculate_all_features(df: pd.DataFrame) -> pd.DataFrame:
 
         # 3) 쌍끌이 매수 (강력한 상승 시그널)
         df['Dual_Net_Buy'] = ((df['Foreign_Net'] > 0) & (df['Inst_Net'] > 0)).astype(int)
+        # ==========================================
+        # 💡 [신규] 스마트 머니 가속도 지표 (MACD 방식)
+        # ==========================================
+        # 외국인과 기관의 순매수 단기(5일) 지수이동평균 - 장기(20일) 지수이동평균
+        df['Foreign_Net_Accel'] = df['Foreign_Net'].ewm(span=5, adjust=False).mean() - df['Foreign_Net'].ewm(span=20,
+                                                                                                            adjust=False).mean()
+        df['Inst_Net_Accel'] = df['Inst_Net'].ewm(span=5, adjust=False).mean() - df['Inst_Net'].ewm(span=20,
+                                                                                                    adjust=False).mean()
     else:
         for col in ['Foreign_Vol_Ratio', 'Inst_Vol_Ratio', 'Foreign_Net_Roll5', 'Inst_Net_Roll5', 'Dual_Net_Buy']:
             df[col] = 0
@@ -124,31 +155,4 @@ def calculate_all_features(df: pd.DataFrame) -> pd.DataFrame:
     df.bfill(inplace=True)
     df.fillna(0, inplace=True)
 
-    # ==========================================
-    # 💡 [신규] 스마트 머니 가속도 지표 (MACD 방식)
-    # ==========================================
-    # 외국인과 기관의 순매수 단기(5일) 지수이동평균 - 장기(20일) 지수이동평균
-    df['Foreign_Net_Accel'] = df['Foreign_Net'].ewm(span=5, adjust=False).mean() - df['Foreign_Net'].ewm(span=20,
-                                                                                                         adjust=False).mean()
-    df['Inst_Net_Accel'] = df['Inst_Net'].ewm(span=5, adjust=False).mean() - df['Inst_Net'].ewm(span=20,
-                                                                                                adjust=False).mean()
-
     return df
-
-
-if __name__ == "__main__":
-    from db_manager import DBManager
-
-    print("Feature Engineer (수급/신용 통합) 테스트 중...")
-
-    db = DBManager()
-    # 삼성전자 데이터 꺼내오기 (DB에 새로 쌓인 수급 데이터 확인)
-    test_df = db.get_stock_data('005930', limit=100)
-
-    if not test_df.empty:
-        processed_df = calculate_all_features(test_df)
-        print("✅ 계산 완료! 신규 수급/신용 피처 샘플:")
-        print(
-            processed_df[['Date', 'Dual_Net_Buy', 'Foreign_Vol_Ratio', 'Inst_Net_Roll5', 'Margin_Rate_Change']].tail(5))
-    else:
-        print("❌ DB에서 데이터를 가져오지 못했습니다.")

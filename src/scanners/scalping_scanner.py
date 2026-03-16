@@ -1,63 +1,82 @@
-import os
+import sys
+from pathlib import Path
+
+# ==========================================
+# 🚀 [핵심 1] 단독 실행을 위한 루트 경로 탐지
+# ==========================================
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.append(str(PROJECT_ROOT))
+
 import time
-import json
-import requests
 from datetime import datetime
 
-import kiwoom_utils
-from signal_radar import SniperRadar  # 🚀 신규 추가: 정보국 레이더
-from db_manager import DBManager
+# 💡 Level 1 & 2 공통 모듈 임포트
+from src.utils import kiwoom_utils
+from src.utils.logger import log_error
+from src.database.db_manager import DBManager
+from src.database.models import RecommendationHistory
+from src.core.event_bus import EventBus
+from src.engine.signal_radar import SniperRadar
 
 # ==========================================
-# 1. 경로 및 환경 설정
+# 🦅 스캘핑 스캐너 (전방 탐색조)
 # ==========================================
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.abspath(os.path.join(CURRENT_DIR, '..', 'data'))
-CONFIG_PATH = os.path.join(DATA_DIR, 'config_prod.json')
-
-
-def load_config():
-    with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-        return json.load(f)
-
-# ==========================================
-# 2. 메인 감시 루프
-# ==========================================
-def run_scalper():
+def run_scalper(is_test_mode=False):
+    """
+    [역할] 
+    1분 주기로 시장을 스캔하여 당일 수급이 폭발하거나 급등 전조가 보이는 '초단타(Scalping)' 타겟을 발굴합니다.
+    
+    [아키텍처 흐름]
+    1. 데이터 수집: kiwoom_utils/signal_radar(REST API)를 호출하여 등락률 상위 및 거래량 급증 종목을 가져옵니다.
+    2. 필터링: is_valid_stock을 통해 동전주, ETF, 스팩주 등의 불순물을 걸러냅니다.
+    3. DB 저장: 발굴된 종목을 SQLAlchemy ORM을 사용하여 안전하게 Upsert(삽입/업데이트) 합니다.
+    4. 이벤트 발행: 'COMMAND_WS_REG' 이벤트를 EventBus에 쏘아, 웹소켓 모듈이 해당 종목의 실시간 틱 데이터 감시를 즉각 시작하도록 지시합니다.
+    """
     print("⚡ [SCALPING 스캐너] 초단타 감시 엔진 가동 (1분 주기)...")
-    conf = load_config()
     db = DBManager()
+    event_bus = EventBus() # 💡 전역 싱글톤 이벤트 버스
+    
     today = datetime.now().strftime('%Y-%m-%d')
-
     already_picked = set()
-    last_closed_msg_time = 0 # 💡 [교정 1] 장 마감 도배 방지용 타이머 추가
+    last_closed_msg_time = 0 # 💡 장 마감 도배 방지용 타이머 추가
+
+    # 💡 무한 루프 밖에서 토큰과 레이더를 한 번만 초기화하여 부하 감소
+    # (실제 운영 시에는 토큰 만료를 대비한 갱신 로직이 추가로 필요할 수 있음)
+    
+    token = kiwoom_utils.get_kiwoom_token()
+    
+    if not token:
+        log_error("❌ 키움 토큰 발급 실패. 스캐너를 종료합니다.")
+        return
 
     while True:
         now = datetime.now()
         now_time = now.time()
 
-        # 💡 [교정 1 적용] 장 마감 메시지 도배 방지 (1시간에 1번만 출력)
+        # 장 운영 시간 체크 (09:00 ~ 15:20)
         market_open = datetime.strptime("09:00:00", "%H:%M:%S").time()
         market_close = datetime.strptime("15:20:00", "%H:%M:%S").time()
         
-        if not (market_open <= now_time <= market_close):
+        if not is_test_mode and not (market_open <= now_time <= market_close):
             if time.time() - last_closed_msg_time > 3600:
                 print("🌙 장 마감 혹은 개장 전입니다. 대기 중...")
                 last_closed_msg_time = time.time()
             time.sleep(60)
             continue
 
-        token = kiwoom_utils.get_kiwoom_token(conf)
-        if not token:
-            time.sleep(10)
-            continue
-            
-        radar = SniperRadar(token)
         print(f"🔍 [{now.strftime('%H:%M:%S')}] 실시간 수급 쏠림 & 폭발 전조 종목 스캔 중...")
         
-        soaring_targets = radar.get_top_fluctuation_ka10027(mrkt_tp="101", limit=30)
+        # 💡 [수정] 통신 유틸리티로 이관된 함수 호출 방식으로 변경
+        # 💡 [수정] 통신 유틸리티로 이관된 함수 호출 방식으로 변경
+        soaring_targets = kiwoom_utils.get_top_fluctuation_ka10027(token, mrkt_tp="101", limit=30)
+        
+        # 💡 1. SniperRadar 객체(인스턴스)를 먼저 생성합니다. (토큰을 쥐어줍니다)
+        radar = SniperRadar(token) 
+        
+        # 💡 2. 생성된 객체에게 타겟을 찾으라고 명령합니다. (token을 또 넘길 필요 없습니다)
         supernova_targets = radar.find_supernova_targets(mrkt_tp="101")
-
+        
         all_targets = {}
         for t in soaring_targets:
             all_targets[t['Code']] = t
@@ -71,11 +90,13 @@ def run_scalper():
                     'CntrStr': 150.0,
                     'Price': t.get('cur_prc', 0) # 💡 초신성 트랙에 현재가 데이터가 있다면 보존
                 }
+            
+        new_codes_found = []
 
         for code, t in all_targets.items():
             if code not in already_picked:
                 
-                # 💡 [교정 2] 가격 데이터를 먼저 추출하여 초고속 필터링에 넘겨줍니다!
+                # 💡 가격 데이터를 먼저 추출하여 초고속 필터링에 넘겨줍니다!
                 curr_p = float(t.get('Price', t.get('cur_prc', 0))) 
 
                 if not kiwoom_utils.is_valid_stock(code, t['Name'], token=token, current_price=curr_p):
@@ -84,24 +105,47 @@ def run_scalper():
 
                 print(f"🎯 [타겟 포착] {t['Name']} (등락/급증률: +{t['ChangeRate']}%, 체결강도: {t['CntrStr']})")
                 already_picked.add(code)
+                new_codes_found.append(code)
 
+                # 💡 [수정] Raw SQL 제거 및 SQLAlchemy ORM 적용
                 try:
-                    with db._get_connection() as conn:
-                        conn.execute('''
-                                     INSERT INTO recommendation_history 
-                                     (date, code, name, buy_price, type, strategy, status)
-                                     VALUES (?, ?, ?, ?, ?, ?, 'WATCHING')
-                                     ON CONFLICT(date, code) DO UPDATE SET 
-                                         strategy = excluded.strategy,
-                                         buy_price = excluded.buy_price,
-                                         status = 'WATCHING'
-                                     WHERE status IN ('WATCHING', 'COMPLETED')
-                                     ''', (today, code, t['Name'], 0, 'SCALP', 'SCALPING'))
-                        conn.commit()
+                    with db.get_session() as session:
+                        today_date = datetime.now().date() # 문자열이 아닌 Date 객체 사용
+
+                        # 1. 💡 기존 데이터 확인 (rec_date, stock_code 사용)
+                        record = session.query(RecommendationHistory).filter_by(
+                            rec_date=today_date, 
+                            stock_code=code
+                        ).first()
+
+                        if record:
+                            # 2. 업데이트
+                            if record.status in ('WATCHING', 'COMPLETED'):
+                                record.strategy = 'SCALPING'
+                                record.buy_price = 0
+                                record.status = 'WATCHING'
+                        else:
+                            # 3. 💡 신규 삽입 (새로운 컬럼명 규격 완벽 적용)
+                            new_record = RecommendationHistory(
+                                rec_date=today_date, 
+                                stock_code=code, 
+                                stock_name=t['Name'], 
+                                buy_price=0, 
+                                trade_type='SCALP',       # type 대신 trade_type
+                                strategy='SCALPING', 
+                                status='WATCHING'
+                            )
+                            session.add(new_record)
                 except Exception as e:
+                    log_error(f"⚠️ DB 저장 실패 ({code}): {e}")
                     print(f"⚠️ DB 저장 실패: {e}")
+            
+            # 🚀 [핵심] 새로운 종목을 찾았으면 EventBus를 통해 웹소켓에 감시 등록 명령 하달!
+        if new_codes_found:
+            event_bus.publish("COMMAND_WS_REG", {"codes": new_codes_found})
+            print(f"📡 웹소켓 감시 등록 요청 완료: {len(new_codes_found)} 종목")
 
         time.sleep(60)
 
 if __name__ == "__main__":
-    run_scalper()
+    run_scalper(is_test_mode=True)

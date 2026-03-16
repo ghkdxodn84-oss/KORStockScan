@@ -4,9 +4,9 @@ import json
 import re # 💡 JSON 파싱 전 마크다운 찌꺼기 제거용
 from itertools import cycle
 from openai import OpenAI, RateLimitError  # 💡 신규 SDK (openai)
-import utils.kiwoom_utils as kiwoom_utils
-from utils.db_manager import DBManager
-from utils.constants import TRADING_RULES, DATA_DIR, CONFIG_PATH, STOCK_DB_PATH, NOTIFY_DIR
+import src.utils.kiwoom_utils as kiwoom_utils
+from src.database.db_manager import DBManager
+from src.utils.constants import TRADING_RULES, DATA_DIR, CONFIG_PATH, NOTIFY_DIR
 
 # ==========================================
 # 1. 🎯 시스템 프롬프트 (스캘핑 전용)

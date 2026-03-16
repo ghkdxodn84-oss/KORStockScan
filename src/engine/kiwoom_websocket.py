@@ -4,22 +4,45 @@ import json
 import threading
 from datetime import datetime
 
+# 💡 [Level 1 & 2 적용] 독립 로거 및 싱글톤 이벤트 버스 임포트
+from src.utils.logger import log_error
+from src.core.event_bus import EventBus
+from src.utils.constants import CONFIG_PATH, DEV_PATH
+
+def _load_system_config():
+    """웹소켓 매니저 전용 설정 로더 (의존성 분리)"""
+    target = CONFIG_PATH if CONFIG_PATH.exists() else DEV_PATH
+    try:
+        with open(target, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception as e:
+        log_error(f"🚨 설정 로드 실패: {e}")
+        return {}
+    
 class KiwoomWSManager:
-    def __init__(self, token, on_execution_callback=None):
-        self.uri = 'wss://api.kiwoom.com:10000/api/dostk/websocket'
+    def __init__(self, token):
+        # 💡 [우아한 아키텍처] 하드코딩 파괴! 설정 파일에서 URI를 동적으로 읽어옵니다.
+        conf = _load_system_config()
+        # config에 URI가 없으면 안전하게 Mock API를 기본값으로 사용합니다.
+        self.uri = conf.get('KIWOOM_WS_URI', 'wss://mockapi.kiwoom.com:10000/api/dostk/websocket')
+        
         self.token = token
         self.realtime_data = {}
         self.subscribed_codes = set()
         self.websocket = None
         self.lock = threading.Lock()
         self.loop = None
-        self.on_execution_callback = on_execution_callback
+        
+        # 전역 EventBus 인스턴스 획득 및 외부 명령 수신기 장착
+        self.event_bus = EventBus()
+        self.event_bus.subscribe("COMMAND_WS_REG", self._handle_reg_event)
+        
+        print(f"🌐 [WS] 웹소켓 매니저 초기화 완료 (Target: {self.uri})")
 
     async def _run_ws(self):
         while True:
             try:
-                print("🔌 [WS] 키움 서버에 연결을 시도합니다...")
-                # ping_interval=None으로 설정하여 키움 서버의 PING 패킷을 수동으로 처리합니다.
+                print(f"🔌 [WS] 키움 서버({self.uri})에 연결을 시도합니다...")
                 async with websockets.connect(self.uri, ping_interval=None) as ws:
                     self.websocket = ws
                     print("✅ [WS] 웹소켓 연결 성공!")
@@ -31,15 +54,15 @@ class KiwoomWSManager:
                     
                     await asyncio.sleep(1) # 로그인 처리 대기
 
-                    # 🚀 2. 계좌 전체 주문체결(00) 감시 명시적 등록
+                    # 2. 계좌 전체 주문체결(00) 감시 명시적 등록
                     exec_reg_packet = {
                         "trnm": "REG",
-                        "grp_no": "2",  # 기존 호가 감시(1)와 충돌하지 않도록 그룹번호 2 사용
+                        "grp_no": "2",  
                         "refresh": "1",
                         "data": [
                             {
-                                "item": [""],   # 전체 종목
-                                "type": ["00"]  # 주문/체결 통보
+                                "item": [""],   
+                                "type": ["00"]  
                             }
                         ]
                     }
@@ -60,6 +83,7 @@ class KiwoomWSManager:
                 self.websocket = None
                 await asyncio.sleep(3)
             except Exception as e:
+                log_error(f"🚨 [WS] 예상치 못한 오류: {e}")
                 print(f"🚨 [WS] 예상치 못한 오류: {e}")
                 self.websocket = None
                 await asyncio.sleep(3)
@@ -69,7 +93,7 @@ class KiwoomWSManager:
             msg_dict = json.loads(message)
             trnm = msg_dict.get('trnm')
             
-            # 🛡️ [생존 신고] 키움 서버의 PING에 PONG으로 응답하여 연결 끊김 방지
+            # 생존 신고 (PING/PONG)
             if trnm == 'PING':
                 if self.websocket:
                     await self.websocket.send(message)
@@ -83,7 +107,7 @@ class KiwoomWSManager:
                     real_type = d.get('type')
                     
                     # ===================================================
-                    # [트랙 A] 🚨 주문/체결 통보 가로채기
+                    # [트랙 A] 🚨 주문/체결 통보 가로채기 (ORDER_EXECUTED)
                     # ===================================================
                     if real_type == '00' or d.get('name') == '주문체결':
                         status = str(values.get('913', '')).strip()      
@@ -103,8 +127,9 @@ class KiwoomWSManager:
                             
                             print(f"🔔 [WS 실제체결] {code} {exec_type} {exec_qty}주 @ {exec_price}원 (주문번호: {order_no})")
                             
-                            if exec_price > 0 and self.on_execution_callback:
-                                self.on_execution_callback({
+                            if exec_price > 0:
+                                # 💡 체결 영수증을 허공에 쏩니다! 스나이퍼가 낚아채서 DB에 기록할 것입니다.
+                                self.event_bus.publish("ORDER_EXECUTED", {
                                     'code': code,
                                     'order_no': order_no,
                                     'type': exec_type,
@@ -112,7 +137,7 @@ class KiwoomWSManager:
                                     'qty': exec_qty,
                                     'time': datetime.now().strftime('%H:%M:%S')
                                 })
-                        continue 
+                        continue
 
                     # ===================================================
                     # [트랙 B] 실시간 주가/호가 데이터 처리
@@ -120,61 +145,40 @@ class KiwoomWSManager:
                     item_code = d.get('item', '')
                     if item_code and real_type != '00': 
                         with self.lock:
-                            # 1. 초기 데이터 구조 생성 (신규 종목 진입 시)
+                            # 1. 초기 데이터 구조 생성
                             if item_code not in self.realtime_data:
                                 self.realtime_data[item_code] = {
-                                    'curr': 0, 
-                                    'v_pw': 0, 
-                                    'ask_tot': 0, 
-                                    'bid_tot': 0, 
-                                    'volume': 0,
-                                    'time': '',
-                                    'fluctuation': 0.0,
-                                    'open': 0,  # 💡 시가 데이터 추가
-                                    'orderbook': {'asks': [], 'bids': []} # 🚀 [필수 교정] 초기화 시 포함되어야 함
+                                    'curr': 0, 'v_pw': 0, 'ask_tot': 0, 'bid_tot': 0, 
+                                    'volume': 0, 'time': '', 'fluctuation': 0.0, 'open': 0,
+                                    'orderbook': {'asks': [], 'bids': []}
                                 }
                             
                             target = self.realtime_data[item_code]
 
-                            # 10: 현재가
-                            if '10' in values:
-                                raw_curr = values['10'].replace('+', '').replace('-', '')
-                                target['curr'] = int(raw_curr) if raw_curr.isdigit() else target['curr']
-                            
-                            # 16: 시가
-                            if '16' in values:
-                                raw_open = values['16'].replace('+', '').replace('-', '')
-                                target['open'] = int(raw_open) if raw_open.isdigit() else target.get('open', 0)
-                            
-                            # 13: 누적거래량
-                            if '13' in values:
-                                raw_vol = values['13'].replace('+', '').replace('-', '')
-                                target['volume'] = int(raw_vol) if raw_vol.isdigit() else target.get('volume', 0)
+                            # 💡 안전한 파싱 헬퍼 (ValueError 방어막)
+                            def safe_int(val, default=0):
+                                val_str = str(val).replace('+', '').replace('-', '').strip()
+                                return int(val_str) if val_str.isdigit() else default
+
+                            # 데이터 추출 및 할당
+                            if '10' in values: target['curr'] = safe_int(values['10'], target['curr'])
+                            if '16' in values: target['open'] = safe_int(values['16'], target.get('open', 0))
+                            if '13' in values: target['volume'] = safe_int(values['13'], target.get('volume', 0))
                                 
-                            # 12: 전일 대비 등락률
                             if '12' in values:
-                                raw_rate = values['12'].replace('+', '')
-                                try: target['fluctuation'] = float(raw_rate)
+                                try: target['fluctuation'] = float(values['12'].replace('+', ''))
                                 except ValueError: pass
                             
-                            # 228: 체결강도
                             if '228' in values:
-                                target['v_pw'] = float(values['228'])
+                                try: target['v_pw'] = float(values['228'])
+                                except ValueError: pass
                                 
-                            # 121: 매도호가 총잔량
-                            if '121' in values:
-                                target['ask_tot'] = int(values['121'])
-                                
-                            # 125: 매수호가 총잔량
-                            if '125' in values:
-                                target['bid_tot'] = int(values['125'])
+                            if '121' in values: target['ask_tot'] = safe_int(values['121'])
+                            if '125' in values: target['bid_tot'] = safe_int(values['125'])
 
-                            # 🚀 [신규 추가] '0D' 주식호가잔량 데이터 파싱
+                            # '0D' 주식호가잔량 데이터 파싱 (1~5호가)
                             if real_type == '0D':
-                                asks = []
-                                bids = []
-                                # 1호가부터 5호가까지만 추출 (Gemini 토큰 절약 및 핵심 데이터 집중)
-                                # 키움 FID 규칙: 매도호가(41~50), 매수호가(51~60), 매도잔량(61~70), 매수잔량(71~80)
+                                asks, bids = [], []
                                 for i in range(1, 6):
                                     ask_p = values.get(str(40 + i))
                                     ask_v = values.get(str(60 + i))
@@ -182,24 +186,23 @@ class KiwoomWSManager:
                                     bid_v = values.get(str(70 + i))
 
                                     if ask_p and ask_v:
-                                        asks.append({
-                                            'price': abs(int(ask_p.replace('+', '').replace('-', ''))), 
-                                            'volume': int(ask_v)
-                                        })
+                                        asks.append({'price': safe_int(ask_p), 'volume': safe_int(ask_v)})
                                     if bid_p and bid_v:
-                                        bids.append({
-                                            'price': abs(int(bid_p.replace('+', '').replace('-', ''))), 
-                                            'volume': int(bid_v)
-                                        })
+                                        bids.append({'price': safe_int(bid_p), 'volume': safe_int(bid_v)})
                                 
-                                # 매도호가는 역순(5호가 -> 1호가)이 보기 편하므로 뒤집어줌
                                 target['orderbook']['asks'] = asks[::-1]
                                 target['orderbook']['bids'] = bids
                             
                             target['time'] = datetime.now().strftime('%H:%M:%S')
+                            
+                            # 💡 파싱 완료 후 구독자들에게 전파
+                            self.event_bus.publish("REALTIME_TICK_ARRIVED", {
+                                'code': item_code,
+                                'data': target.copy()  
+                            })
 
         except Exception as e:
-            pass # 불필요한 에러 로그 방지
+            log_error(f"[WS] 메시지 파싱 에러 발생: {e} | Payload: {message[:150]}")
 
     def start(self):
         def thread_target():
@@ -212,8 +215,7 @@ class KiwoomWSManager:
     async def _send_reg(self, codes):
         try:
             for _ in range(50):
-                if self.websocket:
-                    break
+                if self.websocket: break
                 await asyncio.sleep(0.1)
 
             if self.websocket:
@@ -234,9 +236,10 @@ class KiwoomWSManager:
                 print(f"⚠️ [WS] 연결된 웹소켓이 없어 전송 실패: {codes}")
 
         except Exception as e:
+            log_error(f"🚨 [WS] _send_reg 에러 발생: {e}")
             print(f"🚨 [WS] _send_reg 내부 치명적 에러 발생: {e}")
 
-    def subscribe(self, codes):
+    def execute_subscribe(self, codes):
         if not codes: return
         if isinstance(codes, str): codes = [codes]
 
@@ -246,12 +249,16 @@ class KiwoomWSManager:
             future = asyncio.run_coroutine_threadsafe(self._send_reg(new_targets), self.loop)
 
             def on_complete(fut):
-                try:
-                    fut.result()
+                try: fut.result()
                 except Exception as e:
+                    log_error(f"🚨 [WS] 스레드 통신 간 에러 발생: {e}")
                     print(f"🚨 [WS] 스레드 통신 간 에러 발생: {e}")
 
             future.add_done_callback(on_complete)
+    
+    def _handle_reg_event(self, payload):
+        codes = payload.get("codes", [])
+        self.execute_subscribe(codes) 
 
     def get_latest_data(self, code):
         with self.lock:
