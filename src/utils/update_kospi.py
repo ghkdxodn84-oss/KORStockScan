@@ -93,18 +93,10 @@ def process_and_save_stock(code, token, db: DBManager):
         df_ohlcv = kiwoom_utils.get_daily_ohlcv_ka10081_df(token, code)
         if df_ohlcv.empty: return False
 
-        # time.sleep(0.5) # 💡 [버퍼 추가] 10081 연속조회 후 키움 서버 진정시키기(모의투자용)
-        # time.sleep(0.2) # 💡 [버퍼 추가] 10081 연속조회 후 키움 서버 진정시키기(실전서버용)
         df_investor = kiwoom_utils.get_investor_daily_ka10059_df(token, code)
-        
-        # time.sleep(0.5) # 💡 [버퍼 추가] 10059 연속조회 후 진정시키기(모의투자용)
-        # time.sleep(0.2) # 💡 [버퍼 추가] 10081 연속조회 후 키움 서버 진정시키기(실전서버용)
         df_margin = kiwoom_utils.get_margin_daily_ka10013_df(token, code)
-        
-        # time.sleep(0.5) # 💡 [버퍼 추가] 10013 연속조회 후 진정시키기(모의투자용)
-        # time.sleep(0.2) # 💡 [버퍼 추가] 10081 연속조회 후 키움 서버 진정시키기(실전서버용)
         basic_info = kiwoom_utils.get_basic_info_ka10001(token, code)
-
+        
         # 2. Date 기준 무결점 병합 (Join)
         df = df_ohlcv
         if not df_investor.empty:
@@ -138,7 +130,9 @@ def process_and_save_stock(code, token, db: DBManager):
 
         # 안전한 최종 컬럼 필터링 (모델 스키마와 완벽 동기화)
         final_cols = [col for col in COLUMN_MAPPING.values() if col in new_rows.columns]
+
         return new_rows[final_cols].dropna(subset=['close_price'])
+        
 
     except Exception as e:
         # 💡 429 처리 로직도 제거됨 (kiwoom_utils가 알아서 하므로)
@@ -197,17 +191,18 @@ def update_kospi_data():
     logger.info(f"\n📦 총 {total_count}개 종목 메모리 적재를 시작합니다.\n")
 
     # [PHASE 1] 메모리에 데이터 차곡차곡 모으기
-    for i, code in enumerate(kospi_codes):
-        df_stock = process_and_save_stock(code, kiwoom_token)
-        
-        if df_stock is not None and not df_stock.empty:
-            all_stocks_data.append(df_stock)
-            successful_codes.append(code)
+    with db.get_session() as session:
+        for i, code in enumerate(kospi_codes):
+            df_stock = process_and_save_stock(code, kiwoom_token, session)
+            
+            if df_stock is not None and not df_stock.empty:
+                all_stocks_data.append(df_stock)
+                successful_codes.append(code)
 
-        if (i + 1) % 50 == 0:
-            logger.info(f" ⏳ 수집 진행 상황: [{i + 1}/{total_count}] 완료...")
+            if (i + 1) % 50 == 0:
+                logger.info(f" ⏳ 수집 진행 상황: [{i + 1}/{total_count}] 완료...")
 
-        time.sleep(0.3) # API 제재 방지용 대기
+            time.sleep(0.3) # API 제재 방지용 대기
 
     # [PHASE 2] 대망의 일괄 DB 삽입 (Bulk Insert)
     if all_stocks_data:

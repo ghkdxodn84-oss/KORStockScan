@@ -162,7 +162,7 @@ def get_daily_ohlcv_ka10081_df(token, code, end_date=""):
     }
     
     # 💡 [핵심] use_continuous=True를 넘겨서 100일 이상 과거 데이터까지 쭉 긁어옵니다.
-    results = fetch_kiwoom_api_continuous(url, token, 'ka10081', payload, use_continuous=True)
+    results = fetch_kiwoom_api_continuous(url, token, 'ka10081', payload, use_continuous=False)
     
     if not results:
         return pd.DataFrame()
@@ -371,7 +371,7 @@ def get_investor_daily_ka10059_df(token, code, base_dt=None):
         token=token, 
         api_id='ka10059', 
         payload=payload, 
-        use_continuous=True
+        use_continuous=False
     )
 
     if not results:
@@ -426,7 +426,7 @@ def get_margin_daily_ka10013_df(token, code, base_dt=None):
         token=token, 
         api_id='ka10013', 
         payload=payload, 
-        use_continuous=True
+        use_continuous=False
     )
 
     if not results:
@@ -813,8 +813,8 @@ def fetch_kiwoom_api_continuous(url: str, token: str, api_id: str, payload: dict
         if cont_yn != 'Y':
             break  # 더 이상 페이지가 없으면 탈출
             
-        # time.sleep(0.5)  # 연속조회 시 서버 배려를 위한 딜레이(실전서버)
-        time.sleep(1.2)  # 연속조회 시 서버 배려를 위한 딜레이(모의투자서버)
+        time.sleep(0.5)  # 연속조회 시 서버 배려를 위한 딜레이(실전서버)
+        # time.sleep(1.2)  # 연속조회 시 서버 배려를 위한 딜레이(모의투자서버)
 
     return all_results
 # ==========================================
