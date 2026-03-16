@@ -369,18 +369,19 @@ def run_intraday_scanner(token):
         df = db.get_stock_data(code, limit=60)
         if len(df) < 30: continue
 
-        df = df.sort_values('Date').reset_index(drop=True)
+        # [✅ 수정 후] DB 스키마(quote_date, close_price 등)에 완벽 대응
+        df = df.sort_values('quote_date').reset_index(drop=True)
 
         # 가상 일봉(오늘) 추가 또는 덮어쓰기
-        if df.iloc[-1]['Date'] != today_str:
+        if str(df.iloc[-1]['quote_date']) != today_str:
             new_row = df.iloc[-1].copy()
-            new_row['Date'] = today_str
-            new_row['Close'] = curr_price
-            if curr_vol > 0: new_row['Volume'] = curr_vol
+            new_row['quote_date'] = today_str
+            new_row['close_price'] = curr_price
+            if curr_vol > 0: new_row['volume'] = curr_vol
             df = pd.concat([df, pd.DataFrame([new_row])], ignore_index=True)
         else:
-            df.at[df.index[-1], 'Close'] = curr_price
-            if curr_vol > 0: df.at[df.index[-1], 'Volume'] = curr_vol
+            df.at[df.index[-1], 'close_price'] = curr_price
+            if curr_vol > 0: df.at[df.index[-1], 'volume'] = curr_vol
 
         try:
             # 💡 [교정 3] ml_predictor에게 순수 예측 요청
@@ -423,7 +424,8 @@ def run_intraday_scanner(token):
                 drop_stats['supply'] += 1
                 continue
 
-            h60, l60 = df_feat['High'].tail(60).max(), df_feat['Low'].tail(60).min()
+            # [✅ 수정 후] 소문자 스키마 대응
+            h60, l60 = df_feat['high_price'].tail(60).max(), df_feat['low_price'].tail(60).min()
             pos_pct = (curr_price - l60) / (h60 - l60 + 1e-9)
             pos_tag = 'BREAKOUT' if pos_pct >= 0.8 else ('BOTTOM' if pos_pct <= 0.3 else 'MIDDLE')
 
@@ -461,7 +463,16 @@ def run_intraday_scanner(token):
             # 💡 ORM 기반 안전한 DB 저장
             with db.get_session() as session:
                 for t in new_targets:
-                    db.save_recommendation(today_str, t['Code'], t['Name'], t['Price'], 'MAIN', t['Position'], prob=t['Prob'])
+                    # [✅ 수정 후] 위치 꼬임 방지를 위한 키워드 지정
+                    db.save_recommendation(
+                        date=today_str, 
+                        code=t['Code'], 
+                        name=t['Name'], 
+                        buy_price=t['Price'], 
+                        trade_type='MAIN', 
+                        strategy=t['Position'], 
+                        prob=t['Prob']
+                    )
         except Exception as e:
             log_error(f"장중 스캐너 DB 저장 에러: {e}")
 

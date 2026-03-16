@@ -2,6 +2,7 @@ import sys
 import os
 import json
 import telebot
+from telebot import types
 import time
 from datetime import datetime
 from pathlib import Path

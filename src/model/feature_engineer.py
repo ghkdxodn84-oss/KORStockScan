@@ -35,6 +35,16 @@ def calculate_all_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
 
+    # 💡 [아키텍트의 무적 방어막] DB에서 온 소문자 스네이크 케이스를 AI 표준(대문자)으로 강제 통일
+    COLUMN_NORMALIZER = {
+        'quote_date': 'Date', 'stock_code': 'Code', 'stock_name': 'Name',
+        'open_price': 'Open', 'high_price': 'High', 'low_price': 'Low', 
+        'close_price': 'Close', 'volume': 'Volume',
+        'foreign_net': 'Foreign_Net', 'inst_net': 'Inst_Net', 'margin_rate': 'Margin_Rate'
+    }
+    # 존재하는 컬럼만 싹 옷을 갈아입힙니다 (API 데이터가 들어와도 에러 없이 통과)
+    df = df.rename(columns=COLUMN_NORMALIZER)
+
     required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
     for col in required_cols:
         if col not in df.columns:
