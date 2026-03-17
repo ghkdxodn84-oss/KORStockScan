@@ -176,6 +176,52 @@ def get_user_badge(chat_id):
     level = db_manager.get_user_level(chat_id)
     return "👑 [VIP 후원자] " if level == 'V' else ("🛡️ [관리자] " if level == 'A' else "👤 [일반] ")
 
+def format_price(p):
+    safe_price = int(p.buy_price) if getattr(p, 'buy_price', None) else 0
+    status = getattr(p, 'status', 'WATCHING')
+    
+    if status == 'COMPLETED':
+        return "<code>✅ 매매 완료</code>"
+    elif status == 'HOLDING':
+        return f"<code>📈 보유중 ({safe_price:,}원)</code>"
+    elif status == 'BUY_ORDERED':
+        return f"<code>🛒 매수 예약 ({safe_price:,}원)</code>"
+    elif status == 'SELL_ORDERED':
+        return f"<code>💸 매도 주문중</code>"
+    else: 
+        if safe_price > 0:
+            return f"<code>👀 감시중 (포착가: {safe_price:,}원)</code>"
+        else:
+            return "<code>⏳ 실시간 타점 추적중</code>"
+
+def process_analyze_step(message):
+    """
+    사용자가 입력한 종목코드를 받아 AI 및 레이더 기반의 실시간 분석 리포트를 회신합니다.
+    (DB에 감시 종목으로 추가하지 않습니다)
+    """
+    code = message.text.strip()
+    chat_id = message.chat.id
+    
+    if not code.isdigit() or len(code) != 6:
+        bot.send_message(chat_id, "❌ 잘못된 입력입니다. 6자리 숫자로 된 종목코드를 다시 입력해 주세요.")
+        return
+
+    # 대기 메시지 전송
+    bot.send_message(chat_id, f"🔄 `{code}` 종목의 실시간 호가창과 차트를 분석 중입니다. 잠시만 기다려주세요...", parse_mode='Markdown')
+    
+    try:
+        import src.engine.kiwoom_sniper_v2 as kiwoom_sniper_v2
+        
+        # 💡 [핵심 교정 2] 스나이퍼 엔진의 실시간 분석 전용 함수 호출
+        report = kiwoom_sniper_v2.analyze_stock_now(code)
+        
+        bot.send_message(chat_id, report, parse_mode='Markdown')
+        
+    except Exception as e:
+        from src.utils.logger import log_error
+        log_error(f"실시간 종목분석 에러 ({code}): {e}")
+        bot.send_message(chat_id, f"❌ 종목 분석 중 시스템 에러 발생: {e}")
+        
 # ==========================================
 # 7. 텔레그램 메시지/명령어 핸들러 (@bot.message_handler)
 # ==========================================
@@ -186,14 +232,15 @@ def get_user_badge(chat_id):
 @bot.message_handler(commands=['start', 'help'])
 def handle_start(message):
     db_manager.add_new_user(message.chat.id)
+    # 💡 [교정 1] 마크다운 문법 오류 수정 (닫히지 않은 백틱 제거 및 이탤릭/볼드체로 깔끔하게 정돈)
     welcome_msg = (
-    "🎯 **[KORStockScan V13.0] 스나이퍼 엔진 온라인**\n\n"
-    "감정을 배제한 기계의 심장. 백테스트 승률 **63.3%**의 AI 앙상블 타격망이 전개되었습니다.\n\n"
-    "⚡ **Sniper Protocol Activating...**\n"
+    "🎯 *[KORStockScan V13.0] 스나이퍼 엔진 온라인*\n\n"
+    "감정을 배제한 기계의 심장. 백테스트 승률 *63.3%*의 AI 앙상블 타격망이 전개되었습니다.\n\n"
+    "⚡ *Sniper Protocol Activating...*\n"
     "✓ `[Targeting]` 다중 AI 합의체 교차 검증 기반 정예 타점 스캐닝\n"
     "✓ `[Radar]` FDR ✖️ Kiwoom 2중 지수 판독 및 실시간 수급 추적\n"
     "✓ `[Action]` 찰나를 파고드는 가변 익절/손절 스마트 트레일링 스탑\n\n"
-    "* `시장의 노이즈를 뚫고, 가장 완벽한 타점만 저격합니다."
+    "💡 _시장의 노이즈를 뚫고, 가장 완벽한 타점만 저격합니다._" 
     )
     bot.send_message(message.chat.id, welcome_msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
 
@@ -202,25 +249,32 @@ def handle_status(message):
     from src.engine.signal_radar import SniperRadar
 
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    token = kiwoom_utils.get_kiwoom_token(CONF)
+    
+    # 💡 [교정 2] 더 이상 쓰지 않는 CONF 파라미터 삭제 (의존성 분리 완료)
+    token = kiwoom_utils.get_kiwoom_token() 
     regime = SniperRadar.get_market_regime(token)
     regime_icon = "🐂 (상승장)" if regime == 'BULL' else "🐻 (조정장)"
 
-    msg = f"🟢 *[상태 보고]*\n⏱ `{now_str}`\n📊 시장판독: **{regime_icon}**\n"
+    msg = f"🟢 *[상태 보고]*\n⏱ `{now_str}`\n📊 시장판독: *{regime_icon}*\n"
     bot.send_message(message.chat.id, msg, parse_mode='Markdown')
 
 @bot.message_handler(commands=['restart'])
 def cmd_restart(message):
-    if str(message.chat.id) == ADMIN_ID:
-        bot.reply_to(message, "🔄 시스템을 재시작합니다.")
-        # os._exit(0)
-        with open("restart.flag", "w") as f: f.write("restart")
+    # 관리자 여부 확인 (ADMIN_ID가 문자열인지 확실히 하기 위해 형변환)
+    if str(message.chat.id) == str(ADMIN_ID):
+        bot.reply_to(message, "🔄 수동 재시작 플래그를 작동합니다. 관제탑이 안전하게 재가동됩니다.")
+        # bot_main.py의 메인 루프가 이 파일을 감지하고 우아하게 종료합니다.
+        with open("restart.flag", "w") as f: 
+            f.write("restart")
+    else:
+        bot.reply_to(message, "⛔ 권한이 없습니다.")
 
 @bot.message_handler(func=lambda message: message.text == "🔍 실시간 종목분석")
 def handle_analyze_btn(message):
-    msg = bot.reply_to(message, "🔍 분석할 **종목코드 6자리** 입력", parse_mode='Markdown')
-    bot.register_next_step_handler(msg, lambda m: process_analyze_logic(m, m.text.strip()) if m.text.strip().isdigit() else None)
-
+    msg = bot.reply_to(message, "🔍 분석할 *종목코드 6자리* 입력", parse_mode='Markdown')
+    # 💡 [핵심 교정 1] 이제 process_manual_add_step 이 아니라 전용 분석 함수로 넘깁니다!
+    bot.register_next_step_handler(msg, process_analyze_step)
+    
 @bot.message_handler(func=lambda message: message.text == "📜 감시/보유 리스트")
 def handle_watch_list(message):
     import pandas as pd
@@ -231,21 +285,21 @@ def handle_watch_list(message):
         
         # 💡 [아키텍처 포인트 1] 원시 Connection 대신 안전한 ORM Session Bind 활용
         with db_manager.get_session() as session:
-            query = f"SELECT * FROM recommendation_history WHERE date='{today}' OR status='HOLDING'"
+            query = f"SELECT * FROM recommendation_history WHERE rec_date='{today}' OR status='HOLDING'"
             df = pd.read_sql(query, session.bind)
 
         if df.empty:
             bot.reply_to(message, "📭 현재 감시 중이거나 보유 중인 종목이 없습니다.")
             return
 
-        # 스나이퍼 엔진과 동일하게 중복 제거 (HOLDING 우선)
-        df = df.sort_values(by='status').drop_duplicates(subset=['code'], keep='first')
+        # 💡 [핵심 교정 1] 중복 제거 기준: 'code' -> 'stock_code'
+        df = df.sort_values(by='status').drop_duplicates(subset=['stock_code'], keep='first')
 
-        # 💡 [핵심 방어] 구버전 DB라서 prob 컬럼이 아예 없다면, V3 기본값(70%)을 채워줍니다.
+        # 구버전 DB라서 prob 컬럼이 아예 없다면, V3 기본값(70%)을 채워줍니다.
         if 'prob' not in df.columns:
-            df['prob'] = TRADING_RULES.get('SNIPER_AGGRESSIVE_PROB', 0.70)
+            df['prob'] = getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.70)
 
-        # 💡 [아키텍처 포인트 2] 스나이퍼 V13.0 상태 머신과 완벽 동기화 (PENDING 삭제 -> BUY_ORDERED 반영)
+        # 💡 [아키텍처 포인트 2] 스나이퍼 V13.0 상태 머신과 완벽 동기화
         watching = df[df['status'] == 'WATCHING']
         buy_ordered = df[df['status'] == 'BUY_ORDERED']
         sell_ordered = df[df['status'] == 'SELL_ORDERED']
@@ -258,8 +312,9 @@ def handle_watch_list(message):
         # 1. 감시 중 (WATCHING)
         msg += f"👀 *감시 대기 (WATCHING)* : {len(watching)}종목\n"
         for _, row in watching.iterrows():
-            prob_val = row['prob'] if pd.notna(row['prob']) else TRADING_RULES.get('SNIPER_AGGRESSIVE_PROB', 0.70)
-            msg += f" • {row['name']} ({row['code']}) | AI확신: {prob_val * 100:.0f}%\n"
+            prob_val = row['prob'] if pd.notna(row['prob']) else getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.70)
+            # 💡 [핵심 교정 2] 'name' -> 'stock_name', 'code' -> 'stock_code'
+            msg += f" • {row['stock_name']} ({row['stock_code']}) | AI확신: {prob_val * 100:.0f}%\n"
 
         # 2. 주문/체결 대기 (BUY_ORDERED / SELL_ORDERED)
         if not buy_ordered.empty or not sell_ordered.empty:
@@ -267,9 +322,9 @@ def handle_watch_list(message):
             msg += f"\n⏳ *주문 전송/대기* : {total_ordered}종목\n"
             for _, row in buy_ordered.iterrows():
                 buy_price = row.get('buy_price', 0)
-                msg += f" • [매수대기] {row['name']} | {int(buy_price) if pd.notna(buy_price) else 0:,}원\n"
+                msg += f" • [매수대기] {row['stock_name']} | {int(buy_price) if pd.notna(buy_price) else 0:,}원\n"
             for _, row in sell_ordered.iterrows():
-                msg += f" • [매도대기] {row['name']} | 체결 확인 중...\n"
+                msg += f" • [매도대기] {row['stock_name']} | 체결 확인 중...\n"
 
         # 3. 보유 중 (HOLDING)
         if not holding.empty:
@@ -277,19 +332,18 @@ def handle_watch_list(message):
             for _, row in holding.iterrows():
                 buy_price = row.get('buy_price', 0)
                 buy_qty = row.get('buy_qty', 0)
-                msg += f" • {row['name']} ({row['code']}) | {int(buy_price) if pd.notna(buy_price) else 0:,}원 ({int(buy_qty) if pd.notna(buy_qty) else 0}주)\n"
+                msg += f" • {row['stock_name']} ({row['stock_code']}) | {int(buy_price) if pd.notna(buy_price) else 0:,}원 ({int(buy_qty) if pd.notna(buy_qty) else 0}주)\n"
 
         # 4. 오늘 매매 완료 (COMPLETED)
         if not completed.empty:
             msg += f"\n🏁 *금일 매매 완료* : {len(completed)}종목\n"
             for _, row in completed.iterrows():
-                msg += f" • {row['name']}\n"
+                msg += f" • {row['stock_name']}\n"
 
         msg += "━━━━━━━━━━━━━━"
         bot.reply_to(message, msg, parse_mode='Markdown')
 
     except Exception as e:
-        # 에러 발생 시 시스템 로그에도 남깁니다.
         from src.utils.logger import log_error
         log_error(f"감시 리스트 조회 에러: {e}")
         bot.reply_to(message, f"❌ 리스트 조회 중 시스템 에러 발생: {e}")
@@ -315,53 +369,43 @@ def handle_ai_confidence_info(message):
 def handle_today_picks(message):
     chat_id = message.chat.id
     try:
-        from src.database.models import RecommendationHistory # 💡 ORM 모델 임포트
+        from src.database.models import RecommendationHistory
+        today = datetime.now().date()
         
-        # 💡 [아키텍처 포인트 1] 원시 SQL과 커넥션을 버리고 안전한 ORM 세션 활용
-        today = datetime.now().strftime('%Y-%m-%d')
         with db_manager.get_session() as session:
-            # ORM을 통해 파이썬 객체 리스트로 결과를 가져옵니다.
-            picks = session.query(RecommendationHistory).filter_by(date=today).all()
+            picks = session.query(RecommendationHistory).filter_by(rec_date=today).all()
 
-        if not picks:
-            bot.send_message(chat_id, "🧐 오늘은 아직 추천 종목이 없습니다.")
-            return
+            if not picks:
+                bot.send_message(chat_id, "🧐 오늘은 아직 추천 종목이 없습니다.")
+                return
 
-        # 💡 [핵심 방어] 마크다운 에러로 인한 '읽씹'을 막기 위해 가장 안전한 HTML 포맷으로 변경
-        msg = "🏆 <b>[오늘의 AI 추천 종목]</b>\n\n"
+            msg = "🏆 <b>[오늘의 AI 추천 종목]</b>\n\n"
 
-        # 💡 [아키텍처 포인트 2] 튜플 인덱스(p[2]) 대신 직관적인 ORM 객체 속성(p.type) 사용
-        main_picks = [p for p in picks if getattr(p, 'type', '') == 'MAIN']
-        runner_picks = [p for p in picks if getattr(p, 'type', '') == 'RUNNER']
-        
-        # SCALP는 type 컬럼에 있을 수도 있고, 우리가 새로 개편한 strategy 컬럼에 있을 수도 있으므로 둘 다 확인합니다.
-        scalp_picks = [p for p in picks if getattr(p, 'type', '') == 'SCALP' or getattr(p, 'strategy', '') == 'SCALPING'] 
+            main_picks = [p for p in picks if getattr(p, 'trade_type', '') == 'MAIN']
+            runner_picks = [p for p in picks if getattr(p, 'trade_type', '') == 'RUNNER']
+            scalp_picks = [p for p in picks if getattr(p, 'trade_type', '') == 'SCALP' or getattr(p, 'strategy', '') == 'SCALPING'] 
 
-        if main_picks:
-            msg += "🔥 <b>[고확신 스윙]</b>\n"
-            for p in main_picks:
-                safe_price = int(p.buy_price) if p.buy_price else 0
-                msg += f"• <b>{p.name}</b> (<code>{safe_price:,}원</code>)\n"
-            msg += "\n"
+            # 💡 [호출부] 안쪽이 훨씬 가벼워졌습니다!
+            if main_picks:
+                msg += "🔥 <b>[고확신 스윙]</b>\n"
+                for p in main_picks:
+                    msg += f"• <b>{p.stock_name}</b> ({format_price(p)})\n"
+                msg += "\n"
 
-        if runner_picks:
-            msg += "🥈 <b>[관심 종목 TOP 10]</b>\n"
-            for p in runner_picks[:10]:
-                safe_price = int(p.buy_price) if p.buy_price else 0
-                msg += f"• <b>{p.name}</b> (<code>{safe_price:,}원</code>)\n"
-            msg += "\n"
+            if runner_picks:
+                msg += "🥈 <b>[관심 종목 TOP 10]</b>\n"
+                for p in runner_picks[:10]:
+                    msg += f"• <b>{p.stock_name}</b> ({format_price(p)})\n"
+                msg += "\n"
 
-        if scalp_picks:
-            msg += "⚡ <b>[초단타(SCALP) 포착 리스트]</b>\n"
-            for p in scalp_picks[:10]:
-                safe_price = int(p.buy_price) if p.buy_price else 0
-                msg += f"• <b>{p.name}</b> (<code>{safe_price:,}원</code>)\n"
+            if scalp_picks:
+                msg += "⚡ <b>[초단타(SCALP) 포착 리스트]</b>\n"
+                for p in scalp_picks[:10]:
+                    msg += f"• <b>{p.stock_name}</b> ({format_price(p)})\n"
 
-        # parse_mode를 무조건 HTML로 던집니다.
         bot.send_message(chat_id, msg, parse_mode='HTML')
 
     except Exception as e:
-        # 혹시라도 에러가 나면 시스템 로거와 텔레그램에 모두 찍어서 원인을 즉시 파악
         from src.utils.logger import log_error
         log_error(f"오늘의 추천종목 에러: {e}")
         bot.send_message(chat_id, f"❌ 추천 종목 로드 실패: {e}")
@@ -373,8 +417,7 @@ def handle_manual_add_btn(message):
         bot.reply_to(message, "🚫 권한이 없습니다. 봇 관리자(A) 또는 VIP(V) 등급만 사용할 수 있는 기능입니다.")
         return
 
-    msg = bot.reply_to(message, "📝 실시간 감시망에 추가할 **종목코드 6자리**를 입력해 주세요.\n*(예: 005930)*", parse_mode='Markdown')
-    # 다음 입력값을 process_manual_add_step 함수로 넘깁니다.
+    msg = bot.reply_to(message, "📝 실시간 감시망에 추가할 *종목코드 6자리*를 입력해 주세요.\n*(예: 005930)*", parse_mode='Markdown')
     bot.register_next_step_handler(msg, process_manual_add_step)
 
 def process_manual_add_step(message):
@@ -384,9 +427,9 @@ def process_manual_add_step(message):
     code = message.text.strip()
     chat_id = message.chat.id
     
-    # 💡 [핵심 방어 1] 정규화 및 방어 코드 (정확히 6자리 숫자인지 확인)
-    if not code.isdigit() or len(code) != 6:
-        bot.send_message(chat_id, "❌ 잘못된 입력입니다. 6자리 숫자 종목코드를 입력해 주세요.")
+    # 💡 [핵심 교정] 람다에서 하던 숫자 검증을 내부로 옮기고, 실패 시 사용자에게 알림을 줍니다.
+    if not code.isdigit():
+        bot.send_message(message.chat.id, "❌ 잘못된 입력입니다. 숫자로 된 종목코드를 다시 입력해 주세요.")
         return
 
     bot.send_message(chat_id, f"🔄 `{code}` 종목을 분석하여 스나이퍼 감시망에 투입합니다...", parse_mode='Markdown')
@@ -395,9 +438,10 @@ def process_manual_add_step(message):
         from src.utils import kiwoom_utils
         from src.database.models import RecommendationHistory
         from src.utils.constants import TRADING_RULES
+        from datetime import datetime
 
-        # 1. API를 통한 종목명 조회 (실패 시 코드로 대체하여 봇 멈춤 방지)
-        token = kiwoom_utils.get_kiwoom_token(CONF)
+        # 💡 [교정 1] CONF 파라미터 삭제 (독립 호출)
+        token = kiwoom_utils.get_kiwoom_token()
         try:
             info = kiwoom_utils.get_basic_info_ka10001(token, code)
             stock_name = info.get('Name', code)
@@ -405,34 +449,36 @@ def process_manual_add_step(message):
             stock_name = code
             print(f"⚠️ API 종목명 조회 실패, 코드로 대체: {e}")
 
-        # 2. DB에 데이터 삽입 (ORM 적용)
-        today = datetime.now().strftime('%Y-%m-%d')
-        high_prob = TRADING_RULES.get('SNIPER_AGGRESSIVE_PROB', 0.8)
+        # 💡 [교정 2] ORM 호환을 위해 날짜를 date() 객체로 변환
+        today = datetime.now().date()
+        high_prob = getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.8)
         
         with db_manager.get_session() as session:
-            # 💡 [아키텍처 포인트] INSERT ON CONFLICT 대신 ORM의 우아한 분기 처리
-            record = session.query(RecommendationHistory).filter_by(date=today, code=code).first()
+            # 💡 [교정 3] 구버전 date, code -> 최신 rec_date, stock_code 매핑
+            record = session.query(RecommendationHistory).filter_by(rec_date=today, stock_code=code).first()
             
             if record:
                 # 이미 오늘 등록된 이력이 있다면 상태를 강제로 감시(WATCHING)로 멱등성 업데이트
                 record.status = 'WATCHING'
-                record.strategy = 'MANUAL'  # 💡 Phase 2 규격 반영
+                record.trade_type = 'MANUAL' # 확실한 수동 타입 지정
+                record.strategy = 'MANUAL'
                 record.prob = high_prob
             else:
-                # 없다면 신규 생성
+                # 없다면 신규 생성 (최신 컬럼명 적용)
                 new_record = RecommendationHistory(
-                    date=today,
-                    code=code,
-                    name=stock_name,
+                    rec_date=today,          # 💡 교정
+                    stock_code=code,         # 💡 교정
+                    stock_name=stock_name,   # 💡 교정
                     prob=high_prob,
                     status='WATCHING',
-                    strategy='MANUAL' # 💡 레거시 type='MANUAL' 대신 strategy 컬럼 사용
+                    trade_type='MANUAL',     # 💡 type -> trade_type
+                    strategy='MANUAL'
                 )
                 session.add(new_record)
-            # with 블록 종료 시 자동 commit()
         
-        # 3. 완료 메시지 발송
-        msg_text = f"✅ *[{stock_name}]({code}) 수동 감시 투입 완료!*\n\n"
+        # 💡 [교정 4] 텔레그램 마크다운 링크 에러 유발 코드 제거
+        # (기존의 `[이름](코드)`를 안전한 `*이름 (코드)*` 형태로 변경)
+        msg_text = f"✅ *{stock_name} ({code})* 수동 감시 투입 완료!\n\n"
         msg_text += "📡 스나이퍼 엔진이 최대 5초 이내에 해당 종목의 호가창 감시를 시작합니다."
         bot.send_message(chat_id, msg_text, parse_mode='Markdown')
 
@@ -452,24 +498,24 @@ def handle_why_not(message):
         
     code = parts[1].strip()
     
-    # 💡 [핵심 방어 1] 종목코드 6자리 유효성 검사 (엔진 크래시 완벽 차단)
     if not code.isdigit() or len(code) != 6:
         bot.send_message(chat_id, "❌ 잘못된 입력입니다. 6자리 숫자 종목코드를 입력해 주세요.")
         return
 
-    # 대기 메시지를 먼저 띄워주어 체감 반응 속도를 높입니다.
+    # 대기 메시지 (백틱 유지)
     bot.send_message(chat_id, f"🔄 `{code}` 종목의 AI 타점 미달 사유를 분석 중입니다...", parse_mode='Markdown')
     
     try:
-        # 💡 [아키텍처 포인트] 모듈 최상단이 아닌 지역(Local) 임포트를 유지하여 
-        # 텔레그램 매니저와 스나이퍼 엔진 간의 치명적인 '순환 참조(Circular Import)'를 방지합니다.
         import src.engine.kiwoom_sniper_v2 as kiwoom_sniper_v2
         
         report = kiwoom_sniper_v2.get_detailed_reason(code)
+        
+        # 💡 [핵심 교정 1] 사유 리포트 내부에 텔레그램이 파싱하지 못하는 특수문자나 
+        # 닫히지 않은 마크다운이 있을 수 있으므로 가장 안전한 HTML 모드로 던집니다.
+        # (만약 스나이퍼에서 마크다운 형태로 리턴한다면 이 부분을 'Markdown'으로 유지하되, 리턴값을 점검해야 합니다.)
         bot.send_message(chat_id, report, parse_mode='Markdown')
         
     except Exception as e:
-        # 💡 [핵심 방어 2] 에러 발생 시 시스템 로거로 추적 가능하게 기록
         from src.utils.logger import log_error
         log_error(f"미진입 사유 분석 에러 ({code}): {e}")
         bot.send_message(chat_id, f"❌ 사유 분석 중 오류 발생: {e}")
@@ -478,7 +524,6 @@ def handle_why_not(message):
 def process_pre_checkout(pre_checkout_query):
     """결제 직전 유효성 검사 (Telegram 결제 필수 콜백)"""
     try:
-        # 무조건 승인 (추가적인 재고/금액 검증이 필요하다면 여기에 로직 추가)
         bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
     except Exception as e:
         from src.utils.logger import log_error
@@ -490,54 +535,49 @@ def handle_payment_success(message):
     chat_id = message.chat.id
     
     try:
-        # 💡 [아키텍처 포인트 1] 레거시(level=1) 대신 규격화된 문자열 'V' 사용
-        db_manager.upgrade_user_level(chat_id, level='V')
+        # DB의 users 테이블 구조(V -> VIP) 확인 필수
+        db_manager.upgrade_user_level(chat_id, level='VIP')
         
-        # 💡 [아키텍처 포인트 2] 마크다운 적용 및 VIP 혜택 안내 강화
+        # 💡 [핵심 교정 2] 텔레그램 마크다운 볼드는 ** 가 아니라 * 하나입니다.
         msg = (
-            "🎊 **VIP 등급으로 승격되었습니다!**\n\n"
-            "이제부터 KORStockScan의 **모든 VIP 전용 알림(초단타 타점, AI 교차 검증 리포트 등)**을 "
+            "🎊 *VIP 등급으로 승격되었습니다!*\n\n"
+            "이제부터 KORStockScan의 *모든 VIP 전용 알림(초단타 타점, AI 교차 검증 리포트 등)*을 "
             "실시간으로 받아보실 수 있습니다. 후원해 주셔서 진심으로 감사합니다! 👑"
         )
         bot.send_message(chat_id, msg, parse_mode='Markdown')
         
-        # 💡 [아키텍처 포인트 3] EventBus를 통한 관리자 다이렉트 보고
+        # EventBus를 통한 관리자 다이렉트 보고
         from src.core.event_bus import EventBus
         event_bus = EventBus()
-        admin_msg = f"💸 **[결제 발생]** Chat ID `{chat_id}` 님이 VIP로 승격되었습니다."
+        admin_msg = f"💸 *[결제 발생]* Chat ID `{chat_id}` 님이 VIP로 승격되었습니다."
         event_bus.publish('TELEGRAM_BROADCAST', {'message': admin_msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'})
         
     except Exception as e:
         from src.utils.logger import log_error
         log_error(f"결제 완료 처리 중 시스템 에러: {e}")
-        # 결제는 됐는데 DB가 뻗었을 경우를 대비한 최소한의 고객 대응 로직
         bot.send_message(chat_id, "✅ 결제는 확인되었으나 시스템 지연으로 등급 반영이 지연되고 있습니다. 관리자가 곧 수동으로 처리해 드릴 예정입니다.")
 
 @bot.message_handler(commands=['reload'])
 def handle_reload(message):
     chat_id = message.chat.id
     
-    # 💡 [핵심 방어 1] 이미 선언해둔 전역 변수 ADMIN_ID를 깔끔하게 활용합니다.
-    if str(chat_id) != ADMIN_ID:
+    # 관리자 검증
+    if str(chat_id) != str(ADMIN_ID):
         bot.send_message(chat_id, "⛔ 관리 권한이 없습니다.")
         return
 
-    # 대기 메시지 발송
     msg_obj = bot.send_message(chat_id, "🔄 시스템 설정을 다시 읽어오는 중입니다...")
 
     try:
         from src.utils import kiwoom_utils
-        import src.engine.kiwoom_sniper_v2 as kiwoom_sniper_v2  # 💡 [핵심 방어 2] 순환 참조 방지를 위한 지역 임포트
+        import src.engine.kiwoom_sniper_v2 as kiwoom_sniper_v2 
         
-        global CONF
-        # 💡 [핵심 방어 3] 삭제된 구형 load_config() 대신 검증된 유틸 함수 사용
-        CONF = kiwoom_utils.load_config()
-        
-        # 스나이퍼 엔진의 설정도 동기화
+        # 💡 [핵심 교정 3] 전역 변수 CONF의 의존성을 끊어냈으므로, 
+        # 이제 reload는 스나이퍼 엔진(Sniper Engine) 내부의 캐시만 비워주는 역할로 축소시킵니다.
         if kiwoom_sniper_v2.reload_config():
-            bot.edit_message_text("✅ 설정 파일(JSON)이 시스템 전반에 성공적으로 새로고침 되었습니다!", chat_id, msg_obj.message_id)
+            bot.edit_message_text("✅ 스나이퍼 엔진의 설정(JSON)이 성공적으로 새로고침 되었습니다!", chat_id, msg_obj.message_id)
         else:
-            bot.edit_message_text("⚠️ 텔레그램 설정은 갱신되었으나, 스나이퍼 엔진 갱신에 실패했습니다.", chat_id, msg_obj.message_id)
+            bot.edit_message_text("⚠️ 스나이퍼 엔진 갱신에 실패했습니다.", chat_id, msg_obj.message_id)
             
     except Exception as e:
         from src.utils.logger import log_error

@@ -61,7 +61,7 @@ class TradingConfig:
     SCALP_TARGET: float = 1.5  # 초단타 익절 1.5%
     SCALP_STOP: float = -2.5  # 초단타 손절 -2.5%
     SCALP_TRAILING_LIMIT: float = 0.5  # 고가 대비 특정 비율(0.5%) 이상 밀리면 즉시 수익을 확정
-    MIN_SCALP_LIQUIDITY: int = 300_000_000  # 최소 호가 잔량 대금 (3억)
+    MIN_SCALP_LIQUIDITY: int = 500_000_000  # 최소 호가 잔량 대금 (5억)
     MAX_SCALP_SURGE_PCT: float = 20.0  # 초단타 진입 금지 급등률 (20%)
     MAX_INTRADAY_SURGE: float = 15.0  # 당일 시가 대비 최대 급등률 (15%)
 
@@ -85,9 +85,18 @@ class TradingConfig:
     # ==========================================
     # 🎯 유저권한별 기능 제한 설정값
     # ==========================================
-    VIP_LIQUIDITY_THRESHOLD: int = 500_000_000  # VIP 전용 호가 잔량 대금 기준 (5억)
+    VIP_LIQUIDITY_THRESHOLD: int = 1_000_000_000  # VIP 전용 호가 잔량 대금 기준 (10억)
     VIP_PROB_THRESHOLD: float = 0.75  # VIP 전용 AI 확신도 기준 (0.75)
     VIP_MAX_INVEST_RATIO: float = 0.30  # VIP 전용 최대 투자 비율 (30%) 
+
+    # ==========================================
+    # 🎯 AI 엔진 제어값
+    # ==========================================
+    GEMINI_ENGINE_MIN_INTERVAL: float = 0.5 # 구글 서버에 쏘는 최소 간격 (초 단위, 0.5초 = 500ms)
+    AI_WATCHING_COOLDOWN: int = 180  # 신규 진입 감시(WATCHING) 쿨타임 (초)
+    AI_HOLDING_MIN_COOLDOWN: float = 3.0 # 보유 종목(HOLDING) 실시간 쿨타임 최소 감시 주기
+    AI_HOLDING_MAX_COOLDOWN: float = 15.0 # 보유 종목(HOLDING) 실시간  쿨타임 최대 감시 주기
+    AI_WAIT_DROP_COOLDOWN: float = 15.0 # AI 거부권(WAIT/DROP) 이후 재평가 쿨타임
 
 # 전역 싱글톤 인스턴스 생성
 TRADING_RULES = TradingConfig()

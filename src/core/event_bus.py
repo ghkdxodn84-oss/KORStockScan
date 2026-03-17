@@ -24,7 +24,6 @@ class EventBus:
                 self._subscribers[event_type] = []
             if callback not in self._subscribers[event_type]:
                 self._subscribers[event_type].append(callback)
-                print(f"[EventBus] '{event_type}' 이벤트 구독 등록 완료 ({callback.__name__})")
 
     def publish(self, event_type: str, payload: dict = None):
         """이벤트를 발생시키고, 구독 중인 모든 콜백 함수에 데이터를 전달합니다."""

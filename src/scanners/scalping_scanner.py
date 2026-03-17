@@ -65,9 +65,6 @@ def run_scalper(is_test_mode=False):
             time.sleep(60)
             continue
 
-        print(f"🔍 [{now.strftime('%H:%M:%S')}] 실시간 수급 쏠림 & 폭발 전조 종목 스캔 중...")
-        
-        # 💡 [수정] 통신 유틸리티로 이관된 함수 호출 방식으로 변경
         # 💡 [수정] 통신 유틸리티로 이관된 함수 호출 방식으로 변경
         soaring_targets = kiwoom_utils.get_top_fluctuation_ka10027(token, mrkt_tp="101", limit=30)
         

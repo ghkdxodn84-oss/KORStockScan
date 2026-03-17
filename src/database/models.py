@@ -71,9 +71,12 @@ class MacroAlert(Base):
 class RecommendationHistory(Base):
     __tablename__ = 'recommendation_history'
 
-    # 💡 복합 기본키
-    rec_date = Column(Date, primary_key=True)
-    stock_code = Column(String(10), primary_key=True)
+    # 💡 [핵심 교정] 새롭게 추가된 id를 Primary Key로 지정합니다.
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    
+    # 기존에 PK 역할을 하던 두 컬럼은 일반 컬럼으로 강등(?) 시킵니다.
+    rec_date = Column(Date, nullable=False) 
+    stock_code = Column(String(10), nullable=False)
     
     stock_name = Column(Text)
     trade_type = Column(Text)

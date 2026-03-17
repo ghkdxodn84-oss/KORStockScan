@@ -203,14 +203,20 @@ class DBManager:
         """
         💡 [핵심] 당일 감시 대상(WATCHING) 및 기존 보유 종목(HOLDING) 리스트를 
         엔진 규격에 맞는 딕셔너리 리스트로 반환합니다.
+        고유 PK인 `id`를 포함하여 다중 스캘핑 시 데이터 덮어쓰기를 방지합니다.
         """
+        import pandas as pd
+        from datetime import datetime
+        from src.utils.constants import TRADING_RULES
+        
         try:
             today = datetime.now().date()
             
             with self.get_session() as session:
-                # 엔진 로직 수정을 막기 위한 완벽한 Alias 쿼리
+                # 💡 [핵심 교정 1] SELECT 최상단에 고유 키 `id` 추가
                 query = f"""
                     SELECT 
+                        id, 
                         rec_date as date, 
                         stock_code as code, 
                         stock_name as name, 
@@ -226,12 +232,27 @@ class DBManager:
             if df.empty:
                 return []
 
-            # 상태별 정렬 및 중복 제거
-            df = df.sort_values(by='status').drop_duplicates(subset=['code'], keep='first')
+            # 💡 [핵심 교정 2] 상태값(status) 우선순위 강제 지정 (알파벳 정렬 버그 차단)
+            # 가장 중요한 상태(HOLDING)부터 먼저 오도록 랭킹을 매깁니다.
+            status_priority = {
+                'HOLDING': 1, 
+                'SELL_ORDERED': 2, 
+                'BUY_ORDERED': 3, 
+                'WATCHING': 4, 
+                'COMPLETED': 5
+            }
+            df['priority'] = df['status'].map(status_priority).fillna(99)
+            
+            # 우선순위가 높은 순(오름차순), 그리고 id가 최신인 순(내림차순)으로 정렬 후 중복 제거
+            df = df.sort_values(by=['priority', 'id'], ascending=[True, False])
+            df = df.drop_duplicates(subset=['code'], keep='first')
+            
+            # 엔진에 넘기기 전에 임시 컬럼 삭제
+            df = df.drop(columns=['priority'])
+            
             targets = df.to_dict('records')
 
             # 기본값 보정 (스나이퍼 엔진의 부담을 DB 매니저가 덜어줍니다)
-
             default_prob = getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.8)
             
             for t in targets:
@@ -242,6 +263,7 @@ class DBManager:
             return targets
             
         except Exception as e:
+            from src.utils.logger import log_error
             print(f"감시 대상 로드 에러: {e}")
             log_error(f"감시 대상 로드 에러: {e}")
             return []
@@ -294,3 +316,34 @@ class DBManager:
             from src.utils.logger import log_error
             log_error(f"❌ 사용자 레벨 조회 중 에러 ({chat_id_str}): {e}")
             return 'U' # 에러 발생 시 보안을 위해 가장 낮은 등급 반환
+    
+    def upgrade_user_level(self, chat_id: int, level: str = 'V') -> bool:
+        """
+        사용자의 등급을 업데이트합니다. (기본값: 'V')
+        """
+        # 💡 [아키텍처 포인트] 파일 최상단에 User 모델이 임포트되어 있지 않다면
+        # 순환 참조 방지를 위해 함수 내부에서 임포트합니다.
+        from src.database.models import User 
+
+        try:
+            # 💡 [핵심 교정] sqlite3 원시 쿼리 대신 SQLAlchemy 세션 사용
+            with self.get_session() as session:
+                # 1. 대상 유저 조회 (chat_id를 문자열로 캐스팅하여 안전하게 비교)
+                user = session.query(User).filter_by(chat_id=str(chat_id)).first()
+                
+                if user:
+                    # 2. 유저가 존재하면 등급 업데이트 (숫자 1 대신 'VIP' 같은 문자열 사용)
+                    user.auth_group = level
+                    # session.commit()은 get_session()의 Context Manager(with문)가 
+                    # 정상 종료될 때 자동으로 수행되지만, 명시적으로 적어주어도 좋습니다.
+                    session.commit()
+                    print(f"✅ [DBManager] 유저({chat_id}) 등급이 '{level}'(으)로 승격되었습니다.")
+                    return True
+                else:
+                    print(f"⚠️ [DBManager] 승격할 유저({chat_id})를 DB에서 찾을 수 없습니다.")
+                    return False
+                    
+        except Exception as e:
+            from src.utils.logger import log_error
+            log_error(f"유저 등급 업데이트 DB 에러: {e}")
+            return False

@@ -6,6 +6,7 @@ from itertools import cycle
 from google import genai
 from google.genai import types
 from src.utils.logger import log_error
+from src.utils.constants import TRADING_RULES
 
 
 # ==========================================
@@ -61,7 +62,7 @@ class GeminiSniperEngine:
         self.current_model_name = 'gemini-2.5-flash-lite'
         self.lock = threading.Lock()
         self.last_call_time = 0
-        self.min_interval = 1.5
+        self.min_interval = getattr(TRADING_RULES, 'GEMINI_ENGINE_MIN_INTERVAL', 0.5)   
         print(f"🧠 [AI 엔진] {len(self.api_keys)}개 키 로테이션 가동! (선봉: {self.current_model_name})")
 
     def _rotate_client(self):
@@ -75,7 +76,6 @@ class GeminiSniperEngine:
         """키 로테이션, 예외 처리, JSON 파싱을 모두 전담하는 중앙 집중식 호출기"""
         contents = [prompt, user_input] if prompt else [user_input]
         
-        # 💡 [버그 픽스] JSON 요구 여부에 따라 MIME 타입을 유동적으로 설정!
         config_kwargs = {}
         if require_json:
             config_kwargs['response_mime_type'] = "application/json"
@@ -95,7 +95,6 @@ class GeminiSniperEngine:
                 
                 raw_text = response.text.strip()
                 if require_json:
-                    # 마크다운 찌꺼기 안전 제거 후 파싱
                     clean_json = re.sub(r"```json\s*|\s*```", "", raw_text)
                     return json.loads(clean_json)
                 else:
@@ -103,16 +102,28 @@ class GeminiSniperEngine:
 
             except Exception as e:
                 last_error = str(e).lower()
-                if any(x in last_error for x in ["429", "quota", "resource_exhausted", "too_many_requests"]):
+                # 💡 [핵심 교정] 429(한도초과)뿐만 아니라 503(서버과부하) 에러도 로테이션 대상에 포함합니다.
+                if any(x in last_error for x in ["429", "quota", "503", "unavailable", "high demand", "too_many_requests"]):
                     old_key = self.current_key[-5:]
                     self._rotate_client()
-                    print(f"⚠️ [AI 교체] {context_name} | {old_key} 한도 초과 -> {self.current_key[-5:]} ({attempt+1}/{len(self.api_keys)})")
-                    time.sleep(0.5)
+                    
+                    # 📢 로그 기록 강화
+                    warn_msg = f"⚠️ [AI 서버 과부하/한도] {context_name} | {old_key} 교체 -> {self.current_key[-5:]} ({attempt+1}/{len(self.api_keys)})"
+                    print(warn_msg)
+                    log_error(warn_msg) 
+                    
+                    # 서버 안정을 위해 약간의 지연 후 재시도
+                    time.sleep(0.8) 
                     continue
                 else:
+                    # 그 외 예측 불가능한 치명적 에러는 즉시 보고
                     raise RuntimeError(f"API 응답/파싱 실패: {e}")
-                    
-        raise RuntimeError(f"모든 API 키 한도 초과. 마지막 에러: {last_error}")
+                
+        # 💡 [최종 방어선] 모든 키를 소진했을 때의 처리
+        fatal_msg = f"🚨 [AI 고갈] 모든 API 키 사용 불가. 마지막 에러: {last_error}"
+        log_error(fatal_msg)
+        raise RuntimeError(fatal_msg)
+        
 
     # ==========================================
     # 4. 🛠️ 데이터 포맷팅 (AI 전용 번역기)
