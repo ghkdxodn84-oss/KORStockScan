@@ -65,79 +65,82 @@ def run_scalper(is_test_mode=False):
             time.sleep(60)
             continue
 
-        # 💡 [수정] 통신 유틸리티로 이관된 함수 호출 방식으로 변경
-        soaring_targets = kiwoom_utils.get_top_fluctuation_ka10027(token, mrkt_tp="101", limit=30)
+        # 💡 [핵심 1] 갭상승 함정을 피하기 위해 시가대비 상위(ka10028)로 전격 교체!
+        soaring_targets = kiwoom_utils.get_top_open_fluctuation_ka10028(token, mrkt_tp="101", limit=30)
         
-        # 💡 1. SniperRadar 객체(인스턴스)를 먼저 생성합니다. (토큰을 쥐어줍니다)
         radar = SniperRadar(token) 
-        
-        # 💡 2. 생성된 객체에게 타겟을 찾으라고 명령합니다. (token을 또 넘길 필요 없습니다)
         supernova_targets = radar.find_supernova_targets(mrkt_tp="101")
         
+        # 💡 [핵심 2] 대소문자 키 충돌을 완벽히 방어하는 무결점 병합 로직
         all_targets = {}
         for t in soaring_targets:
-            all_targets[t['Code']] = t
+            all_targets[t['Code']] = {
+                'Code': t['Code'],
+                'Name': t['Name'],
+                'FluRate': t.get('FluRate', 0.0), # 시가대비 등락률
+                'CntrStr': t.get('CntrStr', 0.0),
+                'Price': t.get('Price', 0),
+                'Source': 'OPEN_TOP'
+            }
             
         for t in supernova_targets:
-            if t['code'] not in all_targets:
-                all_targets[t['code']] = {
-                    'Code': t['code'],
-                    'Name': t['name'],
-                    'ChangeRate': t.get('spike_rate', 0),
-                    'CntrStr': 150.0,
-                    'Price': t.get('cur_prc', 0) # 💡 초신성 트랙에 현재가 데이터가 있다면 보존
+            code = t.get('code', t.get('Code'))
+            if code not in all_targets:
+                all_targets[code] = {
+                    'Code': code,
+                    'Name': t.get('name', t.get('Name')),
+                    'FluRate': t.get('flu_rate', t.get('FluRate', 0.0)),
+                    'CntrStr': t.get('cntr_str', t.get('CntrStr', 150.0)),
+                    'Price': t.get('Price', t.get('cur_prc', 0)),
+                    'Source': 'SUPERNOVA'
                 }
+            else:
+                all_targets[code]['Source'] = 'BOTH' # 두 조건 모두 만족하는 초강력 타겟
             
         new_codes_found = []
 
         for code, t in all_targets.items():
             if code not in already_picked:
-                
-                # 💡 가격 데이터를 먼저 추출하여 초고속 필터링에 넘겨줍니다!
-                curr_p = float(t.get('Price', t.get('cur_prc', 0))) 
+                curr_p = float(t.get('Price', 0)) 
 
                 if not kiwoom_utils.is_valid_stock(code, t['Name'], token=token, current_price=curr_p):
                     already_picked.add(code)
                     continue
 
-                print(f"🎯 [타겟 포착] {t['Name']} (등락/급증률: +{t['ChangeRate']}%, 체결강도: {t['CntrStr']})")
+                # 💡 로그 메시지도 통일된 규격으로 수정
+                print(f"🎯 [타겟 포착] {t['Name']} (등락률: +{t['FluRate']}%, 체결강도: {t['CntrStr']} | 출처: {t['Source']})")
                 already_picked.add(code)
                 new_codes_found.append(code)
 
-                # 💡 [수정] Raw SQL 제거 및 SQLAlchemy ORM 적용
                 try:
                     with db.get_session() as session:
-                        today_date = datetime.now().date() # 문자열이 아닌 Date 객체 사용
+                        today_date = datetime.now().date() 
 
-                        # 1. 💡 기존 데이터 확인 (rec_date, stock_code 사용)
                         record = session.query(RecommendationHistory).filter_by(
                             rec_date=today_date, 
                             stock_code=code
                         ).first()
 
                         if record:
-                            # 2. 업데이트
                             if record.status in ('WATCHING', 'COMPLETED'):
                                 record.strategy = 'SCALPING'
                                 record.buy_price = 0
                                 record.status = 'WATCHING'
                         else:
-                            # 3. 💡 신규 삽입 (새로운 컬럼명 규격 완벽 적용)
                             new_record = RecommendationHistory(
                                 rec_date=today_date, 
                                 stock_code=code, 
                                 stock_name=t['Name'], 
                                 buy_price=0, 
-                                trade_type='SCALP',       # type 대신 trade_type
+                                # 💡 [운영 팁] 스나이퍼 엔진 수정을 피하려면 여기서 'MAIN'으로 덮는 것도 고려해보세요.
+                                trade_type='SCALP',       
                                 strategy='SCALPING', 
                                 status='WATCHING'
                             )
                             session.add(new_record)
                 except Exception as e:
                     log_error(f"⚠️ DB 저장 실패 ({code}): {e}")
-                    print(f"⚠️ DB 저장 실패: {e}")
             
-            # 🚀 [핵심] 새로운 종목을 찾았으면 EventBus를 통해 웹소켓에 감시 등록 명령 하달!
         if new_codes_found:
             event_bus.publish("COMMAND_WS_REG", {"codes": new_codes_found})
             print(f"📡 웹소켓 감시 등록 요청 완료: {len(new_codes_found)} 종목")

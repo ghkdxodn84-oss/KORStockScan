@@ -10,27 +10,27 @@ from src.utils.constants import TRADING_RULES
 
 
 # ==========================================
-# 1. 🎯 시스템 프롬프트 (스캘핑 전용)
+# 1. 🎯 시스템 프롬프트 (스캘핑 전용 - V2.0 틱 가속도 반영)
 # ==========================================
 SCALPING_SYSTEM_PROMPT = """
 너는 15년 경력의 베테랑 초단타(스캘핑) 트레이더이자 리스크 관리 전문가야. 
-너의 목표는 실시간 호가창, 1분봉, 단기 기술적 지표를 종합적으로 분석하여, 신규 진입 타점을 잡거나 현재 보유 중인 종목의 추가 상승 모멘텀(트레일링 익절/조기 청산)을 판단하는 것이다.
+너의 목표는 실시간 호가창, 1분봉, 특히 '틱(Tick) 체결 요약 데이터'를 최우선으로 분석하여 찰나의 돌파 타점을 잡거나 익절/손절을 판단하는 것이다.
 
 [데이터 분석 가이드]
-1. 단기 지표 (VWAP & 5-MA 최우선): 현재가가 Micro-VWAP(거래량 가중 평균) 위에 있는지 확인해라. VWAP 아래는 세력의 이탈(설거지)로 간주한다.
-2. 1분봉 차트: 최근 5분간의 추세, 거래량 급증, 윗꼬리(매도 압력)/아랫꼬리(지지) 패턴을 분석해 하방 리스크 및 모멘텀 둔화를 점검해라.
-3. 실시간 호가 및 틱: 매수/매도 호가창의 잔량 비율과 강력한 시장가 체결(BUY) 유입을 확인해라.
+1. 틱 체결 흐름 (최우선): '매수 압도율(Buy Pressure)'이 70% 이상이고 체결강도가 상승 중이라면 강력한 시장가 돌파 매수 신호다. 반대로 매도 물량이 쏟아지면 즉각 도망쳐라.
+2. 단기 지표 (VWAP & 5-MA): 현재가가 Micro-VWAP(거래량 가중 평균) 위에 있는지 확인해라. VWAP 아래는 세력의 이탈(설거지)로 간주한다.
+3. 1분봉 차트 및 거래량: 최근 캔들의 거래량이 이전 평균 대비 폭증(200% 이상)했는지, 윗꼬리(저항)가 발생했는지 점검해라.
 
 [판단 및 스코어링 기준] - **매우 중요**
-- 강력한 상승 (Score: 75~100): 돌파가 확실시되거나, 기존의 강한 상승 추세와 매수세가 꺾이지 않고 유지될 때. (신규 진입 적합 / 보유 시 트레일링 익절 유지)
-- 모멘텀 둔화 (Score: 41~74): 수급이 모호해지거나, 고점에서 윗꼬리가 달리며 상승 탄력이 둔화될 때. (신규 진입 대기 / 보유 시 조기 익절)
-- 하방 리스크 (Score: 0~40): 가격이 VWAP 아래로 이탈했거나, 대량의 매도세(SELL)가 쏟아지며 하락 전환이 명백할 때. (신규 진입 절대 금지 / 보유 시 즉각 손절)
+- 강력한 상승 (Score: 75~100): 매수 압도율이 압도적이며, 체결강도가 치솟고 VWAP를 강하게 돌파/지지할 때. (신규 진입 / 트레일링 익절 유지)
+- 모멘텀 둔화 (Score: 41~74): 매수/매도 비율이 팽팽해지거나, 고점에서 윗꼬리가 달리며 거래량이 마를 때. (진입 대기 / 조기 익절)
+- 하방 리스크 (Score: 0~40): 매도(SELL) 물량이 쏟아지며 매수 압도율이 무너지고, VWAP 아래로 이탈할 때. (진입 절대 금지 / 즉각 손절)
 
 분석 결과는 반드시 아래 JSON 형식으로만 출력하고 다른 설명은 절대 추가하지 마:
 {
     "action": "BUY" | "WAIT" | "DROP",
     "score": 0~100 사이의 정수,
-    "reason": "현재 모멘텀과 수급 상태를 종합한 1줄 요약 분석"
+    "reason": "현재 모멘텀, 매수 압도율, 수급 상태를 종합한 1줄 요약 분석"
 }
 """
 
@@ -126,7 +126,7 @@ class GeminiSniperEngine:
         
 
     # ==========================================
-    # 4. 🛠️ 데이터 포맷팅 (AI 전용 번역기)
+    # 4. 🛠️ 데이터 포맷팅 (AI 전용 번역기 - V2.0 매수 압도율 계산)
     # ==========================================
     def _format_market_data(self, ws_data, recent_ticks, recent_candles=None):
         """키움 API의 딕셔너리 데이터를 AI가 읽을 수 있는 텍스트로 예쁘게 포장합니다."""
@@ -135,15 +135,40 @@ class GeminiSniperEngine:
             
         curr_price = ws_data.get('curr', 0)
         v_pw = ws_data.get('v_pw', 0)
-        fluctuation = ws_data.get('fluctuation', 0.0)  # 💡 [NEW] 등락률 추가
+        fluctuation = ws_data.get('fluctuation', 0.0) 
         orderbook = ws_data.get('orderbook', {'asks': [], 'bids': []})
 
         # 호가창 조립
         ask_str = "\n".join([f"매도 {5-i}호가: {a['price']}원 ({a['volume']}주)" for i, a in enumerate(orderbook['asks'])])
         bid_str = "\n".join([f"매수 {i+1}호가: {b['price']}원 ({b['volume']}주)" for i, b in enumerate(orderbook['bids'])])
         
-        # 틱 흐름 조립
-        tick_str = "\n".join([f"[{t['time']}] {t['dir']} 체결: {t['price']}원 ({t['volume']}주)" for t in reversed(recent_ticks)])
+        # 🚀 [NEW] 틱 흐름 분석 및 매수 압도율(Buy Pressure) 계산
+        tick_summary = "틱 데이터 부족"
+        tick_str = ""
+        
+        if recent_ticks and len(recent_ticks) > 0:
+            # 방향별 거래량 합산
+            buy_vol = sum(t['volume'] for t in recent_ticks if t.get('dir') == 'BUY')
+            sell_vol = sum(t['volume'] for t in recent_ticks if t.get('dir') == 'SELL')
+            total_vol = buy_vol + sell_vol
+            
+            buy_pressure = (buy_vol / total_vol * 100) if total_vol > 0 else 50.0
+            
+            latest_price = recent_ticks[0]['price']
+            oldest_price = recent_ticks[-1]['price']
+            trend_str = "상승 돌파 중 🚀" if latest_price > oldest_price else "하락 밀림 📉" if latest_price < oldest_price else "횡보 중 ➖"
+            latest_strength = recent_ticks[0].get('strength', 0.0)
+            
+            tick_summary = (
+                f"⏱️ [최근 {len(recent_ticks)}틱 정밀 브리핑]\n"
+                f"- 단기 흐름: {trend_str} (시작가 {oldest_price:,}원 ➡️ 현재가 {latest_price:,}원)\n"
+                f"- 순간 거래량: 총 {total_vol:,}주 체결 (매수 {buy_vol:,}주 vs 매도 {sell_vol:,}주)\n"
+                f"- 🔥 매수 압도율(Buy Pressure): {buy_pressure:.1f}%\n"
+                f"- 현재 체결강도: {latest_strength}%"
+            )
+            
+            # AI가 직접 볼 수 있도록 최근 10개 틱만 상세 제공
+            tick_str = "\n".join([f"[{t['time']}] {t.get('dir', 'NEUTRAL')} 체결: {t['price']:,}원 ({t['volume']:,}주) | 강도:{t.get('strength', 0)}%" for t in recent_ticks[:10]])
 
         # 1분봉 차트 조립
         candle_str = ""
@@ -155,11 +180,11 @@ class GeminiSniperEngine:
         else:
             candle_str = "분봉 데이터 없음"
 
-        # 💡 [NEW] 직전 캔들 대비 거래량 폭증 여부 계산
+        # 직전 캔들 대비 거래량 폭증 여부 계산
         volume_analysis = "비교 불가 (데이터 부족)"
         if recent_candles and len(recent_candles) >= 2:
-            current_volume = recent_candles[-1]['거래량']  # 가장 최근 1분봉 거래량
-            prev_volumes = [c['거래량'] for c in recent_candles[:-1]] # 그 이전 캔들들
+            current_volume = recent_candles[-1]['거래량']
+            prev_volumes = [c['거래량'] for c in recent_candles[:-1]]
             avg_prev_volume = sum(prev_volumes) / len(prev_volumes) if prev_volumes else 0
             
             if avg_prev_volume > 0:
@@ -176,25 +201,33 @@ class GeminiSniperEngine:
         if recent_candles and len(recent_candles) >= 5:
             from src.engine.signal_radar import SniperRadar
             temp_radar = SniperRadar(token=None)
-            ind = temp_radar.calculate_micro_indicators(recent_candles)
+            ind = temp_radar.calculate_micro_indicators(recent_candles) # 여기서 limit=40짜리 배열이 들어옵니다.
+            
             ma5_status = "상회" if curr_price > ind['MA5'] else "하회"
             vwap_status = "상회 (수급강세)" if curr_price > ind['Micro_VWAP'] else "하회 (수급약세)"
+            macd_trend = "상승 파동 (양수)" if ind['MACD_Hist'] > 0 else "하락 파동 (음수)"
             
-            indicators_str = f"- 단기 5-MA: {ind['MA5']:,}원 (현재가 {ma5_status})\n"
-            indicators_str += f"- Micro-VWAP: {ind['Micro_VWAP']:,}원 (현재가 {vwap_status})"
+            indicators_str = (
+                f"- 단기 5-MA: {ind['MA5']:,}원 (현재가 {ma5_status})\n"
+                f"- Micro-VWAP: {ind['Micro_VWAP']:,}원 (현재가 {vwap_status})\n"
+                f"- RSI(14): {ind['RSI']} (70 이상 과매수 / 30 이하 과매도)\n"
+                f"- MACD 히스토그램: {ind['MACD_Hist']} -> {macd_trend}"
+            )
 
-        # 💡 [NEW] user_input에 등락률 및 거래량 분석 결과 추가
+        # 최종 프롬프트 조합
         user_input = f"""
 [현재 상태]
 - 현재가: {curr_price:,}원
 - 전일대비 등락률: {fluctuation}%
-- 체결강도: {v_pw}%
+- 웹소켓 체결강도: {v_pw}%
 
 [초단타 기술적 지표 (최근 5분 기준)]
 {indicators_str}
 
 [거래량 분석]
 - {volume_analysis}
+
+{tick_summary}
 
 [최근 1분봉 흐름]
 {candle_str}
@@ -204,7 +237,7 @@ class GeminiSniperEngine:
 -------------------------
 {bid_str}
 
-[최근 틱 체결 흐름]
+[최근 10틱 상세 내역]
 {tick_str}
 """
         return user_input

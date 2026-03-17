@@ -73,54 +73,104 @@ def run_kosdaq_scanner(is_test_mode=False):
         print(f"\n🔍 [{now.strftime('%H:%M:%S')}] KOSDAQ 수급 주도주 정밀 스캔 중...")
 
         # 🚀 1. 1차 필터링 (통신 유틸리티 호출)
-        # 트랙 A: 코스닥(101) 등락률 상위
-        raw_targets = kiwoom_utils.get_top_fluctuation_ka10027(token, mrkt_tp="101", limit=40)
-
-        # 트랙 B: 코스닥 초신성 추출 
+        # 💡 [핵심 교체] ka10027(전일대비) ➡️ ka10028(시가대비)로 전격 교체!
+        raw_targets = kiwoom_utils.get_top_open_fluctuation_ka10028(token, mrkt_tp="101", limit=40)
         supernova = kiwoom_utils.scan_volume_spike_ka10023(token, mrkt_tp="101")
         
-        # 두 리스트 병합
-        all_candidate_codes = {t['Code']: t for t in raw_targets}
+        # 💡 [핵심 교정 1] 데이터 병합 로직 완전 무결점화 (딕셔너리 키 매핑 안전하게 처리)
+        all_candidate_codes = {}
+        
+        # 트랙 A: 시가대비 상위 종목 맵핑
+        for t in raw_targets:
+            all_candidate_codes[t['Code']] = {
+                'Code': t['Code'], 
+                'Name': t['Name'], 
+                'Price': t['Price'],
+                'flu_rate': t.get('FluRate', 0.0), # 💡 대문자(FluRate)를 소문자(flu_rate)로 안전하게 치환
+                'spike_rate': 0.0,
+                'source': 'TOP'
+            }
+            
+        # 트랙 B: 초신성 수급 종목 병합
         for s in supernova:
-            if s['code'] not in all_candidate_codes:
-                all_candidate_codes[s['code']] = {'Code': s['code'], 'Name': s['name'], 'Price': s.get('cur_prc', 0)}
+            # ka10023이 소문자(code)와 대문자(Code)를 혼용할 경우를 모두 방어
+            code = s.get('code', s.get('Code'))
+            if code not in all_candidate_codes:
+                all_candidate_codes[code] = {
+                    'Code': code, 
+                    'Name': s.get('name', s.get('Name')), 
+                    'Price': s.get('Price', s.get('cur_prc', 0)),
+                    'flu_rate': s.get('flu_rate', s.get('FluRate', 0.0)),
+                    'spike_rate': s.get('spike_rate', 0.0),
+                    'source': 'SUPERNOVA' 
+                }
+            else:
+                # 이미 트랙 A로 뽑힌 종목이면, 초신성의 '거래량 급증률' 데이터만 추가 주입
+                all_candidate_codes[code]['spike_rate'] = s.get('spike_rate', 0.0)
 
         kosdaq_picks = []
         new_codes_found = [] # 웹소켓 등록용
 
         # 🚀 2. 개별 종목 정밀 분석 루프
-        for code, item in all_candidate_codes.items():
+        # 💡 [핵심 교정 2] 수급 강도가 높은(spike_rate) 순서로 먼저 분석하여 API 할당량 아끼기
+        sorted_candidates = sorted(all_candidate_codes.values(), key=lambda x: x.get('spike_rate', 0), reverse=True)
+
+        for item in sorted_candidates:
+            code = item['Code']
             name = item.get('Name', 'Unknown')
-            curr_p = float(item.get('Price', item.get('cur_prc', item.get('price', 0))))
+            curr_p = float(item.get('Price', 0))
+            flu_rate = item.get('flu_rate', 0.0)
+            
+            # 💡 [활용 1] 리스크 필터: 음봉이거나 25% 이상 과열 종목은 AI 분석 전에 쳐냄
+            if flu_rate <= 0 or flu_rate >= 25:
+                continue
             
             # 불순물 필터
             if not kiwoom_utils.is_valid_stock(code, name, token=token, current_price=curr_p):
                 continue
+            
+            # 🚀 [개선] 프로그램 매수 데이터 패키지 획득
+            prm_data = kiwoom_utils.check_program_buying_ka90008(token, code)
+            # 💡 [하드 필터] 프로그램 순매도가 2억(200M) 이상 쏟아지는 종목은 분석 중단
+            if prm_data['net_amt'] < -200:
+                continue
 
-            # 프로그램 매수 확인
-            is_program_buying = kiwoom_utils.check_program_buying_ka90008(token, code)
-            p_status = "🔥 매수중" if is_program_buying else "⚪ 관망"
-
+            # 상태 메시지 고도화 (금액 정보 결합)
+            p_status = f"🔥 매수중 (+{prm_data['net_amt']}M)" if prm_data['is_buying'] else f"⚪ 관망 ({prm_data['net_amt']}M)"
             # 일봉 차트 기반 필터링
             df = kiwoom_utils.get_daily_ohlcv_ka10081_df(token, code)
             if df is None or len(df) < 60: continue
             
             curr_price = int(df['Close'].iloc[-1])
             
-            if curr_price < getattr(TRADING_RULES, 'MIN_PRICE', 5000):
-                continue
+
             
             # 수급/신용 데이터 병합
             df_investor = kiwoom_utils.get_investor_daily_ka10059_df(token, code)
             df_margin = kiwoom_utils.get_margin_daily_ka10013_df(token, code)
+
+            # 💡 [핵심 교정] 확장된 수급 컬럼 리스트 정의
+            investor_cols = [
+                'Retail_Net', 'Foreign_Net', 'Inst_Net', 
+                'Fin_Net', 'Trust_Net', 'Pension_Net', 'Private_Net'
+            ]
             
-            if not df_investor.empty: df = df.join(df_investor, how='left')
-            else: df[['Retail_Net', 'Foreign_Net', 'Inst_Net']] = 0.0
-            
+            if not df_investor.empty: 
+                df = df.join(df_investor, how='left')
+            else: 
+                # 💡 데이터가 없을 경우 모든 수급 주체를 0.0으로 채움
+                df[investor_cols] = 0.0
+             
             if not df_margin.empty: df = df.join(df_margin, how='left')
             else: df['Margin_Rate'] = 0.0
             
             df.fillna(0.0, inplace=True)
+
+
+            # 💡 [활용 2] AI 피처 엔지니어링 (데이터 풍성화)
+            df['Spike_Rate'] = item.get('spike_rate', 0.0)
+            df['Prm_Net_Amt'] = prm_data['net_amt'] # 실시간 순매수 금액
+            df['Prm_Net_Irds'] = prm_data['net_irds_amt'] # 실시간 수급 가속도
 
             # 🚀 3. AI 앙상블 분석 (ml_predictor 사용)
             try:
@@ -131,13 +181,15 @@ def run_kosdaq_scanner(is_test_mode=False):
                 # 테스트 시 결과물을 확인하기 위해 임시로 0.60으로 낮춥니다. (확인 후 0.80 원복)
                 test_threshold = 0.60 if is_test_mode else 0.80
 
-                # 코스닥 스윙은 '확신도 80% 이상' + '프로그램 매수'일 때 최적의 승률
-                if prob >= test_threshold:
-                    print(f"   🎯 [KOSDAQ 포착] {name} (확신: {prob:.1%}, 프로그램: {p_status})")
+                # 💡 [조건 강화] AI 확률 + 프로그램 수급이 '순매수(+)' 상태일 때만 픽
+                if prob >= test_threshold and prm_data['net_amt'] > 0:
                     kosdaq_picks.append({
                         'Code': code, 'Name': name, 'Price': curr_price,
-                        'Prob': prob, 'CntrStr': 100, 'Position': 'MIDDLE',
-                        'ProgramStatus': p_status
+                        'Prob': prob, 'Position': 'MIDDLE',
+                        'ProgramStatus': p_status,
+                        'SpikeRate': item.get('spike_rate', 0.0),
+                        'IsSupernova': item.get('source') == 'SUPERNOVA',
+                        'PrmData': prm_data # 🚀 나중에 텔레그램이나 DB에서 쓰기 위해 전체 저장
                     })
                     new_codes_found.append(code)
             except Exception as e:
@@ -189,8 +241,8 @@ def run_kosdaq_scanner(is_test_mode=False):
                 # 웹소켓 감시망에도 등록하여 실시간 타점 추적 시작!
                 event_bus.publish("COMMAND_WS_REG", {"codes": new_codes_found})
 
-        print(f"✅ [{now.strftime('%H:%M:%S')}] KOSDAQ 스캔 완료. 15분 대기...")
-        time.sleep(900)
+        print(f"✅ [{now.strftime('%H:%M:%S')}] KOSDAQ 스캔 완료. 5분 대기...")
+        time.sleep(300)
 
 if __name__ == "__main__":
     """

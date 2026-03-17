@@ -123,7 +123,7 @@ def sync_balance_with_db():
 
 # --- [외부 요청용 분석 리포트 (텔레그램 봇 응답용)] ---
 def analyze_stock_now(code):
-    global KIWOOM_TOKEN, WS_MANAGER
+    global KIWOOM_TOKEN, WS_MANAGER, event_bus
     
     now_time = datetime.now().time()
     market_open = datetime.strptime("09:00:00", "%H:%M:%S").time()
@@ -133,7 +133,9 @@ def analyze_stock_now(code):
         return f"🌙 현재는 정규장 운영 시간(09:00~15:30)이 아닙니다.\n실시간 종목 분석은 장중에만 이용 가능합니다."
 
     if not WS_MANAGER: return "⏳ 시스템 초기화 중..."
-    WS_MANAGER.subscribe([code])
+    # 💡 [핵심 교정] 직접 호출 대신 이벤트 발행(Publish) 방식으로 변경합니다.
+    # WS_MANAGER.subscribe([code])  # ❌ 제거
+    event_bus.publish("COMMAND_WS_REG", {"codes": [code]}) # ✅ 추가
 
     try:
         stock_name = kiwoom_utils.get_basic_info_ka10001(KIWOOM_TOKEN, code)['Name']
@@ -218,7 +220,7 @@ def get_detailed_reason(code):
     if AI_ENGINE:
         from src.utils import kiwoom_utils
         recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
-        recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=5)
+        recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
         
         if recent_ticks:
             # AI에게 순간 분석을 의뢰합니다 (명령어 호출이므로 락이 걸려도 시도함)
@@ -240,30 +242,6 @@ def get_detailed_reason(code):
     report += f"📝 **최종 시스템 결론:** {conclusion}\n"
     
     return report
-
-def check_and_run_intraday_scanner(targets, last_scan_time):
-    watching_count = len([t for t in targets if t['status'] == 'WATCHING'])
-    max_slots = getattr(TRADING_RULES, 'MAX_WATCHING_SLOTS', 5)
-    scan_interval = getattr(TRADING_RULES, 'SCAN_INTERVAL_SEC', 1800)
-
-    if watching_count < max_slots and (time.time() - last_scan_time > scan_interval):
-        print(f"🔄 [시스템] 감시 슬롯 부족({watching_count}개). 신규 종목을 스캔합니다...")
-        try:
-            # 🚀 스캐너가 알아서 EventBus로 웹소켓 등록 및 텔레그램 발송을 수행합니다.
-            # 스나이퍼는 스캐너를 호출만 하고 결괏값을 메모리에 넣기만 하면 됩니다.
-            new_picks = final_ensemble_scanner.run_intraday_scanner(KIWOOM_TOKEN)
-            
-            if new_picks:
-                for np in new_picks:
-                    if not any(t['code'] == np['code'] for t in targets):
-                        targets.append(np)
-                        # 웹소켓 구독은 스캐너가 발행한 "COMMAND_WS_REG" 이벤트에 의해 
-                        # WS_MANAGER가 알아서 처리하므로 여기서 중복 호출하지 않아도 됩니다.
-            return time.time()
-        except Exception as e:
-            log_error(f"⚠️ 장중 스캔 중 오류: {e}")
-            
-    return last_scan_time
 
 # =====================================================================
 # 🧠 상태 머신 (State Machine) 핸들러 
@@ -375,7 +353,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             if ai_engine and radar and is_vip_target and (time_elapsed > getattr(TRADING_RULES, 'AI_WATCHING_COOLDOWN', 60) or last_ai_time == 0):
                 try:
                     recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
-                    recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=5)
+                    recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
                     
                     if ws_data.get('orderbook') and recent_ticks:
                         # AI 답변 대기 (Blocking Call)
@@ -577,7 +555,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
     if strategy == 'SCALPING' and ai_engine and radar and time_elapsed > getattr(TRADING_RULES, 'AI_HOLDING_MIN_COOLDOWN', 5) and (price_change >= 0.3 or time_elapsed > getattr(TRADING_RULES, 'AI_HOLDING_MAX_COOLDOWN', 30)):
         
         recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
-        recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=5)
+        recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
         
         if ws_data.get('orderbook') and recent_ticks:
             ai_decision = ai_engine.analyze_target(stock['name'], ws_data, recent_ticks, recent_candles)
@@ -980,14 +958,15 @@ def handle_real_execution(exec_data):
                 record = session.query(RecommendationHistory).filter_by(id=target_id).first()
 
                 if record:
-                    # 💡 [핵심 방어] buy_price가 비어있을(None) 경우 안전하게 0으로 치환하여 시스템 다운을 막습니다.
+                    # 💡 [핵심 방어] buy_price가 비어있을(None) 경우 안전하게 0으로 치환
                     safe_buy_price = float(record.buy_price) if record.buy_price is not None else 0.0
                     
                     if safe_buy_price > 0:
+                        # 💡 [교정] safe_buy_price가 0보다 클 때만 나눗셈 수행!
                         profit_rate = round(((exec_price - safe_buy_price) / safe_buy_price) * 100, 2)
                     else:
                         profit_rate = 0.0
-                        print(f"⚠️ [수익률 계산 불가] ID {target_id}의 매수가(buy_price)가 누락되어 수익률을 0%로 처리합니다.")
+                        print(f"⚠️ [수익률 계산 불가] ID {target_id}의 매수가가 0원이거나 누락되었습니다.")
 
                     strategy = record.strategy
 
@@ -1072,7 +1051,7 @@ def execute_morning_strategy_batch(targets, ws_manager, radar, ai_engine):
         target_id = s.get('id') # 💡 [핵심] 고유 ID 추출
         ws_data = ws_manager.get_latest_data(code)
         ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
-        candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=5)
+        candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
         
         # AI 분석 호출
         ai_json_str = ai_engine.analyze_morning_leader(s['name'], ws_data, ticks, candles)
@@ -1224,10 +1203,7 @@ def run_sniper(is_test_mode=False):
                 ACTIVE_TARGETS.clear() # targets 리스트도 함께 비워주면 좋습니다.
                 break
 
-            # 1. 내부 장중 스캐너 가동 (KOSPI)
-            last_scan_time = check_and_run_intraday_scanner(targets, last_scan_time)
-
-            # 🚀 2. [신규 추가] 5초마다 외부(초단타 스캐너 등)에서 DB에 새로 넣은 종목이 있는지 확인
+            # 🚀 [신규 추가] 5초마다 외부(초단타 스캐너 등)에서 DB에 새로 넣은 종목이 있는지 확인
             if time.time() - last_db_poll_time > 5:
                 db_targets = DB.get_active_targets()
                 for dt in db_targets:

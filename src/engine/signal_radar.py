@@ -1,5 +1,6 @@
 import requests
 import pandas as pd
+import pandas_ta as ta
 import FinanceDataReader as fdr
 
 # 기존 유틸리티에서 로깅 등 순수 도구만 빌려옵니다.
@@ -65,23 +66,50 @@ class SniperRadar:
     # ==========================================
     # 🎯 [최종: 융합 및 지시] 메인 스캐너로 넘길 타겟 추출
     # ==========================================
-    def find_supernova_targets(self, mrkt_tp="101"):
-        """초신성 수급 폭발 타겟 추출 (현재가 포함 반환)"""
+    def find_supernova_targets(self, mrkt_tp="000"):
+        """
+        [V13.5 최종형] AI 가동 전 데이터 정제 및 수급 수치 결합
+        """
         final_targets = []
         
-        # 💡 [핵심 수정 1] self.를 제거하고, kiwoom_utils의 함수를 호출하며 self.access_token을 넘깁니다.
+        # 1. 원시 데이터 수집
         vol_spikes = kiwoom_utils.scan_volume_spike_ka10023(self.access_token, mrkt_tp=mrkt_tp)
+        if not vol_spikes: return []
+
+        # [효율화] 급증률 상위 정렬
+        vol_spikes.sort(key=lambda x: x.get('spike_rate', 0), reverse=True)
         
-        for stock in vol_spikes:
-            # 💡 [핵심 수정 2] 각 검증 함수들에도 첫 번째 인자로 self.access_token을 정확히 주입합니다.
-            is_program_buying = kiwoom_utils.check_program_buying_ka90008(self.access_token, stock['code'])
-            is_strong_execution = kiwoom_utils.check_execution_strength_ka10046(self.access_token, stock['code'])
-            
-            if is_program_buying and is_strong_execution:
-                # 🚀 'cur_prc'와 'Price'가 담긴 stock 객체 그대로 전달
-                final_targets.append(stock)
-                log_error(f"🚨 [Radar] 완벽한 수급 조짐 포착: {stock['name']} ({stock['code']})")
+        for stock in vol_spikes[:15]: 
+            code = stock['code']
+            flu = stock.get('flu_rate', 0.0)
+            spike = stock.get('spike_rate', 0.0)
+
+            if flu <= 0 or flu >= 25: continue
+
+            # 2. 수급의 질 정밀 검증
+            # 💡 [핵심 교정 1] 이제 딕셔너리를 반환하므로 결과 객체를 통째로 받습니다.
+            prm_res = kiwoom_utils.check_program_buying_ka90008(self.access_token, code)
+            exe_res = kiwoom_utils.check_execution_strength_ka10046(self.access_token, code) # 💡 고도화 버전 호출
+
+            # 💡 [하이브리드 필터] 프로그램 매수 + 체결강도 골든크로스 + 최소 거래대금 30억
+            if prm_res['is_buying'] and exe_res['is_strong'] and exe_res['acc_amt'] > 3000:
                 
+                # AI를 위한 풍부한 컨텍스트 생성
+                stock['analysis_note'] = (
+                    f"수급점수 상위. 프로그램 {prm_res['net_amt']}M 유입, "
+                    f"체결강도(5분) {exe_res['s5']}%로 급증 중. 누적대금 {exe_res['acc_amt']}M."
+                )
+                
+                # 💡 [최종형 점수 계산] 거래량/가격/프로그램/체결강도를 모두 버무린 초신성 점수
+                stock['priority_score'] = (
+                    (spike / 100) + (flu * 1.5) + (prm_res['net_amt'] / 30) + (exe_res['s5'] / 50)
+                )
+                
+                final_targets.append(stock)
+                log_error(f"🎯 [Supernova] {stock['name']} 준비 완료 (점수: {stock['priority_score']:.1f} | 수급: {prm_res['net_amt']}M)")
+
+        # [효율화] 최종 우선순위 정렬
+        final_targets.sort(key=lambda x: x.get('priority_score', 0), reverse=True)
         return final_targets
     
     # ==========================================
@@ -111,7 +139,7 @@ class SniperRadar:
 
             # 유동성 검사
             liquidity_value = total * curr_price
-            checklist["유동성 (3억↑)"] = {"val": f"{liquidity_value / 1e8:.1f}억", "pass": liquidity_value >= TRADING_RULES['MIN_LIQUIDITY']}
+            checklist["유동성 (5억↑)"] = {"val": f"{liquidity_value / 1e8:.1f}억", "pass": liquidity_value >= getattr(TRADING_RULES, 'MIN_SCALP_LIQUIDITY', 500_000_000)}
 
             # 호가잔량 검사
             imb_ratio = ask_tot / (bid_tot + 1e-9)
@@ -137,7 +165,7 @@ class SniperRadar:
                 "v_pw": v_pw
             }
 
-            if (v_pw < 100 and score < threshold) or (liquidity_value < TRADING_RULES['MIN_LIQUIDITY']):
+            if (v_pw < 100 and score < threshold) or (liquidity_value < getattr(TRADING_RULES, 'MIN_SCALP_LIQUIDITY', 500_000_000)):
                 conclusion = "🚫 매수타이밍이 아닙니다"
             else:
                 conclusion = "✅ 매수를 검토해보십시오"
@@ -223,37 +251,66 @@ class SniperRadar:
 
     def calculate_micro_indicators(self, candles):
         """
-        최근 1분봉 데이터를 바탕으로 스캘핑용 단기 지표를 계산합니다.
-        
-        # 📝 TODO [V14.0 업데이트 예정사항]
-        # 향후 RSI(14) 및 MACD 지표를 추가하려면 아래 작업이 선행되어야 함:
-        # 1. signal_radar.py의 get_minute_candles_ka10080 함수에서 limit=5 를 limit=30 이상으로 수정
-        # 2. pandas-ta 또는 ta 라이브러리를 활용하여 EMA 기반 지표 계산 로직 추가
+        [V14.0 고도화] 최근 1분봉 데이터를 바탕으로 스캘핑용 단기 지표 정밀 계산
+        - pandas_ta를 활용한 RSI(14) 및 MACD(12,26,9) 지원
+        - 시계열 정방향(과거->최신) 배열 완벽 대응
         """
+        # 💡 데이터가 부족하면 현재가 기반의 기본값(Fallback) 반환
         if not candles or len(candles) < 5:
-            return {"MA5": 0, "Micro_VWAP": 0}
+            last_close = candles[-1]['현재가'] if candles else 0
+            return {
+                "MA5": last_close, "Micro_VWAP": last_close, 
+                "RSI": 50.0, "MACD": 0.0, "MACD_Signal": 0.0, "MACD_Hist": 0.0
+            }
 
-        # 1. 5분 이동평균선 (5-MA)
-        # 캔들은 최신순(앞)부터 정렬되어 있다고 가정합니다.
-        closes = [c['현재가'] for c in candles[:5]]
-        ma5 = sum(closes) / 5
-
-        # 2. Micro-VWAP (최근 5분간의 거래량 가중 평균 주가)
-        # 공식: Sum(전형적 주가 * 거래량) / Sum(거래량)
-        # *전형적 주가(Typical Price) = (고가 + 저가 + 종가) / 3
-        total_vol = 0
-        total_price_vol = 0
+        # 1. 딕셔너리 리스트를 Pandas DataFrame으로 변환 (연산 속도 극대화)
+        df = pd.DataFrame(candles)
         
-        for c in candles[:5]:
-            typical_price = (c['고가'] + c['저가'] + c['현재가']) / 3
-            total_price_vol += typical_price * c['거래량']
-            total_vol += c['거래량']
+        # 2. MA5 (5분 이동평균선)
+        df['MA5'] = df['현재가'].rolling(window=5).mean()
 
-        micro_vwap = total_price_vol / total_vol if total_vol > 0 else closes[0]
+        # 3. Micro-VWAP (최근 5분 거래량 가중 평균 주가)
+        df['Typical_Price'] = (df['고가'] + df['저가'] + df['현재가']) / 3
+        df['Price_Vol'] = df['Typical_Price'] * df['거래량']
+        
+        roll_price_vol = df['Price_Vol'].rolling(window=5).sum()
+        roll_vol = df['거래량'].rolling(window=5).sum()
+        
+        df['Micro_VWAP'] = roll_price_vol / roll_vol
+        df['Micro_VWAP'] = df['Micro_VWAP'].fillna(df['현재가']) # 분모가 0일 경우 방어
+
+        # 4. RSI (14) - 데이터가 15개 이상일 때 정상 계산됨
+        if len(df) >= 15:
+            df['RSI'] = ta.rsi(df['현재가'], length=14)
+        else:
+            df['RSI'] = 50.0
+
+        # 5. MACD (12, 26, 9) - 데이터가 30개 이상일 때 안정적
+        macd_col, hist_col, sig_col = None, None, None
+        if len(df) >= 30:
+            macd_df = ta.macd(df['현재가'], fast=12, slow=26, signal=9)
+            if macd_df is not None and not macd_df.empty:
+                df = pd.concat([df, macd_df], axis=1)
+                # pandas_ta의 동적 컬럼명 매핑 (보통 MACD_12_26_9 형식)
+                macd_col = macd_df.columns[0] 
+                hist_col = macd_df.columns[1] 
+                sig_col = macd_df.columns[2]  
+
+        # 🚀 가장 최근(마지막) 분봉의 지표값만 추출
+        latest = df.iloc[-1]
+
+        # MACD 값 안전 추출 로직
+        macd_val = latest[macd_col] if macd_col and macd_col in latest else 0.0
+        hist_val = latest[hist_col] if hist_col and hist_col in latest else 0.0
+        sig_val = latest[sig_col] if sig_col and sig_col in latest else 0.0
 
         return {
-            "MA5": int(ma5), 
-            "Micro_VWAP": int(micro_vwap)
+            "MA5": int(latest['MA5']) if pd.notna(latest['MA5']) else int(latest['현재가']),
+            "Micro_VWAP": int(latest['Micro_VWAP']) if pd.notna(latest['Micro_VWAP']) else int(latest['현재가']),
+            "RSI": round(latest['RSI'], 2) if pd.notna(latest['RSI']) else 50.0,
+            "MACD": round(macd_val, 2),
+            "MACD_Signal": round(sig_val, 2),
+            "MACD_Hist": round(hist_val, 2) # 💡 MACD 히스토그램(오실레이터)이 양수면 단기 상승 추세!
         }
 
     def calculate_market_leader_score(self, ws_data):

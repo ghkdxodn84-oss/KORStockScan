@@ -30,7 +30,8 @@ def get_kiwoom_base_url():
             # config에 명시된 URL이 있으면 가져오고, 없으면 실투자 URL을 기본값으로 씁니다.
             base_url = conf.get("KIWOOM_BASE_URL", "https://api.kiwoom.com")
             # 최초 1회 로드 시 터미널에 현재 모드를 명확히 출력해줍니다.
-            mode_str = "🧪 [MOCK/DEV]" if "dev" in target_path.name else "🚀 [PROD/REAL]"
+            # target_path가 문자열이어도 에러가 나지 않도록 형변환 후 처리
+            mode_str = "🧪 [MOCK/DEV]" if "dev" in str(target_path).lower() else "🚀 [PROD/REAL]"
             print(f"⚙️ Kiwoom API 스위치 온: {mode_str} 목적지 -> {base_url}")
             return base_url
     except Exception as e:
@@ -254,47 +255,44 @@ def get_index_daily_ka20006(token, inds_cd="001"):
 
     return None, None
 
-def get_realtime_hot_stocks_ka00198(token, config=None, as_dict=False):
+def get_realtime_hot_stocks_ka00198(token, config=None, as_dict=True):
     """
-    [ka00198] 당일 누적 기준 실시간 급등주 검색
-    - as_dict=True 일 경우: [{'code': '...', 'name': '...', 'price': ..., 'vol': ...}] 형태 반환
-    - as_dict=False 일 경우: ['005930', '000660'] 형태 반환 (기존 호환성 유지)
+    [ka00198] 실시간 종목조회 순위 데이터 전체 파싱
+    - 빅데이터 순위, 순위 변동, 등락율 등 모든 필드 보존
     """
     url = get_api_url("/api/dostk/stkinfo")
-    payload = {'qry_tp': '3'}  # 장중 테마 변화 및 오후 급등주 포착용
+    payload = {'qry_tp': '3'} # 당일 누적 기준
 
-    # 💡 [핵심] 1회성 조회 래퍼 함수 적용
     results = fetch_kiwoom_api_continuous(
-        url=url, 
-        token=token, 
-        api_id='ka00198', 
-        payload=payload, 
-        use_continuous=False
+        url=url, token=token, api_id='ka00198', payload=payload, use_continuous=False
     )
 
     hot_results = []
-    
-    if results:
-        data = results[0]
-        item_list = data.get('item_inq_rank', [])
+    if results and (data := results[0].get('item_inq_rank', [])):
+        def to_i(v): return int(str(v).replace(',', '').replace('+', '').replace('-', '')) if v else 0
+        def to_f(v): return float(str(v).replace('+', '').replace('-', '')) if v else 0.0
 
-        for item in item_list:
+        for item in data:
             stk_cd = str(item.get('stk_cd', ''))[:6]
-            if stk_cd:
-                if as_dict:
-                    # 🚀 스캐너를 위한 상세 데이터 추출
-                    stk_nm = item.get('stk_nm', '')
-                    price = item.get('past_curr_prc', 0)
-                    vol = item.get('acml_vol', 0)
-                    hot_results.append({
-                        'code': stk_cd,
-                        'name': stk_nm,
-                        'price': abs(int(price)),
-                        'vol': int(vol)
-                    })
-                else:
-                    # 🚀 기존 스나이퍼 엔진 호환성 유지
-                    hot_results.append(stk_cd)
+            if not stk_cd: continue
+            
+            # 🚀 모든 응답 데이터를 딕셔너리로 패키징
+            stock_info = {
+                'code': stk_cd,
+                'name': item.get('stk_nm', ''),
+                'rank': to_i(item.get('bigd_rank')),        # 빅데이터 순위
+                'rank_chg': to_i(item.get('rank_chg')),     # 순위 등락폭
+                'rank_sign': item.get('rank_chg_sign'),     # 순위 등락 부호 (1:상승, 2:하락 등)
+                'price': to_i(item.get('past_curr_prc')),   # 현재가
+                'flu_rate': to_f(item.get('base_comp_chgr')), # 기준가 대비 등락율
+                'prev_flu': to_f(item.get('prev_base_chgr')), # 직전 대비 등락율
+                'time': item.get('tm', ''),                 # 데이터 시각
+            }
+            
+            if as_dict:
+                hot_results.append(stock_info)
+            else:
+                hot_results.append(stk_cd)
 
     return hot_results
 
@@ -352,7 +350,7 @@ def get_daily_data_ka10005_df(token, code):
     return df
 
 def get_investor_daily_ka10059_df(token, code, base_dt=None):
-    """[ka10059] 수급 데이터 (공통 래퍼 함수 및 누락 방어 적용)"""
+    """[ka10059] 수급 데이터 (투신, 연기금, 사모펀드 등 세부 주체 확장)"""
     if not base_dt:
         base_dt = datetime.now().strftime("%Y%m%d")
     else:
@@ -361,40 +359,49 @@ def get_investor_daily_ka10059_df(token, code, base_dt=None):
     url = get_api_url("/api/dostk/stkinfo")
     payload = {"dt": base_dt, "stk_cd": str(code), "amt_qty_tp": "2", "trde_tp": "0", "unit_tp": "1"}
 
-    # 💡 [방어막 1] 빈 데이터 반환 대비용 뼈대
-    empty_df = pd.DataFrame(columns=['Retail_Net', 'Foreign_Net', 'Inst_Net'])
+    # 💡 [방어막 1] 확장된 컬럼 뼈대
+    target_cols = [
+        'Retail_Net', 'Foreign_Net', 'Inst_Net', 
+        'Fin_Net', 'Trust_Net', 'Pension_Net', 'Private_Net'
+    ]
+    empty_df = pd.DataFrame(columns=target_cols)
     empty_df.index.name = 'Date'
 
-    # 💡 [핵심] OHLCV 일봉과 길이를 맞추기 위해 연속조회(True) 적용
     results = fetch_kiwoom_api_continuous(
-        url=url, 
-        token=token, 
-        api_id='ka10059', 
-        payload=payload, 
-        use_continuous=False
+        url=url, token=token, api_id='ka10059', payload=payload, use_continuous=False
     )
 
-    if not results:
-        return empty_df
+    if not results: return empty_df
 
-    # 여러 페이지의 응답을 하나의 리스트로 통합
     all_data = []
     for res in results:
         all_data.extend(res.get('stk_invsr_orgn', []))
 
-    if not all_data:
-        return empty_df
+    if not all_data: return empty_df
 
     df = pd.DataFrame(all_data)
-    df.rename(columns={'dt': 'Date', 'ind_invsr': 'Retail_Net', 'frgnr_invsr': 'Foreign_Net', 'orgn': 'Inst_Net'}, inplace=True)
+    
+    # 💡 [핵심 교정] 세부 기관 주체 완벽 매핑
+    df.rename(columns={
+        'dt': 'Date', 
+        'ind_invsr': 'Retail_Net', 
+        'frgnr_invsr': 'Foreign_Net', 
+        'orgn': 'Inst_Net',
+        'fnnc_invt': 'Fin_Net',      # 금융투자 (보통 단타 성향)
+        'invtrt': 'Trust_Net',       # 투신 (실적주 주도 세력)
+        'penfnd_etc': 'Pension_Net', # 연기금 (중장기 추세)
+        'samo_fund': 'Private_Net'   # 사모펀드 (작전/급등주 배후)
+    }, inplace=True)
 
-    # 💡 [방어막 2] 누락된 수급 주체 0으로 채우기
-    for col in ['Date', 'Retail_Net', 'Foreign_Net', 'Inst_Net']:
+    # 누락된 컬럼 0으로 채우기
+    for col in target_cols:
         if col not in df.columns:
             df[col] = 0
 
-    df = df[['Date', 'Retail_Net', 'Foreign_Net', 'Inst_Net']]
-    for col in ['Retail_Net', 'Foreign_Net', 'Inst_Net']:
+    df = df[['Date'] + target_cols]
+    
+    # 문자열 정수로 파싱 (+, 콤마 제거)
+    for col in target_cols:
         df[col] = pd.to_numeric(
             df[col].astype(str).str.replace('+', '', regex=False).str.replace(',', '', regex=False),
             errors='coerce'
@@ -403,7 +410,6 @@ def get_investor_daily_ka10059_df(token, code, base_dt=None):
     df['Date'] = pd.to_datetime(df['Date'], format='%Y%m%d')
     df.set_index('Date', inplace=True)
     
-    # 💡 [안전장치] 키움 연속조회 시 발생할 수 있는 중복 날짜 제거 및 과거순 정렬
     df = df[~df.index.duplicated(keep='first')]
     return df.sort_index()
 
@@ -510,13 +516,83 @@ def get_top_fluctuation_ka10027(token, mrkt_tp="000", trde_qty_cnd="0100", limit
 
     return cleaned_list
 
+def get_top_open_fluctuation_ka10028(token, mrkt_tp="000", trde_qty_cnd="0100", limit=50):
+    """
+    [ka10028] 시가대비 등락률 상위 요청 (장중 진짜 주도주 포착용)
+    - URL: /api/dostk/stkinfo
+    - 시가(Open) 대비 상승폭이 가장 큰, '오늘 당장의 붉은 기둥(양봉)'을 뿜는 종목 추출
+    """
+    url = get_api_url("/api/dostk/stkinfo")
+    payload = {
+        "sort_tp": "1",           # 1: 시가 기준
+        "trde_qty_cnd": trde_qty_cnd, 
+        "mrkt_tp": mrkt_tp,
+        "updown_incls": "1",      # 상하한가 포함
+        "stk_cnd": "0",           # 0: 전체 (필요시 4: 우선주+관리주 제외 로 변경 추천)
+        "crd_cnd": "0",
+        "trde_prica_cnd": "0",
+        "flu_cnd": "1"            # 1: 상위
+    }
 
-def scan_volume_spike_ka10023(token, mrkt_tp="101"):
+    results = fetch_kiwoom_api_continuous(
+        url=url, token=token, api_id='ka10028', payload=payload, use_continuous=False
+    )
+
+    cleaned_list = []
+    
+    if results and (data := results[0].get('open_pric_pre_flu_rt', [])):
+        def to_i(v): return int(str(v).replace(',', '').replace('+', '').replace('-', '')) if v else 0
+        def to_f(v): return float(str(v).replace(',', '').replace('+', '')) if v else 0.0
+
+        for item in data[:limit]:
+            code = str(item.get('stk_cd', '')).strip()[:6]
+            if not code: continue
+            name = item.get('stk_nm')
+
+            # 가격 데이터 파싱
+            curr_price = to_i(item.get('cur_prc'))
+            open_price = to_i(item.get('open_pric'))
+            high_price = to_i(item.get('high_pric'))
+            low_price = to_i(item.get('low_pric'))
+            
+            # 💡 [핵심] 시가 대비 얼마나 올랐는지(%)를 직접 계산 (명세서의 open_pric_pre는 원화 단위 차이일 수 있으므로 안전하게 직접 계산)
+            if open_price > 0:
+                open_flu_rate = round(((curr_price - open_price) / open_price) * 100, 2)
+            else:
+                open_flu_rate = 0.0
+
+            # 🚀 스캐너 호환성을 위해 기존 키(FluRate)에 '시가대비 등락률'을 덮어씌움
+            cleaned_list.append({
+                'Code': code, 
+                'Name': name, 
+                'Price': curr_price,
+                'OpenPrice': open_price,
+                'HighPrice': high_price,
+                'LowPrice': low_price,
+                'FluRate': open_flu_rate,           # 💡 스캐너 병합용 메인 키 (이제 시가대비 상승률로 작동!)
+                'DayFluRate': to_f(item.get('flu_rt')), # 전일대비 등락률도 보존
+                'OpenDiff': to_i(item.get('open_pric_pre')), # 시가대비 상승액
+                'Volume': to_i(item.get('now_trde_qty')), 
+                'CntrStr': to_f(item.get('cntr_str')),
+                'PreSig': item.get('pred_pre_sig', ''),
+                'Source': 'OPEN_TOP_RANK'
+            })
+
+    return cleaned_list
+
+
+def scan_volume_spike_ka10023(token, mrkt_tp="000"):
     """[ka10023] 최근 n분간 거래량이 급증한 종목 스캔 (현재가 포함)"""
     url = get_api_url("/api/dostk/rkinfo")
     payload = {
-        "mrkt_tp": mrkt_tp, "updown_tp": "1", "tm_tp": "5", "sort_tp": "1",
-        "trde_qty_tp": "50", "stk_cnd": "0", "stex_tp": "3", "pric_tp": "0"
+        "mrkt_tp": mrkt_tp,    # 000: 전체, 001: 코스피, 101: 코스닥
+        "tm_tp": "1",          # 💡 [수정] 1: 분단위 조회
+        "tm": "5",             # 💡 [추가] 5분 입력 (최근 5분간 급증)
+        "sort_tp": "1",        # 1: 급증량 기준
+        "trde_qty_tp": "50",   # 50: 5만주 이상
+        "stk_cnd": "4",        # 4:관리종목,우선주제외
+        "pric_tp": "6",        # 6:5천원이상
+        "stex_tp": "3"         # 3: 통합(KRX+NXT)
     }
     
     # 💡 [핵심] 1회성 스캐너 조회 (429 에러 방어 탑재)
@@ -531,17 +607,23 @@ def scan_volume_spike_ka10023(token, mrkt_tp="101"):
     candidates = []
     
     if results:
-        data = results[0].get('req_vol_sdnin', [])
+        # 💡 [핵심 교정] 명세서에 맞게 'req_vol_sdnin' ➡️ 'trde_qty_sdnin' 으로 수정
+        data = results[0].get('trde_qty_sdnin', [])
         
         for item in data:
             # 💡 가격 추출 (사용자 제안 반영)
             raw_p = str(item.get('cur_prc', '0')).replace('+', '').replace('-', '')
             curr_price = int(raw_p) if raw_p.isdigit() else 0
             
+            # 💡 등락률 추출 (안전한 파싱)
+            raw_flu = str(item.get('flu_rt', '0')).replace('+', '')
+            flu_rate = float(raw_flu) if raw_flu.replace('.', '', 1).replace('-', '', 1).isdigit() else 0.0
+            
             candidates.append({
                 'code': item['stk_cd'],
                 'name': item['stk_nm'],
                 'spike_rate': float(str(item.get('sdnin_rt', '0')).replace('+', '')),
+                'flu_rate': flu_rate, # 💡 [추가] 당일 등락률 포함
                 'Price': curr_price,  # 🚀 스캐너를 위해 'Price' 키로 통일
                 'cur_prc': curr_price # 하위 호환성 유지
             })
@@ -583,31 +665,45 @@ def scan_orderbook_spike_ka10021(token, mrkt_tp="101"):
 
 
 def check_program_buying_ka90008(token, code):
-    """[ka90008] 실시간 프로그램 순매수 강도 확인"""
+    """[ka90008] 프로그램 수급 응답 바디의 모든 핵심 수치 반환"""
     url = get_api_url("/api/dostk/mrkcond")
     today_str = datetime.now().strftime('%Y%m%d')
-    payload = {"amt_qty_tp": "2", "stk_cd": str(code),"date": str(today_str)}
+    payload = {"amt_qty_tp": "2", "stk_cd": str(code), "date": str(today_str)}
     
     results = fetch_kiwoom_api_continuous(
         url=url, token=token, api_id='ka90008', payload=payload, use_continuous=False
     )
     
-    if results:
-        data = results[0].get('prm_trde_trend', [])
-        if data:
-            raw_net = str(data[0].get('prm_netprps_qty', '0'))
-            # 숫자가 아닌 문자열이 섞일 경우를 대비한 안전한 형변환
-            cleaned_net = raw_net.replace('+', '').replace('-', '')
-            net_buy_qty = int(cleaned_net) if cleaned_net.isdigit() else 0
+    # 💡 기본값: 나중에 추가될 모든 필드에 대해 0 또는 False로 초기화
+    res_data = {
+        'is_buying': False, 'net_amt': 0, 'net_qty': 0,
+        'buy_amt': 0, 'sell_amt': 0, 'buy_qty': 0, 'sell_qty': 0,
+        'net_irds_amt': 0 # 순매수 금액 증감
+    }
+    
+    if results and (data := results[0].get('prm_trde_trend', [])):
+        item = data[0]
+        def to_int(v): return int(str(v).replace(',', '').replace('+', '')) if v else 0
+        
+        # 💡 응답 바디의 모든 수치를 정수로 파싱하여 저장
+        res_data.update({
+            'net_amt': to_int(item.get('prm_netprps_amt')),
+            'net_qty': to_int(item.get('prm_netprps_qty')),
+            'buy_amt': to_int(item.get('prm_buy_amt')),
+            'sell_amt': to_int(item.get('prm_sell_amt')),
+            'buy_qty': to_int(item.get('prm_buy_qty')),
+            'sell_qty': to_int(item.get('prm_sell_qty')),
+            'net_irds_amt': to_int(item.get('prm_netprps_amt_irds')),
+        })
+        
+        # '진짜 수급' 판정 (필요에 따라 조건 조절 가능)
+        res_data['is_buying'] = res_data['net_amt'] > 50 and res_data['net_qty'] > 10000
             
-            # 💡 원본 데이터에 '+' 부호가 있고, 순매수량이 1만 주 초과일 때 True
-            return True if ('+' in raw_net and net_buy_qty > 10000) else False
-            
-    return False
+    return res_data
 
 
 def check_execution_strength_ka10046(token, code):
-    """[ka10046] 체결강도 상승 추세 확인"""
+    """[ka10046] 체결강도 및 거래대금 상세 데이터 패키지 반환"""
     url = get_api_url("/api/dostk/mrkcond")
     payload = {"stk_cd": str(code)}
     
@@ -615,46 +711,76 @@ def check_execution_strength_ka10046(token, code):
         url=url, token=token, api_id='ka10046', payload=payload, use_continuous=False
     )
     
-    if results:
-        data = results[0].get('cntr_str_trend', [])
-        if data:
-            s5 = float(data[0].get('cntr_str_5min', 0))
-            s20 = float(data[0].get('cntr_str_20min', 0))
-            # 💡 5분 체결강도가 20분보다 높고, 110.0을 초과할 때 True
-            return s5 > s20 and s5 > 110.0
+    # 💡 기본 반환 규격 (에러 방어용)
+    res_data = {
+        'is_strong': False, 'strength': 0.0,
+        's5': 0.0, 's20': 0.0, 's60': 0.0,
+        'acc_amt': 0, 'trde_qty': 0, 'flu_rt': 0.0
+    }
+    
+    if results and (data := results[0].get('cntr_str_tm', [])):
+        item = data[0]
+        def to_f(v): return float(str(v).replace('+', '').replace('-', '')) if v else 0.0
+        def to_i(v): return int(str(v).replace(',', '').replace('+', '').replace('-', '')) if v else 0
+        
+        res_data.update({
+            'strength': to_f(item.get('cntr_str')),      # 실시간 체결강도
+            's5': to_f(item.get('cntr_str_5min')),       # 5분 체결강도
+            's20': to_f(item.get('cntr_str_20min')),     # 20분 체결강도
+            's60': to_f(item.get('cntr_str_60min')),     # 60분 체결강도
+            'acc_amt': to_i(item.get('acc_trde_prica')), # 누적거래대금
+            'trde_qty': to_i(item.get('trde_qty')),      # 현재 거래량
+            'flu_rt': to_f(item.get('flu_rt')),          # 등락율
+        })
+        
+        # 💡 [전략] 단기 수급이 중기 수급을 골든크로스 할 때 '강력'으로 판정
+        res_data['is_strong'] = res_data['s5'] > res_data['s20'] and res_data['s5'] > 110.0
             
-    return False
+    return res_data
     
 def get_tick_history_ka10003(token, code, limit=10):
     """
-    [ka10003] 주식체결정보요청 - AI 분석용 최근 틱(Tick) 스냅샷 추출
+    [ka10003] 주식체결정보요청 - 가격 흐름을 기반으로 한 진짜 체결 방향 역추적
     """
     url = get_api_url("/api/dostk/stkinfo")
     payload = {"stk_cd": str(code)}
     
-    # 💡 [핵심] 1회성 조회 래퍼 적용 (429 자동 방어)
     results = fetch_kiwoom_api_continuous(
         url=url, token=token, api_id='ka10003', payload=payload, use_continuous=False
     )
     
     ticks = []
     
-    if results:
-        data = results[0]
-        # 🚀 알려주신 명세의 'cntr_infr' 배열 추출
-        tick_list = data.get('cntr_infr', []) 
-        
-        for item in tick_list[:limit]:
-            raw_price = str(item.get('cur_prc', '0'))
+    if results and (data := results[0]) and (tick_list := data.get('cntr_infr', [])):
+        def to_i(v): return int(str(v).replace(',', '').replace('+', '').replace('-', '')) if v else 0
+        def to_f(v): return float(str(v).replace(',', '').replace('+', '').replace('-', '')) if v else 0.0
+
+        # 💡 최근 체결 순으로 들어오므로, 역순으로 순회하며 이전 틱과 비교
+        for i in range(len(tick_list)):
+            if i >= limit: break
             
-            # 부호로 매수/매도 주도권 파악 (키움 데이터 종특 활용)
-            direction = "BUY" if "+" in raw_price else "SELL" if "-" in raw_price else "NEUTRAL"
+            item = tick_list[i]
+            # 💡 [명세서 반영] 부호는 제거하고 순수 정수 가격만 추출
+            current_price = to_i(item.get('cur_prc'))
+            volume = to_i(item.get('cntr_trde_qty'))
+            
+            # 💡 [핵심] 진짜 체결 방향 추론 (다음 인덱스 i+1 이 시간상 더 과거의 틱)
+            direction = "NEUTRAL"
+            if i + 1 < len(tick_list):
+                past_price = to_i(tick_list[i+1].get('cur_prc'))
+                if current_price > past_price:
+                    direction = "BUY"  # 가격이 올랐으므로 매수 주도
+                elif current_price < past_price:
+                    direction = "SELL" # 가격이 내렸으므로 매도 주도
             
             ticks.append({
                 'time': item.get('tm', ''),
-                'price': abs(int(raw_price.replace('+', '').replace('-', ''))),
-                'volume': int(item.get('cntr_trde_qty', '0')),
-                'dir': direction
+                'price': current_price,
+                'volume': volume,
+                'dir': direction,                           # 🚀 완벽하게 교정된 진짜 체결 방향
+                'flu_rate': to_f(item.get('pre_rt')),       # 대비율
+                'strength': to_f(item.get('cntr_str')),     # 체결강도
+                'acc_vol': to_i(item.get('acc_trde_qty'))   # 누적거래량
             })
             
     return ticks
@@ -664,8 +790,8 @@ def get_tick_history_ka10003(token, code, limit=10):
 # AI 속도 최적화를 위해 걸어둔 limit=5를 30~50으로 넉넉하게 늘려줄 것.
 def get_minute_candles_ka10080(token, code, limit=10):
     """
-    [REST API] ka10080: 주식분봉차트조회 (POST 방식)
-    최근 N개의 1분봉 데이터를 가져와 AI가 읽기 쉬운 형태로 정제하여 리턴합니다.
+    [REST API] ka10080: 주식분봉차트조회
+    - 시간 역순 배열 방지 및 AI/지표 연산용 무결점 데이터 정제
     """
     url = get_api_url("/api/dostk/chart")
     base_dt = datetime.now().strftime('%Y%m%d')
@@ -676,47 +802,52 @@ def get_minute_candles_ka10080(token, code, limit=10):
         'base_dt': base_dt      # 당일 기준
     }
     
-    # 💡 [핵심] 1회성 조회 래퍼 적용 (429 자동 방어)
     results = fetch_kiwoom_api_continuous(
         url=url, token=token, api_id='ka10080', payload=payload, use_continuous=False
     )
     
     refined_candles = []
     
-    if results:
-        data = results[0]
-        # 💡 [핵심] 응답 데이터에서 분봉 배열(stk_min_pole_chart_qry) 추출
-        candle_list = data.get('stk_min_pole_chart_qry', [])
-        
-        if not candle_list:
-            return []
-            
-        # 최신 분봉(배열 앞쪽)부터 limit 개수만큼 자르기
+    if results and (data := results[0]) and (candle_list := data.get('stk_min_pole_chart_qry', [])):
+        # 💡 [안전 장치] 키움 특유의 콤마(,)와 부호(+,-)를 모두 지우는 헬퍼 함수
+        def to_i(v): return int(str(v).replace(',', '').replace('+', '').replace('-', '')) if v else 0
+
+        # 최신 분봉부터 limit 개수만큼 자르기
         recent_candles = candle_list[:limit]
         
         for candle in recent_candles:
-            # 1. 시간 포맷팅 (예: "20250917132000" -> "13:20:00")
-            raw_time = candle.get('cntr_tm', '')
+            raw_time = str(candle.get('cntr_tm', ''))
+            
+            # 시간 포맷팅 방어 로직 (14자리 YYYYMMDDHHMMSS 혹은 6자리 HHMMSS 모두 대응)
             if len(raw_time) >= 14:
                 formatted_time = f"{raw_time[8:10]}:{raw_time[10:12]}:{raw_time[12:14]}"
+            elif len(raw_time) >= 6:
+                formatted_time = f"{raw_time[-6:-4]}:{raw_time[-4:-2]}:{raw_time[-2:]}"
             else:
                 formatted_time = raw_time
                 
-            # 2. 가격 절댓값 처리 (키움증권 마이너스 부호 제거) 및 매핑
             refined_candles.append({
                 "체결시간": formatted_time,
-                "시가": abs(int(candle.get("open_pric", 0))),
-                "고가": abs(int(candle.get("high_pric", 0))),
-                "저가": abs(int(candle.get("low_pric", 0))),
-                "현재가": abs(int(candle.get("cur_prc", 0))),  # 종가 역할
-                "거래량": int(candle.get("trde_qty", 0))
+                "시가": to_i(candle.get("open_pric")),
+                "고가": to_i(candle.get("high_pric")),
+                "저가": to_i(candle.get("low_pric")),
+                "현재가": to_i(candle.get("cur_prc")),
+                "거래량": to_i(candle.get("trde_qty"))
             })
             
+        # 🚀 [핵심 교정] 과거 -> 최신(현재) 시간순으로 배열을 뒤집어서 반환!
+        # 이렇게 해야 AI 엔진(recent_candles[-1])과 지표 연산(이동평균선 등)이 정상 작동합니다.
+        return refined_candles[::-1]
+        
     return refined_candles
 
 def get_top_marketcap_stocks(self, limit=300):
     """네이버 API 우회 시총 상위 종목 수집 (구조 정합성 교정)"""
-    headers = {'User-Agent': 'Mozilla/5.0...', 'Referer': 'https://m.stock.naver.com/'}
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Referer': 'https://m.stock.naver.com/',
+        'Accept': 'application/json, text/plain, */*'
+    }
     target_list = [] # 💡 코드 리스트가 아닌 딕셔너리 리스트로 변경
     page_size = 60
     max_pages = (limit // page_size) + 1
