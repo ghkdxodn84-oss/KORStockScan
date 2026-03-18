@@ -87,57 +87,94 @@ COLUMN_MAPPING = {
 # ==========================================
 def process_and_save_stock(code, token, db: DBManager):
     """단일 종목 데이터를 키움 API로 병합하고 DB에 적재합니다."""
-    # 💡 [핵심] 래퍼 함수가 알아서 재시도하므로, 낡은 외부 재시도 루프(for api_attempt)를 제거했습니다.
     try:
-        # 1. API 순차 호출 (호출 사이에 숨고르기 추가)
-        df_ohlcv = kiwoom_utils.get_daily_ohlcv_ka10081_df(token, code)
-        if df_ohlcv.empty: return False
+        # 💡 [안전 장치 1] Margin_Rate API(ka10013)는 무조건 6자리 문자열을 요구합니다.
+        code_str = str(code).zfill(6)
 
-        df_investor = kiwoom_utils.get_investor_daily_ka10059_df(token, code)
-        df_margin = kiwoom_utils.get_margin_daily_ka10013_df(token, code)
-        basic_info = kiwoom_utils.get_basic_info_ka10001(token, code)
+        # 1. API 순차 호출
+        df_ohlcv = kiwoom_utils.get_daily_ohlcv_ka10081_df(token, code_str)
+        if df_ohlcv.empty: return pd.DataFrame()
+        # 💡 [안전 장치 2] 조인(Join) 실패를 막기 위해 인덱스를 날짜형(Datetime)으로 강제 통일
+        df_ohlcv.index = pd.to_datetime(df_ohlcv.index)
+
+        df_investor = kiwoom_utils.get_investor_daily_ka10059_df(token, code_str)
+        if not df_investor.empty:
+            df_investor.index = pd.to_datetime(df_investor.index)
+
+        df_margin = kiwoom_utils.get_margin_daily_ka10013_df(token, code_str)
+        if not df_margin.empty:
+            df_margin.index = pd.to_datetime(df_margin.index)
+
+        basic_info = kiwoom_utils.get_basic_info_ka10001(token, code_str)
         
         # 2. Date 기준 무결점 병합 (Join)
         df = df_ohlcv
         if not df_investor.empty:
             df = df.join(df_investor, how='left')
         else:
-            df['Retail_Net'] = 0; df['Foreign_Net'] = 0; df['Inst_Net'] = 0
+            for col in ['Retail_Net', 'Foreign_Net', 'Inst_Net']: df[col] = np.nan
 
         if not df_margin.empty:
             df = df.join(df_margin, how='left')
         else:
-            df['Margin_Rate'] = 0
+            df['Margin_Rate'] = np.nan
 
+        # 💡 [안전 장치 3] 0으로 덮어버리기 전에, 어제 발표된 Margin_Rate를 오늘 빈칸으로 끌어내림 (ffill)
+        df.ffill(inplace=True)
+        # 그 뒤에 진짜로 데이터가 없는 상장 초기 빈칸들만 0으로 채움
         df.fillna({'Retail_Net': 0, 'Foreign_Net': 0, 'Inst_Net': 0, 'Margin_Rate': 0}, inplace=True)
+        
         df = df.reset_index()
+        
+        # 인덱스 이름 보정 (reset_index 후 이름이 index가 될 수 있음)
+        if 'index' in df.columns and 'Date' not in df.columns:
+            df.rename(columns={'index': 'Date'}, inplace=True)
+            
         df['Date'] = df['Date'].dt.strftime('%Y-%m-%d')
 
-        # 3. 보조 지표 계산
+        # 💡 [핵심 복구 1] 종목 코드, 이름, 그리고 시가총액(Marcap) 주입!
+        df['Code'] = code_str
+        df['Name'] = basic_info.get('Name', '이름없음')
+        df['Marcap'] = basic_info.get('Marcap', 0)  # 잘 들어오던 로직 그대로 유지!
+
+        # 💡 [핵심 복구 2] 지표 계산 전 원본 데이터 완벽 백업
+        backup_df = df.copy()
+        original_cols = df.columns.tolist()
+
+        # 3. 보조 지표 계산 (Return 컬럼 생성)
         df = calculate_all_features(df)
 
-        df['Code'] = code
-        df['Name'] = basic_info.get('Name', '이름없음')
-        df['Marcap'] = basic_info.get('Marcap', 0)
+        # 🚨 [중요] feature_engineer가 소문자 'return'을 줬다면 대문자로 통일
+        if 'return' in df.columns and 'Return' not in df.columns:
+            df.rename(columns={'return': 'Return'}, inplace=True)
 
-        # 💡 [데이터 정제] 새 스키마 규격으로 옷 갈아입히기
-        existing_cols = [col for col in COLUMN_MAPPING.keys() if col in df.columns]
-        df = df[existing_cols].rename(columns=COLUMN_MAPPING)
+        # 💡 [핵심 복구 3] 원본 컬럼 강제 복원 (지표 계산기가 0으로 덮어쓰는 것 원천 차단)
+        for col in original_cols:
+            if col in ['Marcap', 'Margin_Rate', 'Retail_Net', 'Foreign_Net', 'Inst_Net', 'Code', 'Name']:
+                df[col] = backup_df[col]
+            elif col not in df.columns:
+                df[col] = backup_df[col]
 
-        # 4. 최근 100일치만 잘라내어 반환 (DB I/O는 여기서 안 함!)
+        # 4. DB 컬럼명으로 최종 변환
+        final_valid_cols = [col for col in COLUMN_MAPPING.keys() if col in df.columns]
+        df = df[final_valid_cols].rename(columns=COLUMN_MAPPING)
+
+        # 5. 최근 100일치 슬라이싱
         cutoff_date = (datetime.now() - timedelta(days=100)).strftime('%Y-%m-%d')
         new_rows = df[df['quote_date'] >= cutoff_date].copy()
 
-        # 안전한 최종 컬럼 필터링 (모델 스키마와 완벽 동기화)
+        # 💡 [핵심 복구 4] 결측치(NaN) 완벽 제거 및 0 채우기 (PostgreSQL 에러 원천 차단)
+        new_rows = new_rows.dropna(subset=['close_price', 'daily_return'])
+        new_rows = new_rows.fillna(0)
+
+        # 안전한 최종 컬럼 필터링
         final_cols = [col for col in COLUMN_MAPPING.values() if col in new_rows.columns]
 
-        return new_rows[final_cols].dropna(subset=['close_price'])
-        
+        return new_rows[final_cols]
 
     except Exception as e:
-        # 💡 429 처리 로직도 제거됨 (kiwoom_utils가 알아서 하므로)
         logger.error(f"❌ [{code}] 처리 중 치명적 에러: {e}")
-        return False
+        return pd.DataFrame()
         
 # ==========================================
 # 3. 전체 스케줄러 (배치 메인)

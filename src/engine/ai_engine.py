@@ -21,24 +21,24 @@ from src.utils.constants import TRADING_RULES
 # 1. 🎯 시스템 프롬프트 (스캘핑 전용 - V2.0 틱 가속도 반영)
 # ==========================================
 SCALPING_SYSTEM_PROMPT = """
-너는 15년 경력의 베테랑 초단타(스캘핑) 트레이더이자 리스크 관리 전문가야. 
-너의 목표는 실시간 호가창, 1분봉, 특히 '틱(Tick) 체결 요약 데이터'를 최우선으로 분석하여 찰나의 돌파 타점을 잡거나 익절/손절을 판단하는 것이다.
+너는 매년 꾸준한 수익을 누적하는 상위 1%의 극강 공격적 초단타(Scalping) 프랍 트레이더야. 
+너의 생존 철학은 '돌파 직전의 찰나에 탑승해 수수료를 떼고 1~2%만 먹고 빠지는 것'이며, 모멘텀이 멈추는 순간 자비 없이 칼손절(-1.5% 이내)하는 것이다.
 
-[데이터 분석 가이드]
-1. 틱 체결 흐름 (최우선): '매수 압도율(Buy Pressure)'이 70% 이상이고 체결강도가 상승 중이라면 강력한 시장가 돌파 매수 신호다. 반대로 매도 물량이 쏟아지면 즉각 도망쳐라.
-2. 단기 지표 (VWAP & 5-MA): 현재가가 Micro-VWAP(거래량 가중 평균) 위에 있는지 확인해라. VWAP 아래는 세력의 이탈(설거지)로 간주한다.
-3. 1분봉 차트 및 거래량: 최근 캔들의 거래량이 이전 평균 대비 폭증(200% 이상)했는지, 윗꼬리(저항)가 발생했는지 점검해라.
+[스캘핑 타점 판별의 3원칙] - **이 기준을 뼈에 새겨라**
+1. 매도벽 소화(Ask Eating): 매도 잔량이 매수 잔량보다 두꺼운 상태(호가 열위)에서, 틱 체결 속도가 급격히 빨라지며(가속도) 매수 압도율(Buy Pressure)이 70% 이상일 때가 유일한 'BUY' 타점이다.
+2. 속도 저하 = 즉각 도망: 체결강도가 높더라도, 최근 10틱이 체결되는 데 걸린 시간이 느려지거나 고가 부근에서 큰 매도 틱이 찍히면 주저 없이 'DROP' 또는 조기 익절을 지시해라.
+3. 위치의 중요성: 현재가가 Micro-VWAP 아래에 있거나, 당일 최고가를 찍고 줄설거지가 나오는 역배열 패턴이라면 매수 압도율이 높아도 페이크(Fake)다. 절대 진입하지 마라.
 
-[판단 및 스코어링 기준] - **매우 중요**
-- 강력한 상승 (Score: 75~100): 매수 압도율이 압도적이며, 체결강도가 치솟고 VWAP를 강하게 돌파/지지할 때. (신규 진입 / 트레일링 익절 유지)
-- 모멘텀 둔화 (Score: 41~74): 매수/매도 비율이 팽팽해지거나, 고점에서 윗꼬리가 달리며 거래량이 마를 때. (진입 대기 / 조기 익절)
-- 하방 리스크 (Score: 0~40): 매도(SELL) 물량이 쏟아지며 매수 압도율이 무너지고, VWAP 아래로 이탈할 때. (진입 절대 금지 / 즉각 손절)
+[스코어링 기준 (0~100)]
+- 80~100 (BUY): 호가창 매도벽을 뚫어내는 강력한 시장가 매수 폭발. 거래량과 틱 속도가 미친 듯이 가속화되는 돌파 시점.
+- 50~79 (WAIT): 수급은 들어오나 아직 매물대 저항을 맞고 있거나, 방향성이 모호한 눌림목. (지켜볼 것)
+- 0~49 (DROP): 매수벽에 물량을 던지는 투매 발생, VWAP 이탈, 윗꼬리 대량 거래량 발생. (즉시 버릴 것)
 
-분석 결과는 반드시 아래 JSON 형식으로만 출력하고 다른 설명은 절대 추가하지 마:
+분석 결과는 반드시 아래 JSON 형식으로만 출력하고 단 1글자의 부연 설명도 추가하지 마:
 {
     "action": "BUY" | "WAIT" | "DROP",
     "score": 0~100 사이의 정수,
-    "reason": "현재 모멘텀, 매수 압도율, 수급 상태를 종합한 1줄 요약 분석"
+    "reason": "매수 압도율, 틱 속도, 호가벽 소화 상태를 바탕으로 한 타점 근거 1줄 요약"
 }
 """
 
@@ -47,14 +47,36 @@ SCALPING_SYSTEM_PROMPT = """
 # ==========================================
 MARKET_ANALYSIS_PROMPT = """
 너는 15년 경력의 베테랑 퀀트 트레이더이자 수석 애널리스트야.
-오늘의 주식 스캐너 필터링 통계 데이터와 어제 미국 S&P 500 및 나스닥 시장상황을 보고, 현재 코스피 시장의 상태를 진단하고 트레이딩 전략을 브리핑해줘.
+오늘 스캐너가 KOSPI/KOSDAQ 유망 종목들을 필터링한 결과(탈락 통계)를 분석하여, 현재 주식 시장의 장세(Sentiment)를 정확히 진단해줘.
 
-[요구사항]
-1. 친근하지만 전문적인 어투를 사용하고, 텔레그램에서 읽기 좋게 이모지를 적절히 섞어줘.
-2. 0개 또는 극소수만 살아남았다면, 봇이 고장난 것이 아니라 "시장에 돈이 마른 조정장/하락장"이기 때문에 현금을 지킨 것이라고 명확히 해석해줘.
-3. '기초 품질 미달'이 많다면 차트 붕괴(역배열) 장세, 'AI 확신도 부족'이 많다면 수급 부재(눈치보기) 장세로 해석해.
-4. 마지막엔 오늘의 행동 지침을 1~2줄로 요약해줘 (예: "철저한 현금 관망", "오후장 초단타 위주 대응" 등).
-5. 출력은 JSON이 아니라, 텔레그램에 바로 전송할 수 있는 마크다운 텍스트 형식으로 작성해. (총 300자 내외)
+[데이터 해석 핵심 가이드]
+1. 최종 생존 종목이 0개이거나 극소수라면, 단순히 "추천 종목이 없다"가 아니라 "스캐너 탈락 통계로 본 현재 장세의 문제점"을 진단해라.
+2. 탈락 사유(Drop Stats)의 분포를 심층 분석해라:
+   - '기초 품질 미달'이 압도적으로 많다면: 증시 전반의 차트가 무너진 역배열 장세이거나 투매가 나오는 하락장.
+   - 'AI 확신도 부족'이나 '수급 부재'가 많다면: 차트는 버티고 있으나 주도 테마가 없고 외인/기관의 매수세가 마른 전형적인 눈치보기(관망) 장세.
+   - '단기 급등/이격도 과다'가 많다면: 쉴 틈 없이 오르기만 한 과열장, 곧 조정이 올 수 있는 리스크 상태.
+3. 친근하지만 뼈 때리는 전문가의 어투로, 텔레그램에서 읽기 좋게 이모지를 적절히 사용해라.
+4. 마지막에는 오늘 하루 트레이더가 취해야 할 현실적인 [행동 지침]을 1~2줄로 명확히 제시해라. (예: "철저한 현금 관망", "오후장 주도주 쏠림 현상 주의" 등)
+5. 출력은 JSON이 아니라 마크다운 텍스트 형식으로 300~400자 내외로 작성해라.
+"""
+# ==========================================
+# 3. 🎯 [신규] 실시간 종목 분석 프롬프트 (On-Demand Report용 - V4.0 심리분석 강화)
+# ==========================================
+REALTIME_ANALYSIS_PROMPT = """
+너는 15년 경력의 베테랑 Prop 트레이더이자 수석 퀀트 애널리스트야.
+사용자가 요청한 특정 종목의 실시간 호가/수급 데이터와 퀀트 엔진의 분석 결과를 바탕으로, 텔레그램에서 읽기 좋은 최고의 '실시간 타점 리포트'를 작성해줘.
+
+[데이터 해석 핵심 가이드]
+1. 거래량 및 프로그램 수급: 20일 평균 대비 거래량(%)이 폭발적인지, 프로그램 순매수가 강하게 들어오는지(외인/기관 개입 여부) 확인하여 찐반등인지 가짜 휩소인지 판별해라.
+2. 매수세(Ratio) 비중 및 체결강도: 체결강도 100% 이상 유지와 함께 매수세가 높다면 진짜 형님들의 개입이다. 반면 체결강도가 죽었는데 가격만 높다면 개미들의 뇌동매매다.
+3. 호가 불균형: 매도벽이 두꺼운지(매도 우위), 매수벽이 두꺼운지(매수 우위) 파악해라. (주식은 보통 매도벽을 잡아먹으며 올라갈 때가 진짜 상승이다.)
+4. 퀀트 결론(Sonar Conclusion): 기계가 판단한 목표가와 퀀트 결론을 바탕으로, 너의 경력을 보태어 '지금 당장 사야 하나, 기다려야 하나'에 대한 명확한 어투의 결론을 내려라.
+
+[출력 양식 설정]
+1. 텔레그램 마크다운 텍스트 형식으로 작성해라.
+2. 친근하면서도 뼈 때리는 전문가의 어투를 사용하고, 각 섹션에 맞는 이모지를 적절히 배치해라.
+3. 리포트 마지막에는 딱 한 줄로 된 [최종 행동 지침]을 명확히 제시해라. (예: "🛑 프로그램 매도 폭탄 나오는 중. 절대 관망", "✅ 수급/거래량 완벽. 기계 목표가까지 홀딩")
+4. 출력은 JSON이 아니라 마크다운 텍스트 형식으로 300~400자 내외로 핵심만 작성해라.
 """
 
 class GeminiSniperEngine:
@@ -80,20 +102,22 @@ class GeminiSniperEngine:
     # ==========================================
     # 3. 💡 [아키텍처 포인트] 만능 API 호출기 (중복 코드 완벽 제거)
     # ==========================================
-    def _call_gemini_safe(self, prompt, user_input, require_json=True, context_name="Unknown"):
-        """키 로테이션, 예외 처리, JSON 파싱을 모두 전담하는 중앙 집중식 호출기"""
+    def _call_gemini_safe(self, prompt, user_input, require_json=True, context_name="Unknown", model_override=None):
+        """키 로테이션, 예외 처리, 모델 덮어쓰기를 모두 전담하는 중앙 집중식 호출기"""
         contents = [prompt, user_input] if prompt else [user_input]
         
         config_kwargs = {}
         if require_json:
             config_kwargs['response_mime_type'] = "application/json"
             
+        # 💡 [핵심] model_override가 지정되면 해당 모델을, 아니면 기본 모델(flash-lite)을 사용
+        target_model = model_override if model_override else self.current_model_name
         last_error = ""
 
         for attempt in range(len(self.api_keys)):
             try:
                 response = self.client.models.generate_content(
-                    model=self.current_model_name,
+                    model=target_model,  # 👈 여기를 수정!
                     contents=contents,
                     config=types.GenerateContentConfig(**config_kwargs)
                 )
@@ -134,7 +158,7 @@ class GeminiSniperEngine:
         
 
     # ==========================================
-    # 4. 🛠️ 데이터 포맷팅 (AI 전용 번역기 - V2.0 매수 압도율 계산)
+    # 4. 🛠️ 데이터 포맷팅 (AI 전용 번역기 - V3.0 스캘퍼의 눈)
     # ==========================================
     def _format_market_data(self, ws_data, recent_ticks, recent_candles=None):
         """키움 API의 딕셔너리 데이터를 AI가 읽을 수 있는 텍스트로 예쁘게 포장합니다."""
@@ -145,44 +169,81 @@ class GeminiSniperEngine:
         v_pw = ws_data.get('v_pw', 0)
         fluctuation = ws_data.get('fluctuation', 0.0) 
         orderbook = ws_data.get('orderbook', {'asks': [], 'bids': []})
+        ask_tot = ws_data.get('ask_tot', 0)
+        bid_tot = ws_data.get('bid_tot', 0)
+
+        # 🚀 [무기 1] 호가 불균형 (Orderbook Imbalance) 계산
+        imbalance_str = "데이터 없음"
+        if ask_tot > 0 and bid_tot > 0:
+            ratio = ask_tot / bid_tot
+            if ratio >= 2.0:
+                imbalance_str = f"매도벽 압도적 우위 ({ratio:.1f}배) - 돌파 시 급등 패턴"
+            elif ratio <= 0.5:
+                imbalance_str = f"매수벽 우위 ({1/ratio:.1f}배) - 하락 방어 또는 휩소(가짜) 패턴"
+            else:
+                imbalance_str = f"팽팽함 (매도 {ask_tot:,} vs 매수 {bid_tot:,})"
+
+        # 🚀 [무기 2] 당일 고점 대비 이격도 (Drawdown from High)
+        high_price = curr_price
+        if recent_candles:
+            # 1분봉 데이터들을 훑어 가장 높았던 고점을 찾습니다.
+            high_price = max(c.get('고가', curr_price) for c in recent_candles)
+        
+        drawdown_str = "0.0%"
+        if high_price > 0:
+            drawdown = ((curr_price - high_price) / high_price) * 100
+            drawdown_str = f"{drawdown:.2f}% (당일 고가 {high_price:,}원)"
 
         # 호가창 조립
-        ask_str = "\n".join([f"매도 {5-i}호가: {a['price']}원 ({a['volume']}주)" for i, a in enumerate(orderbook['asks'])])
-        bid_str = "\n".join([f"매수 {i+1}호가: {b['price']}원 ({b['volume']}주)" for i, b in enumerate(orderbook['bids'])])
+        ask_str = "\n".join([f"매도 {5-i}호가: {a['price']:,}원 ({a['volume']:,}주)" for i, a in enumerate(orderbook['asks'])])
+        bid_str = "\n".join([f"매수 {i+1}호가: {b['price']:,}원 ({b['volume']:,}주)" for i, b in enumerate(orderbook['bids'])])
         
-        # 🚀 [NEW] 틱 흐름 분석 및 매수 압도율(Buy Pressure) 계산
+        # 🚀 [무기 3] 틱 흐름 분석 및 틱 체결 가속도(Tick Speed) 계산
         tick_summary = "틱 데이터 부족"
         tick_str = ""
         
         if recent_ticks and len(recent_ticks) > 0:
-            # 방향별 거래량 합산
             buy_vol = sum(t['volume'] for t in recent_ticks if t.get('dir') == 'BUY')
             sell_vol = sum(t['volume'] for t in recent_ticks if t.get('dir') == 'SELL')
             total_vol = buy_vol + sell_vol
-            
             buy_pressure = (buy_vol / total_vol * 100) if total_vol > 0 else 50.0
             
             latest_price = recent_ticks[0]['price']
             oldest_price = recent_ticks[-1]['price']
             trend_str = "상승 돌파 중 🚀" if latest_price > oldest_price else "하락 밀림 📉" if latest_price < oldest_price else "횡보 중 ➖"
             latest_strength = recent_ticks[0].get('strength', 0.0)
+
+            # 10틱이 터지는 데 걸린 시간(초)을 계산하여 '가속도'를 측정합니다.
+            time_diff_sec = 0
+            try:
+                from datetime import datetime
+                # 시간 포맷(HHMMSS) 문자열을 파싱
+                t1_str = str(recent_ticks[-1]['time']).replace(':', '').zfill(6)
+                t2_str = str(recent_ticks[0]['time']).replace(':', '').zfill(6)
+                t1 = datetime.strptime(t1_str, "%H%M%S")
+                t2 = datetime.strptime(t2_str, "%H%M%S")
+                time_diff_sec = (t2 - t1).total_seconds()
+                if time_diff_sec < 0: time_diff_sec += 86400 # 자정 넘어가는 경우
+            except:
+                time_diff_sec = 999
             
+            speed_str = f"🚀 매우 빠름 ({len(recent_ticks)}틱에 {time_diff_sec}초)" if time_diff_sec <= 2.0 else f"보통 ({time_diff_sec}초)" if time_diff_sec <= 10.0 else f"느림 ({time_diff_sec}초 - 소강상태)"
+
             tick_summary = (
                 f"⏱️ [최근 {len(recent_ticks)}틱 정밀 브리핑]\n"
-                f"- 단기 흐름: {trend_str} (시작가 {oldest_price:,}원 ➡️ 현재가 {latest_price:,}원)\n"
-                f"- 순간 거래량: 총 {total_vol:,}주 체결 (매수 {buy_vol:,}주 vs 매도 {sell_vol:,}주)\n"
-                f"- 🔥 매수 압도율(Buy Pressure): {buy_pressure:.1f}%\n"
+                f"- 단기 흐름: {trend_str}\n"
+                f"- 틱 체결 속도(가속도): {speed_str}\n"
+                f"- 🔥 매수 압도율(Buy Pressure): {buy_pressure:.1f}% (매수 {buy_vol:,}주 vs 매도 {sell_vol:,}주)\n"
                 f"- 현재 체결강도: {latest_strength}%"
             )
             
-            # AI가 직접 볼 수 있도록 최근 10개 틱만 상세 제공
             tick_str = "\n".join([f"[{t['time']}] {t.get('dir', 'NEUTRAL')} 체결: {t['price']:,}원 ({t['volume']:,}주) | 강도:{t.get('strength', 0)}%" for t in recent_ticks[:10]])
 
         # 1분봉 차트 조립
         candle_str = ""
         if recent_candles:
             candle_str = "\n".join([
-                f"[{c['체결시간']}] 시가:{c['시가']} 고가:{c['고가']} 저가:{c['저가']} 종가:{c['현재가']} 거래량:{c['거래량']}" 
+                f"[{c['체결시간']}] 시가:{c['시가']:,} 고가:{c['고가']:,} 저가:{c['저가']:,} 종가:{c['현재가']:,} 거래량:{c['거래량']:,}" 
                 for c in recent_candles
             ])
         else:
@@ -204,22 +265,21 @@ class GeminiSniperEngine:
                 else:
                     volume_analysis = f"감소 추세 (이전 평균 대비 {vol_ratio:.0f}% 수준)"
 
-        # 지표 계산
+        # 지표 조립
         indicators_str = "지표 계산 불가"
         if recent_candles and len(recent_candles) >= 5:
             from src.engine.signal_radar import SniperRadar
             temp_radar = SniperRadar(token=None)
-            ind = temp_radar.calculate_micro_indicators(recent_candles) # 여기서 limit=40짜리 배열이 들어옵니다.
+            ind = temp_radar.calculate_micro_indicators(recent_candles) 
             
             ma5_status = "상회" if curr_price > ind['MA5'] else "하회"
             vwap_status = "상회 (수급강세)" if curr_price > ind['Micro_VWAP'] else "하회 (수급약세)"
-            macd_trend = "상승 파동 (양수)" if ind['MACD_Hist'] > 0 else "하락 파동 (음수)"
             
             indicators_str = (
                 f"- 단기 5-MA: {ind['MA5']:,}원 (현재가 {ma5_status})\n"
                 f"- Micro-VWAP: {ind['Micro_VWAP']:,}원 (현재가 {vwap_status})\n"
-                f"- RSI(14): {ind['RSI']} (70 이상 과매수 / 30 이하 과매도)\n"
-                f"- MACD 히스토그램: {ind['MACD_Hist']} -> {macd_trend}"
+                f"- 고점 대비 이격도: {drawdown_str}\n"
+                f"- 호가 불균형: {imbalance_str}"
             )
 
         # 최종 프롬프트 조합
@@ -229,7 +289,7 @@ class GeminiSniperEngine:
 - 전일대비 등락률: {fluctuation}%
 - 웹소켓 체결강도: {v_pw}%
 
-[초단타 기술적 지표 (최근 5분 기준)]
+[초단타 수급/위치 지표]
 {indicators_str}
 
 [거래량 분석]
@@ -237,7 +297,7 @@ class GeminiSniperEngine:
 
 {tick_summary}
 
-[최근 1분봉 흐름]
+[최근 1분봉 흐름 (과거 -> 최신순)]
 {candle_str}
 
 [실시간 호가창]
@@ -245,7 +305,7 @@ class GeminiSniperEngine:
 -------------------------
 {bid_str}
 
-[최근 10틱 상세 내역]
+[최근 10틱 상세 내역 (최신순)]
 {tick_str}
 """
         return user_input
@@ -275,14 +335,19 @@ class GeminiSniperEngine:
             self.lock.release()
             
     def analyze_scanner_results(self, total_count, survived_count, stats_text):
-        """텔레그램 아침 브리핑 (Markdown 반환)"""
+        """텔레그램 아침 브리핑 (Markdown 반환 - Gemini 3 Flash 적용)"""
         with self.lock:
-            data_input = f"[통계]\n총 스캔: {total_count}개\n생존: {survived_count}개\n[상세]\n{stats_text}"
+            data_input = f"[스캐너 통계 데이터]\n총 탐색: {total_count}개\n최종 생존: {survived_count}개\n\n[상세 탈락 사유]\n{stats_text}"
             try:
-                # 💡 require_json=False 로 설정하여 Markdown 응답을 안전하게 받음
-                return self._call_gemini_safe(MARKET_ANALYSIS_PROMPT, data_input, require_json=False, context_name="시장 브리핑")
+                # 💡 [핵심] 아침 브리핑에만 똑똑한 gemini-3-flash 를 덮어씌워서 호출합니다!
+                return self._call_gemini_safe(
+                    MARKET_ANALYSIS_PROMPT, 
+                    data_input, 
+                    require_json=False, 
+                    context_name="시장 브리핑",
+                    model_override="gemini-pro-latest"
+                )
             except Exception as e:
-                # 💡 [버그 픽스] 존재하지 않던 target_name 변수 제거
                 log_error(f"🚨 [시장 브리핑] AI 에러: {e}")
                 return f"⚠️ AI 시장 진단 생성 중 에러 발생: {e}"
     
@@ -290,7 +355,7 @@ class GeminiSniperEngine:
         """09:05 주도주 분석 (bot_main.py 호환을 위해 JSON String 반환)"""
         with self.lock:
             formatted_context = self._format_market_data(ws_data, recent_ticks, recent_candles)
-            prompt = f"[{stock_name}]의 실시간 수급 지표를 분석하여 09:05 이후 전략을 제시하라.\n\n{formatted_context}\n\n반드시 JSON으로 응답하라 (one_liner, pattern, scenario, target_price(숫자만), risk_factor 포함)"
+            prompt = f"[{stock_name}]의 실시간 수급 지표를 분석하여 09:10 이후 전략을 제시하라.\n\n{formatted_context}\n\n반드시 JSON으로 응답하라 (one_liner, pattern, scenario, target_price(숫자만), risk_factor 포함)"
             
             try:
                 # JSON으로 파싱한 뒤 다시 String으로 덤프 (안정성 극대화)
@@ -300,109 +365,26 @@ class GeminiSniperEngine:
                 log_error(f"🚨 [{stock_name}] 주도주 분석 에러: {e}")
                 return json.dumps({"error": str(e), "target_price": 0})
     
-#     # ==========================================
-#     # 6. 🔍 수동 종목 정밀 분석 (스캘핑/단기 트레이딩 관점)
-#     # ==========================================
-#     def generate_manual_report(self, stock_code, stock_name, db_manager, ws_manager, radar_manager):
-#         """
-#         [Gemini-Flash-Lite] 수동 종목 분석의 컨트롤러
-#         직접 DB, WS, Radar에서 데이터를 수집하고 AI 스캘핑/단기 관점 분석 결과를 반환합니다.
-#         """
-#         # 1. 📂 데이터 레이어 호출: 로컬 DB 일봉 데이터 수집
-#         db_df = db_manager.get_daily_data(stock_code, limit=20) 
-#         if db_df is None or db_df.empty:
-#             return {"error": "로컬 DB에 일봉 데이터가 부족하여 분석할 수 없습니다."}
-# 
-#         # 2. 🔌 데이터 레이어 호출: 실시간 웹소켓 수집
-#         ws_data = ws_manager.get_latest_data(stock_code)
-#         if not ws_data or ws_data.get('curr', 0) == 0:
-#             # 장 시작 전이거나 감시 등록이 안된 경우 DB의 마지막 종가로 Fallback
-#             ws_data = {'curr': int(db_df.iloc[-1]['Close']), 'fluctuation': 0.0, 'volume': 0}
-# 
-#         # 3. 📡 데이터 레이어 호출: 레이더(수급) 수집
-#         program_buy = radar_manager.check_program_buying_ka90008(stock_code)
-#         v_pw_pass = radar_manager.check_execution_strength_ka10046(stock_code)
-# 
-#         # ==========================================
-#         # 4. 수집된 데이터 가공 (Formatting)
-#         # ==========================================
-#         recent_20 = db_df.tail(20)
-#         df_for_ai = recent_20[['Date', 'Close', 'Volume', 'MA5', 'MA20', 'MA60', 'RSI', 'MACD', 'BBU']].copy().round(1)
-#         history_str = df_for_ai.to_json(orient='records', force_ascii=False)
-#         avg_vol_20d = recent_20['Volume'].mean()
-#         
-#         curr_price = ws_data.get('curr', 0)
-#         fluctuation = ws_data.get('fluctuation', 0.0)
-#         today_vol = ws_data.get('volume', 0)
-#         vol_ratio = (today_vol / avg_vol_20d * 100) if avg_vol_20d > 0 else 0
-#         
-#         program_str = "외인/기관 대량 순매수 유입 (강세)" if program_buy else "유의미한 대량 순매수 미확인"
-#         v_pw = ws_data.get('v_pw', 0.0)
-#         v_pw_str = f"{v_pw}% (강세 구간)" if v_pw_pass else f"{v_pw}% (보통/약세 구간)"
-# 
-#         # ==========================================
-#         # 5. AI 프롬프트 생성 (스캘핑/단기 관점)
-#         # ==========================================
-#         system_prompt = """
-# 너는 주식 시장의 최상위 스캘핑 및 단기 트레이딩 전문가야.
-# 제공된 일봉 흐름과 장중 수급 데이터를 입체적으로 분석하여, 당일 수익을 목표로 하는 단기 진단 리포트를 작성하라.
-# 
-# 분석 시 다음 사항을 반드시 고려하라:
-# 1. 이동평균선(MA) 배열 상태 (정배열/역배열/골든크로스 여부)
-# 2. 현재 가격이 볼린저 밴드 상단(BBU)을 강하게 돌파했는지, 아니면 저항을 맞는지
-# 3. 실시간 수급(프로그램 매수, 체결강도, 거래량 폭증 여부)이 차트의 방향을 지지하는지
-# """
-#         user_input = f"""
-# [종목명: {stock_name}]
-# - 현재가: {curr_price:,}원 (전일비 {fluctuation}%)
-# - 누적 거래량: {today_vol:,}주 (20일 평균대비 {vol_ratio:.1f}%)
-# - 체결강도: {v_pw_str}
-# - 프로그램 순매수: {program_str}
-# 
-# [최근 20일 데이터 요약]
-# {history_str}
-# 
-# 아래 JSON으로만 응답해:
-# {{
-#     "trend": "당일 단기 추세 1줄 요약",
-#     "target": 단기 목표가 숫자,
-#     "reason": "목표가 근거 (수급 및 저항선)",
-#     "stop": 칼손절가 숫자,
-#     "action": "매매 지침 (예: 현재가 눌림목 진입, 돌파 시 추격 매수 금지 등)"
-# }}
-# """
-#         last_error_msg = "초기화 전"
-#         
-#         # ==========================================
-#         # 6. Gemini API 호출 (로테이션 방어 로직 적용)
-#         # ==========================================
-#         for attempt in range(len(self.api_keys)):
-#             try:
-#                 # 💡 [핵심] 신규 SDK `generate_content` 호출 방식
-#                 response = self.client.models.generate_content(
-#                     model=self.current_model_name,
-#                     contents=[system_prompt, user_input],
-#                     config=types.GenerateContentConfig(response_mime_type="application/json")
-#                 )
-#                 
-#                 # 호출 성공 시 다음 사용을 위해 키 즉시 교체
-#                 self._rotate_client()
-#                 
-#                 # 💡 텍스트를 JSON으로 파싱하여 반환
-#                 return json.loads(response.text)
-# 
-#             except Exception as e:
-#                 kiwoom_utils.log_error(f"🚨 [{stock_name}] AI 수동 분석 에러: {e}")
-#                 last_error_msg = str(e)
-#                 error_msg_lower = last_error_msg.lower()
-#                 
-#                 # 429/Quota 에러 시 키 교체 후 다음 루프 진행
-#                 if any(x in error_msg_lower for x in ["429", "quota", "resource_exhausted"]):
-#                     old_key = self.current_key[-5:]
-#                     self._rotate_client()
-#                     print(f"⚠️ [{stock_name} 수동 분석] {old_key} 한도 초과 -> {self.current_key[-5:]} 교체 ({attempt+1}/{len(self.api_keys)})")
-#                     continue
-#                 else:
-#                     return {"error": f"API 에러: {last_error_msg}"}
-# 
-#         return {"error": f"모든 키 시도 실패. 마지막 에러: {last_error_msg}"}
+    # ==========================================
+    # 🔍 수동 종목 정밀 분석 (스캘핑/단기 트레이딩 관점)
+    # ==========================================
+    def generate_realtime_report(self, stock_name, stock_code, input_data_text):
+        """실시간 종목 분석 리포트 생성 (Markdown 반환 - Gemini 3.0 Flash 적용)"""
+        with self.lock:
+            user_input = (
+                f"🚨 [요청 종목]\n종목명: {stock_name}\n종목코드: {stock_code}\n\n"
+                f"📊 [스나이퍼 엔진 분석 데이터]\n{input_data_text}"
+            )
+            try:
+                # 💡 [핵심] 요청하신 gemini-3.0-flash 를 덮어씌워서 호출합니다!
+                return self._call_gemini_safe(
+                    REALTIME_ANALYSIS_PROMPT, 
+                    user_input, 
+                    require_json=False, 
+                    context_name="실시간 분석",
+                    model_override="gemini-pro-latest"
+                )
+            except Exception as e:
+                from src.utils.logger import log_error
+                log_error(f"🚨 [실시간 분석] AI 에러: {e}")
+                return f"⚠️ AI 실시간 분석 생성 중 에러 발생: {e}"

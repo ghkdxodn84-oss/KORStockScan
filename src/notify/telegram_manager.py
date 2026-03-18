@@ -460,8 +460,8 @@ def process_manual_add_step(message):
             if record:
                 # 이미 오늘 등록된 이력이 있다면 상태를 강제로 감시(WATCHING)로 멱등성 업데이트
                 record.status = 'WATCHING'
-                record.trade_type = 'MANUAL' # 확실한 수동 타입 지정
-                record.strategy = 'MANUAL'
+                record.trade_type = 'SCALP' # 확실한 수동 타입 지정
+                record.strategy = 'SCALPING'
                 record.prob = high_prob
             else:
                 # 없다면 신규 생성 (최신 컬럼명 적용)
@@ -471,8 +471,8 @@ def process_manual_add_step(message):
                     stock_name=stock_name,   # 💡 교정
                     prob=high_prob,
                     status='WATCHING',
-                    trade_type='MANUAL',     # 💡 type -> trade_type
-                    strategy='MANUAL'
+                    trade_type='SCALP',     # 💡 type -> trade_type
+                    strategy='SCALPING'
                 )
                 session.add(new_record)
         

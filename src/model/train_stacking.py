@@ -1,21 +1,24 @@
 import os
-import sqlite3
 import pandas as pd
 import numpy as np
 import joblib
 import FinanceDataReader as fdr
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import precision_score
+from sqlalchemy import create_engine, text
 import warnings
 
 warnings.filterwarnings('ignore')
 
-# --- 경로 설정 ---
+# --- 경로 및 DB 설정 ---
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.abspath(os.path.join(CURRENT_DIR, '..', 'data'))
+PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, '..', '..'))
+DATA_DIR = os.path.join(PROJECT_ROOT, 'data')
 os.makedirs(DATA_DIR, exist_ok=True)
 
-DB_NAME = os.path.join(DATA_DIR, 'kospi_stock_data.db')
+# 🎯 PostgreSQL 연결 설정
+DB_URL = os.getenv("DATABASE_URL", "postgresql://quant_admin:quant_password_123!@localhost:5432/korstockscan")
+engine = create_engine(DB_URL)
 
 HYBRID_XGB_PATH = os.path.join(DATA_DIR, 'hybrid_xgb_model.pkl')
 HYBRID_LGBM_PATH = os.path.join(DATA_DIR, 'hybrid_lgbm_model.pkl')
@@ -25,7 +28,7 @@ META_MODEL_PATH = os.path.join(DATA_DIR, 'stacking_meta_model.pkl')
 
 
 # ==========================================
-# [수정] 우량 대장주 필터링 (종목 대폭 확대)
+# 1. 우량 대장주 필터링 (FDR + PostgreSQL Fallback)
 # ==========================================
 def get_stacking_target_codes():
     print("[1/5] 우량 대장주 필터링 (메타 모델용)...")
@@ -37,82 +40,99 @@ def get_stacking_target_codes():
         return target_top['Code'].tolist()
     except Exception:
         try:
-            conn = sqlite3.connect(DB_NAME)
-            latest_date = pd.read_sql("SELECT MAX(Date) FROM daily_stock_quotes", conn).iloc[0, 0]
-            top_codes_df = pd.read_sql(f"SELECT Code FROM daily_stock_quotes WHERE Date = '{latest_date}' ORDER BY Volume DESC LIMIT 300", conn)
-            conn.close()
+            with engine.connect() as conn:
+                latest_date_query = "SELECT MAX(quote_date) FROM daily_stock_quotes"
+                latest_date = pd.read_sql(text(latest_date_query), conn).iloc[0, 0]
+                
+                query = f"""
+                    SELECT stock_code FROM daily_stock_quotes 
+                    WHERE quote_date = '{latest_date}' 
+                    ORDER BY volume DESC LIMIT 300
+                """
+                top_codes_df = pd.read_sql(text(query), conn)
+                
             print(f"✅ DB 기반 최근 거래량 상위 {len(top_codes_df)}종목을 추출했습니다.")
-            return top_codes_df['Code'].tolist() if not top_codes_df.empty else []
-        except: return []
+            return top_codes_df['stock_code'].tolist() if not top_codes_df.empty else []
+        except Exception as e: 
+            print(f"❌ DB 종목 추출 실패: {e}")
+            return []
 
 
 # ==========================================
-# 2. 데이터 로드 및 전처리 (최적화)
+# 2. 데이터 로드 및 전처리 (DB 스키마 최적화)
 # ==========================================
 def load_and_preprocess_stacking(codes):
     print(f"[2/5] {len(codes)}개 종목 데이터 가공 및 전체 지표(수급/신용 포함) 생성 중...")
-    conn = sqlite3.connect(DB_NAME)
     all_processed_data = []
 
-    # 💡 [변경] 수급/신용 컬럼 3개 추가 로드
-    cols_to_fetch = "Date, Code, Open, High, Low, Close, Volume, MA5, MA20, MACD, MACD_Sig, VWAP, OBV, BBL, BBU, RSI, ATR, BBB, BBP, Return, Foreign_Net, Inst_Net, Margin_Rate"
+    # 💡 DB 컬럼 소문자 매핑
+    cols_to_fetch = """
+        quote_date, stock_code, open_price, high_price, low_price, close_price, volume, 
+        ma5, ma20, macd, macd_sig, vwap, obv, rsi, atr, bbb, bbp, daily_return, 
+        foreign_net, inst_net, margin_rate
+    """
 
-    for code in codes:
-        query = f"SELECT {cols_to_fetch} FROM daily_stock_quotes WHERE Code = '{code}' ORDER BY Date DESC LIMIT 750"
-        df = pd.read_sql(query, conn)
-        df = df.sort_values('Date', ascending=True).reset_index(drop=True)
+    with engine.connect() as conn:
+        for code in codes:
+            query = f"""
+                SELECT {cols_to_fetch} 
+                FROM daily_stock_quotes 
+                WHERE stock_code = '{code}' 
+                ORDER BY quote_date DESC LIMIT 750
+            """
+            df = pd.read_sql(text(query), conn)
+            
+            if df.empty or len(df) < 150: 
+                continue
 
-        if len(df) < 150: continue
+            df = df.sort_values('quote_date', ascending=True).reset_index(drop=True)
 
-        df['Vol_Change'] = df['Volume'].pct_change()
-        df['MA_Ratio'] = df['Close'] / (df['MA20'] + 1e-9)
-        df['BB_Pos'] = (df['Close'] - df['BBL']) / (df['BBU'] - df['BBL'] + 1e-9)
-        df['RSI_Slope'] = df['RSI'].diff()
-        df['Range_Ratio'] = (df['High'] - df['Low']) / (df['Close'] + 1e-9)
-        df['Vol_Momentum'] = df['Volume'] / (df['Volume'].rolling(window=5).mean() + 1e-9)
-        df['Dist_MA5'] = df['Close'] / (df['MA5'] + 1e-9)
-        df['Up_Trend_2D'] = ((df['Close'].diff(1) > 0) & (df['Close'].shift(1).diff(1) > 0)).astype(int)
+            # 파생 변수 계산
+            df['vol_change'] = df['volume'].pct_change()
+            df['ma_ratio'] = df['close_price'] / (df['ma20'] + 1e-9)
+            df['rsi_slope'] = df['rsi'].diff()
+            df['range_ratio'] = (df['high_price'] - df['low_price']) / (df['close_price'] + 1e-9)
+            df['vol_momentum'] = df['volume'] / (df['volume'].rolling(window=5).mean() + 1e-9)
+            df['dist_ma5'] = df['close_price'] / (df['ma5'] + 1e-9)
+            df['up_trend_2d'] = ((df['close_price'].diff(1) > 0) & (df['close_price'].shift(1).diff(1) > 0)).astype(int)
+            
+            # 💡 [추가] Hybrid XGBoost가 요구하는 atr_ratio 계산 로직
+            df['atr_ratio'] = df['atr'] / (df['close_price'] + 1e-9)
 
-        # 💡 [신규] 수급 및 신용잔고 파생 피처 계산
-        vol_safe = df['Volume'] + 1e-9
-        df['Foreign_Net'] = df['Foreign_Net'].fillna(0)
-        df['Inst_Net'] = df['Inst_Net'].fillna(0)
-        df['Margin_Rate'] = df['Margin_Rate'].fillna(0)
+            # 수급 및 신용 파생 피처
+            vol_safe = df['volume'] + 1e-9
+            df['foreign_net'] = df['foreign_net'].fillna(0)
+            df['inst_net'] = df['inst_net'].fillna(0)
+            df['margin_rate'] = df['margin_rate'].fillna(0)
 
-        df['Foreign_Net_Roll5'] = df['Foreign_Net'].rolling(5).sum() / (df['Volume'].rolling(5).sum() + 1e-9)
-        df['Inst_Net_Roll5'] = df['Inst_Net'].rolling(5).sum() / (df['Volume'].rolling(5).sum() + 1e-9)
-        df['Dual_Net_Buy'] = ((df['Foreign_Net'] > 0) & (df['Inst_Net'] > 0)).astype(int)
-        df['Foreign_Vol_Ratio'] = df['Foreign_Net'] / vol_safe
-        df['Inst_Vol_Ratio'] = df['Inst_Net'] / vol_safe
-        df['Margin_Rate_Change'] = df['Margin_Rate'].diff()
-        df['Margin_Rate_Roll5'] = df['Margin_Rate'].rolling(5).mean()
+            df['foreign_net_roll5'] = df['foreign_net'].rolling(5).sum() / (df['volume'].rolling(5).sum() + 1e-9)
+            df['inst_net_roll5'] = df['inst_net'].rolling(5).sum() / (df['volume'].rolling(5).sum() + 1e-9)
+            df['dual_net_buy'] = ((df['foreign_net'] > 0) & (df['inst_net'] > 0)).astype(int)
+            df['foreign_vol_ratio'] = df['foreign_net'] / vol_safe
+            df['inst_vol_ratio'] = df['inst_net'] / vol_safe
+            df['margin_rate_change'] = df['margin_rate'].diff()
+            df['margin_rate_roll5'] = df['margin_rate'].rolling(5).mean()
 
-        # ==========================================
-        # 🎯 [변경] 3일 단기 스윙 정답지(Target) 생성 로직
-        # ==========================================
-        df['Next1_Open'] = df['Open'].shift(-1)  # 다음날 아침 시가(매수가)
+            # 🎯 3일 단기 스윙 정답지(Target) 생성
+            df['next1_open'] = df['open_price'].shift(-1)
 
-        # 1일차 ~ 3일차의 고가, 저가, 종가 미리보기
-        for i in range(1, 4):
-            df[f'Next{i}_High'] = df['High'].shift(-i)
-            df[f'Next{i}_Low'] = df['Low'].shift(-i)
-            df[f'Next{i}_Close'] = df['Close'].shift(-i)
+            for i in range(1, 4):
+                df[f'next{i}_high'] = df['high_price'].shift(-i)
+                df[f'next{i}_low'] = df['low_price'].shift(-i)
 
-        # 3일 동안의 최고가와 최저가 계산
-        df['Max_High_3D'] = df[['Next1_High', 'Next2_High', 'Next3_High']].max(axis=1)
-        df['Min_Low_3D'] = df[['Next1_Low', 'Next2_Low', 'Next3_Low']].min(axis=1)
+            df['max_high_3d'] = df[['next1_high', 'next2_high', 'next3_high']].max(axis=1)
+            df['min_low_3d'] = df[['next1_low', 'next2_low', 'next3_low']].min(axis=1)
 
-        # 타겟 조건: 3일 안에 +4.5% 도달 & 3일 동안 -3.0% 손절선 방어 성공
-        hit_target = (df['Max_High_3D'] / (df['Next1_Open'] + 1e-9)) >= 1.045
-        no_stop_loss = (df['Min_Low_3D'] / (df['Next1_Open'] + 1e-9)) >= 0.970
+            hit_target = (df['max_high_3d'] / (df['next1_open'] + 1e-9)) >= 1.045
+            no_stop_loss = (df['min_low_3d'] / (df['next1_open'] + 1e-9)) >= 0.970
 
-        df['Target'] = np.where(hit_target & no_stop_loss, 1, 0)
+            df['target'] = np.where(hit_target & no_stop_loss, 1, 0)
 
-        # 결측치(최근 3일 데이터가 없어 정답을 알 수 없는 마지막 행들) 제거
-        df = df.replace([np.inf, -np.inf], np.nan).dropna()
-        if not df.empty: all_processed_data.append(df)
+            df = df.replace([np.inf, -np.inf], np.nan).dropna()
+            
+            if not df.empty: 
+                all_processed_data.append(df)
 
-    conn.close()
     return pd.concat(all_processed_data) if all_processed_data else pd.DataFrame()
 
 
@@ -121,10 +141,12 @@ def load_and_preprocess_stacking(codes):
 # ==========================================
 def train_meta_model():
     target_codes = get_stacking_target_codes()
-    if not target_codes: return
+    if not target_codes: 
+        return
 
     total_df = load_and_preprocess_stacking(target_codes)
-    if total_df.empty: return
+    if total_df.empty: 
+        return
 
     print("[3/5] 하위 전문가 모델(Base Models) 로드 중...")
     try:
@@ -136,37 +158,51 @@ def train_meta_model():
         print(f"[-] 모델 로드 실패. 하위 모델을 먼저 학습하세요. 에러: {e}")
         return
 
-    # 💡 [변경] 학습 시 사용했던 신규 피처 리스트로 완벽히 교체
-    features_xgb = ['Return', 'MA_Ratio', 'MACD', 'MACD_Sig', 'VWAP', 'OBV', 'Up_Trend_2D', 'Dist_MA5', 'Dual_Net_Buy',
-                    'Foreign_Net_Roll5', 'Inst_Net_Roll5']
-    features_lgbm = ['BB_Pos', 'RSI', 'RSI_Slope', 'Range_Ratio', 'Vol_Momentum', 'Vol_Change', 'ATR', 'BBB', 'BBP',
-                     'Foreign_Vol_Ratio', 'Inst_Vol_Ratio', 'Margin_Rate_Change', 'Margin_Rate_Roll5']
+    # 💡 [핵심 수정] 각 모델이 학습할 때 사용했던 피처 리스트를 명확하게 분리
+    features_hybrid_xgb = [
+        'daily_return', 'ma_ratio', 'macd', 'macd_sig', 'vwap', 'obv', 
+        'up_trend_2d', 'dist_ma5', 'dual_net_buy', 'foreign_net_roll5', 'inst_net_roll5',
+        'bbb', 'bbp', 'atr_ratio', 'rsi'
+    ]
+    
+    features_bull_xgb = [
+        'daily_return', 'ma_ratio', 'macd', 'macd_sig', 'vwap', 'obv', 
+        'up_trend_2d', 'dist_ma5', 'dual_net_buy', 'foreign_net_roll5', 'inst_net_roll5',
+        'bbb', 'bbp', 'atr_ratio', 'rsi'  # 👈 메타 모델도 이 4개를 넘겨주도록 수정!
+    ]
+    
+    features_lgbm = [
+        'bbp', 'rsi', 'rsi_slope', 'range_ratio', 'vol_momentum', 'vol_change', 
+        'atr', 'bbb', 'foreign_vol_ratio', 'inst_vol_ratio', 'margin_rate_change', 'margin_rate_roll5'
+    ]
 
-    unique_dates = sorted(total_df['Date'].unique())
+    unique_dates = sorted(total_df['quote_date'].unique())
     split_date = unique_dates[int(len(unique_dates) * 0.8)]
 
-    train_df = total_df[total_df['Date'] < split_date]
-    test_df = total_df[total_df['Date'] >= split_date]
-    y_train = train_df['Target']
-    y_test = test_df['Target']
+    train_df = total_df[total_df['quote_date'] < split_date]
+    test_df = total_df[total_df['quote_date'] >= split_date]
+    y_train = train_df['target']
+    y_test = test_df['target']
 
     print("[4/5] 메타 학습용 OOF(Out-of-Fold) 확률 데이터 생성 중...")
 
+    # 하위 모델별로 각자에게 맞는 피처 리스트를 전달하도록 수정
     meta_X_train = pd.DataFrame({
-        'XGB_Prob': xgb_model.predict_proba(train_df[features_xgb])[:, 1],
+        'XGB_Prob': xgb_model.predict_proba(train_df[features_hybrid_xgb])[:, 1],
         'LGBM_Prob': lgbm_model.predict_proba(train_df[features_lgbm])[:, 1],
-        'Bull_XGB_Prob': bull_xgb.predict_proba(train_df[features_xgb])[:, 1],
+        'Bull_XGB_Prob': bull_xgb.predict_proba(train_df[features_bull_xgb])[:, 1],
         'Bull_LGBM_Prob': bull_lgbm.predict_proba(train_df[features_lgbm])[:, 1]
     })
 
     meta_X_test = pd.DataFrame({
-        'XGB_Prob': xgb_model.predict_proba(test_df[features_xgb])[:, 1],
+        'XGB_Prob': xgb_model.predict_proba(test_df[features_hybrid_xgb])[:, 1],
         'LGBM_Prob': lgbm_model.predict_proba(test_df[features_lgbm])[:, 1],
-        'Bull_XGB_Prob': bull_xgb.predict_proba(test_df[features_xgb])[:, 1],
+        'Bull_XGB_Prob': bull_xgb.predict_proba(test_df[features_bull_xgb])[:, 1],
         'Bull_LGBM_Prob': bull_lgbm.predict_proba(test_df[features_lgbm])[:, 1]
     })
 
     print("[5/5] 최종 결정권자(Meta-Model) 학습 및 임계값 테스트 중...")
+    
     meta_model = LogisticRegression(class_weight='balanced', random_state=42)
     meta_model.fit(meta_X_train, y_train)
 
@@ -190,14 +226,13 @@ def train_meta_model():
     print(f"✅ Stacking 메타 모델이 성공적으로 갱신되었습니다! ({META_MODEL_PATH})")
 
     # ==========================================
-    # 🚀 [추가] 정밀 백테스트(V2)를 위한 AI 예측 결과 저장
+    # 🚀 백테스트용 AI 예측 결과(ai_predictions.csv) 저장
     # ==========================================
     print("\n💾 백테스트용 AI 예측 결과(ai_predictions.csv)를 생성합니다...")
 
-    # 원본 test_df의 Date와 Code만 복사해 옵니다. ('Name' 삭제)
-    df_results = test_df[['Date', 'Code']].copy()
+    df_results = test_df[['quote_date', 'stock_code']].copy()
+    df_results.rename(columns={'quote_date': 'Date', 'stock_code': 'Code'}, inplace=True)
 
-    # 방금 구한 각 모델들의 OOF 예측 확률과 최종 Stacking 확률을 주입합니다.
     df_results['XGB_Prob'] = np.round(meta_X_test['XGB_Prob'].values, 4)
     df_results['LGBM_Prob'] = np.round(meta_X_test['LGBM_Prob'].values, 4)
     df_results['Bull_XGB_Prob'] = np.round(meta_X_test['Bull_XGB_Prob'].values, 4)
@@ -205,10 +240,8 @@ def train_meta_model():
     df_results['Stacking_Prob'] = np.round(meta_pred_proba, 4)
     df_results['Actual_Target'] = y_test.values
 
-    # 시간순 백테스트를 위해 날짜 오름차순 정렬
     df_results = df_results.sort_values(by=['Date', 'Code']).reset_index(drop=True)
 
-    # CSV 저장
     save_path = os.path.join(DATA_DIR, 'ai_predictions.csv')
     df_results.to_csv(save_path, index=False, encoding='utf-8-sig')
     print(f"✅ 테스트 세트(총 {len(df_results):,}건) 예측 결과가 저장되었습니다: {save_path}")

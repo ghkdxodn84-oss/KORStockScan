@@ -103,6 +103,100 @@ def get_kiwoom_token(config=None):
         log_error(f"🚨 토큰 발급 중 시스템 예외: {e}")
         return None
 
+def get_account_balance_kt00005(token, dmst_stex_tp="ALL"):
+    """
+    [kt00005] 체결잔고요청 (SOR 통합 버전)
+    KRX와 NXT 양쪽의 잔고를 모두 조회하여 같은 종목은 수량과 평단가를 병합하여 반환합니다.
+    """
+    url = get_api_url("/api/dostk/acnt") 
+    
+    # 💡 조회할 거래소 목록 설정 (ALL일 경우 두 곳 모두 조회)
+    target_exchanges = ["KRX", "NXT"] if dmst_stex_tp == "ALL" else [dmst_stex_tp]
+    
+    # 종목코드를 Key로 하여 두 거래소의 잔고를 합산할 딕셔너리
+    aggregated_balances = {}
+
+    for ex in target_exchanges:
+        payload = {"dmst_stex_tp": ex}
+
+        results = fetch_kiwoom_api_continuous(
+            url=url, 
+            token=token, 
+            api_id='kt00005', # 로그 가독성을 위해 거래소 명시
+            payload=payload, 
+            use_continuous=True
+        )
+
+        if not results:
+            continue
+
+        for res in results:
+            data_list = res.get('stk_cntr_remn', [])
+
+            for item in data_list:
+                def to_i(v): 
+                    if not v: return 0
+                    try:
+                        clean_v = str(v).replace(',', '').replace('+', '').strip()
+                        return int(float(clean_v)) 
+                    except (ValueError, TypeError):
+                        return 0
+
+                def to_f(v): 
+                    if not v: return 0.0
+                    try:
+                        clean_v = str(v).replace(',', '').replace('+', '').strip()
+                        return float(clean_v)
+                    except (ValueError, TypeError):
+                        return 0.0
+
+                cur_qty = to_i(item.get('cur_qty'))
+                
+                if cur_qty > 0:
+                    # 'A' 접두사 제거
+                    raw_code = str(item.get('stk_cd', '')).strip()
+                    clean_code = raw_code.replace('A', '') if raw_code.startswith('A') else raw_code
+                    
+                    pur_amt = to_i(item.get('pur_amt'))       # 매입금액
+                    eval_profit = to_i(item.get('evltv_prft')) # 평가손익
+
+                    # 💡 [핵심] 이미 다른 거래소(예: KRX)에서 조회된 종목이라면 수량과 평단가를 합산합니다!
+                    if clean_code in aggregated_balances:
+                        existing = aggregated_balances[clean_code]
+                        
+                        # 1. 수량, 총 매입금액, 총 평가손익 합산
+                        new_qty = existing['qty'] + cur_qty
+                        new_pur_amt = existing['pur_amt'] + pur_amt
+                        new_eval_profit = existing['eval_profit'] + eval_profit
+                        
+                        # 2. 가중 평균 매입단가(평단가) 및 수익률 재계산
+                        new_buy_price = int(new_pur_amt / new_qty) if new_qty > 0 else 0
+                        new_profit_rate = (new_eval_profit / new_pur_amt) * 100 if new_pur_amt > 0 else 0.0
+                        
+                        # 3. 데이터 갱신
+                        existing.update({
+                            'qty': new_qty,
+                            'pur_amt': new_pur_amt,
+                            'buy_price': new_buy_price,
+                            'eval_profit': new_eval_profit,
+                            'profit_rate': round(new_profit_rate, 4)
+                        })
+                    else:
+                        # 처음 발견된 종목이면 딕셔너리에 신규 등록
+                        aggregated_balances[clean_code] = {
+                            'code': clean_code,
+                            'name': str(item.get('stk_nm', '')).strip(),
+                            'qty': cur_qty,
+                            'buy_price': to_i(item.get('buy_uv')),        
+                            'current_price': to_i(item.get('cur_prc')),   
+                            'eval_profit': eval_profit,  
+                            'profit_rate': to_f(item.get('pl_rt')),
+                            'pur_amt': pur_amt # 평단가 가중평균 계산을 위한 임시 저장
+                        }
+                        
+    # 딕셔너리의 Value들만 뽑아서 리스트 형태로 반환 (기존 로직과 100% 호환)
+    return list(aggregated_balances.values())
+
 def get_industry_list_ka10101(token, market_type="0"):
     """
     [ka10101] 업종코드 리스트 조회

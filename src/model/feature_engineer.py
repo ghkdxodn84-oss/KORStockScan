@@ -25,13 +25,6 @@ def calculate_all_features(df: pd.DataFrame) -> pd.DataFrame:
     """
     OHLCV(고가/저가/종가/거래량) 및 수급/신용 데이터를 입력받아
     KORStockScan의 AI 앙상블 모델(XGB/LGBM)에 주입할 파생 피처를 일괄 계산하는 순수 함수(Pure Function)입니다.
-
-    Args:
-        df (pd.DataFrame): 'Open', 'High', 'Low', 'Close', 'Volume' 필수 컬럼이 포함된 데이터프레임.
-                           (수급/신용 데이터 컬럼이 존재할 경우 해당 피처도 자동 계산됨)
-
-    Returns:
-        pd.DataFrame: 결측치(NaN) 처리가 완벽히 완료되고, 모든 기술적/수급 지표가 추가된 데이터프레임.
     """
     df = df.copy()
 
@@ -42,7 +35,6 @@ def calculate_all_features(df: pd.DataFrame) -> pd.DataFrame:
         'close_price': 'Close', 'volume': 'Volume',
         'foreign_net': 'Foreign_Net', 'inst_net': 'Inst_Net', 'margin_rate': 'Margin_Rate'
     }
-    # 존재하는 컬럼만 싹 옷을 갈아입힙니다 (API 데이터가 들어와도 에러 없이 통과)
     df = df.rename(columns=COLUMN_NORMALIZER)
 
     required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
@@ -112,7 +104,10 @@ def calculate_all_features(df: pd.DataFrame) -> pd.DataFrame:
     # ----------------------------------------------------
     df['Vol_Change'] = df['Volume'].pct_change()
     df['MA_Ratio'] = df['Close'] / (df['MA20'] + 1e-9)
-    df['BB_Pos'] = (df['Close'] - df['BBL']) / (df['BBU'] - df['BBL'] + 1e-9)
+    
+    # 💡 [신규 추가] 모델이 요구하는 ATR_Ratio 피처 계산
+    df['ATR_Ratio'] = df['ATR'] / (df['Close'] + 1e-9)
+    
     df['RSI_Slope'] = df['RSI'].diff()
     df['Range_Ratio'] = (df['High'] - df['Low']) / (df['Close'] + 1e-9)
     df['Vol_Momentum'] = df['Volume'] / (df['Volume'].rolling(5).mean() + 1e-9)
@@ -122,37 +117,33 @@ def calculate_all_features(df: pd.DataFrame) -> pd.DataFrame:
     # ----------------------------------------------------
     # 3. [신규] 수급 및 신용잔고 파생 피처 (AI 재학습용 핵심 데이터)
     # ----------------------------------------------------
-    # 데이터베이스에 수급 컬럼이 존재할 경우에만 계산 (하위 호환성 방어)
     if 'Foreign_Net' in df.columns and 'Inst_Net' in df.columns:
         vol_safe = df['Volume'] + 1e-9
 
-        # 1) 당일 수급 비중 (0~1 사이의 비율로 스케일링)
+        # 1) 당일 수급 비중
         df['Foreign_Vol_Ratio'] = df['Foreign_Net'] / vol_safe
         df['Inst_Vol_Ratio'] = df['Inst_Net'] / vol_safe
 
-        # 2) 최근 5일 누적 수급 비중 (외국인/기관이 꾸준히 매집 중인가?)
+        # 2) 최근 5일 누적 수급 비중
         df['Foreign_Net_Roll5'] = df['Foreign_Net'].rolling(5).sum() / (df['Volume'].rolling(5).sum() + 1e-9)
         df['Inst_Net_Roll5'] = df['Inst_Net'].rolling(5).sum() / (df['Volume'].rolling(5).sum() + 1e-9)
 
-        # 3) 쌍끌이 매수 (강력한 상승 시그널)
+        # 3) 쌍끌이 매수
         df['Dual_Net_Buy'] = ((df['Foreign_Net'] > 0) & (df['Inst_Net'] > 0)).astype(int)
-        # ==========================================
-        # 💡 [신규] 스마트 머니 가속도 지표 (MACD 방식)
-        # ==========================================
-        # 외국인과 기관의 순매수 단기(5일) 지수이동평균 - 장기(20일) 지수이동평균
-        df['Foreign_Net_Accel'] = df['Foreign_Net'].ewm(span=5, adjust=False).mean() - df['Foreign_Net'].ewm(span=20,
-                                                                                                            adjust=False).mean()
-        df['Inst_Net_Accel'] = df['Inst_Net'].ewm(span=5, adjust=False).mean() - df['Inst_Net'].ewm(span=20,
-                                                                                                    adjust=False).mean()
+        
+        # 4) 스마트 머니 가속도 지표 (MACD 방식)
+        df['Foreign_Net_Accel'] = df['Foreign_Net'].ewm(span=5, adjust=False).mean() - df['Foreign_Net'].ewm(span=20, adjust=False).mean()
+        df['Inst_Net_Accel'] = df['Inst_Net'].ewm(span=5, adjust=False).mean() - df['Inst_Net'].ewm(span=20, adjust=False).mean()
     else:
-        for col in ['Foreign_Vol_Ratio', 'Inst_Vol_Ratio', 'Foreign_Net_Roll5', 'Inst_Net_Roll5', 'Dual_Net_Buy']:
+        # 🚨 [핵심 교정] 데이터 누락 시 Accel 지표도 반드시 0으로 생성해야 에러가 안 납니다!
+        missing_cols = ['Foreign_Vol_Ratio', 'Inst_Vol_Ratio', 'Foreign_Net_Roll5', 'Inst_Net_Roll5', 'Dual_Net_Buy', 'Foreign_Net_Accel', 'Inst_Net_Accel']
+        for col in missing_cols:
             df[col] = 0
 
     if 'Margin_Rate' in df.columns:
-        # 4) 신용잔고율 증감 (빚투 개미들이 털려나가는지 확인)
+        # 4) 신용잔고율 증감
         df['Margin_Rate_Change'] = df['Margin_Rate'].diff()
-
-        # 5) 신용잔고율 5일 평균 (종목의 전반적인 신용 부담감)
+        # 5) 신용잔고율 5일 평균
         df['Margin_Rate_Roll5'] = df['Margin_Rate'].rolling(5).mean()
     else:
         df['Margin_Rate_Change'] = 0
@@ -162,7 +153,12 @@ def calculate_all_features(df: pd.DataFrame) -> pd.DataFrame:
     # 4. 결측치(NaN) 처리 및 반환
     # ----------------------------------------------------
     df = df.replace([np.inf, -np.inf], np.nan)
-    df.bfill(inplace=True)
+    
+    # 🚨 [핵심 교정] 미래 데이터 참조(Data Leakage)를 유발하는 bfill 삭제
+    # df.bfill(inplace=True) <-- 절대 금지!
+    
+    # 과거 데이터로 빈칸을 채우거나(ffill), 아예 0으로 채워 무로부터 시작하게 만듭니다.
+    df.ffill(inplace=True)
     df.fillna(0, inplace=True)
 
     return df

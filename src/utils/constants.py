@@ -40,7 +40,7 @@ class TradingConfig:
     # [매매 비중 설정] 전략별 주문 가능 현금 대비 1회 매수 투입 비율
     INVEST_RATIO_KOSPI: float = 0.20  # 1. 코스피 우량주 (20% - 묵직하게 스윙)
     INVEST_RATIO_KOSDAQ: float = 0.15  # 2. 코스닥 주도주 (15% - 중간 비중)
-    INVEST_RATIO_SCALPING: float = 0.20  # 3. 초단타 스캘핑 (20% - AI의 빠른 판단에 따라 적극적으로 매매)
+    INVEST_RATIO_SCALPING: float = 0.10  # 3. 초단타 스캘핑 (10% - AI의 빠른 판단에 따라 적극적으로 매매)
 
     # 💡 [변경] 스윙 손절선 (백테스트 기준 -3.0% 반영)
     STOP_LOSS_BULL: float = -3.0  # 🏆 상승장 손절선 (최적화 결과 -3.0 반영)
@@ -49,8 +49,8 @@ class TradingConfig:
     STOP_LOSS_BOTTOM: float = -4.0  # 바닥권 매물 소화 버티기용 (-4.0%)
 
     # 💡 [변경] 가변 익절 (Trailing Stop) 룰
-    TRAILING_START_PCT: float = 3.5  # 🏆 방어선 가동 시작 수익률
-    TRAILING_DRAWDOWN_PCT: float = 1.5  # 🏆 고점 대비 익절 하락폭 (%)
+    TRAILING_START_PCT: float = 4.0  # 🏆 방어선 가동 시작 수익률
+    TRAILING_DRAWDOWN_PCT: float = 0.5  # 🏆 고점 대비 익절 하락폭 (%)
     MIN_PROFIT_PRESERVE: float = 1.5  # 어떤 흔들기가 와도 최소 +1.5% 수익은 무조건 보존
 
 

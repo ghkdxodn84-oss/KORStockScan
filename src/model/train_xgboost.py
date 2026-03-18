@@ -1,4 +1,3 @@
-import sqlite3
 import os
 import FinanceDataReader as fdr
 import joblib
@@ -6,18 +5,25 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import precision_score
 from xgboost import XGBClassifier
-
-CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
-DATA_DIR = os.path.abspath(os.path.join(CURRENT_DIR, '..', 'data'))
-os.makedirs(DATA_DIR, exist_ok=True)
-
-DB_NAME = os.path.join(DATA_DIR, 'kospi_stock_data.db')
-MODEL_PATH = os.path.join(DATA_DIR, 'hybrid_xgb_model.pkl')
-FEATURE_PATH = os.path.join(DATA_DIR, 'hybrid_features.pkl')
-
+from sqlalchemy import create_engine, text
 
 # ==========================================
-# 1. 우량 대장주 필터링 (FDR + DB Fallback)
+# 1. 디렉토리 및 DB 경로 설정
+# ==========================================
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, '..', '..'))
+
+DATA_DIR = os.path.join(PROJECT_ROOT, 'data')
+os.makedirs(DATA_DIR, exist_ok=True)
+
+MODEL_PATH = os.path.join(DATA_DIR, 'hybrid_xgb_model.pkl')
+FEATURE_PATH = os.path.join(DATA_DIR, 'hybrid_features.pkl')
+# 🎯 PostgreSQL 연결 설정 (환경 변수 우선, 기본값 세팅).
+DB_URL = os.getenv("DATABASE_URL", "postgresql://quant_admin:quant_password_123!@localhost:5432/korstockscan")
+engine = create_engine(DB_URL)
+
+# ==========================================
+# 2. 우량 대장주 필터링 (FDR + PostgreSQL Fallback)
 # ==========================================
 def get_hybrid_top_codes():
     print("[1/5] 최신 시장 데이터 기반 우량 대장주 필터링 중...")
@@ -30,96 +36,124 @@ def get_hybrid_top_codes():
     except Exception:
         try:
             print(f"⚠️ FDR 종목 리스트 수집 실패. DB 데이터로 우회합니다...")
-            conn = sqlite3.connect(DB_NAME)
-            latest_date = pd.read_sql("SELECT MAX(Date) FROM daily_stock_quotes", conn).iloc[0, 0]
-            top_codes_df = pd.read_sql(f"SELECT Code FROM daily_stock_quotes WHERE Date = '{latest_date}' ORDER BY Volume DESC LIMIT 300", conn)
-            conn.close()
+            with engine.connect() as conn:
+                # 테이블 스키마 적용: quote_date, volume, stock_code
+                latest_date_query = "SELECT MAX(quote_date) FROM daily_stock_quotes"
+                latest_date = pd.read_sql(text(latest_date_query), conn).iloc[0, 0]
+                
+                top_codes_query = f"""
+                    SELECT stock_code FROM daily_stock_quotes 
+                    WHERE quote_date = '{latest_date}' 
+                    ORDER BY volume DESC LIMIT 300
+                """
+                top_codes_df = pd.read_sql(text(top_codes_query), conn)
+                
             print(f"✅ DB 기반 최근 거래량 상위 {len(top_codes_df)}종목을 추출했습니다.")
-            return top_codes_df['Code'].tolist() if not top_codes_df.empty else []
-        except: return []
+            return top_codes_df['stock_code'].tolist() if not top_codes_df.empty else []
+        except Exception as e: 
+            print(f"❌ DB 종목 추출 실패: {e}")
+            return []
 
 
 # ==========================================
-# 2. 데이터 로드 및 전처리 (최적화 적용)
+# 3. 데이터 로드 및 전처리 (DB 스키마 완벽 반영)
 # ==========================================
 def load_and_preprocess(codes):
-    print(f"[2/5] {len(codes)}개 종목 데이터 가공 및 정답지 생성 중...")
-    conn = sqlite3.connect(DB_NAME)
+    print(f"[2/5] {len(codes)}개 종목 데이터 로드 및 정답지 생성 중...")
     all_data = []
 
-    # 💡 [핵심] 수급 컬럼 명시적 로드
-    cols_to_fetch = "Date, Code, Open, High, Low, Close, Volume, MA5, MA20, MACD, MACD_Sig, VWAP, OBV, Foreign_Net, Inst_Net"
+    # DB에 이미 계산된 훌륭한 지표들(bbb, bbp, atr, rsi)을 바로 가져옵니다.
+    cols_to_fetch = """
+        quote_date, stock_code, open_price, high_price, low_price, close_price, volume, 
+        ma5, ma20, rsi, macd, macd_sig, bbb, bbp, vwap, obv, atr, daily_return, 
+        foreign_net, inst_net
+    """
 
-    for code in codes:
-        df = pd.read_sql(f"SELECT {cols_to_fetch} FROM daily_stock_quotes WHERE Code = '{code}' ORDER BY Date DESC LIMIT 750", conn)
-        df = df.sort_values('Date', ascending=True).reset_index(drop=True)
-        if len(df) < 150: continue
+    with engine.connect() as conn:
+        for code in codes:
+            query = f"""
+                SELECT {cols_to_fetch} 
+                FROM daily_stock_quotes 
+                WHERE stock_code = '{code}' 
+                ORDER BY quote_date DESC LIMIT 750
+            """
+            df = pd.read_sql(text(query), conn)
+            
+            if df.empty or len(df) < 150: 
+                continue
 
-        df['MA_Ratio'] = df['Close'] / (df['MA20'] + 1e-9)
-        df['Dist_MA5'] = df['Close'] / (df['MA5'] + 1e-9)
-        df['Up_Trend_2D'] = ((df['Close'].diff(1) > 0) & (df['Close'].shift(1).diff(1) > 0)).astype(int)
+            # 과거 날짜부터 정렬
+            df = df.sort_values('quote_date', ascending=True).reset_index(drop=True)
 
-        # 💡 [신규] 수급 추세 피처 생성
-        df['Foreign_Net'] = df['Foreign_Net'].fillna(0)
-        df['Inst_Net'] = df['Inst_Net'].fillna(0)
-        df['Foreign_Net_Roll5'] = df['Foreign_Net'].rolling(5).sum() / (df['Volume'].rolling(5).sum() + 1e-9)
-        df['Inst_Net_Roll5'] = df['Inst_Net'].rolling(5).sum() / (df['Volume'].rolling(5).sum() + 1e-9)
-        df['Dual_Net_Buy'] = ((df['Foreign_Net'] > 0) & (df['Inst_Net'] > 0)).astype(int)
+            # 파생 변수 계산
+            df['ma_ratio'] = df['close_price'] / (df['ma20'] + 1e-9)
+            df['dist_ma5'] = df['close_price'] / (df['ma5'] + 1e-9)
+            df['up_trend_2d'] = ((df['close_price'].diff(1) > 0) & (df['close_price'].shift(1).diff(1) > 0)).astype(int)
 
-        df['Return'] = df['Close'].pct_change()
-        # ==========================================
-        # 🎯 [변경] 3일 단기 스윙 정답지(Target) 생성 로직
-        # ==========================================
-        df['Next1_Open'] = df['Open'].shift(-1)  # 다음날 아침 시가(매수가)
+            # 수급 지표 롤링 (결측치는 0으로 처리)
+            df['foreign_net'] = df['foreign_net'].fillna(0)
+            df['inst_net'] = df['inst_net'].fillna(0)
+            df['foreign_net_roll5'] = df['foreign_net'].rolling(5).sum() / (df['volume'].rolling(5).sum() + 1e-9)
+            df['inst_net_roll5'] = df['inst_net'].rolling(5).sum() / (df['volume'].rolling(5).sum() + 1e-9)
+            df['dual_net_buy'] = ((df['foreign_net'] > 0) & (df['inst_net'] > 0)).astype(int)
 
-        # 1일차 ~ 3일차의 고가, 저가, 종가 미리보기
-        for i in range(1, 4):
-            df[f'Next{i}_High'] = df['High'].shift(-i)
-            df[f'Next{i}_Low'] = df['Low'].shift(-i)
-            df[f'Next{i}_Close'] = df['Close'].shift(-i)
+            # 종가 대비 ATR 비율 (DB의 atr 컬럼 활용)
+            df['atr_ratio'] = df['atr'] / (df['close_price'] + 1e-9)
 
-        # 3일 동안의 최고가와 최저가 계산
-        df['Max_High_3D'] = df[['Next1_High', 'Next2_High', 'Next3_High']].max(axis=1)
-        df['Min_Low_3D'] = df[['Next1_Low', 'Next2_Low', 'Next3_Low']].min(axis=1)
+            # 🎯 3일 단기 스윙 정답지(Target) 생성
+            df['next1_open'] = df['open_price'].shift(-1)
+            for i in range(1, 4):
+                df[f'next{i}_high'] = df['high_price'].shift(-i)
+                df[f'next{i}_low'] = df['low_price'].shift(-i)
 
-        # 타겟 조건: 3일 안에 +4.5% 도달 & 3일 동안 -3.0% 손절선 방어 성공
-        hit_target = (df['Max_High_3D'] / (df['Next1_Open'] + 1e-9)) >= 1.045
-        no_stop_loss = (df['Min_Low_3D'] / (df['Next1_Open'] + 1e-9)) >= 0.970
+            df['max_high_3d'] = df[['next1_high', 'next2_high', 'next3_high']].max(axis=1)
+            df['min_low_3d'] = df[['next1_low', 'next2_low', 'next3_low']].min(axis=1)
 
-        df['Target'] = np.where(hit_target & no_stop_loss, 1, 0)
+            # 조건: 3일 내 +4.5% 도달 & -3.0% 손절 방어
+            hit_target = (df['max_high_3d'] / (df['next1_open'] + 1e-9)) >= 1.045
+            no_stop_loss = (df['min_low_3d'] / (df['next1_open'] + 1e-9)) >= 0.970
+            df['target'] = np.where(hit_target & no_stop_loss, 1, 0)
 
-        # 결측치(최근 3일 데이터가 없어 정답을 알 수 없는 마지막 행들) 제거
-        df = df.replace([np.inf, -np.inf], np.nan).dropna()
-        if not df.empty: all_data.append(df)
+            df = df.replace([np.inf, -np.inf], np.nan).dropna()
+            
+            if not df.empty: 
+                all_data.append(df)
 
-    conn.close()
     return pd.concat(all_data, axis=0) if all_data else pd.DataFrame()
 
 
 # ==========================================
-# 3. 모델 학습 (경로 분리 적용)
+# 4. 모델 학습 
 # ==========================================
 def train_hybrid_xgb():
     target_codes = get_hybrid_top_codes()
-    if not target_codes: return
+    if not target_codes: 
+        print("❌ 대상 종목이 없어 학습을 종료합니다.")
+        return
+        
     total_df = load_and_preprocess(target_codes)
-    if total_df.empty: return
+    if total_df.empty: 
+        print("❌ 학습할 데이터가 존재하지 않습니다.")
+        return
 
-    # 💡 [신규] 수급 피처 3개 탑재
-    features = ['Return', 'MA_Ratio', 'MACD', 'MACD_Sig', 'VWAP', 'OBV', 'Up_Trend_2D', 'Dist_MA5',
-                'Dual_Net_Buy', 'Foreign_Net_Roll5', 'Inst_Net_Roll5']
+    # 💡 [업데이트] DB 스키마에 맞춘 소문자 컬럼명 적용 및 rsi, bbb, bbp 추가
+    features = [
+        'daily_return', 'ma_ratio', 'macd', 'macd_sig', 'vwap', 'obv', 
+        'up_trend_2d', 'dist_ma5', 'dual_net_buy', 'foreign_net_roll5', 'inst_net_roll5',
+        'bbb', 'bbp', 'atr_ratio', 'rsi'
+    ]
 
-    unique_dates = sorted(total_df['Date'].unique())
+    unique_dates = sorted(total_df['quote_date'].unique())
     split_date = unique_dates[int(len(unique_dates) * 0.8)]
-    train_df, test_df = total_df[total_df['Date'] < split_date], total_df[total_df['Date'] >= split_date]
+    train_df, test_df = total_df[total_df['quote_date'] < split_date], total_df[total_df['quote_date'] >= split_date]
 
-    X_train, y_train = train_df[features], train_df['Target']
-    X_test, y_test = test_df[features], test_df['Target']
+    X_train, y_train = train_df[features], train_df['target']
+    X_test, y_test = test_df[features], test_df['target']
 
     neg_count, pos_count = (y_train == 0).sum(), (y_train == 1).sum()
     dynamic_weight = 1.0 if pos_count == 0 else neg_count / pos_count
 
-    print(f"[3/5] XGBoost 모델 학습 시작...")
+    print(f"[3/5] XGBoost 모델 학습 시작... (Train: {len(train_df)}행, Test: {len(test_df)}행)")
     model = XGBClassifier(
         n_estimators=2000, learning_rate=0.005, max_depth=5, min_child_weight=5, gamma=0.1,
         subsample=0.8, colsample_bytree=0.8, scale_pos_weight=dynamic_weight, random_state=42, n_jobs=-1,

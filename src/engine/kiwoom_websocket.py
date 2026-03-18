@@ -36,6 +36,8 @@ class KiwoomWSManager:
         # 전역 EventBus 인스턴스 획득 및 외부 명령 수신기 장착
         self.event_bus = EventBus()
         self.event_bus.subscribe("COMMAND_WS_REG", self._handle_reg_event)
+        # 💡 [추가] 최초 접속인지, 끊겼다가 다시 붙은(재접속) 것인지 구분하는 플래그
+        self.is_reconnected = False
         
         print(f"🌐 [WS] 웹소켓 매니저 초기화 완료 (Target: {self.uri})")
 
@@ -53,6 +55,14 @@ class KiwoomWSManager:
                     print("🔑 [WS] 로그인 패킷 전송 완료")
                     
                     await asyncio.sleep(1) # 로그인 처리 대기
+
+                    # 💡 [신규 추가] 재접속(Reconnect)인 경우 스나이퍼 엔진에 상태 동기화 명령 하달
+                    if self.is_reconnected:
+                        print("🔄 [WS] 웹소켓 재접속 감지! EventBus에 상태 동기화 이벤트를 발행합니다.")
+                        self.event_bus.publish("WS_RECONNECTED", {})
+                    
+                    # 최초 접속이 끝났으므로, 이후부터 연결되면 무조건 '재접속'으로 간주
+                    self.is_reconnected = True
 
                     # 2. 계좌 전체 주문체결(00) 감시 명시적 등록
                     exec_reg_packet = {

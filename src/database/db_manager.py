@@ -75,6 +75,8 @@ class DBManager:
                 record.trade_type = pick_type # 💡 type -> trade_type
                 record.position_tag = position
                 record.prob = prob
+                if record.status == 'EXPIRED':
+                    record.status = 'WATCHING'
             else:      # Insert
                 new_record = RecommendationHistory(
                     rec_date=date,           # 💡 date -> rec_date
@@ -121,14 +123,14 @@ class DBManager:
 
                 if record:
                     record.status = 'WATCHING'
-                    record.trade_type = 'MANUAL' # 💡 type -> trade_type
+                    record.trade_type = 'SCALPING' # 💡 type -> trade_type
                 else:
                     new_record = RecommendationHistory(
                         rec_date=today_date,     # 💡 date -> rec_date
                         stock_code=target_code,  # 💡 code -> stock_code
                         stock_name=name,         # 💡 name -> stock_name
                         buy_price=0,
-                        trade_type='MANUAL',     # 💡 type -> trade_type
+                        trade_type='SCALPING',     # 💡 type -> trade_type
                         status='WATCHING',
                         position_tag='MIDDLE'
                     )
@@ -213,19 +215,16 @@ class DBManager:
             today = datetime.now().date()
             
             with self.get_session() as session:
-                # 💡 [핵심 교정 1] SELECT 최상단에 고유 키 `id` 추가
+                # 💡 [핵심 교정 2] 이미 매매가 끝났거나(COMPLETED) 버려진(EXPIRED) 종목은 
+                # 아예 DB에서 가져오지 않도록 쿼리단에서 컷오프! (메모리 낭비 완벽 차단)
                 query = f"""
                     SELECT 
-                        id, 
-                        rec_date as date, 
-                        stock_code as code, 
-                        stock_name as name, 
-                        trade_type as type, 
-                        status, strategy, position_tag, prob, nxt, 
-                        buy_price, buy_qty, buy_time, 
-                        sell_price, sell_time, profit_rate 
+                        id, rec_date as date, stock_code as code, stock_name as name, 
+                        trade_type as type, status, strategy, position_tag, prob, nxt, 
+                        buy_price, buy_qty, buy_time, sell_price, sell_time, profit_rate 
                     FROM recommendation_history 
-                    WHERE rec_date='{today}' OR status='HOLDING'
+                    WHERE (rec_date='{today}' AND status NOT IN ('COMPLETED', 'EXPIRED')) 
+                       OR status='HOLDING'
                 """
                 df = pd.read_sql(query, session.bind)
 

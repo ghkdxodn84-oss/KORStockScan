@@ -18,6 +18,8 @@
 import sys
 from pathlib import Path
 
+from openai import api_key
+
 # ==========================================
 # 🚀 [핵심 방어] 프로젝트 루트 경로를 sys.path에 동적으로 추가
 # ==========================================
@@ -56,29 +58,64 @@ import src.notify.telegram_manager as telegram_manager
 warnings.filterwarnings('ignore')
 
 # --- [1. 성과 복기 엔진] ---
-def get_performance_report(db: DBManager):
-    """전일 추천 종목의 성과를 계산하여 반환합니다."""
+def get_performance_report(db):
+    """전일 추천 종목의 성과를 계산하여 반환합니다. (DB 스키마 변경 완벽 대응)"""
     last_date = db.get_latest_history_date()
     if not last_date: return "📊 신규 가동을 시작합니다.\n"
 
-    history = db.get_history_by_date(last_date)
+    try:
+        history = db.get_history_by_date(last_date)
+        if history is None or history.empty:
+            return f"📊 <b>[전일 성적표 ({last_date})]</b>\n기록 없음\n" + "-" * 20 + "\n"
+    except Exception as e:
+        return f"📊 성과 데이터 로드 실패: {e}\n"
+
     report_msg = f"📊 <b>[전일 성적표 ({last_date})]</b>\n"
 
+    # 💡 [핵심 교정 1] DB 스키마 버전에 따라 유연하게 컬럼명 매핑
+    # 'trade_type'이나 'strategy'가 있으면 그것을 쓰고, 없으면 기존 'type' 사용
+    type_col = 'trade_type' if 'trade_type' in history.columns else 'type'
+    if 'strategy' in history.columns and type_col not in history.columns:
+        type_col = 'strategy'
+        
+    code_col = 'stock_code' if 'stock_code' in history.columns else 'code'
+    price_col = 'buy_price' if 'buy_price' in history.columns else 'price'
+
     for r_type in ['MAIN', 'RUNNER']:
-        subset = history[history['type'] == r_type]
+        # 해당 컬럼 자체가 없으면 스킵하여 에러 방어
+        if type_col not in history.columns:
+            continue
+            
+        subset = history[history[type_col] == r_type]
         if subset.empty: continue
 
         profits = []
         for _, row in subset.iterrows():
             try:
-                df = fdr.DataReader(row['code'], start=last_date)
-                close_price = df.iloc[-1]['Close']
-            except:
-                db_last = db.get_stock_data(row['code'], limit=1)
-                close_price = db_last.iloc[0]['Close'] if not db_last.empty else row['buy_price']
+                # 💡 [핵심 교정 2] 종목코드 6자리 규격화 및 가격 유효성 검사
+                target_code = str(row.get(code_col, '')).replace('.0', '').strip().zfill(6)
+                target_price = float(row.get(price_col, 0)) if pd.notna(row.get(price_col)) else 0
+                
+                # 매수가가 0이면 수익률 계산이 불가능하므로 스킵
+                if target_price <= 0: continue
 
-            p = (close_price / row['buy_price'] - 1) * 100
-            profits.append(p)
+                try:
+                    df = fdr.DataReader(target_code, start=last_date)
+                    close_price = df.iloc[-1]['Close']
+                except:
+                    # FDR 수집 실패 시 DB 데이터로 폴백 (대소문자 완벽 대응)
+                    db_last = db.get_stock_data(target_code, limit=1)
+                    if db_last is not None and not db_last.empty:
+                        close_price = db_last.iloc[0]['close_price'] if 'close_price' in db_last.columns else db_last.iloc[0]['Close']
+                    else:
+                        close_price = target_price # 최후의 수단: 본전 처리
+
+                p = (close_price / target_price - 1) * 100
+                profits.append(p)
+                
+            except Exception as e:
+                print(f"⚠️ [{target_code}] 성과 계산 중 오류: {e}")
+                continue
 
         if profits:
             win_rate = (len([p for p in profits if p > 0]) / len(profits)) * 100
@@ -243,7 +280,7 @@ def run_integrated_scanner():
         print("📊 [3/4] 리포트 생성 및 전송 중...")
         
         debug_msg = (
-            f"🛑 *[장 마감 스캐너 필터링 결과]*\n"
+            f"🛑 *[AI 스캐너 필터링 결과]*\n"
             f"총 {len(target_list)}개 중 *{len(all_results)}개 생존*\n\n"
             f"📉 *탈락 사유 통계*\n"
             f" • 데이터 부족: {drop_stats['short_data']}개\n"
@@ -268,26 +305,44 @@ def run_integrated_scanner():
 
         # --- Gemini AI 수석 트레이더 장전 브리핑 ---
         ai_briefing = "⚠️ GEMINI_API_KEY 미설정"
-        api_key = CONF.get('GEMINI_API_KEY')
-        if api_key:
+        
+        # 💡 [핵심 교정 1] 복수형 api_keys 변수로 정확히 받음
+        api_keys = [v for k, v in CONF.items() if k.startswith("GEMINI_API_KEY")]
+    
+        if not api_keys:
+            kiwoom_utils.log_error("❌ 제미나이 키 발급 실패로 엔진을 중단합니다.")
+            event_bus.publish('TELEGRAM_BROADCAST', {'message': "🚨 [시스템 에러] 제미나이 키 발급 실패로 엔진을 중단합니다."})
+        else:
             try:
-                ai_engine = GeminiSniperEngine(api_keys=api_key)
+                # 💡 [핵심 교정 2] api_keys=api_keys 로 오타 수정!
+                ai_engine = GeminiSniperEngine(api_keys=api_keys)
                 ai_briefing = ai_engine.analyze_scanner_results(len(target_list), len(all_results), debug_msg)
             except Exception as e:
                 ai_briefing = f"⚠️ AI 브리핑 생성 실패: {e}"
 
         perf_report = get_performance_report(db)
 
-        # 📢 [입의 분리 2] 최종 리포트를 포장해서 텔레그램 매니저에게 Event로 던짐!
-        payload = {
-            "type": "START_OF_DAY_REPORT",
-            "date": today,
-            "performance_report": perf_report,
-            "ai_briefing": ai_briefing,
-            "main_picks": main_picks,
-            "runner_ups": runner_ups
-        }
-        event_bus.publish("TELEGRAM_BROADCAST", payload)
+        # 💡 [핵심 교정 3] 텔레그램 매니저의 '0개 스킵' 로직을 우회하는 방어막 추가
+        if len(main_picks) == 0 and len(runner_ups) == 0:
+            # 종목이 0개일 때는 START_OF_DAY_REPORT 양식을 쓰지 않고, 통짜 텍스트로 강제 전송합니다.
+            fallback_msg = (
+                f"{perf_report}\n"
+                f"{ai_briefing}\n\n"
+                f"🛡️ <b>[시스템 알림]</b>\n"
+                f"오늘은 AI 필터링을 통과한 생존 종목이 0개입니다.\n무리한 진입을 피하고 현금을 보호합니다."
+            )
+            event_bus.publish("TELEGRAM_BROADCAST", {"message": fallback_msg, "parse_mode": "HTML"})
+        else:
+            # 📢 정상적으로 생존 종목이 있을 때 (기존 로직)
+            payload = {
+                "type": "START_OF_DAY_REPORT",
+                "date": today,
+                "performance_report": perf_report,
+                "ai_briefing": ai_briefing,
+                "main_picks": main_picks,
+                "runner_ups": runner_ups
+            }
+            event_bus.publish("TELEGRAM_BROADCAST", payload)
 
     except Exception as e:
         print(f"❌ 시스템 에러 발생: {e}")
