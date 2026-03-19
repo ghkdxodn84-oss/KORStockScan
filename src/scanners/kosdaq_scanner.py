@@ -57,8 +57,8 @@ def run_kosdaq_scanner(is_test_mode=False):
     # 환경 설정 및 토큰
     while True:
         now = datetime.now()
-        # 💡 [핵심 3] 테스트 모드일 때는 09:05 ~ 15:20 시간 제한을 무시하고 즉시 실행합니다!
-        is_market_open = datetime.strptime("09:05:00", "%H:%M:%S").time() <= now.time() <= datetime.strptime("15:20:00", "%H:%M:%S").time()
+        # 💡 [핵심 3] 테스트 모드일 때는 09:05 ~ 19:15 시간 제한을 무시하고 즉시 실행합니다!
+        is_market_open = datetime.strptime("09:05:00", "%H:%M:%S").time() <= now.time() <= datetime.strptime("19:15:00", "%H:%M:%S").time()
         
         if not is_test_mode and not is_market_open:
             print("🌙 [KOSDAQ] 대기 중...")
@@ -178,8 +178,8 @@ def run_kosdaq_scanner(is_test_mode=False):
                 prob = ml_predictor.predict_prob_for_df(df, models)
 
                 # 💡 [테스트용 교정] 평소에는 0.80 이상이어야 하지만, 
-                # 테스트 시 결과물을 확인하기 위해 임시로 0.60으로 낮춥니다. (확인 후 0.80 원복)
-                test_threshold = 0.60 if is_test_mode else 0.80
+                # test_threshold = 0.60 if is_test_mode else 0.80
+                test_threshold = 0.60 if is_test_mode else 0.58 
 
                 # 💡 [조건 강화] AI 확률 + 프로그램 수급이 '순매수(+)' 상태일 때만 픽
                 if prob >= test_threshold and prm_data['net_amt'] > 0:
@@ -218,7 +218,7 @@ def run_kosdaq_scanner(is_test_mode=False):
                                 rec_date=today_date,       #
                                 stock_code=r['Code'],      #
                                 stock_name=r['Name'],      #
-                                trade_type='MAIN',         # (기존 type에서 변경)
+                                trade_type='RUNNER',         # (기존 type에서 변경)
                                 buy_price=r['Price'], 
                                 position_tag=r['Position'], 
                                 prob=r['Prob'], 
@@ -241,8 +241,8 @@ def run_kosdaq_scanner(is_test_mode=False):
                 # 웹소켓 감시망에도 등록하여 실시간 타점 추적 시작!
                 event_bus.publish("COMMAND_WS_REG", {"codes": new_codes_found})
 
-        print(f"✅ [{now.strftime('%H:%M:%S')}] KOSDAQ 스캔 완료. 5분 대기...")
-        time.sleep(300)
+        print(f"✅ [{now.strftime('%H:%M:%S')}] KOSDAQ 스캔 완료. 30분 대기...")
+        time.sleep(1800)
 
 if __name__ == "__main__":
     """

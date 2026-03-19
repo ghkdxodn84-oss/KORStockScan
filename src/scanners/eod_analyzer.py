@@ -24,10 +24,9 @@ def load_config():
         return {}
 
 def extract_eod_candidates(db_manager):
-    """최근 5일 데이터를 분석하여 내일의 주도주 후보 15종목을 추출합니다."""
-    print("🔍 [데이터 추출] VCP 패턴 및 메이저 수급 매집 종목을 스캔합니다...")
+    """장 마감 후 내일의 주도주 후보 15종목을 추출합니다. (쌍끌이 양매수 + VCP 압축)"""
+    print("🔍 [데이터 추출] 외인/기관 쌍끌이 매집 및 VCP 압축 종목을 정밀 스캔합니다...")
     
-    # 최근 5영업일 데이터 가져오기 (PostgreSQL 쿼리)
     query = """
     WITH RecentDates AS (
         SELECT DISTINCT quote_date FROM daily_stock_quotes ORDER BY quote_date DESC LIMIT 5
@@ -35,6 +34,7 @@ def extract_eod_candidates(db_manager):
     SELECT * FROM daily_stock_quotes 
     WHERE quote_date IN (SELECT quote_date FROM RecentDates)
     """
+    import pandas as pd
     df = pd.read_sql(query, db_manager.engine)
     if df.empty: return ""
 
@@ -43,67 +43,78 @@ def extract_eod_candidates(db_manager):
 
     for code, group in grouped:
         group = group.sort_values('quote_date').reset_index(drop=True)
-        if len(group) < 5: continue
+        if len(group) < 3: continue
 
         today_data = group.iloc[-1]
         
-        # [조건 1] 잡주 배제: 종가 5,000원 이상, 시총 1,000억 이상
-        if today_data['close_price'] < 5000 or today_data['marcap'] < 1000_000_000_00:
+        # 1. 시가총액 단위 보정 및 우량주 필터 (5천원 이상, 1000억 이상)
+        marcap = today_data.get('marcap', 0)
+        min_marcap = 100_000_000_000 if marcap > 1000000 else 1000
+
+        if today_data.get('close_price', 0) < 5000 or marcap < min_marcap:
             continue
         
-        # [조건 2] 추세 방어: 종가가 20일선 위 (정배열 초입)
-        if today_data['close_price'] <= today_data['ma20']:
+        # 2. 20일선 완벽 지지 (이탈 종목 칼같이 컷아웃)
+        ma20 = today_data.get('ma20', 0)
+        if pd.isna(ma20) or ma20 == 0 or today_data['close_price'] < ma20:
             continue
             
-        # [조건 3] RSI 과열 방지 및 에너지 비축 (45 ~ 68 사이)
-        if not (45 <= today_data['rsi'] <= 68):
+        # 3. RSI 골든존 (50 ~ 70: 힘은 붙었으나 과열되지 않은 상태)
+        rsi = today_data.get('rsi', 0)
+        if pd.isna(rsi) or not (50 <= rsi <= 70):
             continue
 
-        # [조건 4] 스마트머니(수급) 매집: 최근 3일 외인 or 기관 순매수 합산
+        # 4. 💎 쌍끌이 양매수 (가장 강력한 필터: 외인 AND 기관 모두 순매수)
         last_3_days = group.iloc[-3:]
         foreign_sum = last_3_days['foreign_net'].sum()
         inst_sum = last_3_days['inst_net'].sum()
         
-        # 둘 다 팔고 나갔다면 세력 이탈로 간주
-        if foreign_sum <= 0 and inst_sum <= 0:
+        # 둘 중 하나라도 팔았거나 0이면 가차 없이 버림!
+        if foreign_sum <= 0 or inst_sum <= 0:
             continue 
 
-        # [조건 5] 에너지 응축 (거래량 급감): 오늘 거래량이 5일 평균 대비 120% 미만일 것
+        # 5. 거래량 응축 (5일 평균 대비 150% 이하로 숨죽인 녀석들만)
         avg_vol = group['volume'].mean()
         vol_ratio = today_data['volume'] / avg_vol if avg_vol > 0 else 1.0
-        if vol_ratio > 1.2: 
-            continue # 거래량이 터진 상태면 내일 쉬어갈 확률 높음
+        if vol_ratio > 1.5: 
+            continue 
 
-        # [조건 6] 볼린저밴드 스퀴즈 (폭이 좁을수록 폭발력이 큼)
+        # 볼린저밴드 수축도 계산
         bbu = today_data.get('bbu', 0)
         bbl = today_data.get('bbl', 0)
-        bb_width = (bbu - bbl) / today_data['close_price'] if bbu > 0 else 999
+        bb_width = (bbu - bbl) / today_data['close_price'] if bbu > 0 and today_data['close_price'] > 0 else 999
         
+        total_smart_money = foreign_sum + inst_sum
+
         candidates.append({
             'code': code,
-            'name': today_data['stock_name'],
+            'name': today_data.get('stock_name', code),
             'close_price': today_data['close_price'],
             'foreign_sum': foreign_sum,
             'inst_sum': inst_sum,
-            'rsi': today_data['rsi'],
+            'total_smart_money': total_smart_money, 
+            'rsi': rsi,
             'macd_hist': today_data.get('macd_hist', 0),
             'bb_width': bb_width,
             'vol_ratio': vol_ratio
         })
 
-    # 후보군 정렬: 볼린저밴드 폭이 좁으면서(응축), 메이저 수급이 많은 순으로 Top 15 추출
     candidates_df = pd.DataFrame(candidates)
-    if candidates_df.empty: return ""
+    if candidates_df.empty: 
+        print("⚠️ 오늘 시장에서는 쌍끌이 매집 및 응축 조건에 부합하는 A급 종목이 없습니다.")
+        return ""
     
-    candidates_df = candidates_df.sort_values(by=['bb_width', 'foreign_sum'], ascending=[True, False]).head(15)
+    # 정렬: 1순위 볼린저밴드 수축(좁을수록 좋음), 2순위 메이저 수급 많은 순
+    candidates_df = candidates_df.sort_values(by=['bb_width', 'total_smart_money'], ascending=[True, False]).head(15)
     
-    # AI에게 먹여줄 텍스트 포맷팅
+    print(f"✨ [정밀 스캔 완료] 조건에 완벽히 부합하는 {len(candidates_df)}개의 A급 타겟을 AI에게 전달합니다.")
+    
     report_text = ""
     for idx, row in candidates_df.iterrows():
         report_text += f"🔹 [{row['name']}] ({row['code']})\n"
         report_text += f" - 종가: {int(row['close_price']):,}원 (RSI: {row['rsi']:.1f}, BB폭: {row['bb_width']*100:.1f}%)\n"
-        report_text += f" - 3일 누적수급: 외인 {int(row['foreign_sum']):,}주 / 기관 {int(row['inst_sum']):,}주\n"
-        report_text += f" - 거래량 상태: 5일 평균대비 {row['vol_ratio']*100:.0f}% (에너지 응축중)\n"
+        report_text += f" - 3일 누적 쌍끌이: 외인 {int(row['foreign_sum']):,}주 / 기관 {int(row['inst_sum']):,}주\n"
+        report_text += f" - 거래량 상태: 5일 평균대비 {row['vol_ratio']*100:.0f}%\n"
         report_text += f" - MACD 히스토그램: {row['macd_hist']:.2f}\n\n"
     
     return report_text

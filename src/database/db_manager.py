@@ -64,58 +64,60 @@ class DBManager:
     # --------------------------------------------------------
     # 2. 매매 이력 및 종목 관리
     # --------------------------------------------------------
-    def save_recommendation(self, date: str, code: str, name: str, price: int, pick_type: str, position: str, prob: float = 0.7):
-        """종목 추천 이력 저장 (존재하면 업데이트, 없으면 인서트)"""
+    def save_recommendation(self, date: str, code: str, name: str, price: int, pick_type: str, position: str, prob: float = 0.7, strategy: str = None):
+        """종목 추천 이력 저장 (3대 표준 trade_type 강제 정규화)"""
+        
+        # 💡 [핵심 교정 1] 스캐너가 넘겨준 pick_type을 3대 표준 태그로 강제 매핑합니다.
+        pick_type_upper = pick_type.upper()
+        if 'SCALP' in pick_type_upper:
+            normalized_type = 'SCALP'
+        elif 'RUNNER' in pick_type_upper or 'KOSDAQ' in pick_type_upper:
+            normalized_type = 'RUNNER'
+        else:
+            normalized_type = 'MAIN' # 기본값
+
+        # 💡 [핵심 교정 2] 정규화된 태그에 맞춰 실제 매매 로직(strategy)을 짝지어줍니다.
+        if not strategy:
+            if normalized_type == 'SCALP':
+                strategy = 'SCALPING'
+            elif normalized_type == 'RUNNER':
+                strategy = 'KOSDAQ_ML'
+            else:
+                strategy = 'KOSPI_ML'
+
         with self.get_session() as session:
-            # 💡 [변경] rec_date, stock_code 필터링 적용
             record = session.query(RecommendationHistory).filter_by(rec_date=date, stock_code=code).first()
             
             if record: # Update
                 record.buy_price = price
-                record.trade_type = pick_type # 💡 type -> trade_type
+                record.trade_type = normalized_type # 💡 표준화된 태그 저장
+                record.strategy = strategy          # 💡 매핑된 전략 저장
                 record.position_tag = position
                 record.prob = prob
+                
                 if record.status == 'EXPIRED':
                     record.status = 'WATCHING'
             else:      # Insert
                 new_record = RecommendationHistory(
-                    rec_date=date,           # 💡 date -> rec_date
-                    stock_code=code,         # 💡 code -> stock_code
-                    stock_name=name,         # 💡 name -> stock_name
+                    rec_date=date,           
+                    stock_code=code,         
+                    stock_name=name,         
                     buy_price=price, 
-                    trade_type=pick_type,    # 💡 type -> trade_type
+                    trade_type=normalized_type, # 💡 표준화된 태그 저장
+                    strategy=strategy,          # 💡 매핑된 전략 저장
+                    status='WATCHING',
                     position_tag=position, 
                     prob=prob
                 )
                 session.add(new_record)
-
-    def update_sell_record(self, code: str, sell_price: int, profit_rate: float, status: str = 'COMPLETED'):
-        """매도 완료 기록 업데이트"""
-        # 💡 [변경] 모델이 진정한 DateTime으로 바뀌었으므로 문자열이 아닌 datetime 객체를 넘깁니다.
-        sell_time_obj = datetime.now()
-        
-        with self.get_session() as session:
-            # 💡 [변경] code -> stock_code
-            records = session.query(RecommendationHistory).filter(
-                RecommendationHistory.stock_code == code,
-                RecommendationHistory.status.in_(['HOLDING', 'SELL_ORDERED'])
-            ).all()
-            
-            for record in records:
-                record.status = status
-                record.sell_price = sell_price
-                record.sell_time = sell_time_obj # 💡 파이썬 객체 그대로 투입
-                record.profit_rate = profit_rate
     
     def register_manual_stock(self, code: str, name: str) -> bool:
         """수동 감시 종목을 DB에 등록합니다."""
-        # 💡 ORM 단에서 Date 컬럼과 매핑될 수 있도록 date() 객체로 넘기는 것이 가장 안전합니다.
         today_date = datetime.now().date()
         target_code = str(code).zfill(6)
 
         try:
             with self.get_session() as session:
-                # 💡 [변경] rec_date, stock_code 매핑
                 record = session.query(RecommendationHistory).filter_by(
                     rec_date=today_date,
                     stock_code=target_code
@@ -123,14 +125,16 @@ class DBManager:
 
                 if record:
                     record.status = 'WATCHING'
-                    record.trade_type = 'SCALPING' # 💡 type -> trade_type
+                    record.trade_type = 'SCALP' 
+                    record.strategy = 'SCALPING' # 💡 수동 등록 시 확실하게 단타 전략으로 덮어씌움
                 else:
                     new_record = RecommendationHistory(
-                        rec_date=today_date,     # 💡 date -> rec_date
-                        stock_code=target_code,  # 💡 code -> stock_code
-                        stock_name=name,         # 💡 name -> stock_name
+                        rec_date=today_date,     
+                        stock_code=target_code,  
+                        stock_name=name,         
                         buy_price=0,
-                        trade_type='SCALPING',     # 💡 type -> trade_type
+                        trade_type='SCALP', # 태그는 단타로
+                        strategy='SCALPING',       # 💡 실제 매매 로직은 확실한 SCALPING으로!
                         status='WATCHING',
                         position_tag='MIDDLE'
                     )
@@ -139,6 +143,7 @@ class DBManager:
             return True
 
         except Exception as e:
+            from src.utils.logger import log_error
             log_error(f"수동 타겟 DB 등록 오류 (ORM): {e}")
             return False
     
@@ -279,7 +284,9 @@ class DBManager:
     def check_special_auth(self, chat_id: int) -> bool:
         with self.get_session() as session:
             user = session.query(User).filter_by(chat_id=chat_id).first()
-            return bool(user and user.auth_group in ['A', 'V'])
+            # return bool(user and user.auth_group in ['A', 'V'])
+            return bool(user and user.auth_group in ['A']) # VIP 등급 제거 (관리자만 허용), VIP는 일반 유저와 동일하게 취급, 추가기능개발시 VIP 등급 활용 예정
+
 
     def add_new_user(self, chat_id: int):
         with self.get_session() as session:

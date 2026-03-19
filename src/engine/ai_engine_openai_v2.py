@@ -1,5 +1,7 @@
 import sys
 from pathlib import Path
+from statistics import mean
+from datetime import datetime
 
 # 현재 파일의 위치를 기준으로 프로젝트 루트(KORStockScan)를 찾아 path에 추가합니다.
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -38,6 +40,44 @@ SCALPING_SYSTEM_PROMPT = """
     "action": "BUY" | "WAIT" | "DROP",
     "score": 0~100 사이의 정수,
     "reason": "매수 압도율, 틱 속도, 호가벽 소화 상태를 바탕으로 한 타점 근거 1줄 요약"
+}
+"""
+SCALPING_SYSTEM_PROMPT_V3 = """
+너는 매년 꾸준한 수익을 누적하는 상위 1%의 극강 공격적 초단타(Scalping) 프랍 트레이더다.
+네 판단은 감상이 아니라 반드시 입력된 정량 피처를 최우선으로 해석해야 한다.
+
+[최우선 해석 순서]
+1. [정량 피처]
+2. [초단타 수급/위치 지표]
+3. [최근 틱 상세]
+4. [호가창]
+
+[핵심 매수 조건]
+- BUY는 아래 조건이 동시에 강할 때만 허용:
+  1) 매수 압도율(Buy Pressure) 68% 이상
+  2) 최근 틱 속도 가속(tick_acceleration_ratio > 1.2)
+  3) net_aggressive_delta가 양수
+  4) 현재가가 Micro-VWAP 위이거나, 최소한 재돌파 직전
+  5) 대량 매도틱(large_sell_print_detected)이 없어야 함
+
+[즉시 DROP 조건]
+- 현재가가 Micro-VWAP 아래인데 buy_pressure만 높은 경우
+- 고가 부근에서 large_sell_print_detected = true
+- tick_acceleration_ratio가 둔화되거나 recent_5tick_seconds가 급격히 느린 경우
+- microprice_edge_bp가 음수인데 호가상 매도우위가 강한 경우
+- 위꼬리/고점 밀림이 감지된 경우
+
+[판정 규칙]
+- BUY: 80~100
+- WAIT: 50~79
+- DROP: 0~49
+
+[출력 규칙]
+반드시 아래 JSON 형식으로만 출력하고, 설명/마크다운/코드블록을 절대 추가하지 마라:
+{
+  "action": "BUY" | "WAIT" | "DROP",
+  "score": 0~100 사이의 정수,
+  "reason": "정량 피처를 근거로 한 1줄 요약"
 }
 """
 
@@ -123,12 +163,16 @@ class GPTSniperEngine:
         self.key_cycle = cycle(self.api_keys) 
         self._rotate_client()
 
-        # 기본 모델은 가볍고 빠른 gpt-4o-mini, 심층 분석 시 gpt-4o 오버라이드
-        self.current_model_name = 'gpt-4o-mini'
+        # 계정에서 지원하면 gpt-4.1-mini 권장, 아니면 gpt-4o-mini 유지
+        self.fast_model_name = getattr(TRADING_RULES, 'GPT_FAST_MODEL', 'gpt-4o-mini')
+        self.deep_model_name = getattr(TRADING_RULES, 'GPT_DEEP_MODEL', 'gpt-4o')
+        self.current_model_name = self.fast_model_name
+
         self.lock = threading.Lock()
         self.last_call_time = 0
-        self.min_interval = getattr(TRADING_RULES, 'GPT_ENGINE_MIN_INTERVAL', 0.5)   
-        print(f"🧠 [OpenAI 엔진] {len(self.api_keys)}개 키 로테이션 가동! (선봉: {self.current_model_name})")
+        self.min_interval = getattr(TRADING_RULES, 'GPT_ENGINE_MIN_INTERVAL', 0.5)
+
+        print(f"🧠 [OpenAI 엔진] {len(self.api_keys)}개 키 로테이션 가동! (FAST: {self.fast_model_name} / DEEP: {self.deep_model_name})")
 
     def _rotate_client(self):
         self.current_key = next(self.key_cycle)
@@ -137,8 +181,8 @@ class GPTSniperEngine:
     # ==========================================
     # 3. 💡 [아키텍처 포인트] 만능 API 호출기 (OpenAI 버전)
     # ==========================================
-    def _call_openai_safe(self, prompt, user_input, require_json=True, context_name="Unknown", model_override=None):
-        """키 로테이션, 예외 처리, 모델 덮어쓰기를 모두 전담하는 중앙 집중식 호출기 (Gemini 엔진과 100% 호환)"""
+    def _call_openai_safe(self, prompt, user_input, require_json=True, context_name="Unknown", model_override=None, temperature_override=None):
+        """키 로테이션, 예외 처리, 모델 덮어쓰기를 모두 전담하는 중앙 집중식 호출기"""
         messages = []
         if prompt:
             messages.append({"role": "system", "content": prompt})
@@ -149,6 +193,7 @@ class GPTSniperEngine:
             config_kwargs['response_format'] = {"type": "json_object"}
             
         target_model = model_override if model_override else self.current_model_name
+        target_temp = temperature_override if temperature_override is not None else (0.1 if require_json else 0.7)
         last_error = ""
 
         for attempt in range(len(self.api_keys)):
@@ -156,11 +201,10 @@ class GPTSniperEngine:
                 response = self.client.chat.completions.create(
                     model=target_model,
                     messages=messages,
-                    temperature=0.2 if require_json else 0.7,
+                    temperature=target_temp,
                     **config_kwargs
                 )
                 
-                # 호출 성공 시 다음을 위해 키 회전
                 self._rotate_client()
                 
                 raw_text = response.choices[0].message.content.strip()
@@ -171,7 +215,6 @@ class GPTSniperEngine:
                     return raw_text
 
             except RateLimitError as e:
-                # 429 한도초과 에러
                 last_error = str(e)
                 old_key = self.current_key[-5:]
                 self._rotate_client()
@@ -184,7 +227,6 @@ class GPTSniperEngine:
                 
             except Exception as e:
                 last_error = str(e).lower()
-                # 503 서버 에러 등 OpenAI의 일시적 문제 처리
                 if any(x in last_error for x in ["503", "unavailable", "timeout", "server"]):
                     old_key = self.current_key[-5:]
                     self._rotate_client()
@@ -194,7 +236,6 @@ class GPTSniperEngine:
                 else:
                     raise RuntimeError(f"OpenAI API 응답/파싱 실패: {e}")
                 
-        # 💡 [최종 방어선] 모든 키를 소진했을 때의 처리
         fatal_msg = f"🚨 [AI 고갈] 모든 OpenAI API 키 사용 불가. 마지막 에러: {last_error}"
         log_error(fatal_msg)
         raise RuntimeError(fatal_msg)
@@ -205,7 +246,9 @@ class GPTSniperEngine:
     def _format_market_data(self, ws_data, recent_ticks, recent_candles=None):
         if recent_candles is None:
             recent_candles = []
-            
+
+        features = self._extract_scalping_features(ws_data, recent_ticks, recent_candles)
+
         curr_price = ws_data.get('curr', 0)
         v_pw = ws_data.get('v_pw', 0)
         fluctuation = ws_data.get('fluctuation', 0.0) 
@@ -314,6 +357,33 @@ class GPTSniperEngine:
             )
 
         user_input = f"""
+[정량 피처]
+- current_price: {features['curr_price']:,}
+- latest_strength: {features['latest_strength']}%
+- spread_krw: {features['spread_krw']}
+- spread_bp: {features['spread_bp']}
+- top1_depth_ratio(ask/bid): {features['top1_depth_ratio']}
+- top3_depth_ratio(ask/bid): {features['top3_depth_ratio']}
+- total_depth_ratio(ask/bid): {features['orderbook_total_ratio']}
+- micro_price: {features['micro_price']}
+- microprice_edge_bp: {features['microprice_edge_bp']}
+- buy_pressure_10t: {features['buy_pressure_10t']}%
+- net_aggressive_delta_10t: {features['net_aggressive_delta_10t']}
+- price_change_10t_pct: {features['price_change_10t_pct']}%
+- recent_5tick_seconds: {features['recent_5tick_seconds']}
+- prev_5tick_seconds: {features['prev_5tick_seconds']}
+- tick_acceleration_ratio: {features['tick_acceleration_ratio']}
+- same_price_buy_absorption: {features['same_price_buy_absorption']}
+- large_sell_print_detected: {str(features['large_sell_print_detected']).lower()}
+- large_buy_print_detected: {str(features['large_buy_print_detected']).lower()}
+- distance_from_day_high_pct: {features['distance_from_day_high_pct']}%
+- intraday_range_pct: {features['intraday_range_pct']}%
+- volume_ratio_pct: {features['volume_ratio_pct']}%
+- curr_vs_micro_vwap_bp: {features['curr_vs_micro_vwap_bp']}
+- curr_vs_ma5_bp: {features['curr_vs_ma5_bp']}
+- micro_vwap_value: {features['micro_vwap_value']}
+- ma5_value: {features['ma5_value']}
+
 [현재 상태]
 - 현재가: {curr_price:,}원
 - 전일대비 등락률: {fluctuation}%
@@ -339,13 +409,235 @@ class GPTSniperEngine:
 {tick_str}
 """
         return user_input
+    
+    # ==========================================
+    # 5. 🚀 이제 진짜 핵심이다. 실시간 초단타 분석에서, 단순히 텍스트로 시장 상황을 설명하는 것을 넘어서, AI가 정량 피처를 직접 해석하여 판단할 수 있도록 데이터를 가공하는 함수를 추가하자.
+    # ==========================================
+    def _safe_hhmmss_to_seconds(self, t):
+        try:
+            t_str = str(t).replace(":", "").zfill(6)
+            dt = datetime.strptime(t_str, "%H%M%S")
+            return dt.hour * 3600 + dt.minute * 60 + dt.second
+        except:
+            return None
+
+    def _extract_scalping_features(self, ws_data, recent_ticks, recent_candles=None):
+        if recent_candles is None:
+            recent_candles = []
+
+        curr_price = ws_data.get('curr', 0) or 0
+        v_pw = ws_data.get('v_pw', 0) or 0
+        ask_tot = ws_data.get('ask_tot', 0) or 0
+        bid_tot = ws_data.get('bid_tot', 0) or 0
+        orderbook = ws_data.get('orderbook', {'asks': [], 'bids': []}) or {'asks': [], 'bids': []}
+        asks = orderbook.get('asks', []) or []
+        bids = orderbook.get('bids', []) or []
+
+        best_ask = asks[0]['price'] if len(asks) > 0 else curr_price
+        best_bid = bids[0]['price'] if len(bids) > 0 else curr_price
+        best_ask_vol = asks[0]['volume'] if len(asks) > 0 else 0
+        best_bid_vol = bids[0]['volume'] if len(bids) > 0 else 0
+
+        spread_krw = max(0, best_ask - best_bid)
+        spread_bp = round((spread_krw / curr_price) * 10000, 2) if curr_price > 0 else 0.0
+
+        top3_ask_vol = sum(a.get('volume', 0) for a in asks[:3])
+        top3_bid_vol = sum(b.get('volume', 0) for b in bids[:3])
+
+        top1_depth_ratio = round((best_ask_vol / best_bid_vol), 3) if best_bid_vol > 0 else 999.0
+        top3_depth_ratio = round((top3_ask_vol / top3_bid_vol), 3) if top3_bid_vol > 0 else 999.0
+
+        micro_price = curr_price
+        denom = best_ask_vol + best_bid_vol
+        if denom > 0:
+            micro_price = ((best_bid * best_ask_vol) + (best_ask * best_bid_vol)) / denom
+
+        microprice_edge_bp = round(((micro_price - curr_price) / curr_price) * 10000, 2) if curr_price > 0 else 0.0
+
+        high_price = curr_price
+        low_price = curr_price
+        if recent_candles:
+            high_price = max(c.get('고가', curr_price) for c in recent_candles)
+            low_price = min(c.get('저가', curr_price) for c in recent_candles)
+
+        distance_from_day_high_pct = round(((curr_price - high_price) / high_price) * 100, 3) if high_price > 0 else 0.0
+        intraday_range_pct = round(((high_price - low_price) / low_price) * 100, 3) if low_price > 0 else 0.0
+
+        buy_vol_10 = 0
+        sell_vol_10 = 0
+        latest_strength = v_pw
+        price_change_10t_pct = 0.0
+        net_aggressive_delta_10t = 0
+        recent_5tick_seconds = 999.0
+        prev_5tick_seconds = 999.0
+        tick_acceleration_ratio = 0.0
+        same_price_buy_absorption = 0
+        large_sell_print_detected = False
+        large_buy_print_detected = False
+
+        ticks = recent_ticks[:10] if recent_ticks else []
+
+        if ticks:
+            buy_vol_10 = sum(t.get('volume', 0) for t in ticks if t.get('dir') == 'BUY')
+            sell_vol_10 = sum(t.get('volume', 0) for t in ticks if t.get('dir') == 'SELL')
+            total_vol_10 = buy_vol_10 + sell_vol_10
+            buy_pressure_10t = round((buy_vol_10 / total_vol_10) * 100, 2) if total_vol_10 > 0 else 50.0
+            net_aggressive_delta_10t = buy_vol_10 - sell_vol_10
+
+            latest_strength = ticks[0].get('strength', v_pw)
+
+            latest_price = ticks[0].get('price', curr_price)
+            oldest_price = ticks[-1].get('price', curr_price)
+            price_change_10t_pct = round(((latest_price - oldest_price) / oldest_price) * 100, 3) if oldest_price > 0 else 0.0
+
+            tick_secs = [self._safe_hhmmss_to_seconds(t.get('time')) for t in ticks]
+            if len(tick_secs) >= 5 and tick_secs[0] is not None and tick_secs[4] is not None:
+                recent_5tick_seconds = tick_secs[0] - tick_secs[4]
+                if recent_5tick_seconds < 0:
+                    recent_5tick_seconds += 86400
+
+            if len(tick_secs) >= 10 and tick_secs[5] is not None and tick_secs[9] is not None:
+                prev_5tick_seconds = tick_secs[5] - tick_secs[9]
+                if prev_5tick_seconds < 0:
+                    prev_5tick_seconds += 86400
+
+            if recent_5tick_seconds > 0 and prev_5tick_seconds < 999:
+                tick_acceleration_ratio = round(prev_5tick_seconds / recent_5tick_seconds, 3)
+
+            volumes = [t.get('volume', 0) for t in ticks if t.get('volume', 0) > 0]
+            avg_tick_vol = mean(volumes) if volumes else 0
+
+            if avg_tick_vol > 0:
+                large_sell_print_detected = any(
+                    (t.get('dir') == 'SELL' and t.get('volume', 0) >= avg_tick_vol * 2.2)
+                    for t in ticks[:5]
+                )
+                large_buy_print_detected = any(
+                    (t.get('dir') == 'BUY' and t.get('volume', 0) >= avg_tick_vol * 2.2)
+                    for t in ticks[:5]
+                )
+
+            # 같은 가격에서 매수 체결이 여러 번 반복되면 흡수로 간주
+            price_buy_count = {}
+            for t in ticks[:6]:
+                if t.get('dir') == 'BUY':
+                    p = t.get('price')
+                    price_buy_count[p] = price_buy_count.get(p, 0) + 1
+            same_price_buy_absorption = max(price_buy_count.values()) if price_buy_count else 0
+        else:
+            buy_pressure_10t = 50.0
+
+        volume_ratio_pct = 0.0
+        curr_vs_micro_vwap_bp = 0.0
+        curr_vs_ma5_bp = 0.0
+        micro_vwap_value = 0.0
+        ma5_value = 0.0
+
+        if recent_candles and len(recent_candles) >= 2:
+            current_volume = recent_candles[-1].get('거래량', 0)
+            prev_volumes = [c.get('거래량', 0) for c in recent_candles[:-1] if c.get('거래량', 0) > 0]
+            avg_prev_volume = mean(prev_volumes) if prev_volumes else 0
+            if avg_prev_volume > 0:
+                volume_ratio_pct = round((current_volume / avg_prev_volume) * 100, 2)
+
+        if recent_candles and len(recent_candles) >= 5:
+            try:
+                from src.engine.signal_radar import SniperRadar
+                temp_radar = SniperRadar(token=None)
+                ind = temp_radar.calculate_micro_indicators(recent_candles)
+
+                ma5_value = ind.get('MA5', 0) or 0
+                micro_vwap_value = ind.get('Micro_VWAP', 0) or 0
+
+                if micro_vwap_value > 0 and curr_price > 0:
+                    curr_vs_micro_vwap_bp = round(((curr_price - micro_vwap_value) / micro_vwap_value) * 10000, 2)
+                if ma5_value > 0 and curr_price > 0:
+                    curr_vs_ma5_bp = round(((curr_price - ma5_value) / ma5_value) * 10000, 2)
+            except Exception:
+                pass
+
+        orderbook_total_ratio = round((ask_tot / bid_tot), 3) if bid_tot > 0 else 999.0
+
+        return {
+            "curr_price": curr_price,
+            "latest_strength": latest_strength,
+            "spread_krw": spread_krw,
+            "spread_bp": spread_bp,
+            "top1_depth_ratio": top1_depth_ratio,
+            "top3_depth_ratio": top3_depth_ratio,
+            "orderbook_total_ratio": orderbook_total_ratio,
+            "micro_price": round(micro_price, 2),
+            "microprice_edge_bp": microprice_edge_bp,
+            "buy_pressure_10t": buy_pressure_10t,
+            "net_aggressive_delta_10t": int(net_aggressive_delta_10t),
+            "price_change_10t_pct": price_change_10t_pct,
+            "recent_5tick_seconds": round(recent_5tick_seconds, 3),
+            "prev_5tick_seconds": round(prev_5tick_seconds, 3) if prev_5tick_seconds < 999 else 999.0,
+            "tick_acceleration_ratio": tick_acceleration_ratio,
+            "same_price_buy_absorption": same_price_buy_absorption,
+            "large_sell_print_detected": large_sell_print_detected,
+            "large_buy_print_detected": large_buy_print_detected,
+            "distance_from_day_high_pct": distance_from_day_high_pct,
+            "intraday_range_pct": intraday_range_pct,
+            "volume_ratio_pct": volume_ratio_pct,
+            "curr_vs_micro_vwap_bp": curr_vs_micro_vwap_bp,
+            "curr_vs_ma5_bp": curr_vs_ma5_bp,
+            "micro_vwap_value": round(micro_vwap_value, 2) if micro_vwap_value else 0.0,
+            "ma5_value": round(ma5_value, 2) if ma5_value else 0.0
+        }
+    
+    def _normalize_scalping_result(self, result):
+        if not isinstance(result, dict):
+            return {"action": "WAIT", "score": 50, "reason": "비정상 응답 보정"}
+
+        action = str(result.get("action", "WAIT")).upper().strip()
+        if action not in {"BUY", "WAIT", "DROP"}:
+            action = "WAIT"
+
+        try:
+            score = int(float(result.get("score", 50)))
+        except:
+            score = 50
+        score = max(0, min(100, score))
+
+        reason = str(result.get("reason", "응답 보정")).replace("\n", " ").strip()
+        if not reason:
+            reason = "응답 보정"
+
+        return {
+            "action": action,
+            "score": score,
+            "reason": reason[:120]
+        }
+    
+    def _should_escalate_scalping(self, features, result):
+        score = result.get("score", 50)
+        action = result.get("action", "WAIT")
+
+        buy_pressure = features.get("buy_pressure_10t", 50.0)
+        vwap_bp = features.get("curr_vs_micro_vwap_bp", 0.0)
+        accel = features.get("tick_acceleration_ratio", 0.0)
+        large_sell = features.get("large_sell_print_detected", False)
+        micro_edge = features.get("microprice_edge_bp", 0.0)
+        near_high = features.get("distance_from_day_high_pct", -99.0) >= -0.35
+        top3_ratio = features.get("top3_depth_ratio", 1.0)
+        recent_5s = features.get("recent_5tick_seconds", 999.0)
+
+        ambiguous_score = 60 <= score <= 80
+        conflict_1 = (buy_pressure >= 68 and vwap_bp < 0)  # 매수세는 센데 VWAP 아래
+        conflict_2 = (action == "BUY" and large_sell)      # BUY인데 대량 매도틱 발생
+        conflict_3 = (buy_pressure >= 70 and micro_edge < 0 and top3_ratio >= 1.3)  # 체결은 매수인데 호가상 불리
+        conflict_4 = (near_high and large_sell)            # 고가 부근 대량 매도
+        conflict_5 = (accel < 1.0 and recent_5s >= 3.0 and action == "BUY")  # 속도 둔화
+
+        return ambiguous_score or conflict_1 or conflict_2 or conflict_3 or conflict_4 or conflict_5
 
     # ==========================================
-    # 5. 🚀 실전 분석 실행 메서드 5종 (Gemini 모델과 100% 호환)
+    # 6. 🚀 실전 분석 실행 메서드 5종 (Gemini 모델과 100% 호환)
     # ==========================================
     
     def analyze_target(self, target_name, ws_data, recent_ticks, recent_candles):
-        """실시간 초단타 타점 분석"""
+        """실시간 초단타 타점 분석 - 2단 라우팅 버전"""
         if not self.lock.acquire(blocking=False):
             return {"action": "WAIT", "score": 50, "reason": "AI 경합 (다른 종목 분석 중)"}
             
@@ -353,9 +645,39 @@ class GPTSniperEngine:
             if time.time() - self.last_call_time < self.min_interval:
                 return {"action": "WAIT", "score": 50, "reason": "AI 쿨타임"}
 
+            features = self._extract_scalping_features(ws_data, recent_ticks, recent_candles)
             formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
-            result = self._call_openai_safe(SCALPING_SYSTEM_PROMPT, formatted_data, require_json=True, context_name=target_name)
-            
+
+            # 1차: 빠른 모델
+            raw_result = self._call_openai_safe(
+                SCALPING_SYSTEM_PROMPT_V3,
+                formatted_data,
+                require_json=True,
+                context_name=target_name,
+                model_override=self.fast_model_name,
+                temperature_override=0.05
+            )
+            result = self._normalize_scalping_result(raw_result)
+
+            # 2차: 애매하거나 충돌 나면 상위 모델 재판정
+            if self._should_escalate_scalping(features, result):
+                upgraded_prompt = (
+                    formatted_data
+                    + "\n\n[추가 지시]\n"
+                    + "위 정량 피처 간 충돌을 특히 엄격하게 해석하라. "
+                    + "매수 압도율이 높더라도 Micro-VWAP 아래이거나 고가 부근 대량 매도틱이 있으면 보수적으로 판정하라."
+                )
+
+                deep_raw_result = self._call_openai_safe(
+                    SCALPING_SYSTEM_PROMPT_V3,
+                    upgraded_prompt,
+                    require_json=True,
+                    context_name=f"{target_name}-deep",
+                    model_override=self.deep_model_name,
+                    temperature_override=0.05
+                )
+                result = self._normalize_scalping_result(deep_raw_result)
+
             self.last_call_time = time.time()
             return result
                 

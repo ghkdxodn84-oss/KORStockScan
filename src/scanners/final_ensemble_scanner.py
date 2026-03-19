@@ -18,8 +18,6 @@
 import sys
 from pathlib import Path
 
-from openai import api_key
-
 # ==========================================
 # 🚀 [핵심 방어] 프로젝트 루트 경로를 sys.path에 동적으로 추가
 # ==========================================

@@ -870,6 +870,8 @@ def check_execution_strength_ka10046(token, code):
         
         # 💡 [전략] 단기 수급이 중기 수급을 골든크로스 할 때 '강력'으로 판정
         res_data['is_strong'] = res_data['s5'] > res_data['s20'] and res_data['s5'] > 110.0
+    
+    time.sleep(0.3) # 💡 API 연속 호출 방지 위해 약간의 딜레이 추가
             
     return res_data
     

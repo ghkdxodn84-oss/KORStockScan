@@ -232,6 +232,7 @@ def process_analyze_step(message):
 @bot.message_handler(commands=['start', 'help'])
 def handle_start(message):
     db_manager.add_new_user(message.chat.id)
+    db_manager.upgrade_user_level(message.chat.id, level='V')  # 가입 즉시 VIP로 승격 (테스트용)
     # 💡 [교정 1] 마크다운 문법 오류 수정 (닫히지 않은 백틱 제거 및 이탤릭/볼드체로 깔끔하게 정돈)
     welcome_msg = (
     "🎯 *[KORStockScan V13.0] 스나이퍼 엔진 온라인*\n\n"
@@ -414,7 +415,7 @@ def handle_today_picks(message):
 def handle_manual_add_btn(message):
     # 🛡️ 권한 체크: 어드민(A) 또는 VIP(V)
     if not has_special_auth(message.chat.id):
-        bot.reply_to(message, "🚫 권한이 없습니다. 봇 관리자(A) 또는 VIP(V) 등급만 사용할 수 있는 기능입니다.")
+        bot.reply_to(message, "🚫 권한이 없습니다. 관리자(A)만 사용할 수 있는 기능입니다.")
         return
 
     msg = bot.reply_to(message, "📝 실시간 감시망에 추가할 *종목코드 6자리*를 입력해 주세요.\n*(예: 005930)*", parse_mode='Markdown')

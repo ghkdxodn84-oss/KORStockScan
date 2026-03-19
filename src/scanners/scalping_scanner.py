@@ -54,9 +54,9 @@ def run_scalper(is_test_mode=False):
         now = datetime.now()
         now_time = now.time()
 
-        # 장 운영 시간 체크 (09:00 ~ 15:20)
-        market_open = datetime.strptime("09:00:00", "%H:%M:%S").time()
-        market_close = datetime.strptime("15:20:00", "%H:%M:%S").time()
+        # 장 운영 시간 체크 (08:00 ~ 20:00)
+        market_open = datetime.strptime("08:00:00", "%H:%M:%S").time()
+        market_close = datetime.strptime("20:00:00", "%H:%M:%S").time()
         
         if not is_test_mode and not (market_open <= now_time <= market_close):
             if time.time() - last_closed_msg_time > 3600:
@@ -65,11 +65,11 @@ def run_scalper(is_test_mode=False):
             time.sleep(60)
             continue
 
-        # 💡 [핵심 1] 갭상승 함정을 피하기 위해 시가대비 상위(ka10028)로 전격 교체!
-        soaring_targets = kiwoom_utils.get_top_open_fluctuation_ka10028(token, mrkt_tp="101", limit=30)
+        # 💡 [핵심 1] 갭상승 함정을 피하기 위해 시가대비 상위(ka10028)로 전격 교체! 코스피 코스닥 전종목 탐색
+        soaring_targets = kiwoom_utils.get_top_open_fluctuation_ka10028(token, mrkt_tp="000", limit=30)
         
         radar = SniperRadar(token) 
-        supernova_targets = radar.find_supernova_targets(mrkt_tp="101")
+        supernova_targets = radar.find_supernova_targets(mrkt_tp="000")
         
         # 💡 [핵심 2] 대소문자 키 충돌을 완벽히 방어하는 무결점 병합 로직
         all_targets = {}
@@ -122,7 +122,7 @@ def run_scalper(is_test_mode=False):
                         ).first()
 
                         if record:
-                            if record.status in ('WATCHING', 'COMPLETED'):
+                            if record.status in ('WATCHING', 'COMPLETED', 'EXPIRED'):
                                 record.strategy = 'SCALPING'
                                 record.buy_price = 0
                                 record.status = 'WATCHING'
@@ -132,7 +132,6 @@ def run_scalper(is_test_mode=False):
                                 stock_code=code, 
                                 stock_name=t['Name'], 
                                 buy_price=0, 
-                                # 💡 [운영 팁] 스나이퍼 엔진 수정을 피하려면 여기서 'MAIN'으로 덮는 것도 고려해보세요.
                                 trade_type='SCALP',       
                                 strategy='SCALPING', 
                                 status='WATCHING'

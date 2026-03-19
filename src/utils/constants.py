@@ -65,6 +65,10 @@ class TradingConfig:
     MIN_SCALP_LIQUIDITY: int = 500_000_000  # 최소 호가 잔량 대금 (5억)
     MAX_SCALP_SURGE_PCT: float = 20.0  # 초단타 진입 금지 급등률 (20%)
     MAX_INTRADAY_SURGE: float = 15.0  # 당일 시가 대비 최대 급등률 (15%)
+    # [V3 스캘핑 동적 트레일링 전용 상수]
+    SCALP_SAFE_PROFIT = 0.5            # 💡 [신규] 수수료/세금/슬리피지를 커버하는 최소 안전 마진 (이 선을 넘으면 무조건 수익 마감 모드 돌입)
+    SCALP_TRAILING_LIMIT_STRONG = 0.8  # 💡 [신규] AI 점수가 75점 이상(수급 폭발)일 때 허용하는 고점 대비 눌림폭 (%)
+    SCALP_TRAILING_LIMIT_WEAK = 0.4    # 💡 [신규] AI 점수가 75점 미만(수급 애매)일 때 타이트하게 끊어내는 고점 대비 눌림폭 (%)
 
     # 💡 [신규] 코스닥 스캐너 설정
     KOSDAQ_TARGET: float = 4.0  # 코스닥은 조금 더 높게 목표 (예: 4.0%)
@@ -76,7 +80,7 @@ class TradingConfig:
     # ==========================================
     # 🎯 추가된 스나이퍼 매매/운영 세부 설정값
     # ==========================================
-    BUY_SCORE_THRESHOLD: int = 80  # AI 봇이 매수 버튼을 누르는 최소 종합 점수
+    BUY_SCORE_THRESHOLD: int = 70  # AI 봇이 매수 버튼을 누르는 최소 종합 점수
     VPW_STRONG_LIMIT: int = 110  # 확신도가 낮을 때 매수를 강행하기 위한 체결강도 허들(%)
     RALLY_TARGET_PCT: float = 5.0  # 신고가 돌파 시 기본 목표가 (%)
     ORDER_TIMEOUT_SEC: int = 30  # 미체결 주문 취소 대기 시간 (초)
@@ -91,13 +95,22 @@ class TradingConfig:
     VIP_MAX_INVEST_RATIO: float = 0.30  # VIP 전용 최대 투자 비율 (30%) 
 
     # ==========================================
-    # 🎯 AI 엔진 제어값
+    # 🎯 AI 엔진 제어값 (제미나이)
     # ==========================================
     GEMINI_ENGINE_MIN_INTERVAL: float = 0.5 # 구글 서버에 쏘는 최소 간격 (초 단위, 0.5초 = 500ms)
     AI_WATCHING_COOLDOWN: int = 180  # 신규 진입 감시(WATCHING) 쿨타임 (초)
-    AI_HOLDING_MIN_COOLDOWN: float = 3.0 # 보유 종목(HOLDING) 실시간 쿨타임 최소 감시 주기
-    AI_HOLDING_MAX_COOLDOWN: float = 15.0 # 보유 종목(HOLDING) 실시간  쿨타임 최대 감시 주기
-    AI_WAIT_DROP_COOLDOWN: float = 15.0 # AI 거부권(WAIT/DROP) 이후 재평가 쿨타임
+    # [AI 보유 종목 감시 쿨타임 설정 - 비용 절감형]
+    AI_HOLDING_MIN_COOLDOWN = 15          # 💡 (기존 5초 -> 15초) 주가가 미친듯이 널뛰어도 최소 15초는 무조건 대기
+    AI_HOLDING_MAX_COOLDOWN = 60          # 💡 (기존 30초 -> 60초) 평상시 횡보장에서는 1분에 딱 한 번만 AI 호출
+    AI_HOLDING_CRITICAL_COOLDOWN = 20     # 💡 [신규 추가] 익절/손절 임박 구간에서는 20초마다 호출
+
+    # ==========================================
+    # 🎯 AI 엔진 제어값 (OpenAI)
+    # ==========================================
+    GPT_FAST_MODEL = "gpt-4.1-mini"
+    GPT_DEEP_MODEL = "gpt-4o"
+    GPT_ENGINE_MIN_INTERVAL: float = 0.5 # OpenAI 서버에 쏘는 최소 간격 (초 단위, 0.5초 = 500ms)
+
 
 # 전역 싱글톤 인스턴스 생성
 TRADING_RULES = TradingConfig()

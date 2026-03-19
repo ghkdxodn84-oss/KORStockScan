@@ -286,8 +286,8 @@ def send_smart_sell_order(code, qty, token, ws_data, reason_type):
 
     # 💰 익절(PROFIT): 슬리피지 방어 가동
     else:
-        # 매수 1호가 잔량이 내 물량보다 넉넉한지 확인 (1.2배 여유)
-        if bid_1_p > 0 and bid_1_q >= qty * 1.2:
+        # 매수 1호가 잔량이 내 물량보다 넉넉한지 확인 (2배 여유)
+        if bid_1_p > 0 and bid_1_q >= qty * 2.0:
             print(f"💰 [스마트익절] {code}: 1호가({bid_1_p:,}원) 지정가 매도 (호가잔량: {bid_1_q}주)")
             return send_sell_order_market(code, qty, token, order_type="00", price=bid_1_p)
         
