@@ -81,6 +81,87 @@ ACTIVE_TARGETS = []
 LAST_AI_CALL_TIMES = {}
 # -------------------------------------------------------------------
 
+def handle_condition_matched(payload):
+    """실시간 조건검색(Push)으로 날아온 종목을 즉각 감시망(WATCHING)에 올립니다."""
+    global KIWOOM_TOKEN, DB, ACTIVE_TARGETS, event_bus
+    from datetime import datetime, time # time 객체 임포트
+    
+    code = payload.get('code')
+    cnd_name = payload.get('condition_name', '') # 💡 웹소켓이 달아준 이름표
+    if not code: return
+
+    now_t = datetime.now().time()
+    
+    # =========================================================
+    # ⏰ [핵심] 시간대별 검색식 필터링 (Time-based Routing)
+    # =========================================================
+    # 1. 후보군_공격형_전고근접_1분 / 후보군_보수형_전고압축_3분 (09:00 ~ 09:30) 
+    if "scalp_candid_aggressive_01" in cnd_name or "scalp_candid_normal_01" in cnd_name:
+        if not (time(9, 0) <= now_t <= time(9, 30)):
+            return # 지정 시간이 아니면 0.001초 만에 조용히 무시(Drop)합니다.
+            
+    # 2. 장중후보군_강세유지_5분 (09:20 ~ 11:00) 
+    elif "scalp_strong_01" in cnd_name: # HTS에 지정하신 이름 키워드
+        if not (time(9, 20) <= now_t <= time(11, 0)):
+            return
+            
+    # 3. 장중후보군_눌림완성_3분 (09:40 ~ 13:00)
+    elif "scalp_underpress_01" in cnd_name:
+        if not (time(9, 40) <= now_t <= time(13, 0)):
+            return
+            
+    # 4. 장중진입_재돌파_3분 (09:40 ~ 13:30) 
+    elif "scalp_shooting_01" in cnd_name:
+        if not (time(9, 40) <= now_t <= time(13, 30)):
+            return
+    
+    # 5. 장중진입_오후재점화_5분 (13:00 ~ 15:20)
+    elif "scalp_afternoon_01" in cnd_name:
+        if not (time(13, 0) <= now_t <= time(15, 20)):
+            return
+    # =========================================================
+    
+    # 1. 이미 감시 중이거나 보유 중인 종목이면 스킵
+    if any(t['code'] == code for t in ACTIVE_TARGETS):
+        return
+        
+    try:
+        from src.utils import kiwoom_utils
+        basic_info = kiwoom_utils.get_basic_info_ka10001(KIWOOM_TOKEN, code)
+        name = basic_info.get('Name', code)
+        
+        # 2. 동전주, ETF, ETN, 우선주 등 불순물 제거
+        if not kiwoom_utils.is_valid_stock(code, name, KIWOOM_TOKEN):
+            return
+            
+        print(f"🦅 [V3 헌터] 조건검색 0.1초 포착! {name}({code}) 감시망 편입 완료")
+        
+        # 3. DB 저장 (ORM)
+        with DB.get_session() as session:
+            today = datetime.now().date()
+            record = session.query(RecommendationHistory).filter_by(rec_date=today, stock_code=code).first()
+            if not record:
+                new_record = RecommendationHistory(
+                    rec_date=today, stock_code=code, stock_name=name, buy_price=0,
+                    trade_type='SCALP', strategy='SCALPING', status='WATCHING'
+                )
+                session.add(new_record)
+                session.flush() # ID 즉시 획득
+                
+                # 4. 스나이퍼 메모리 즉시 동기화
+                new_target = {
+                    'id': new_record.id, 'code': code, 'name': name,
+                    'strategy': 'SCALPING', 'status': 'WATCHING', 'added_time': time.time()
+                }
+                ACTIVE_TARGETS.append(new_target)
+                
+                # 5. 웹소켓 매니저에게 "이 종목 호가창 당장 구독해!" 지시
+                event_bus.publish("COMMAND_WS_REG", {"codes": [code]})
+                
+    except Exception as e:
+        from src.utils.logger import log_error
+        log_error(f"🚨 조건검색 편입 처리 에러: {e}")
+
 def sync_balance_with_db():
     """봇 시작 시 실제 계좌 잔고와 DB의 HOLDING 기록을 대조하여 정합성을 맞춥니다. (ORM 완벽 적용)"""
     print("🔄 [데이터 동기화] 실제 계좌 잔고와 DB를 대조합니다...")
@@ -548,23 +629,17 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
     curr_price = ws_data.get('curr', 0)
     current_vpw = ws_data.get('v_pw', 0)
 
-    # 🚨 3. 실시간 동전주/저가주 컷오프 (MIN_PRICE 방어막)
-    if 0 < curr_price < MIN_PRICE:
-        if time.time() % 60 < 1: 
-            print(f"🚫 [저가주 방어] {stock['name']} 현재가 {curr_price:,}원. (5,000원 미만 진입 금지)")
-        return 
-
     is_trigger = False
     msg = ""
     ratio = 0.10
 
-    ai_prob = stock.get('prob', getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.70))
-    buy_threshold = getattr(TRADING_RULES, 'BUY_SCORE_THRESHOLD', 80)
+    ai_prob = stock.get('prob', getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.75))
+    buy_threshold = getattr(TRADING_RULES, 'BUY_SCORE_THRESHOLD', 70)
     strong_vpw = getattr(TRADING_RULES, 'VPW_STRONG_LIMIT', 120)
 
     # 1️⃣ 초단타 (SCALPING) 전략
     if strategy == 'SCALPING':
-        ratio = getattr(TRADING_RULES, 'INVEST_RATIO_SCALPING', 0.05)
+        ratio = getattr(TRADING_RULES, 'INVEST_RATIO_SCALPING', 0.15)
         
         ask_tot = ws_data.get('ask_tot', 0)
         bid_tot = ws_data.get('bid_tot', 0)
@@ -1395,9 +1470,11 @@ def run_sniper(is_test_mode=False):
     # 1. 💡 콜백 파라미터를 완전히 제거하여 결합도를 낮춥니다.
     WS_MANAGER = KiwoomWSManager(KIWOOM_TOKEN)
 
-    # 2. 💡 대신, EventBus에 수신기를 등록합니다. 
-    # (웹소켓이 'ORDER_EXECUTED' 이벤트를 허공에 외치면 스나이퍼가 알아서 이 함수를 실행합니다)
+    # 2. 💡 EventBus에 수신기를 등록합니다. 
     event_bus.subscribe('ORDER_EXECUTED', handle_real_execution)
+    
+    # 🚀 [추가] 조건검색 실시간 PUSH 수신기 장착!
+    event_bus.subscribe('CONDITION_MATCHED', handle_condition_matched)
 
     # 💡 [신규 추가] 웹소켓 재접속 이벤트를 수신하면 동기화 로직을 백그라운드로 실행!
     # (API 통신 중 스나이퍼 루프가 멈추는 것을 방지하기 위해 데몬 쓰레드로 띄웁니다)

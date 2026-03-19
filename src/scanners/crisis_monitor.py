@@ -79,7 +79,7 @@ def run_crisis_monitor():
                 except: ko_title = alert["en_title"]
                 msg += f"▪️ **[{alert['category']}]** {ko_title}\n"
 
-            event_bus.publish('TELEGRAM_BROADCAST', {'message': msg, 'audience': 'VIP_ALL', 'parse_mode': 'Markdown'})
+            event_bus.publish('TELEGRAM_BROADCAST', {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'})
             print(f"📢 위기 경보 브로드캐스트 완료 (누적: {risk_count}건)")
 
 if __name__ == "__main__":

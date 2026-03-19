@@ -15,6 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.append(str(PROJECT_ROOT))
     
 import os
+import multiprocessing
 import sys
 import time
 import signal
@@ -125,7 +126,7 @@ def broadcast_today_picks_job():
 
 # 💡 [신규 추가] 30분 단위 글로벌 위기 감지 무한 루프
 def crisis_monitor_loop():
-    """30분(1800초) 주기로 글로벌 위기를 감시하는 백그라운드 작업"""
+    """60분(3600초) 주기로 글로벌 위기를 감시하는 백그라운드 작업"""
     # 순환 참조 및 의존성 방지를 위해 쓰레드 내부에서 지역 임포트
     try:
         import src.scanners.crisis_monitor as crisis_monitor
@@ -140,8 +141,8 @@ def crisis_monitor_loop():
             from src.utils.logger import log_error
             log_error(f"위기 감지 스케줄러 에러: {e}")
         
-        # 30분 대기 (1800초)
-        time.sleep(1800)
+        # 1시간 대기 (3600초)
+        time.sleep(3600)
 
 # ==========================================
 # 🎯 메인 실행부 (Main Thread)
@@ -172,25 +173,25 @@ if __name__ == '__main__':
         # 💡 [아키텍처 포인트 3] 콜백(broadcast_alert) 파라미터 완전 제거!
         engine_thread = threading.Thread(target=kiwoom_sniper_v2.run_sniper, daemon=True)
         engine_thread.start()
-        print("✅ [시스템] 정상거래일 - 스나이퍼 매매 엔진 가동 완료.")
+        print("✅ [시스템] 정상거래일 - 스나이퍼 매매 엔진 가동 완료. 조건검색식 가동기간으로 코스닥 및 스캘핑 스캐너 가동 임시중단 합니다.")
 
-        # 초단타 스캘핑 스캐너 가동
-        try:
-            import src.scanners.scalping_scanner as scalping_scanner
-            scalper_thread = threading.Thread(target=scalping_scanner.run_scalper, daemon=True)
-            scalper_thread.start()
-            print("⚡ [시스템] 정상거래일 - 초단타 스캘핑 스캐너 가동 완료.")
-        except Exception as e:
-            print(f"🚨 [시스템] 스캘핑 스캐너 가동 중 오류 발생 (혹은 모듈 없음): {e}")
-
+        # 초단타 스캘핑 스캐너 가동 - 조건검색식 스캐너로 대체
+        # try:
+        #     import src.scanners.scalping_scanner as scalping_scanner
+        #     scalper_thread = threading.Thread(target=scalping_scanner.run_scalper, daemon=True)
+        #     scalper_thread.start()
+        #     print("⚡ [시스템] 정상거래일 - 초단타 스캘핑 스캐너 가동 완료.")
+        # except Exception as e:
+        #     print(f"🚨 [시스템] 스캘핑 스캐너 가동 중 오류 발생 (혹은 모듈 없음): {e}")
+# 
         # 코스닥 AI 하이브리드 스캐너 가동
-        try:
-            import src.scanners.kosdaq_scanner as kosdaq_scanner
-            kosdaq_thread = threading.Thread(target=kosdaq_scanner.run_kosdaq_scanner, daemon=True)
-            kosdaq_thread.start()
-            print("🚀 [시스템] 정상거래일 - 코스닥 하이브리드 스캐너 가동 완료.")
-        except Exception as e:
-            print(f"🚨 [시스템] 코스닥 스캐너 가동 중 오류 발생 (혹은 모듈 없음): {e}")
+        # try:
+        #     import src.scanners.kosdaq_scanner as kosdaq_scanner
+        #     kosdaq_thread = threading.Thread(target=kosdaq_scanner.run_kosdaq_scanner, daemon=True)
+        #     kosdaq_thread.start()
+        #     print("🚀 [시스템] 정상거래일 - 코스닥 하이브리드 스캐너 가동 완료.")
+        # except Exception as e:
+        #     print(f"🚨 [시스템] 코스닥 스캐너 가동 중 오류 발생 (혹은 모듈 없음): {e}")
 
     else:
         # 휴장일 처리

@@ -87,9 +87,17 @@ def _broadcast_alert(message_text, audience='VIP_ALL', parse_mode='HTML'):
         if should_send:
             try:
                 bot.send_message(chat_id, message_text, parse_mode=parse_mode)
-                time.sleep(0.05) # 텔레그램 API 도배(Rate Limit) 방지
-            except Exception:
-                pass # 봇을 차단한 유저 등 예외 무시
+                time.sleep(0.05) 
+            except telebot.apihelper.ApiTelegramException as e:
+                if e.error_code == 403:
+                    # 💡 핵심: 사용자가 봇을 차단함
+                    print(f"🚫 [차단 감지] 유저 {chat_id}가 봇을 차단했습니다. DB를 업데이트합니다.")
+                    # db_manager에 해당 유저를 비활성화하는 메서드가 있다고 가정합니다.
+                    db_manager.update_user_active_status(chat_id, is_active=False)
+                else:
+                    log_error(f"⚠️ 메시지 전송 중 알 수 없는 API 에러 ({chat_id}): {e}")
+            except Exception as e:
+                log_error(f"⚠️ 전송 실패 ({chat_id}): {e}")
 
 # ==========================================
 # 🎧 5. EventBus 구독 (Subscriber) 핸들러
@@ -487,6 +495,24 @@ def process_manual_add_step(message):
         from src.utils.logger import log_error
         log_error(f"수동 종목 추가 에러: {e}")
         bot.send_message(chat_id, f"❌ 종목 추가 중 시스템 에러 발생: {e}")
+
+@bot.my_chat_member_handler()
+def handle_my_chat_member_update(message: types.ChatMemberUpdated):
+    """
+    봇의 상태 변화(차단, 해제, 나가기 등)를 실시간으로 감지합니다.
+    """
+    new_status = message.new_chat_member.status
+    chat_id = message.chat.id
+    
+    if new_status in ['kicked', 'left']:
+        # 사용자가 봇을 차단(kicked)하거나 그룹에서 봇을 내보냄(left)
+        print(f"👋 [상태변경] 유저 {chat_id}가 봇을 떠났습니다. (상태: {new_status})")
+        db_manager.update_user_active_status(chat_id, is_active=False)
+        
+    elif new_status == 'member':
+        # 차단했던 유저가 다시 대화방에 들어오거나 차단을 해제함
+        print(f"✅ [상태변경] 유저 {chat_id}가 다시 복귀했습니다!")
+        db_manager.update_user_active_status(chat_id, is_active=True)
 
 @bot.message_handler(commands=['사유', 'why'])
 def handle_why_not(message):

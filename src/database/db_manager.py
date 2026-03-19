@@ -295,6 +295,30 @@ class DBManager:
                 new_user = User(chat_id=chat_id)
                 session.add(new_user)
     
+    def update_user_active_status(self, chat_id: int, is_active: bool = True) -> bool:
+        """
+        💡 [핵심] 사용자의 봇 활성화 상태(차단/해제)를 업데이트합니다.
+        """
+        try:
+            with self.get_session() as session:
+                user = session.query(User).filter_by(chat_id=chat_id).first()
+                
+                if user:
+                    user.is_active = is_active
+                    # session.commit()은 get_session() 제너레이터에서 자동 처리됨
+                    
+                    status_str = "활성화(복귀)" if is_active else "비활성화(차단)"
+                    print(f"🔄 [DBManager] 유저({chat_id}) 상태가 '{status_str}'(으)로 변경되었습니다.")
+                    return True
+                else:
+                    print(f"⚠️ [DBManager] 상태를 변경할 유저({chat_id})를 찾을 수 없습니다.")
+                    return False
+                    
+        except Exception as e:
+            from src.utils.logger import log_error
+            log_error(f"❌ 유저 활성화 상태 업데이트 에러: {e}")
+            return False
+    
     def get_user_level(self, chat_id):
         """
         💡 [핵심] 특정 사용자의 등급(Admin/VIP/User)을 조회합니다.

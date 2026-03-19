@@ -38,77 +38,74 @@ class KiwoomWSManager:
         self.event_bus.subscribe("COMMAND_WS_REG", self._handle_reg_event)
         # 💡 [추가] 최초 접속인지, 끊겼다가 다시 붙은(재접속) 것인지 구분하는 플래그
         self.is_reconnected = False
+        self.condition_dict = {} # 💡 [추가] 일련번호(seq)와 검색식 이름을 매핑할 사전
         
         print(f"🌐 [WS] 웹소켓 매니저 초기화 완료 (Target: {self.uri})")
-
-    async def _run_ws(self):
-        while True:
-            try:
-                print(f"🔌 [WS] 키움 서버({self.uri})에 연결을 시도합니다...")
-                async with websockets.connect(self.uri, ping_interval=None) as ws:
-                    self.websocket = ws
-                    print("✅ [WS] 웹소켓 연결 성공!")
-
-                    # 1. 로그인 패킷 전송
-                    login_packet = {'trnm': 'LOGIN', 'token': self.token}
-                    await ws.send(json.dumps(login_packet))
-                    print("🔑 [WS] 로그인 패킷 전송 완료")
-                    
-                    await asyncio.sleep(1) # 로그인 처리 대기
-
-                    # 💡 [신규 추가] 재접속(Reconnect)인 경우 스나이퍼 엔진에 상태 동기화 명령 하달
-                    if self.is_reconnected:
-                        print("🔄 [WS] 웹소켓 재접속 감지! EventBus에 상태 동기화 이벤트를 발행합니다.")
-                        self.event_bus.publish("WS_RECONNECTED", {})
-                    
-                    # 최초 접속이 끝났으므로, 이후부터 연결되면 무조건 '재접속'으로 간주
-                    self.is_reconnected = True
-
-                    # 2. 계좌 전체 주문체결(00) 감시 명시적 등록
-                    exec_reg_packet = {
-                        "trnm": "REG",
-                        "grp_no": "2",  
-                        "refresh": "1",
-                        "data": [
-                            {
-                                "item": [""],   
-                                "type": ["00"]  
-                            }
-                        ]
-                    }
-                    await ws.send(json.dumps(exec_reg_packet))
-                    print("📝 [WS] 🚨 계좌 주문/체결통보(00) 감시망 등록 완료!")
-
-                    # 3. 기존 감시 종목 재등록 (네트워크 끊김 복구용)
-                    if self.subscribed_codes:
-                        await self._send_reg(list(self.subscribed_codes))
-
-                    # 4. 메시지 수신 무한 루프
-                    while True:
-                        message = await ws.recv()
-                        await self._handle_message(message)
-
-            except websockets.ConnectionClosed:
-                print("⚠️ [WS] 연결 끊김! 3초 후 재접속 시도...")
-                self.websocket = None
-                await asyncio.sleep(3)
-            except Exception as e:
-                log_error(f"🚨 [WS] 예상치 못한 오류: {e}")
-                print(f"🚨 [WS] 예상치 못한 오류: {e}")
-                self.websocket = None
-                await asyncio.sleep(3)
 
     async def _handle_message(self, message):
         try:
             msg_dict = json.loads(message)
             trnm = msg_dict.get('trnm')
             
-            # 생존 신고 (PING/PONG)
+            # =========================================================
+            # 🏓 [핵심] 생존 신고 (PING/PONG)
+            # =========================================================
             if trnm == 'PING':
                 if self.websocket:
-                    await self.websocket.send(message)
+                    pong_packet = json.dumps({"trnm": "PONG"})
+                    await self.websocket.send(pong_packet)
                 return
             
+            # =========================================================
+            # 🚀 [추가 2] 조건검색식 목록 응답 수신 (ka10171)
+            # =========================================================
+            if trnm == 'CNSRLST':
+                data_list = msg_dict.get('data', [])
+                target_seqs = []
+
+                # 💡 HTS에서 만든 시간대별 모든 식을 다 찾습니다! (이름은 HTS 저장명에 맞게 추가하세요)
+                target_keywords = [
+                    "scalp_candid_aggressive_01", # 09:00 ~ 09:30 초단타 후보군 (공격형)
+                    "scalp_candid_normal_01", # 09:00 ~ 09:30 초단타 후보군 (일반형)
+                    "scalp_strong_01",  # 09:20 ~ 11:00 스캘핑 강세군 (공격형)
+                    "scalp_underpress_01",  # 09:40 ~ 13:00 스캘핑 약세군 (수동)
+                    "scalp_shooting_01",   # 09:40 ~ 13:30 스캘핑 슈팅스타 (공격형)
+                    "scalp_afternoon_01"   # 13:00 ~ 15:30 장중진입_오후재점화
+                ]
+                # 🚨 주의: 다중 검색식을 찾을 때는 여기서 break를 쓰면 안 됩니다!
+
+                for seq, name in data_list:
+                    if any(k in name for k in target_keywords): 
+                        target_seqs.append((seq, name))
+                        self.condition_dict[str(seq)] = name # 💡 [핵심] 번호와 이름을 기억해 둡니다.
+                
+                if target_seqs:
+                    for target_seq, target_name in target_seqs:
+                        print(f"🎯 [WS] 스캘핑 조건식 발견: [{target_name}] (seq: {target_seq}). 실시간 PUSH 감시 요청.")
+                        req_packet = {
+                            'trnm': 'CNSRREQ', 'seq': str(target_seq), 'search_type': '1', 'stex_tp': 'K'
+                        }
+                        if self.websocket:
+                            await self.websocket.send(json.dumps(req_packet))
+                            await asyncio.sleep(0.2) 
+                else:
+                    print("⚠️ [WS] 타겟 조건검색식을 찾을 수 없습니다.")
+                return
+            
+            # =========================================================
+            # 🚀 [추가 3] 조건검색 최초 편입 목록 (ka10173)
+            # =========================================================
+            if trnm == 'CNSRREQ':
+                c_data = msg_dict.get('data', [])
+                print(f"📊 [WS] 조건검색 최초 편입 종목 수: {len(c_data)}개 (스나이퍼 큐에 투입합니다)")
+                for item in c_data:
+                    code = item.get('jmcode', '').replace('A', '')
+                    self.event_bus.publish("CONDITION_MATCHED", {'code': code, 'type': 'INIT'})
+                return
+            
+            # =========================================================
+            # 📈 [기존 트랙] 실시간 주가 / 호가 / 체결 / 조건검색 데이터 처리
+            # =========================================================
             if trnm == 'REAL' and 'data' in msg_dict:
                 for d in msg_dict['data']:
                     values = d.get('values', {})
@@ -116,6 +113,25 @@ class KiwoomWSManager:
 
                     real_type = d.get('type')
                     
+                    # 🚀 실시간 조건검색 편입/이탈 통보 가로채기 (02)
+                    if real_type == '02' or d.get('name') == '조건검색':
+                        seq = str(values.get('841', '')).strip() # 💡 일련번호 추출
+                        code = str(values.get('9001', '')).replace('A', '').strip()
+                        insert_type = str(values.get('843', '')).strip() 
+                        
+                        # 기억해둔 번호로 검색식 이름을 알아냅니다.
+                        cnd_name = self.condition_dict.get(seq, '알수없는검색식') 
+
+                        if insert_type == 'I':
+                            print(f"🚨 [조건검색 PUSH] {code} 포착! (출처: {cnd_name})")
+                            # 💡 스나이퍼에게 출처(이름표)를 함께 보냅니다!
+                            self.event_bus.publish("CONDITION_MATCHED", {
+                                'code': code, 
+                                'type': 'REALTIME', 
+                                'condition_name': cnd_name
+                            })
+                        continue
+
                     # ===================================================
                     # [트랙 A] 🚨 주문/체결 통보 가로채기 (ORDER_EXECUTED)
                     # ===================================================
@@ -138,7 +154,6 @@ class KiwoomWSManager:
                             print(f"🔔 [WS 실제체결] {code} {exec_type} {exec_qty}주 @ {exec_price}원 (주문번호: {order_no})")
                             
                             if exec_price > 0:
-                                # 💡 체결 영수증을 허공에 쏩니다! 스나이퍼가 낚아채서 DB에 기록할 것입니다.
                                 self.event_bus.publish("ORDER_EXECUTED", {
                                     'code': code,
                                     'order_no': order_no,
@@ -211,8 +226,11 @@ class KiwoomWSManager:
                                 'data': target.copy()  
                             })
 
+        except websockets.ConnectionClosed:
+            pass
         except Exception as e:
-            log_error(f"[WS] 메시지 파싱 에러 발생: {e} | Payload: {message[:150]}")
+            from src.utils.logger import log_error
+            log_error(f"🚨 [WS] 메시지 파싱 에러 발생: {e} | Payload: {message[:150]}")
 
     def start(self):
         def thread_target():

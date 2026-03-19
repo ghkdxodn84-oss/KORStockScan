@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, BigInteger, Float, String, Text, Date, DateTime, text
+from sqlalchemy import Column, Integer, BigInteger, Float, String, Text, Date, DateTime, Boolean, text
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -105,6 +105,8 @@ class User(Base):
     chat_id = Column(BigInteger, primary_key=True)
     joined_at = Column(DateTime, server_default=text("CURRENT_TIMESTAMP"))
     auth_group = Column(Text, server_default=text("'USER'"))
+    # 💡 [신규 추가] 봇 활성화 상태 (차단/나가기 감지용)
+    is_active = Column(Boolean, default=True, server_default=text("true"))
 
     def __repr__(self):
         return f"<User(chat_id={self.chat_id}, auth_group='{self.auth_group}')>"
