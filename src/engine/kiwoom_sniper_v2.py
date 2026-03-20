@@ -84,7 +84,7 @@ LAST_AI_CALL_TIMES = {}
 def handle_condition_matched(payload):
     """실시간 조건검색(Push)으로 날아온 종목을 즉각 감시망(WATCHING)에 올립니다."""
     global KIWOOM_TOKEN, DB, ACTIVE_TARGETS, event_bus
-    from datetime import datetime, time # time 객체 임포트
+    from datetime import time as dt_time
     
     code = payload.get('code')
     cnd_name = payload.get('condition_name', '') # 💡 웹소켓이 달아준 이름표
@@ -97,27 +97,27 @@ def handle_condition_matched(payload):
     # =========================================================
     # 1. 후보군_공격형_전고근접_1분 / 후보군_보수형_전고압축_3분 (09:00 ~ 09:30) 
     if "scalp_candid_aggressive_01" in cnd_name or "scalp_candid_normal_01" in cnd_name:
-        if not (time(9, 0) <= now_t <= time(9, 30)):
+        if not (dt_time(9, 0) <= now_t <= dt_time(9, 30)):
             return # 지정 시간이 아니면 0.001초 만에 조용히 무시(Drop)합니다.
             
     # 2. 장중후보군_강세유지_5분 (09:20 ~ 11:00) 
     elif "scalp_strong_01" in cnd_name: # HTS에 지정하신 이름 키워드
-        if not (time(9, 20) <= now_t <= time(11, 0)):
+        if not (dt_time(9, 20) <= now_t <= dt_time(11, 0)):
             return
             
     # 3. 장중후보군_눌림완성_3분 (09:40 ~ 13:00)
     elif "scalp_underpress_01" in cnd_name:
-        if not (time(9, 40) <= now_t <= time(13, 0)):
+        if not (dt_time(9, 40) <= now_t <= dt_time(13, 0)):
             return
             
     # 4. 장중진입_재돌파_3분 (09:40 ~ 13:30) 
     elif "scalp_shooting_01" in cnd_name:
-        if not (time(9, 40) <= now_t <= time(13, 30)):
+        if not (dt_time(9, 40) <= now_t <= dt_time(13, 30)):
             return
     
     # 5. 장중진입_오후재점화_5분 (13:00 ~ 15:20)
     elif "scalp_afternoon_01" in cnd_name:
-        if not (time(13, 0) <= now_t <= time(15, 20)):
+        if not (dt_time(13, 0) <= now_t <= dt_time(15, 20)):
             return
     # =========================================================
     
@@ -652,7 +652,8 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
         # 💡 [기본 조건 검사] 수급과 호가잔량이 최소 기준을 넘어야 함
         if current_vpw >= getattr(TRADING_RULES, 'VPW_SCALP_LIMIT', 120) and liquidity_value >= MIN_LIQUIDITY:
             
-            scanner_price = stock.get('buy_price', 0)
+            # 💡 [핵심 방어막] None이 들어오더라도 파이썬이 안전하게 0으로 바꿔치기합니다!
+            scanner_price = stock.get('buy_price') or 0
             if scanner_price > 0:
                 gap_pct = (curr_price - scanner_price) / scanner_price * 100
                 if gap_pct >= 1.5: 
@@ -892,10 +893,21 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
     if strategy == 'SCALPING' and ai_engine and radar:
         
         # 💡 [V3 핵심] 현재 수익률에 따른 '동적 감시망' 적용
-        base_min_cd = getattr(TRADING_RULES, 'AI_HOLDING_MIN_COOLDOWN', 15)
         safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5)
         
         is_critical_zone = (profit_rate >= safe_profit_pct) or (profit_rate < 0)
+
+        # =========================================================
+        # 🚨 [버그 픽스] 크리티컬 존에서는 최소 쿨타임(min_cd)의 족쇄도 풀어줍니다!
+        # =========================================================
+        if is_critical_zone:
+            dynamic_min_cd = 3  # 🔥 익절/손절 구간: 단 3초만 지나도 AI 재호출 허용! (초정밀 타격)
+            dynamic_max_cd = getattr(TRADING_RULES, 'AI_HOLDING_CRITICAL_COOLDOWN', 20)
+            dynamic_price_trigger = 0.15 # 변동폭 조건도 0.15%로 초예민하게 세팅
+        else:
+            dynamic_min_cd = getattr(TRADING_RULES, 'AI_HOLDING_MIN_COOLDOWN', 15) # 평상시: 15초 락
+            dynamic_max_cd = getattr(TRADING_RULES, 'AI_HOLDING_MAX_COOLDOWN', 60)
+            dynamic_price_trigger = 0.3
         
         # 💡 [핵심 교정] 하드코딩을 빼고 상수로 유연하게 제어합니다.
         critical_cd = getattr(TRADING_RULES, 'AI_HOLDING_CRITICAL_COOLDOWN', 20)
@@ -905,8 +917,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
         dynamic_price_trigger = 0.2 if is_critical_zone else 0.4  # 변동폭 조건도 살짝 둔감하게(0.15->0.2, 0.3->0.4) 늘렸습니다.
         
         # 💡 동적 쿨타임 조건을 만족할 때만 AI 엔진 호출
-        if time_elapsed > base_min_cd and (price_change >= dynamic_price_trigger or time_elapsed > dynamic_max_cd):
-            
+        if time_elapsed > dynamic_min_cd and (price_change >= dynamic_price_trigger or time_elapsed > dynamic_max_cd):
+
             recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
             recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
             
@@ -1118,10 +1130,14 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                 reason_type=sell_reason_type
             )
             
+            ord_no = '' # 💡 [추가] 취소를 위한 원주문번호 저장 변수
+            
             if isinstance(res, dict):
                 rt_cd = str(res.get('return_code', res.get('rt_cd', '')))
                 if rt_cd == '0':
                     is_success = True
+                    # 💡 [추가] 키움 서버가 준 원주문번호(odno)를 추출합니다.
+                    ord_no = str(res.get('ord_no', '') or res.get('odno', '')) 
                 else:
                     print(f"❌ [매도거절] {stock['name']}: {res.get('return_msg')}")
             elif res:
@@ -1130,6 +1146,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             if is_success:
                 print(f"✅ [{stock['name']}] 매도 주문 전송 완료. 체결 영수증 처리 대기 중...")
                 event_bus.publish('TELEGRAM_BROADCAST', {'message': msg})
+                
+                # 💡 [신규 핵심 추가] 미체결 타임아웃 감시를 위한 타이머 및 주문번호 기록!
+                stock['sell_order_time'] = time.time()
+                if ord_no:
+                    stock['sell_odno'] = ord_no
 
                 if strategy in ['SCALPING', 'SCALP'] and now_t < datetime.strptime("19:15:00", "%H:%M:%S").time():
                     cooldowns[code] = time.time() + 1200
@@ -1195,6 +1216,95 @@ def handle_buy_ordered_state(stock, code):
 
         # [CASE 2] 정상적인 취소 로직 호출
         process_order_cancellation(stock, code, orig_ord_no, db, strategy)
+    
+# =====================================================================
+# 💸 매도 미체결(SELL_ORDERED) 타임아웃 감시 및 취소 로직
+# =====================================================================
+def handle_sell_ordered_state(stock, code):
+    """
+    주문 전송 후(SELL_ORDERED) 미체결 상태를 감시하고 타임아웃 시 취소 후 HOLDING으로 롤백합니다.
+    """
+    sell_order_time = stock.get('sell_order_time', 0)
+    
+    # 예외 처리: 타이머가 안 찍혀있으면 현재 시간으로 세팅 후 다음 턴 대기
+    if sell_order_time == 0:
+        stock['sell_order_time'] = time.time()
+        return
+
+    time_elapsed = time.time() - sell_order_time
+    target_id = stock.get('id')
+    
+    # 매도는 시장가/최유리이므로 보통 즉시 체결되어야 함 (VI 발동 등을 감안하여 40초 부여)
+    timeout_sec = getattr(TRADING_RULES, 'SELL_TIMEOUT_SEC', 40) 
+        
+    if time_elapsed > timeout_sec:
+        print(f"⚠️ [{stock['name']}] 매도 대기 {timeout_sec}초 초과. 호가 꼬임/VI 의심 ➡️ 취소 후 HOLDING 롤백 절차 진입.")
+        orig_ord_no = stock.get('sell_odno')
+        global DB
+
+        # [CASE 1] 원주문번호가 없는 경우 (통신 에러로 번호를 못 받은 경우)
+        if not orig_ord_no:
+            print(f"🚨 [{stock['name']}] 취소할 원주문번호(odno)가 없습니다. 상태만 HOLDING으로 강제 롤백합니다.")
+            stock['status'] = 'HOLDING'
+            stock.pop('sell_order_time', None)
+            
+            try:
+                with DB.get_session() as session:
+                    session.query(RecommendationHistory).filter_by(id=target_id).update({"status": "HOLDING"})
+            except Exception as e:
+                print(f"🚨 [DB 에러] {stock['name']} 매도 타임아웃 복구 실패: {e}")
+            return
+
+        # [CASE 2] 정상적인 매도 취소 로직 호출
+        process_sell_cancellation(stock, code, orig_ord_no, DB)
+
+def process_sell_cancellation(stock, code, orig_ord_no, db):
+    """미체결 매도 주문을 전량 취소하고 상태를 다시 HOLDING으로 되돌립니다."""
+    target_id = stock.get('id') 
+
+    # 1. 취소 주문 전송 (수량을 0으로 넣으면 전량 취소됩니다)
+    res = kiwoom_orders.send_cancel_order(
+        code=code, orig_ord_no=orig_ord_no, token=KIWOOM_TOKEN, qty=0
+    )
+
+    is_success = False
+    err_msg = str(res)
+
+    if isinstance(res, dict):
+        if str(res.get('return_code', res.get('rt_cd', ''))) == '0':
+            is_success = True
+        err_msg = res.get('return_msg', '사유 알 수 없음')
+    elif res:
+        is_success = True
+
+    # 2. 취소 성공 시: 상태를 다시 HOLDING으로 롤백!
+    if is_success:
+        print(f"✅ [{stock['name']}] 미체결 매도 주문 취소 성공! HOLDING(보유) 상태로 복귀하여 다시 매도 타점을 노립니다.")
+        stock['status'] = 'HOLDING'
+        stock.pop('sell_odno', None)
+        stock.pop('sell_order_time', None)
+        
+        try:
+            with DB.get_session() as session:
+                session.query(RecommendationHistory).filter_by(id=target_id).update({"status": "HOLDING"})
+        except Exception as e:
+            from src.utils.logger import log_error
+            log_error(f"🚨 [DB 에러] {stock['name']} 매도 취소 후 HOLDING 복구 실패: {e}")
+        return True
+
+    # 3. 취소 실패 시: 내가 취소하기 직전에 이미 체결되어 버린 경우
+    else:
+        print(f"🚨 [{stock['name']}] 매도 취소 실패! (사유: {err_msg})")
+        if any(keyword in err_msg for keyword in ['취소가능수량', '잔고', '주문없음', '체결']):
+            print(f"💡 [{stock['name']}] 간발의 차이로 이미 매도 체결된 것으로 판단합니다. COMPLETED로 전환.")
+            stock['status'] = 'COMPLETED'
+            
+            try:
+                with DB.get_session() as session:
+                    session.query(RecommendationHistory).filter_by(id=target_id).update({"status": "COMPLETED"})
+            except Exception as e:
+                pass
+        return False
 
 def process_order_cancellation(stock, code, orig_ord_no, db, strategy):
     """
@@ -1591,7 +1701,7 @@ def run_sniper(is_test_mode=False):
                                 RecommendationHistory.id.in_(expired_ids)
                             ).update({"status": "EXPIRED"}, synchronize_session=False)
                     except Exception as e:
-                        from src.utils.logger import log_error
+                        # 💡 글로벌 임포트가 있으므로 바로 함수를 호출하면 됩니다.
                         log_error(f"🚨 FIFO 큐 DB 업데이트 에러: {e}")
                         
                     for t in targets:
@@ -1684,6 +1794,10 @@ def run_sniper(is_test_mode=False):
                 # 👇 [수정] PENDING 대신 BUY_ORDERED 로 확인하고, 방금 만든 새 함수를 호출합니다!
                 elif status == 'BUY_ORDERED':
                     handle_buy_ordered_state(stock, code)
+                    
+                # 👇 [신규 추가] 매도 대기(SELL_ORDERED) 상태일 때 타임아웃(40초) 감시망 가동!
+                elif status == 'SELL_ORDERED':
+                    handle_sell_ordered_state(stock, code)
 
             # 💡 [핵심 교정] 매매가 끝났거나(COMPLETED) 큐에서 밀려난(EXPIRED) 종목은 메모리에서 제거
             targets[:] = [t for t in targets if t['status'] not in ['COMPLETED', 'EXPIRED']]
