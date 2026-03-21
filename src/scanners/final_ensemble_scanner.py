@@ -290,14 +290,27 @@ def run_integrated_scanner():
                     csv_price = int(row.get('close', 0)) if 'close' in df_csv.columns else 0
                     csv_prob = float(row.get('score', 0.99))
                     
-                    # 1. DB 우선 적재 (KOSPI_ML / MAIN 강제 할당)
+                    # 💡 [핵심] Base 모델의 절대 확률을 읽어옵니다. (없으면 1.0으로 간주)
+                    hybrid_mean = float(row.get('hybrid_mean', 1.0))
+                    
+                    # 🛡️ 깐깐한 동적 할당 로직: 안전망(0.35)을 통과하지 못한 임시 10개 종목은 RUNNER로 강등!
+                    if hybrid_mean < 0.35:
+                        pick_type = 'RUNNER'
+                        position_tag = 'META_FALLBACK'  # 텔레그램에서 쉽게 구분하기 위한 태그
+                        star_icon = "🥈"                 # 임시 종목은 은메달 아이콘
+                    else:
+                        pick_type = 'MAIN'
+                        position_tag = 'META_V2'
+                        star_icon = "🌟"                 # 확실한 종목은 빛나는 별 아이콘
+
+                    # 1. DB 우선 적재 (MAIN 또는 RUNNER 동적 할당)
                     db.save_recommendation(
                         date=today,
                         code=csv_code,
                         name=csv_name,
                         price=csv_price,
-                        pick_type='MAIN',
-                        position='MIDDLE',     
+                        pick_type=pick_type,
+                        position=position_tag,     
                         prob=csv_prob,
                         strategy='KOSPI_ML'     
                     )
@@ -305,13 +318,13 @@ def run_integrated_scanner():
                     # 2. 리포트 결합용 데이터 보관
                     csv_picks.append({
                         'Code': csv_code,
-                        'Name': f"🌟{csv_name}", 
+                        'Name': f"{star_icon}{csv_name}", 
                         'Price': csv_price,
                         'Prob': csv_prob,
-                        'Position': 'META_V2'
+                        'Position': position_tag
                     })
                     csv_count += 1
-                print(f"✅ V2 CSV에서 {csv_count}개 종목 우선 적재 완료 (KOSPI_ML / MAIN)")
+                print(f"✅ V2 CSV에서 {csv_count}개 종목 우선 적재 완료")
             except Exception as e:
                 print(f"⚠️ V2 CSV 적재 실패: {e}")
         else:

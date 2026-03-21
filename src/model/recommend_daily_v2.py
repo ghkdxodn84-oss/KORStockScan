@@ -1,5 +1,12 @@
 import joblib
 import pandas as pd
+import numpy as np
+
+# --- Pickle 로드 에러 방지용 더미 클래스 ---
+class PassThroughCalibrator:
+    def transform(self, x):
+        return np.asarray(x, dtype=float)
+# ----------------------------------------
 
 from common_v2 import (
     HYBRID_XGB_PATH, HYBRID_LGBM_PATH, BULL_XGB_PATH, BULL_LGBM_PATH,

@@ -9,7 +9,8 @@ from common_v2 import (
     META_MODEL_PATH, AI_PRED_PATH, META_FEATURES,
     get_top_kospi_codes, split_by_unique_dates,
     precision_at_k_by_day, build_meta_feature_frame,
-    score_artifact
+    score_artifact, select_daily_candidates,
+    PassThroughCalibrator  # 💡 여기 추가!
 )
 from dataset_builder_v2 import build_panel_dataset
 

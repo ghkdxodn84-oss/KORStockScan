@@ -77,6 +77,10 @@ class IdentityCalibrator:
         arr = np.asarray(x, dtype=float)
         return np.clip(arr, 0.0, 1.0)
 
+class PassThroughCalibrator:
+    """LGBMRanker 등 확률 캘리브레이션이 필요 없는 모델을 위한 패스스루 클래스"""
+    def transform(self, x):
+        return np.asarray(x, dtype=float)
 
 def fit_calibrator(raw_prob, y_true):
     raw_prob = np.asarray(raw_prob, dtype=float)
