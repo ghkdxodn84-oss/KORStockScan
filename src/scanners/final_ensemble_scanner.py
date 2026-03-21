@@ -370,7 +370,7 @@ def run_integrated_scanner():
         api_keys = [v for k, v in CONF.items() if k.startswith("GEMINI_API_KEY")]
     
         if not api_keys:
-            kiwoom_utils.log_error("❌ 제미나이 키 발급 실패로 엔진을 중단합니다.")
+            log_error("❌ 제미나이 키 발급 실패로 엔진을 중단합니다.")
             event_bus.publish('TELEGRAM_BROADCAST', {'message': "🚨 [시스템 에러] 제미나이 키 발급 실패로 엔진을 중단합니다."})
         else:
             try:

@@ -10,6 +10,7 @@ sys.path.append(str(PROJECT_ROOT))
 
 import os
 import pandas as pd
+import numpy as np
 import time
 import logging
 import json
@@ -36,12 +37,20 @@ os.makedirs(LOG_DIR, exist_ok=True)
 LOG_PATH = os.path.join(LOG_DIR, 'update_kospi_error.log')
 TABLE_NAME = 'daily_stock_quotes'
 
+# Constants
+CUTOFF_DAYS = 100
+API_DELAY_SECONDS = 0.3
+LOG_MAX_BYTES = 5 * 1024 * 1024
+LOG_BACKUP_COUNT = 3
+BULK_CHUNKSIZE = 2000
+PROGRESS_INTERVAL = 50
+
 # 전문 로거 세팅 (터미널+파일)
 logger = logging.getLogger("KospiUpdater")
 logger.setLevel(logging.INFO)
 
 if not logger.handlers:
-    file_handler = RotatingFileHandler(LOG_PATH, maxBytes=5*1024*1024, backupCount=3, encoding='utf-8')
+    file_handler = RotatingFileHandler(LOG_PATH, maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUP_COUNT, encoding='utf-8')
     file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
     logger.addHandler(file_handler)
 
@@ -86,7 +95,7 @@ COLUMN_MAPPING = {
 # ==========================================
 # 2. 메인 업데이트 로직
 # ==========================================
-def process_and_save_stock(code, token, db: DBManager):
+def process_and_save_stock(code, token, session) -> pd.DataFrame:
     """단일 종목 데이터를 키움 API로 병합하고 DB에 적재합니다."""
     try:
         # 💡 [안전 장치 1] Margin_Rate API(ka10013)는 무조건 6자리 문자열을 요구합니다.
@@ -121,7 +130,11 @@ def process_and_save_stock(code, token, db: DBManager):
             df['Margin_Rate'] = np.nan
 
         # 💡 [안전 장치 3] 0으로 덮어버리기 전에, 어제 발표된 Margin_Rate를 오늘 빈칸으로 끌어내림 (ffill)
-        df.ffill(inplace=True)
+        # Forward fill only for missing investor and margin data
+        cols_to_ffill = ['Margin_Rate', 'Retail_Net', 'Foreign_Net', 'Inst_Net']
+        for col in cols_to_ffill:
+            if col in df.columns:
+                df[col] = df[col].ffill()
         # 그 뒤에 진짜로 데이터가 없는 상장 초기 빈칸들만 0으로 채움
         df.fillna({'Retail_Net': 0, 'Foreign_Net': 0, 'Inst_Net': 0, 'Margin_Rate': 0}, inplace=True)
         
@@ -156,12 +169,20 @@ def process_and_save_stock(code, token, db: DBManager):
             elif col not in df.columns:
                 df[col] = backup_df[col]
 
+        # Ensure 'Return' column exists for mapping
+        if 'Return' not in df.columns:
+            # Compute daily return as percentage change of close_price
+            if 'Close' in df.columns:
+                df['Return'] = df['Close'].pct_change().fillna(0)
+            else:
+                df['Return'] = 0.0
+
         # 4. DB 컬럼명으로 최종 변환
         final_valid_cols = [col for col in COLUMN_MAPPING.keys() if col in df.columns]
         df = df[final_valid_cols].rename(columns=COLUMN_MAPPING)
 
         # 5. 최근 100일치 슬라이싱
-        cutoff_date = (datetime.now() - timedelta(days=100)).strftime('%Y-%m-%d')
+        cutoff_date = (datetime.now() - timedelta(days=CUTOFF_DAYS)).strftime('%Y-%m-%d')
         new_rows = df[df['quote_date'] >= cutoff_date].copy()
 
         # 💡 [핵심 복구 4] 결측치(NaN) 완벽 제거 및 0 채우기 (PostgreSQL 에러 원천 차단)
@@ -237,10 +258,10 @@ def update_kospi_data():
                 all_stocks_data.append(df_stock)
                 successful_codes.append(code)
 
-            if (i + 1) % 50 == 0:
+            if (i + 1) % PROGRESS_INTERVAL == 0:
                 logger.info(f" ⏳ 수집 진행 상황: [{i + 1}/{total_count}] 완료...")
 
-            time.sleep(0.3) # API 제재 방지용 대기
+            time.sleep(API_DELAY_SECONDS) # API 제재 방지용 대기
 
     # [PHASE 2] 대망의 일괄 DB 삽입 (Bulk Insert)
     if all_stocks_data:
@@ -248,17 +269,17 @@ def update_kospi_data():
         
         # 모든 데이터프레임을 하나로 합치기
         final_bulk_df = pd.concat(all_stocks_data, ignore_index=True)
-        cutoff_date = (datetime.now() - timedelta(days=100)).strftime('%Y-%m-%d')
+        cutoff_date = (datetime.now() - timedelta(days=CUTOFF_DAYS)).strftime('%Y-%m-%d')
         
         try:
             # 💡 [트랜잭션 최적화] 삭제와 삽입을 하나의 논리적 흐름으로 묶어버림
             with db.engine.begin() as conn:
                 # 1. 대상 종목들의 최근 100일치 데이터를 한방에 지움
-                delete_query = text(f"DELETE FROM {TABLE_NAME} WHERE quote_date >= :date AND stock_code IN :codes")
-                conn.execute(delete_query, {'date': cutoff_date, 'codes': tuple(successful_codes)})
+                delete_query = text(f"DELETE FROM {TABLE_NAME} WHERE quote_date >= :date AND stock_code = ANY(:codes)")
+                conn.execute(delete_query, {'date': cutoff_date, 'codes': successful_codes})
                 
                 # 2. 수만 건의 데이터를 고속으로 밀어넣기 (method='multi' 가 핵심 부스터)
-                final_bulk_df.to_sql(TABLE_NAME, con=conn, if_exists='append', index=False, chunksize=2000, method='multi')
+                final_bulk_df.to_sql(TABLE_NAME, con=conn, if_exists='append', index=False, chunksize=BULK_CHUNKSIZE, method='multi')
             
             logger.info(f"✅ DB 일괄 삽입 성공! (총 {len(final_bulk_df)}행 적재 완료)")
         except Exception as e:
@@ -277,9 +298,9 @@ if __name__ == "__main__":
     update_kospi_data()
     
     # 2. 업데이트가 끝난 후 V2 추천 스크립트 실행
-    print("🚀 추천 모델(recommend_daily_v2.py)을 이어서 실행합니다...")
+    logger.info("🚀 추천 모델(recommend_daily_v2.py)을 이어서 실행합니다...")
     try:
         # check=True는 에러 발생 시 프로세스를 중단시킵니다.
         subprocess.run([sys.executable, "src/model/recommend_daily_v2.py"], check=True)
     except subprocess.CalledProcessError as e:
-        print(f"❌ 추천 모델 실행 중 에러 발생: {e}")
+        logger.error(f"❌ 추천 모델 실행 중 에러 발생: {e}")
