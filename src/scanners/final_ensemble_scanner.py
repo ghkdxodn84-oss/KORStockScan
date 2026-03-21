@@ -271,16 +271,63 @@ def run_integrated_scanner():
             except Exception as e:
                 drop_stats['error'] += 1  
                 continue
+        
+        today = datetime.now().strftime('%Y-%m-%d')
+
+        # ==========================================
+        # 💡 [신규/순서변경] 4.5 V2 Meta Ranker (CSV) 우선 로드 및 DB 적재
+        # ==========================================
+        csv_path = os.path.join(DATA_DIR, 'daily_recommendations_v2.csv')
+        csv_count = 0
+        csv_picks = []  # 텔레그램 아침 브리핑에 합류시킬 임시 리스트
+        
+        if os.path.exists(csv_path):
+            try:
+                df_csv = pd.read_csv(csv_path)
+                for _, row in df_csv.iterrows():
+                    csv_code = str(row['code']).replace('.0', '').strip().zfill(6)
+                    csv_name = row.get('name', 'Unknown')
+                    csv_price = int(row.get('close', 0)) if 'close' in df_csv.columns else 0
+                    csv_prob = float(row.get('score', 0.99))
+                    
+                    # 1. DB 우선 적재 (KOSPI_ML / MAIN 강제 할당)
+                    db.save_recommendation(
+                        date=today,
+                        code=csv_code,
+                        name=csv_name,
+                        price=csv_price,
+                        pick_type='MAIN',
+                        position='MIDDLE',     
+                        prob=csv_prob,
+                        strategy='KOSPI_ML'     
+                    )
+                    
+                    # 2. 리포트 결합용 데이터 보관
+                    csv_picks.append({
+                        'Code': csv_code,
+                        'Name': f"🌟{csv_name}", 
+                        'Price': csv_price,
+                        'Prob': csv_prob,
+                        'Position': 'META_V2'
+                    })
+                    csv_count += 1
+                print(f"✅ V2 CSV에서 {csv_count}개 종목 우선 적재 완료 (KOSPI_ML / MAIN)")
+            except Exception as e:
+                print(f"⚠️ V2 CSV 적재 실패: {e}")
+        else:
+            print(f"ℹ️ V2 CSV 파일이 존재하지 않아 실시간 스캐닝 결과만 처리합니다.")
 
         # ==========================================
         # 5. 결과 기록 및 텔레그램 전송 (Event-Driven)
         # ==========================================
         print("📊 [3/4] 리포트 생성 및 전송 중...")
         
+        # 💡 [핵심] 텔레그램 발송 메시지에 CSV 적재 건수(csv_count)를 한 줄 추가!
         debug_msg = (
             f"🛑 *[AI 스캐너 필터링 결과]*\n"
-            f"총 {len(target_list)}개 중 *{len(all_results)}개 생존*\n\n"
-            f"📉 *탈락 사유 통계*\n"
+            f"총 {len(target_list)}개 중 *{len(all_results)}개 생존 (실시간)*\n"
+            f"🌟 *V2 앙상블 (CSV) 추가 적재: {csv_count}개*\n\n"
+            f"📉 *탈락 사유 통계 (실시간)*\n"
             f" • 데이터 부족: {drop_stats['short_data']}개\n"
             f" • ETF/동전주: {drop_stats['invalid_type'] + drop_stats['low_price']}개\n"
             f" • 기초 품질 미달: {drop_stats['quality']}개\n"
@@ -288,11 +335,10 @@ def run_integrated_scanner():
             f" • 수급 부재(이탈): {drop_stats['supply']}개\n"
         )
 
-        # 📢 [입의 분리 1] 관리자 텔레그램 발송을 EventBus로 위임!
+        # 관리자용 디버그 메시지 발송
         event_bus.publish("TELEGRAM_ADMIN_NOTIFY", {"text": debug_msg})
 
-        # --- 추천 종목 분류 및 DB 저장 ---
-        today = datetime.now().strftime('%Y-%m-%d')
+        # --- 기존 실시간 추천 종목 분류 및 DB 저장 ---
         main_picks = sorted([r for r in all_results if r['Prob'] >= TRADING_RULES.PROB_MAIN_PICK], key=lambda x: x['Prob'], reverse=True)[:3]
         runner_ups = sorted([r for r in all_results if TRADING_RULES.PROB_RUNNER_PICK <= r['Prob'] < TRADING_RULES.PROB_MAIN_PICK], key=lambda x: x['Prob'], reverse=True)[:50]
 
@@ -300,6 +346,9 @@ def run_integrated_scanner():
             db.save_recommendation(today, r['Code'], r['Name'], r['Price'], 'MAIN', r['Position'], prob=r['Prob'])
         for r in runner_ups:
             db.save_recommendation(today, r['Code'], r['Name'], r['Price'], 'RUNNER', r['Position'], prob=r['Prob'])
+
+        # 💡 [핵심] 아침 브리핑(START_OF_DAY_REPORT)을 위해 CSV 종목을 실시간 MAIN 종목 맨 앞에 병합
+        main_picks = csv_picks + main_picks
 
         # --- Gemini AI 수석 트레이더 장전 브리핑 ---
         ai_briefing = "⚠️ GEMINI_API_KEY 미설정"
