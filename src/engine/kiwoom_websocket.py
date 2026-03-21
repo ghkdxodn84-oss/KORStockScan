@@ -132,7 +132,12 @@ class KiwoomWSManager:
                     "scalp_strong_01",  # 09:20 ~ 11:00 스캘핑 강세군 (공격형)
                     "scalp_underpress_01",  # 09:40 ~ 13:00 스캘핑 약세군 (수동)
                     "scalp_shooting_01",   # 09:40 ~ 13:30 스캘핑 슈팅스타 (공격형)
-                    "scalp_afternoon_01"   # 13:00 ~ 15:30 장중진입_오후재점화
+                    "scalp_afternoon_01",  # 13:00 ~ 15:30 장중진입_오후재점화
+                    "kospi_short_swing_01", # 💡 [신규] 14:30 ~ 15:30 종가/다음날 단기 스윙
+                    "kospi_midterm_swing_01", # 💡 [신규] 14:30 ~ 15:30 종가/다음날 중기 스윙
+                    "vcp_candid_01",       # 💡 [VCP 1단계] 15:30 ~ VCP 예비 후보 (다음날용)
+                    "vcp_shooting_01",     # 💡 [VCP 2단계] 09:00 ~ 15:00 VCP 당일 슈팅
+                    "vcp_shooting_next_01" # 💡 [VCP 3단계] 15:30 ~ VCP 다음날 시초가 예약 매수
                 ]
                 # 🚨 주의: 다중 검색식을 찾을 때는 여기서 break를 쓰면 안 됩니다!
 

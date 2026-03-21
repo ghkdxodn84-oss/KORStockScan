@@ -257,7 +257,10 @@ def send_cancel_order(code, orig_ord_no, token, qty=0):
 # ==========================================
 def send_smart_sell_order(code, qty, token, ws_data, reason_type):
     """
-    [v13.1] 슬리피지 방어를 위한 스마트 매도 로직 (오리지널 정밀 로직 복원)
+     [v14.0] 슬리피지 방어를 위한 스마트 매도 로직 (사유 기반 동적 시장가 전환)
+    - LOSS, CLOSE: 긴급 탈출 -> 시장가(3)
+    - MOMENTUM_DECAY, TRAILING: 빠른 익절 보장 -> 최유리지정가(6)
+    - 기타(PROFIT, TIMEOUT): 1호가 잔량 확인 후 지정가(00) 우선 시도
     """
     if qty <= 0: return None
 
@@ -278,17 +281,24 @@ def send_smart_sell_order(code, qty, token, ws_data, reason_type):
         log_error(f"❌ [{code}] 호가 데이터 파싱 실패: {e}")
         return send_sell_order_market(code, qty, token, order_type="3")
 
-    # 2. 매매 성격에 따른 주문 분기
-    # 🚨 손절(LOSS): 가격 불문, 시장가(3) 즉시 체결 (긴급 탈출)
-    if reason_type == 'LOSS':
-        print(f"🚨 [긴급손절] {code}: 시장가(3) 매도 (수량: {qty})")
+    # 2. 매매 성격(reason_type)에 따른 주문 분기
+    # 🚨 긴급 탈출(LOSS, CLOSE) : 절대 지정가 쓰지 않음. 시장가(3) 즉시 던짐.
+    if reason_type in ['LOSS', 'CLOSE']:
+        print(f"🚨 [긴급매도] {code}: 시장가(3) 매도 (사유: {reason_type}, 수량: {qty})")
         return send_sell_order_market(code, qty, token, order_type="3")
 
     # 💰 익절(PROFIT): 슬리피지 방어 가동
+    # ⚠️ 모멘텀 급감, 트레일링 스탑 (MOMENTUM_DECAY, TRAILING) : 최유리지정가(6)로 시장가에 가깝게 즉시 체결 유도
+    elif reason_type in ['MOMENTUM_DECAY', 'TRAILING']:
+        print(f"⚠️ [시장가성 매도] {code}: 최유리지정가(6) 매도 (사유: {reason_type}, 수량: {qty})")
+        return send_sell_order_market(code, qty, token, order_type="6")
+
+    # 💰 일반 익절, 타임아웃 (PROFIT, TIMEOUT) : 지정가(00) 우선 시도, 안 되면 최유리지정가(6) (8:2 비율 중 2의 영역)
+
     else:
         # 매수 1호가 잔량이 내 물량보다 넉넉한지 확인 (2배 여유)
         if bid_1_p > 0 and bid_1_q >= qty * 2.0:
-            print(f"💰 [스마트익절] {code}: 1호가({bid_1_p:,}원) 지정가 매도 (호가잔량: {bid_1_q}주)")
+            print(f"💰 [스마트익절] {code}: 1호가({bid_1_p:,}원) 지정가 매도 (사유: {reason_type}, 호가잔량: {bid_1_q}주)")
             return send_sell_order_market(code, qty, token, order_type="00", price=bid_1_p)
         
         else:

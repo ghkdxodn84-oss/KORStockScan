@@ -79,261 +79,531 @@ event_bus = EventBus() # 💡 [신규] 전역 이벤트 버스 장착!
 global ACTIVE_TARGETS
 ACTIVE_TARGETS = []
 LAST_AI_CALL_TIMES = {}
+
+# 💡 [최적화] 매번 파싱(strptime)하지 않도록 주요 시간 객체를 미리 생성해둡니다.
+TIME_07_00 = datetime.strptime("07:00:00", "%H:%M:%S").time()
+TIME_09_00 = datetime.strptime("09:00:00", "%H:%M:%S").time()
+TIME_09_03 = datetime.strptime("09:03:00", "%H:%M:%S").time()
+TIME_09_05 = datetime.strptime("09:05:00", "%H:%M:%S").time()
+TIME_09_10 = datetime.strptime("09:10:00", "%H:%M:%S").time()
+TIME_15_30 = datetime.strptime("15:30:00", "%H:%M:%S").time()
+TIME_16_00 = datetime.strptime("16:00:00", "%H:%M:%S").time()
+TIME_19_15 = datetime.strptime("19:15:00", "%H:%M:%S").time()
+TIME_20_00 = datetime.strptime("20:00:00", "%H:%M:%S").time()
+TIME_23_59 = datetime.strptime("23:59:59", "%H:%M:%S").time()
 # -------------------------------------------------------------------
 
 def handle_condition_matched(payload):
     """실시간 조건검색(Push)으로 날아온 종목을 즉각 감시망(WATCHING)에 올립니다."""
     global KIWOOM_TOKEN, DB, ACTIVE_TARGETS, event_bus
     from datetime import time as dt_time
-    
-    code = payload.get('code')
-    cnd_name = payload.get('condition_name', '') # 💡 웹소켓이 달아준 이름표
-    if not code: return
+
+    def in_window(now_value, start, end):
+        return (start <= now_value <= end) if start <= end else (now_value >= start or now_value <= end)
+
+    code = str(payload.get('code', '')).strip()[:6]
+    cnd_name = str(payload.get('condition_name', '') or '')
+    if not code:
+        return
 
     now_t = datetime.now().time()
-    
+
+    target_strategy = 'SCALPING'
+    target_trade_type = 'SCALP'
+    is_next_day_target = False
+    target_position_tag = 'MIDDLE'
+
     # =========================================================
-    # ⏰ [핵심] 시간대별 검색식 필터링 (Time-based Routing)
+    # ⏰ 시간대별 검색식 필터링
     # =========================================================
-    # 1. 후보군_공격형_전고근접_1분 / 후보군_보수형_전고압축_3분 (09:00 ~ 09:30) 
     if "scalp_candid_aggressive_01" in cnd_name or "scalp_candid_normal_01" in cnd_name:
-        if not (dt_time(9, 0) <= now_t <= dt_time(9, 30)):
-            return # 지정 시간이 아니면 0.001초 만에 조용히 무시(Drop)합니다.
-            
-    # 2. 장중후보군_강세유지_5분 (09:20 ~ 11:00) 
-    elif "scalp_strong_01" in cnd_name: # HTS에 지정하신 이름 키워드
-        if not (dt_time(9, 20) <= now_t <= dt_time(11, 0)):
+        if not in_window(now_t, dt_time(9, 0), dt_time(9, 30)):
             return
-            
-    # 3. 장중후보군_눌림완성_3분 (09:40 ~ 13:00)
+
+    elif "scalp_strong_01" in cnd_name:
+        if not in_window(now_t, dt_time(9, 20), dt_time(11, 0)):
+            return
+
     elif "scalp_underpress_01" in cnd_name:
-        if not (dt_time(9, 40) <= now_t <= dt_time(13, 0)):
+        if not in_window(now_t, dt_time(9, 40), dt_time(13, 0)):
             return
-            
-    # 4. 장중진입_재돌파_3분 (09:40 ~ 13:30) 
+
     elif "scalp_shooting_01" in cnd_name:
-        if not (dt_time(9, 40) <= now_t <= dt_time(13, 30)):
+        if not in_window(now_t, dt_time(9, 40), dt_time(13, 30)):
             return
-    
-    # 5. 장중진입_오후재점화_5분 (13:00 ~ 15:20)
+
     elif "scalp_afternoon_01" in cnd_name:
-        if not (dt_time(13, 0) <= now_t <= dt_time(15, 20)):
+        if not in_window(now_t, dt_time(13, 0), dt_time(15, 20)):
             return
-    # =========================================================
-    
-    # 1. 이미 감시 중이거나 보유 중인 종목이면 스킵
-    if any(t['code'] == code for t in ACTIVE_TARGETS):
+
+    elif "kospi_short_swing_01" in cnd_name or "kospi_midterm_swing_01" in cnd_name:
+        if not in_window(now_t, dt_time(14, 30), dt_time(15, 30)):
+            return
+        target_strategy = 'KOSPI_ML'
+        target_trade_type = 'MAIN'
+        is_next_day_target = True
+
+    elif "vcp_candid_01" in cnd_name:
+        # ✅ overnight 구간 보정: 15:30 ~ 23:59 or 00:00 ~ 07:00
+        if not in_window(now_t, dt_time(15, 30), dt_time(7, 0)):
+            return
+        target_strategy = 'SCALPING'
+        target_trade_type = 'SCALP'
+        is_next_day_target = True
+        target_position_tag = 'VCP_CANDID'
+
+    elif "vcp_shooting_01" in cnd_name:
+        if not in_window(now_t, dt_time(9, 0), dt_time(15, 0)):
+            return
+        target_position_tag = 'VCP_SHOOTING'
+
+    elif "vcp_shooting_next_01" in cnd_name:
+        if not in_window(now_t, dt_time(15, 30), dt_time(23, 59, 59)):
+            return
+        target_strategy = 'SCALPING'
+        target_trade_type = 'SCALP'
+        is_next_day_target = True
+        target_position_tag = 'VCP_NEXT'
+
+    else:
         return
-        
+    # =========================================================
+
+    # 당일 감시망에 이미 있으면 일반 케이스는 스킵
+    # 단, VCP_SHOOTING은 기존 CANDID -> SHOOTING 승격이 있으므로 통과
+    if any(str(t.get('code', '')).strip()[:6] == code for t in ACTIVE_TARGETS):
+        if not is_next_day_target and target_position_tag != 'VCP_SHOOTING':
+            return
+
     try:
-        from src.utils import kiwoom_utils
+        import holidays
+
         basic_info = kiwoom_utils.get_basic_info_ka10001(KIWOOM_TOKEN, code)
         name = basic_info.get('Name', code)
-                    
-        print(f"🦅 [V3 헌터] 조건검색 0.1초 포착! {name}({code}) 감시망 편입 완료")
-        
-        # 3. DB 저장 (ORM)
+
+        if is_next_day_target:
+            kr_hols = holidays.KR(years=[datetime.now().year, datetime.now().year + 1])
+            hol_dates = np.array([np.datetime64(d) for d in kr_hols.keys()], dtype='datetime64[D]')
+            today_np = np.datetime64(datetime.now().date())
+            next_bday_np = np.busday_offset(today_np, 1, holidays=hol_dates)
+            target_date = pd.to_datetime(next_bday_np).date()
+        else:
+            target_date = datetime.now().date()
+
+        print(f"🦅 [V3 헌터] 조건검색 0.1초 포착! {name}({code}) 감시망 편입 준비 (목표일: {target_date})")
+
         with DB.get_session() as session:
-            today = datetime.now().date()
-            record = session.query(RecommendationHistory).filter_by(rec_date=today, stock_code=code).first()
-            if not record:
-                new_record = RecommendationHistory(
-                    rec_date=today, stock_code=code, stock_name=name, buy_price=0,
-                    trade_type='SCALP', strategy='SCALPING', status='WATCHING'
+            # =====================================================
+            # 1) VCP_SHOOTING: 전일 VCP_CANDID가 있어야 승격
+            # =====================================================
+            if target_position_tag == 'VCP_SHOOTING':
+                candid_record = session.query(RecommendationHistory).filter_by(
+                    rec_date=target_date,
+                    stock_code=code,
+                    position_tag='VCP_CANDID'
+                ).first()
+
+                if not candid_record:
+                    return
+
+                candid_record.position_tag = 'VCP_SHOOTING'
+                candid_record.status = 'WATCHING'
+                candid_record.strategy = 'SCALPING'
+                candid_record.trade_type = 'SCALP'
+
+                if not any(str(t.get('code', '')).strip()[:6] == code for t in ACTIVE_TARGETS):
+                    new_target = {
+                        'id': candid_record.id,
+                        'code': code,
+                        'name': name,
+                        'strategy': 'SCALPING',
+                        'status': 'WATCHING',
+                        'added_time': time.time(),
+                        'position_tag': 'VCP_SHOOTING'
+                    }
+                    ACTIVE_TARGETS.append(new_target)
+                    event_bus.publish("COMMAND_WS_REG", {"codes": [code]})
+
+                msg = (
+                    f"🎯 **[VCP 돌파 포착]**\n"
+                    f"종목: **{name} ({code})**\n"
+                    f"전일 CANDID 포착 후 금일 슈팅 조건을 만족하여 스캘핑 감시망에 투입됩니다."
                 )
-                session.add(new_record)
-                session.flush() # ID 즉시 획득
-                
-                # 4. 스나이퍼 메모리 즉시 동기화
-                new_target = {
-                    'id': new_record.id, 'code': code, 'name': name,
-                    'strategy': 'SCALPING', 'status': 'WATCHING', 'added_time': time.time()
-                }
-                ACTIVE_TARGETS.append(new_target)
-                
-                # 5. 웹소켓 매니저에게 "이 종목 호가창 당장 구독해!" 지시
+                event_bus.publish(
+                    'TELEGRAM_BROADCAST',
+                    {'message': msg, 'audience': 'VIP_ALL', 'parse_mode': 'Markdown'}
+                )
+                return
+
+            # =====================================================
+            # 2) VCP_NEXT: 당일 SHOOTING 완료 종목만 다음날 예약
+            # =====================================================
+            elif target_position_tag == 'VCP_NEXT':
+                today = datetime.now().date()
+                today_record = session.query(RecommendationHistory).filter_by(
+                    rec_date=today,
+                    stock_code=code,
+                    position_tag='VCP_SHOOTING'
+                ).first()
+
+                if not today_record:
+                    return
+
+                next_record = session.query(RecommendationHistory).filter_by(
+                    rec_date=target_date,
+                    stock_code=code
+                ).first()
+
+                if not next_record:
+                    new_record = RecommendationHistory(
+                        rec_date=target_date,
+                        stock_code=code,
+                        stock_name=name,
+                        buy_price=0,
+                        trade_type='SCALP',
+                        strategy='SCALPING',
+                        status='WATCHING',
+                        position_tag='VCP_NEXT'
+                    )
+                    session.add(new_record)
+
+                    msg = (
+                        f"🌙 **[내일의 VCP 슈팅 예약]**\n"
+                        f"종목: **{name} ({code})**\n"
+                        f"금일 슈팅 후 강력한 마감 패턴을 보여 내일 시초가 매수를 예약합니다."
+                    )
+                    event_bus.publish(
+                        'TELEGRAM_BROADCAST',
+                        {'message': msg, 'audience': 'VIP_ALL', 'parse_mode': 'Markdown'}
+                    )
+                return
+
+            # =====================================================
+            # 3) 일반 로직 / VCP_CANDID 저장
+            # =====================================================
+            record = session.query(RecommendationHistory).filter_by(
+                rec_date=target_date,
+                stock_code=code
+            ).first()
+
+            if not record:
+                record = RecommendationHistory(
+                    rec_date=target_date,
+                    stock_code=code,
+                    stock_name=name,
+                    buy_price=0,
+                    trade_type=target_trade_type,
+                    strategy=target_strategy,
+                    status='WATCHING',
+                    position_tag=target_position_tag
+                )
+                session.add(record)
+                session.flush()
+            else:
+                # 기존 record가 있는데 position_tag가 비어 있거나 약한 값이면 보강
+                if hasattr(record, 'position_tag') and target_position_tag not in [None, '', 'MIDDLE']:
+                    record.position_tag = target_position_tag
+
+            if not is_next_day_target:
+                if not any(str(t.get('code', '')).strip()[:6] == code for t in ACTIVE_TARGETS):
+                    new_target = {
+                        'id': record.id,
+                        'code': code,
+                        'name': name,
+                        'strategy': record.strategy or target_strategy,
+                        'status': 'WATCHING',
+                        'added_time': time.time(),
+                        'position_tag': getattr(record, 'position_tag', target_position_tag) or target_position_tag
+                    }
+                    ACTIVE_TARGETS.append(new_target)
+
                 event_bus.publish("COMMAND_WS_REG", {"codes": [code]})
-                
+
+            else:
+                if target_position_tag == 'VCP_CANDID':
+                    msg = (
+                        f"🌙 **[VCP 예비 후보 포착]**\n"
+                        f"조건검색: `{cnd_name}`\n"
+                        f"종목: **{name} ({code})**\n"
+                        f"내일 오전 VCP 슈팅 조건 만족 시 감시망에 투입됩니다."
+                    )
+                else:
+                    msg = (
+                        f"🌙 **[내일의 스윙 주도주 예약]**\n"
+                        f"조건검색 포착: `{cnd_name}`\n"
+                        f"종목: **{name} ({code})**\n"
+                        f"내일({target_date}) 감시망에 전략({target_strategy})으로 자동 투입됩니다."
+                    )
+
+                event_bus.publish(
+                    'TELEGRAM_BROADCAST',
+                    {'message': msg, 'audience': 'VIP_ALL', 'parse_mode': 'Markdown'}
+                )
+                print(f"🌙 [{name}] 종가 무렵 포착 완료. 내일({target_date}) 감시 대상({target_strategy})으로 DB 예약 성공!")
+
     except Exception as e:
-        from src.utils.logger import log_error
         log_error(f"🚨 조건검색 편입 처리 에러: {e}")
 
+
+
 def sync_balance_with_db():
-    """봇 시작 시 실제 계좌 잔고와 DB의 HOLDING 기록을 대조하여 정합성을 맞춥니다. (ORM 완벽 적용)"""
+    """봇 시작 시 실제 계좌 잔고와 DB의 HOLDING 기록을 대조하여 정합성을 맞춥니다."""
+    global KIWOOM_TOKEN, DB, ACTIVE_TARGETS
+
+    def to_int(value):
+        try:
+            return int(float(value or 0))
+        except Exception:
+            return 0
+
     print("🔄 [데이터 동기화] 실제 계좌 잔고와 DB를 대조합니다...")
-    
-    real_inventory = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN) 
-    
+
+    real_inventory = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)
     if real_inventory is None:
         print("⚠️ [동기화 보류] 잔고 조회 API 통신에 실패하여 DB 동기화를 건너뜁니다.")
         return
 
-    real_codes = {item['code']: item for item in real_inventory}
+    real_codes = {
+        str(item.get('code', '')).strip()[:6]: item
+        for item in real_inventory
+        if item.get('code')
+    }
 
     try:
         with DB.get_session() as session:
-            # 💡 [ORM 교정 1] SELECT 쿼리 대신 객체 리스트로 가져옵니다.
             db_holdings = session.query(RecommendationHistory).filter_by(status='HOLDING').all()
 
             for record in db_holdings:
-                code = record.stock_code
+                code = str(record.stock_code).strip()[:6]
                 name = record.stock_name
-                safe_db_qty = record.buy_qty or 0
-                    
+                safe_db_qty = to_int(record.buy_qty)
+
                 if code not in real_codes:
                     print(f"⚠️ [동기화] {name}({code}): 실제 잔고 0주. 상태를 COMPLETED로 강제 변경.")
-                    # 💡 [ORM 교정 2] UPDATE 쿼리 대신 파이썬 객체의 속성만 바꿔줍니다.
                     record.status = 'COMPLETED'
+                    if not record.sell_time:
+                        record.sell_time = datetime.now()
+
+                    target = next((t for t in ACTIVE_TARGETS if str(t.get('code', '')).strip()[:6] == code), None)
+                    if target:
+                        target['status'] = 'COMPLETED'
                 else:
-                    real_qty = real_codes[code]['qty']
+                    real_qty = to_int(real_codes[code].get('qty', 0))
                     if safe_db_qty != real_qty:
                         print(f"⚠️ [동기화] {name}({code}): 수량 불일치 교정 (DB: {safe_db_qty}주 -> 실제: {real_qty}주)")
-                        # 💡 [ORM 교정 3] 마찬가지로 파이썬 객체 속성만 바꿉니다.
-                        # record.buy_qty = real_qty
-                        
-            # 💡 with 블록이 종료될 때, 변경된 객체들이 알아서 DB에 commit() 됩니다!
-            
+                        record.buy_qty = real_qty
+
+                    target = next((t for t in ACTIVE_TARGETS if str(t.get('code', '')).strip()[:6] == code), None)
+                    if target and real_qty > 0:
+                        target['buy_qty'] = real_qty
+
     except Exception as e:
         log_error(f"🚨 DB 동기화 중 에러 발생: {e}")
 
     print("✅ [데이터 동기화] 완료. 봇 메모리가 실제 계좌와 완벽히 일치합니다.")
 
+
 def sync_state_with_broker():
     """
-    [Fallback 로직] 웹소켓 재접속 시 증권사 실제 잔고를 불러와 
+    [Fallback 로직] 웹소켓 재접속 시 증권사 실제 잔고를 불러와
     누락된 체결 건(BUY_ORDERED -> HOLDING)을 강제로 동기화합니다.
     """
-    # 💡 [핵심 교정] self 대신 kiwoom_sniper_v2.py의 전역 변수들을 가져옵니다.
     global KIWOOM_TOKEN, DB, ACTIVE_TARGETS, event_bus
-    
+
+    def to_int(value):
+        try:
+            return int(float(value or 0))
+        except Exception:
+            return 0
+
     print("🔄 [상태 동기화] 웹소켓 재접속 감지! 증권사 잔고와 봇 상태를 대조합니다...")
-    
-    # 1. 증권사 실제 잔고 가져오기 (kiwoom_utils에 만든 SOR 통합 조회 함수 호출)
+
     real_balances = kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN, "ALL")
-    
-    # 빠른 조회를 위해 종목코드를 Key로 하는 Dictionary로 변환 (005930 -> 잔고데이터)
-    balance_dict = {str(item.get('code', '')).strip(): item for item in real_balances if item.get('code')}
+    if real_balances is None:
+        print("⚠️ [상태 동기화] 잔고 조회 실패. 다음 턴에 재시도합니다.")
+        return
+
+    balance_dict = {
+        str(item.get('code', '')).strip()[:6]: item
+        for item in real_balances
+        if item.get('code')
+    }
 
     synced_count = 0
-    
+
     try:
-        # 2. 로컬 DB에서 오늘 '주문 전송 후 대기 중(BUY_ORDERED)'인 타겟들 조회 (ORM 적용)
         with DB.get_session() as session:
             pending_records = session.query(RecommendationHistory).filter_by(status='BUY_ORDERED').all()
-            
+
             for record in pending_records:
-                code = record.stock_code
-                
-                # 3. 매핑 로직 (웹소켓 끊긴 사이 증권사 잔고에 해당 종목이 들어왔다면 체결된 것!)
+                code = str(record.stock_code).strip()[:6]
+
                 if code in balance_dict:
                     real_data = balance_dict[code]
-                    cur_qty = real_data.get('qty', 0)
-                    
+                    cur_qty = to_int(real_data.get('qty', 0))
+
                     if cur_qty > 0:
-                        buy_uv = real_data.get('buy_price', 0) # 확정된 실제 매입단가
-                        
+                        raw_price = (
+                            real_data.get('buy_price')
+                            or real_data.get('purchase_price')
+                            or real_data.get('pchs_avg_pric')
+                            or 0
+                        )
+                        buy_uv = to_int(raw_price)
+
                         print(f"✅ [동기화 완료] 누락 체결 확인! {record.stock_name}({code}) | 수량: {cur_qty} | 평단가: {buy_uv:,}원")
-                        
-                        # 3-1. DB 업데이트 (상태를 HOLDING으로 변경하고 확정 체결가/수량 덮어쓰기)
+
                         record.status = 'HOLDING'
                         record.buy_price = buy_uv
-                        # record.buy_qty = cur_qty
-                        
-                        # 3-2. 스나이퍼 메모리(ACTIVE_TARGETS) 상태 즉시 업데이트
+                        record.buy_qty = cur_qty
+                        if not record.buy_time:
+                            record.buy_time = datetime.now()
+
                         for t in ACTIVE_TARGETS:
-                            if t['code'] == code:
+                            if str(t.get('code', '')).strip()[:6] == code:
                                 t['status'] = 'HOLDING'
                                 t['buy_price'] = buy_uv
-                                # t['buy_qty'] = cur_qty
+                                t['buy_qty'] = cur_qty
                                 break
-                                
+
                         synced_count += 1
-                        
-            # with 블록 종료 시 DB session 자동 commit
-    
+
     except Exception as e:
-        from src.utils.logger import log_error
         log_error(f"🚨 [상태 동기화] DB 처리 중 에러 발생: {e}")
 
-    # 4. 동기화 결과 텔레그램 리포팅
     if synced_count > 0:
         msg = f"🔄 <b>[시스템 복구 알림]</b>\n웹소켓 단절 시간 동안 체결된 <b>{synced_count}건</b>의 종목을 성공적으로 동기화하여 감시망에 편입했습니다."
-        event_bus.publish('TELEGRAM_BROADCAST', {'message': msg, 'parse_mode': 'HTML'})
+        event_bus.publish('TELEGRAM_BROADCAST', {'message': msg, 'audience': 'VIP_ALL', 'parse_mode': 'HTML'})
     else:
         print("✅ [상태 동기화] 누락된 체결 건이 없습니다.")
+
+
 
 # =====================================================================
 # 🔄 3분 주기 강제 계좌 동기화 (웹소켓 영수증 누락 방어)
 # =====================================================================
 def periodic_account_sync():
     """
-    주기적으로 실제 증권사 잔고를 조회하여, 웹소켓 체결 누락으로 인해 
+    주기적으로 실제 증권사 잔고를 조회하여, 웹소켓 체결 누락으로 인해
     DB와 메모리가 꼬이는 현상을 강제로 바로잡습니다.
     """
-    global KIWOOM_TOKEN, DB, ACTIVE_TARGETS
-    
-    # 💡 [핵심 교정 1] 구형 inventory 함수 대신, 가장 안정적인 통합 잔고조회 함수 사용
-    from src.utils import kiwoom_utils
+    global KIWOOM_TOKEN, DB, ACTIVE_TARGETS, highest_prices
+
+    def to_int(value):
+        try:
+            return int(float(value or 0))
+        except Exception:
+            return 0
+
     real_inventory = kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN, "ALL")
-    
     if real_inventory is None:
-        return # 통신 실패 시 다음 턴에 재시도
-        
-    real_codes = {str(item.get('code', '')).strip(): item for item in real_inventory if item.get('code')}
+        return
+
+    real_codes = {
+        str(item.get('code', '')).strip()[:6]: item
+        for item in real_inventory
+        if item.get('code')
+    }
+
     synced_count = 0
-    
+
     try:
         with DB.get_session() as session:
             # 1️⃣ [매도 누락 방어] DB엔 HOLDING/SELL_ORDERED 인데, 실제 계좌엔 없는 경우 -> 팔렸음 (COMPLETED)
             active_records = session.query(RecommendationHistory).filter(
                 RecommendationHistory.status.in_(['HOLDING', 'SELL_ORDERED'])
             ).all()
-            
+
             for record in active_records:
-                code = record.stock_code
+                code = str(record.stock_code).strip()[:6]
+
                 if code not in real_codes:
                     print(f"⚠️ [정기 동기화] {record.stock_name}({code}) 잔고 없음. 매도 영수증 누락으로 판단하여 COMPLETED 강제 전환.")
                     record.status = 'COMPLETED'
                     record.sell_time = datetime.now()
-                    
-                    # 메모리 동기화
-                    for t in ACTIVE_TARGETS:
-                        if t['code'] == code:
-                            t['status'] = 'COMPLETED'
-                            break
+
+                    target_stock = next((t for t in ACTIVE_TARGETS if str(t.get('code', '')).strip()[:6] == code), None)
+                    estimated_sell_price = target_stock.get('sell_target_price', 0) if target_stock else 0
+                    fallback_price = record.buy_price if record.buy_price is not None else 0
+
+                    if not record.sell_price or record.sell_price == 0:
+                        record.sell_price = estimated_sell_price if estimated_sell_price > 0 else fallback_price
+
+                    if record.buy_price and record.buy_price > 0 and record.sell_price and record.sell_price > 0:
+                        record.profit_rate = round(((record.sell_price - record.buy_price) / record.buy_price) * 100, 2)
+
+                    if target_stock:
+                        target_stock['status'] = 'COMPLETED'
+
+                    highest_prices.pop(code, None)
                     synced_count += 1
-            
+
+                else:
+                    real_data = real_codes[code]
+                    real_qty = to_int(real_data.get('qty', 0))
+
+                    raw_price = (
+                        real_data.get('buy_price')
+                        or real_data.get('purchase_price')
+                        or real_data.get('pchs_avg_pric')
+                        or 0
+                    )
+                    real_buy_uv = to_int(raw_price)
+
+                    if real_qty > 0 and to_int(record.buy_qty) != real_qty:
+                        print(f"🔄 [정기 동기화] {record.stock_name} 수량 오차 교정 (기존: {to_int(record.buy_qty)}주 ➡️ 실제: {real_qty}주)")
+                        record.buy_qty = real_qty
+                        for t in ACTIVE_TARGETS:
+                            if str(t.get('code', '')).strip()[:6] == code:
+                                t['buy_qty'] = real_qty
+                                break
+
+                    if real_buy_uv > 0 and record.buy_price != real_buy_uv:
+                        print(f"🔄 [정기 동기화] {record.stock_name} 매입단가 오차 교정 (기존: {record.buy_price}원 ➡️ 실제: {real_buy_uv}원)")
+                        record.buy_price = real_buy_uv
+                        for t in ACTIVE_TARGETS:
+                            if str(t.get('code', '')).strip()[:6] == code:
+                                t['buy_price'] = real_buy_uv
+                                break
+
             # 2️⃣ [매수 누락 방어] DB엔 BUY_ORDERED 인데, 실제 잔고에 들어와 있는 경우 -> 샀음 (HOLDING)
             pending_records = session.query(RecommendationHistory).filter_by(status='BUY_ORDERED').all()
+
             for record in pending_records:
-                code = record.stock_code
+                code = str(record.stock_code).strip()[:6]
+
                 if code in real_codes:
                     real_data = real_codes[code]
-                    cur_qty = real_data.get('qty', 0)
-                    
+                    cur_qty = to_int(real_data.get('qty', 0))
+
                     if cur_qty > 0:
-                        # 💡 [핵심 교정 2] 여러 Key 이름 방어 및 문자열->숫자(int) 안전 변환
-                        raw_price = real_data.get('buy_price') or real_data.get('purchase_price') or real_data.get('pchs_avg_pric') or 0
-                        buy_uv = int(float(raw_price)) if raw_price else 0
-                        
+                        raw_price = (
+                            real_data.get('buy_price')
+                            or real_data.get('purchase_price')
+                            or real_data.get('pchs_avg_pric')
+                            or 0
+                        )
+                        buy_uv = to_int(raw_price)
+
                         print(f"⚠️ [정기 동기화] {record.stock_name}({code}) 매수 체결 확인! HOLDING 강제 전환 (평단가 {buy_uv:,}원)")
-                        
+
                         record.status = 'HOLDING'
                         record.buy_price = buy_uv
+                        record.buy_qty = cur_qty
                         record.buy_time = datetime.now()
-                        
-                        # 메모리 동기화
+
                         for t in ACTIVE_TARGETS:
-                            if t['code'] == code:
+                            if str(t.get('code', '')).strip()[:6] == code:
                                 t['status'] = 'HOLDING'
                                 t['buy_price'] = buy_uv
+                                t['buy_qty'] = cur_qty
                                 break
+
                         synced_count += 1
-                        
+
     except Exception as e:
-        from src.utils.logger import log_error
         log_error(f"🚨 정기 계좌 동기화 DB 에러: {e}")
-        
+
     if synced_count > 0:
         print(f"🔄 [정기 동기화 완료] 총 {synced_count}건의 웹소켓 누락 체결 상태를 바로잡았습니다.")
 
@@ -583,46 +853,105 @@ def get_detailed_reason(code):
     
     return report
 
+def get_realtime_ai_scores(codes):
+    """
+    [V14.0 신규] 외부(텔레그램) 요청 시 감시 중인 종목들의 실시간 AI 점수를 일괄 분석하여 반환합니다.
+    """
+    global KIWOOM_TOKEN, WS_MANAGER, AI_ENGINE, ACTIVE_TARGETS
+    scores = {}
+    
+    if not AI_ENGINE or not WS_MANAGER or not KIWOOM_TOKEN:
+        return scores
+        
+    for code in codes:
+        ws_data = WS_MANAGER.get_latest_data(code)
+        if not ws_data or ws_data.get('curr', 0) == 0:
+            # 웹소켓 데이터가 없을 경우 REST API로 가볍게 1틱 폴백
+            try:
+                from src.utils import kiwoom_utils
+                recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=1)
+                if recent_ticks and len(recent_ticks) > 0:
+                    last_tick = recent_ticks[0]
+                    ws_data = {
+                        'curr': last_tick.get('price', 0), 'fluctuation': last_tick.get('flu_rate', 0.0),
+                        'volume': last_tick.get('acc_vol', 0), 'v_pw': last_tick.get('strength', 0.0),
+                        'ask_tot': 0, 'bid_tot': 0, 'orderbook': {'asks': [], 'bids': []}
+                    }
+            except:
+                pass
+
+        if not ws_data or ws_data.get('curr', 0) == 0:
+            continue
+            
+        target = next((t for t in ACTIVE_TARGETS if t['code'] == code), None)
+        name = target['name'] if target else code
+        
+        try:
+            from src.utils import kiwoom_utils
+            ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
+            candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
+            
+            if ticks:
+                ai_decision = AI_ENGINE.analyze_target(name, ws_data, ticks, candles)
+                scores[code] = ai_decision.get('score', 50)
+                
+                # 스나이퍼 메모리에도 최신 점수로 업데이트 (겸사겸사)
+                if target and scores[code] != 50:
+                    target['rt_ai_prob'] = scores[code] / 100.0
+        except Exception as e:
+            from src.utils.logger import log_error
+            log_error(f"실시간 일괄 AI 분석 에러 ({code}): {e}")
+            
+        time.sleep(0.3) # API 연속 호출 제재 방지
+        
+    return scores
+
 # =====================================================================
 # 🧠 상태 머신 (State Machine) 핸들러 
 # =====================================================================
 def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=None):
     """
     [WATCHING 상태] 진입 타점 감시 및 AI 교차 검증
-    * 변경점: broadcast_callback 파라미터 파괴 -> EventBus 적용
     """
-    strategy = stock.get('strategy', 'KOSPI_ML')
+    global LAST_AI_CALL_TIMES
+
+    raw_strategy = (stock.get('strategy') or 'KOSPI_ML').upper()
+    strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
+    pos_tag = stock.get('position_tag', 'MIDDLE')
+
     now = datetime.now()
     now_t = now.time()
-    market_open = datetime.strptime("09:00:00", "%H:%M:%S").time()
-    # 💡 [핵심 교정] 스캘핑은 9시 3분(1분봉 3개 완성)부터 바로 사냥 시작! 스윙은 9시 10분 유지
-    if strategy in ['SCALPING', 'SCALP']:
-        strategy_start = datetime.strptime("09:03:00", "%H:%M:%S").time()
-    else:
-        strategy_start = datetime.strptime("09:10:00", "%H:%M:%S").time()
 
-    # 🛡️ 개장 직후 정보 블라인드 구간 (진입 금지)
-    if market_open <= now_t < strategy_start:
+    # 스캘핑은 9시 3분부터 시작하되, VCP_NEXT 예약 매수는 9시 정각 즉시 시작!
+    if strategy == 'SCALPING':
+        strategy_start = TIME_09_00 if pos_tag == 'VCP_NEXT' else TIME_09_03
+    else:
+        strategy_start = TIME_09_05
+
+    if now_t < strategy_start:
         if now.second % 30 == 0:
             print(f"📡 [관찰/블라인드 모드] 차트 데이터(VWAP) 형성 대기 중... (목표: {strategy_start})")
         return
-    
-    MAX_SURGE = getattr(TRADING_RULES, 'MAX_SCALP_SURGE_PCT', 20.0) 
+
+    MAX_SURGE = getattr(TRADING_RULES, 'MAX_SCALP_SURGE_PCT', 20.0)
     MAX_INTRADAY_SURGE = getattr(TRADING_RULES, 'MAX_INTRADAY_SURGE', 15.0)
     MIN_LIQUIDITY = getattr(TRADING_RULES, 'MIN_SCALP_LIQUIDITY', 500_000_000)
 
-    # 🚀 1. 쿨타임(휴식기) 검사
     if code in cooldowns and time.time() < cooldowns[code]:
         return
 
-    # 🚀 2. 초단타 장 후반 진입 금지 (16:00 이후)
-    if strategy == 'SCALPING' and now_t >= datetime.strptime("16:00:00", "%H:%M:%S").time():
+    if strategy == 'SCALPING' and now_t >= TIME_16_00:
         return
 
-    if code in alerted_stocks: return
+    if code in alerted_stocks:
+        return
 
-    curr_price = ws_data.get('curr', 0)
-    current_vpw = ws_data.get('v_pw', 0)
+    curr_price = int(float(ws_data.get('curr', 0) or 0))
+    if curr_price <= 0:
+        return
+
+    current_vpw = float(ws_data.get('v_pw', 0) or 0)
+    fluctuation = float(ws_data.get('fluctuation', 0.0) or 0.0)
 
     is_trigger = False
     msg = ""
@@ -632,14 +961,18 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
     buy_threshold = getattr(TRADING_RULES, 'BUY_SCORE_THRESHOLD', 70)
     strong_vpw = getattr(TRADING_RULES, 'VPW_STRONG_LIMIT', 120)
 
+
     # 1️⃣ 초단타 (SCALPING) 전략
     if strategy == 'SCALPING':
+        # 🚨 [방어막] VCP_CANDID 상태인 종목은 당일 슈팅 조건이 올 때까지 매수 금지 (대기)
+        if pos_tag == 'VCP_CANDID':
+            return
+            
         ratio = getattr(TRADING_RULES, 'INVEST_RATIO_SCALPING', 0.15)
-        
-        ask_tot = ws_data.get('ask_tot', 0)
-        bid_tot = ws_data.get('bid_tot', 0)
-        fluctuation = float(ws_data.get('fluctuation', 0.0)) 
-        open_price = float(ws_data.get('open', curr_price))
+
+        ask_tot = int(float(ws_data.get('ask_tot', 0) or 0))
+        bid_tot = int(float(ws_data.get('bid_tot', 0) or 0))
+        open_price = float(ws_data.get('open', curr_price) or curr_price)
 
         intraday_surge = ((curr_price - open_price) / open_price) * 100 if open_price > 0 else fluctuation
         liquidity_value = (ask_tot + bid_tot) * curr_price
@@ -649,14 +982,30 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
         if fluctuation >= MAX_SURGE or intraday_surge >= MAX_INTRADAY_SURGE:
             return
         
-        # 💡 [기본 조건 검사] 수급과 호가잔량이 최소 기준을 넘어야 함
-        if current_vpw >= getattr(TRADING_RULES, 'VPW_SCALP_LIMIT', 120) and liquidity_value >= MIN_LIQUIDITY:
-            
-            # 💡 [핵심 방어막] None이 들어오더라도 파이썬이 안전하게 0으로 바꿔치기합니다!
+        # 💡 [VCP_NEXT는 09:00 이후 시초가 예약 진입]
+        if pos_tag == 'VCP_NEXT':
+            stock['target_buy_price'] = curr_price
+            is_trigger = True
+            msg = (
+                f"🚀 **[{stock['name']}]({code}) VCP 시초가 예약 매수!**\n"
+                f"현재가: `{curr_price:,}원` (전일 VCP NEXT 달성)"
+            )
+            stock['msg_audience'] = 'VIP_ALL'
+
+        else:
+            if radar is None:
+                return
+
+            # 기본 조건
+            if current_vpw < getattr(TRADING_RULES, 'VPW_SCALP_LIMIT', 120):
+                return
+            if liquidity_value < MIN_LIQUIDITY:
+                return
+
             scanner_price = stock.get('buy_price') or 0
             if scanner_price > 0:
                 gap_pct = (curr_price - scanner_price) / scanner_price * 100
-                if gap_pct >= 1.5: 
+                if gap_pct >= 1.5:
                     if code not in cooldowns:
                         print(f"⚠️ [{stock['name']}] 포착가 대비 너무 오름 (갭 +{gap_pct:.1f}%). 추격매수 포기.")
                         cooldowns[code] = time.time() + 1200
@@ -666,63 +1015,62 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             # 💎 4. [핵심] AI 감시 종목 VIP 필터링 & 타점 계산 (Blocking Wait 적용)
             # =========================================================
             # 1. 이전 AI 점수를 기반으로 1차 타점 계산
-            current_ai_score = stock.get('rt_ai_prob', 0.5) * 100 
-            
+            current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
             target_buy_price, used_drop_pct = radar.get_smart_target_price(
-                curr_price, 
-                v_pw=current_vpw, 
+                curr_price,
+                v_pw=current_vpw,
                 ai_score=current_ai_score,
-                ask_tot=ask_tot, 
-                bid_tot=bid_tot  
+                ask_tot=ask_tot,
+                bid_tot=bid_tot
             )
 
-            global LAST_AI_CALL_TIMES
             last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
             time_elapsed = time.time() - last_ai_time
-            
-            # 💡 [순서 교정 1] 타점 접근 여부(is_vip_target)를 먼저 계산합니다.
             is_vip_target = (target_buy_price > 0) and (curr_price <= target_buy_price * 1.015)
 
-            # 💡 [순서 교정 2] 첫 진입 시 '대기' 메시지를 먼저 출력합니다.
             if is_vip_target and last_ai_time == 0:
                 print(f"⏳ [{stock['name']}] 첫 AI 분석을 시작합니다... (기계적 매수 일시 보류)")
 
-            # 💡 [순서 교정 3] VIP 종목이면서 (쿨타임이 지났거나 OR 첫 분석인 경우) AI 개입
-            if ai_engine and radar and is_vip_target and (time_elapsed > getattr(TRADING_RULES, 'AI_WATCHING_COOLDOWN', 60) or last_ai_time == 0):
+            if ai_engine and is_vip_target and (time_elapsed > getattr(TRADING_RULES, 'AI_WATCHING_COOLDOWN', 60) or last_ai_time == 0):
                 try:
                     recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
                     recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
-                    
+
                     if ws_data.get('orderbook') and recent_ticks:
-                        # AI 답변 대기 (Blocking Call)
                         ai_decision = ai_engine.analyze_target(stock['name'], ws_data, recent_ticks, recent_candles)
-                        
+
                         action = ai_decision.get('action', 'WAIT')
-                        ai_score = ai_decision.get('score', 50)  
+                        ai_score = ai_decision.get('score', 50)
                         reason = ai_decision.get('reason', '사유 없음')
-                        
+
                         if ai_score != 50:
                             stock['rt_ai_prob'] = ai_score / 100.0
-                            current_ai_score = ai_score 
-                            # 💡 이제 '확답' 로그가 '대기' 로그 다음에 찍힙니다.
+                            current_ai_score = ai_score
                             print(f"💎 [VIP AI 확답 완료: {stock['name']}] {action} | 점수: {ai_score}점 | {reason}")
-                            
-                            # 텔레그램 발송
+
                             if action == "BUY":
-                                ai_msg = f"🤖 <b>[VIP 종목 실시간 분석]</b>\n🎯 종목: {stock['name']}\n⚡ 행동: <b>{action} ({ai_score}점)</b>\n🧠 사유: {reason}"
+                                ai_msg = (
+                                    f"🤖 <b>[VIP 종목 실시간 분석]</b>\n"
+                                    f"🎯 종목: {stock['name']}\n"
+                                    f"⚡ 행동: <b>{action} ({ai_score}점)</b>\n"
+                                    f"🧠 사유: {reason}"
+                                )
                                 target_audience = 'VIP_ALL' if liquidity_value >= getattr(TRADING_RULES, 'VIP_LIQUIDITY_THRESHOLD', 1_000_000_000) else 'ADMIN_ONLY'
-                                event_bus.publish('TELEGRAM_BROADCAST', {'message': ai_msg, 'audience': target_audience, 'parse_mode': 'HTML'})
+                                event_bus.publish(
+                                    'TELEGRAM_BROADCAST',
+                                    {'message': ai_msg, 'audience': target_audience, 'parse_mode': 'HTML'}
+                                )
                         else:
                             print(f"⚠️ [{stock['name']}] AI 판단 보류(Score 50). 기계적 로직으로 폴백합니다.")
                             current_ai_score = 50
 
                 except Exception as e:
                     log_error(f"🚨 [AI 엔진 오류] {e} | 기계적 매수 모드로 폴백(Fallback)합니다.")
-                    current_ai_score = 50 
-                
+                    current_ai_score = 50
+
                 LAST_AI_CALL_TIMES[code] = time.time()
 
-                # 💡 [순서 교정 4] 첫 분석이었다면 확답까지 출력한 후, 안전을 위해 다음 루프에서 매수하도록 리턴
+                # 첫 분석 턴은 바로 진입하지 않고 다음 루프에서 확인
                 if last_ai_time == 0:
                     return
 
@@ -733,33 +1081,37 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             # =========================================================
 
             if current_ai_score < 75 and current_ai_score != 50:
-                if time.time() - last_ai_time < 1.0: 
+                if time.time() - last_ai_time < 1.0:
                     action_str = "WAIT(진입 보류)" if current_ai_score > 40 else "DROP(진입 차단)"
                     print(f"🚫 [AI 매수 거부] {stock['name']} {action_str} (AI 점수: {current_ai_score}점)")
-                
-                # 💡 대처 방안: DROP(위험)은 3분간 쳐다보지도 않고, WAIT(대기)은 30초 뒤에 다시 간을 봅니다.
+
                 cooldown_time = getattr(TRADING_RULES, 'AI_WAIT_DROP_COOLDOWN', 300) if current_ai_score > 40 else 180
                 cooldowns[code] = time.time() + cooldown_time
                 return
-            
-            # 최신 AI 점수를 반영하여 목표가 재계산 (방금 AI 점수가 갱신되었을 수 있으므로)
+
             final_target_buy_price, final_used_drop_pct = radar.get_smart_target_price(
-                curr_price, 
-                v_pw=current_vpw, 
-                ai_score=current_ai_score 
+                curr_price,
+                v_pw=current_vpw,
+                ai_score=current_ai_score,
+                ask_tot=ask_tot,
+                bid_tot=bid_tot
             )
 
             stock['target_buy_price'] = final_target_buy_price
             is_trigger = True
-            
-            msg = (f"⚡ **[{stock['name']}]({code}) 초단타(SCALP) 그물망 투척!**\n"
-                   f"현재가: `{curr_price:,}원` ➡️ **매수대기: `{final_target_buy_price:,}원` (-{final_used_drop_pct:.1f}% 눌림목)**\n"
-                   f"호가잔량대금: `{liquidity_value / 100_000_000:.1f}억` | 수급강도: `{current_vpw:.1f}%`")
-            
+
+            msg = (
+                f"⚡ **[{stock['name']}]({code}) 초단타(SCALP) 그물망 투척!**\n"
+                f"현재가: `{curr_price:,}원` ➡️ **매수대기: `{final_target_buy_price:,}원` (-{final_used_drop_pct:.1f}% 눌림목)**\n"
+                f"호가잔량대금: `{liquidity_value / 100_000_000:.1f}억` | 수급강도: `{current_vpw:.1f}%`"
+            )
             stock['msg_audience'] = 'VIP_ALL' if liquidity_value >= getattr(TRADING_RULES, 'VIP_LIQUIDITY_THRESHOLD', 1_000_000_000) else 'ADMIN_ONLY'
       
     # 2️⃣ 코스닥 우량주 스윙 (KOSDAQ_ML) 전략
     elif strategy == 'KOSDAQ_ML':
+        if radar is None:
+            return
+
         ratio = getattr(TRADING_RULES, 'INVEST_RATIO_KOSDAQ', 0.10)
         score, prices, conclusion, checklist, metrics = radar.analyze_signal_integrated(ws_data, ai_prob)
 
@@ -768,12 +1120,21 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
 
         if (score >= buy_threshold or is_shooting) and current_vpw >= getattr(TRADING_RULES, 'VPW_KOSDAQ_LIMIT', 105):
             is_trigger = True
-            msg = (f"🚀 **[{stock['name']}]({code}) 코스닥(KOSDAQ) 스나이퍼 포착!**\n"
-                   f"현재가: `{curr_price:,}원` | 확신도: `{ai_prob:.1%}`\n"
-                   f"수급강도: `{current_vpw:.1f}%`")
+            msg = (
+                f"🚀 **[{stock['name']}]({code}) 코스닥(KOSDAQ) 스나이퍼 포착!**\n"
+                f"현재가: `{curr_price:,}원` | 확신도: `{ai_prob:.1%}`\n"
+                f"수급강도: `{current_vpw:.1f}%`"
+            )
 
     # 3️⃣ 코스피 우량주 스윙 (KOSPI_ML 및 기본값)
     else:
+        if radar is None:
+            return
+
+        max_gap = getattr(TRADING_RULES, 'MAX_SWING_GAP_UP_PCT', 3.0)
+        if fluctuation >= max_gap:
+            return
+
         ratio = getattr(TRADING_RULES, 'INVEST_RATIO_KOSPI', 0.20)
         ai_prob = stock.get('prob', getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.8))
         score, prices, conclusion, checklist, metrics = radar.analyze_signal_integrated(ws_data, ai_prob)
@@ -785,9 +1146,11 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
 
         if (score >= buy_threshold or is_shooting) and current_vpw >= 103:
             is_trigger = True
-            msg = (f"🚀 **[{stock['name']}]({code}) 스나이퍼 포착! (스윙)**\n"
-                   f"현재가: `{curr_price:,}원` | 확신도: `{ai_prob:.1%}`\n"
-                   f"수급강도: `{current_vpw:.1f}%`")
+            msg = (
+                f"🚀 **[{stock['name']}]({code}) 스나이퍼 포착! (스윙)**\n"
+                f"현재가: `{curr_price:,}원` | 확신도: `{ai_prob:.1%}`\n"
+                f"수급강도: `{current_vpw:.1f}%`"
+            )
 
     # ==========================================
     # 🎯 매수 실행 공통 로직
@@ -802,28 +1165,27 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
 
         if real_buy_qty <= 0:
             print(f"⚠️ [매수보류] {stock['name']}: 매수 수량이 0주입니다. (자금 부족으로 20분 제외)")
-            # 💡 [교정] 0주일 때도 쿨타임을 적용해 무한 루프 차단
-            cooldowns[code] = time.time() + 1200 
+            cooldowns[code] = time.time() + 1200
             return
 
-        # 🚀 [상호 검증 반영] 전략별 주문 세팅
         if strategy == 'SCALPING':
             order_type_code = "00"  # 지정가
-            final_price = stock.get('target_buy_price', curr_price)
+            final_price = int(float(stock.get('target_buy_price', curr_price) or curr_price))
         else:
-            order_type_code = "6"  # 스윙은 최유리지정가
+            order_type_code = "6"   # 최유리지정가
             final_price = 0
 
-        # 주문 발송
         res = kiwoom_orders.send_buy_order_market(
-            code=code, qty=real_buy_qty, token=KIWOOM_TOKEN,
-            order_type=order_type_code, price=final_price
+            code=code,
+            qty=real_buy_qty,
+            token=KIWOOM_TOKEN,
+            order_type=order_type_code,
+            price=final_price
         )
 
         is_success = False
         ord_no = ''
 
-        # 💡 [핵심 교정] 응답값을 정확히 분석하여 성공 여부 판단
         if isinstance(res, dict):
             if str(res.get('return_code', res.get('rt_cd', ''))) == '0':
                 is_success = True
@@ -833,139 +1195,134 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
         elif res:
             is_success = True
 
-        # 💡 [핵심 교정] 주문이 "정상 접수" 되었을 때만 메모리와 DB 상태를 'BUY_ORDERED'로 변경!
         if is_success:
             print(f"🛒 [{stock['name']}] 매수 주문 전송 완료. 체결 영수증 대기 중...")
-            # 📢 EventBus 퍼블리싱 (매수 주문 알림)
-            event_bus.publish('TELEGRAM_BROADCAST', {'message': msg, 'audience': stock.get('msg_audience', 'VIP_ALL')})
+            stock['pending_buy_msg'] = msg
             alerted_stocks.add(code)
-            
-            stock.update({'status': 'BUY_ORDERED', 'order_price': final_price if final_price > 0 else curr_price, 'buy_qty': real_buy_qty, 'odno': ord_no, 'order_time': time.time()})
+
+            stock.update({
+                'status': 'BUY_ORDERED',
+                'order_price': final_price if final_price > 0 else curr_price,
+                'buy_qty': real_buy_qty,
+                'odno': ord_no,
+                'order_time': time.time()
+            })
             highest_prices[code] = curr_price
+
             try:
                 with DB.get_session() as session:
-                    # 💡 [정밀 타격] 종목코드가 아닌 PK(id)로 정확히 해당 행만 업데이트
                     record = session.query(RecommendationHistory).filter_by(id=stock['id']).first()
                     if record:
                         record.status = 'BUY_ORDERED'
-                        record.buy_price = final_price if final_price > 0 else curr_price
-                        
-                        # 🎯 [핵심 패치] DB에도 수량을 반드시 저장해야 매도 감시 시 0주로 오해하지 않습니다!
-                        record.buy_qty = real_buy_qty 
-                        
-                    # commit은 with 종료 시 자동 수행
+                        record.buy_qty = real_buy_qty
             except Exception as e:
-                from src.utils.logger import log_error
                 log_error(f"🚨 [DB 에러] {stock['name']} 상태 업데이트 실패: {e}")
+
+
 
 def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=None, ai_engine=None):
     """
     [HOLDING 상태] 보유 종목 익절/손절 감시 및 AI 조기 개입
-    * 변경점: broadcast_callback 파라미터 파괴 -> EventBus 적용
     """
-    curr_p = ws_data['curr']
-    buy_p = stock.get('buy_price', 0)
-    if buy_p <= 0: return
+    global LAST_AI_CALL_TIMES
 
-    if code not in highest_prices: highest_prices[code] = curr_p
+    raw_strategy = (stock.get('strategy') or 'KOSPI_ML').upper()
+    strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
+
+    curr_p = int(float(ws_data.get('curr', 0) or 0))
+    buy_p = float(stock.get('buy_price', 0) or 0)
+    if curr_p <= 0 or buy_p <= 0:
+        return
+
+    if code not in highest_prices:
+        highest_prices[code] = curr_p
     highest_prices[code] = max(highest_prices[code], curr_p)
 
     profit_rate = (curr_p - buy_p) / buy_p * 100
     peak_profit = (highest_prices[code] - buy_p) / buy_p * 100
 
-    strategy = stock.get('strategy', 'KOSPI_ML')
     is_sell_signal = False
+    sell_reason_type = "PROFIT"
     reason = ""
 
-    now_t = datetime.now().time()
+    now = datetime.now()
+    now_t = now.time()
 
     # =========================================================
     # 🤖 [AI 보유 종목 실시간 감시] 문지기(Gatekeeper) 스무딩 적용
     # =========================================================
-    global LAST_AI_CALL_TIMES
     last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
-    current_ai_score = stock.get('rt_ai_prob', 0.8) * 100 
-    
+    current_ai_score = float(stock.get('rt_ai_prob', 0.8) or 0.8) * 100
+
     last_ai_profit = stock.get('last_ai_profit', profit_rate)
     price_change = abs(profit_rate - last_ai_profit)
     time_elapsed = time.time() - last_ai_time
 
     if strategy == 'SCALPING' and ai_engine and radar:
-        
-        # 💡 [V3 핵심] 현재 수익률에 따른 '동적 감시망' 적용
         safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5)
-        
         is_critical_zone = (profit_rate >= safe_profit_pct) or (profit_rate < 0)
 
-        # =========================================================
-        # 🚨 [버그 픽스] 크리티컬 존에서는 최소 쿨타임(min_cd)의 족쇄도 풀어줍니다!
-        # =========================================================
-        if is_critical_zone:
-            dynamic_min_cd = 3  # 🔥 익절/손절 구간: 단 3초만 지나도 AI 재호출 허용! (초정밀 타격)
-            dynamic_max_cd = getattr(TRADING_RULES, 'AI_HOLDING_CRITICAL_COOLDOWN', 20)
-            dynamic_price_trigger = 0.15 # 변동폭 조건도 0.15%로 초예민하게 세팅
-        else:
-            dynamic_min_cd = getattr(TRADING_RULES, 'AI_HOLDING_MIN_COOLDOWN', 15) # 평상시: 15초 락
-            dynamic_max_cd = getattr(TRADING_RULES, 'AI_HOLDING_MAX_COOLDOWN', 60)
-            dynamic_price_trigger = 0.3
+        dynamic_min_cd = 3 if is_critical_zone else getattr(TRADING_RULES, 'AI_HOLDING_MIN_COOLDOWN', 15)
+        dynamic_max_cd = getattr(TRADING_RULES, 'AI_HOLDING_CRITICAL_COOLDOWN', 20) if is_critical_zone else getattr(TRADING_RULES, 'AI_HOLDING_MAX_COOLDOWN', 60)
+        dynamic_price_trigger = 0.20 if is_critical_zone else 0.40
         
-        # 💡 [핵심 교정] 하드코딩을 빼고 상수로 유연하게 제어합니다.
-        critical_cd = getattr(TRADING_RULES, 'AI_HOLDING_CRITICAL_COOLDOWN', 20)
-        normal_cd = getattr(TRADING_RULES, 'AI_HOLDING_MAX_COOLDOWN', 60)
-        
-        dynamic_max_cd = critical_cd if is_critical_zone else normal_cd
-        dynamic_price_trigger = 0.2 if is_critical_zone else 0.4  # 변동폭 조건도 살짝 둔감하게(0.15->0.2, 0.3->0.4) 늘렸습니다.
-        
-        # 💡 동적 쿨타임 조건을 만족할 때만 AI 엔진 호출
         if time_elapsed > dynamic_min_cd and (price_change >= dynamic_price_trigger or time_elapsed > dynamic_max_cd):
+            try:
+                recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
+                recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
 
-            recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
-            recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
-            
-            if ws_data.get('orderbook') and recent_ticks:
-                ai_decision = ai_engine.analyze_target(stock['name'], ws_data, recent_ticks, recent_candles)
-                raw_ai_score = ai_decision.get('score', 50)
-                
-                # 💡 [핵심 방어: EMA 스무딩] AI의 순간적인 호가창 발작을 걸러냅니다.
-                # (기존 점수 관성 60% + 새로운 판단 40%)
-                smoothed_score = int((current_ai_score * 0.6) + (raw_ai_score * 0.4))
-                
-                stock['rt_ai_prob'] = smoothed_score / 100.0
+                if ws_data.get('orderbook') and recent_ticks:
+                    ai_decision = ai_engine.analyze_target(stock['name'], ws_data, recent_ticks, recent_candles)
+                    raw_ai_score = ai_decision.get('score', 50)
+
+                    smoothed_score = int((current_ai_score * 0.6) + (raw_ai_score * 0.4))
+                    stock['rt_ai_prob'] = smoothed_score / 100.0
+                    stock['last_ai_profit'] = profit_rate
+                    current_ai_score = smoothed_score
+
+                    print(f"👁️ [AI 보유감시: {stock['name']}] 수익: {profit_rate:+.2f}% | AI: {current_ai_score:.0f}점 | 갱신주기: {dynamic_max_cd}초")
+
+            except Exception as e:
+                log_error(f"🚨 [보유 AI 감시 에러] {stock['name']}({code}): {e}")
+            finally:
                 LAST_AI_CALL_TIMES[code] = time.time()
-                stock['last_ai_profit'] = profit_rate 
-                
-                print(f"👁️ [AI 보유감시: {stock['name']}] 수익: {profit_rate:+.2f}% | AI: {current_ai_score:.0f} ➡️ {smoothed_score}점 (순간: {raw_ai_score}점) | 갱신주기: {dynamic_max_cd}초")
-                
-                current_ai_score = smoothed_score
     # =========================================================
+
+
 
     # 1️⃣ 초단타 (SCALPING) 전략 (V3 동적 트레일링 & AI 개입)
     if strategy == 'SCALPING':
-        # --- [STEP 1] 보유 시간(held_time_min) 계산 ---
         held_time_min = 0
-        if 'order_time' in stock:
-            # 메모리에 order_time이 있을 때 (가장 정확)
+        # --- [STEP 1] 보유 시간(held_time_min) 계산 ---
+        if 'order_time' in stock and stock.get('order_time'):
             held_time_min = (time.time() - stock['order_time']) / 60
-        elif 'buy_time' in stock and stock['buy_time']:
-            # DB 등에서 가져온 문자열 포맷일 때
+        elif stock.get('buy_time'):
             try:
-                b_time = datetime.strptime(stock['buy_time'], '%H:%M:%S').time()
-                b_dt = datetime.combine(datetime.now().date(), b_time)
+                bt = stock['buy_time']
+                if isinstance(bt, datetime):
+                    b_dt = bt
+                else:
+                    bt_str = str(bt)
+                    try:
+                        b_dt = datetime.fromisoformat(bt_str)
+                    except Exception:
+                        b_time = datetime.strptime(bt_str, '%H:%M:%S').time()
+                        b_dt = datetime.combine(datetime.now().date(), b_time)
                 held_time_min = (datetime.now() - b_dt).total_seconds() / 60
-            except:
+            except Exception:
                 pass
 
         # --- [STEP 2] 익절/손절 기준선 및 하락폭(Drawdown) 설정 ---
         base_stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -2.5)
-        safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5) # 수수료 방어선
+        safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5)
         drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100
 
         # AI 점수에 따른 동적 파라미터 분기
         if current_ai_score >= 75:
-            dynamic_stop_pct = base_stop_pct - 1.0  # 수급 폭발 시 -3.5%까지 허용 (휩소 방어)
+            dynamic_stop_pct = base_stop_pct - 1.0
             dynamic_trailing_limit = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_STRONG', 0.8)
         else:
-            dynamic_stop_pct = base_stop_pct        # 평소 -2.5%
+            dynamic_stop_pct = base_stop_pct
             dynamic_trailing_limit = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_WEAK', 0.4)
 
         # --- [STEP 3] 🧠 V3 매도 판단 실행 (우선순위 순서) ---
@@ -973,34 +1330,42 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
         # 1. 하드 리밋 (최우선: 물리적 손절선 이탈 시 자비 없이 컷)
         if profit_rate <= dynamic_stop_pct:
             is_sell_signal = True
-            reason = f"🔪 무호흡 칼손절 ({dynamic_stop_pct}%) [AI: {current_ai_score}]"
+            sell_reason_type = "LOSS"
+            reason = f"🔪 무호흡 칼손절 ({dynamic_stop_pct}%) [AI: {current_ai_score:.0f}]"
 
         # 2. AI 하방 리스크 조기 차단 (수익이 마이너스 구간일 때)
-        elif not is_sell_signal and profit_rate < 0 and current_ai_score <= 35:
+        elif profit_rate < 0 and current_ai_score <= 35:
             is_sell_signal = True
-            reason = f"🚨 AI 하방 리스크 포착 ({current_ai_score}점). 조기 손절 ({profit_rate:.2f}%)"
+            sell_reason_type = "LOSS"
+            reason = f"🚨 AI 하방 리스크 포착 ({current_ai_score:.0f}점). 조기 손절 ({profit_rate:.2f}%)"
 
         # 3. 🎯 V3 동적 트레일링 익절 (수익이 안전 마진 이상일 때만 발동!)
-        elif not is_sell_signal and profit_rate >= safe_profit_pct:
+        elif profit_rate >= safe_profit_pct:
             
             # 3-1. AI 모멘텀 둔화: 고점 대비 눌림을 기다릴 필요도 없이, AI가 가속도 죽었다고 판단하면 즉각 수익 실현
             if current_ai_score < 50:
                 is_sell_signal = True
-                reason = f"🤖 AI 틱 가속도 둔화 ({current_ai_score}점). 즉각 익절 (+{profit_rate:.2f}%)"
+                sell_reason_type = "MOMENTUM_DECAY"
+                reason = f"🤖 AI 틱 가속도 둔화 ({current_ai_score:.0f}점). 즉각 익절 (+{profit_rate:.2f}%)"
                 
             # 3-2. 기계적 트레일링 방어: AI 점수(수급 강도)에 따라 타이트하게 혹은 여유롭게 익절폭 조절
             elif drawdown >= dynamic_trailing_limit:
                 is_sell_signal = True
+                sell_reason_type = "TRAILING"
                 reason = f"🔥 고점 대비 밀림 (-{drawdown:.2f}%). 트레일링 익절 (+{profit_rate:.2f}%)"
+
 
         # 4. 시간 초과 및 장 마감 (가장 하위 우선순위)
         if not is_sell_signal:
             if held_time_min >= getattr(TRADING_RULES, 'SCALP_TIME_LIMIT_MIN', 30) and profit_rate >= getattr(TRADING_RULES, 'MIN_FEE_COVER', 0.1):
                 is_sell_signal = True
+                sell_reason_type = "TIMEOUT"
                 reason = f"⏱️ {getattr(TRADING_RULES, 'SCALP_TIME_LIMIT_MIN', 30)}분 타임아웃 (순환매 우선)"
-            elif now_t >= datetime.strptime("19:15:00", "%H:%M:%S").time():
+            elif now_t >= TIME_19_15:
                 is_sell_signal = True
+                sell_reason_type = "CLOSE"
                 reason = "⏰ 장 마감 전 현금화"
+
                 
     # 2️⃣ 코스닥 AI 스윙 (KOSDAQ_ML) 전용 전략
     elif strategy == 'KOSDAQ_ML':
@@ -1009,19 +1374,23 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             buy_date = datetime.strptime(buy_date_str, '%Y-%m-%d').date()
             if np.busday_count(buy_date, datetime.now().date()) >= getattr(TRADING_RULES, 'KOSDAQ_HOLDING_DAYS', 2):
                 is_sell_signal = True
+                sell_reason_type = "TIMEOUT"
                 reason = "⏳ 코스닥 스윙 기한 만료 청산"
-        except:
+        except Exception:
             pass
 
         if not is_sell_signal and peak_profit >= getattr(TRADING_RULES, 'KOSDAQ_TARGET', 4.0):
             drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100
             if drawdown >= 1.0:
                 is_sell_signal = True
+                sell_reason_type = "TRAILING"
                 reason = f"🏆 KOSDAQ 트레일링 익절 (+{getattr(TRADING_RULES, 'KOSDAQ_TARGET', 4.0)}% 돌파 후 하락)"
 
         elif not is_sell_signal and profit_rate <= getattr(TRADING_RULES, 'KOSDAQ_STOP', -2.0):
             is_sell_signal = True
+            sell_reason_type = "LOSS"
             reason = f"🛑 KOSDAQ 전용 방어선 이탈 ({getattr(TRADING_RULES, 'KOSDAQ_STOP', -2.0)}%)"
+
 
     # 3️⃣ 코스피 우량주 스윙 (KOSPI_ML 및 기본값)
     else:
@@ -1041,37 +1410,42 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             buy_date = datetime.strptime(buy_date_str, '%Y-%m-%d').date()
             if np.busday_count(buy_date, datetime.now().date()) >= getattr(TRADING_RULES, 'HOLDING_DAYS'):
                 is_sell_signal = True
-                reason = f"⏳ {getattr(TRADING_RULES,'HOLDING_DAYS')}일 스윙 보유 만료"
-        except:
+                sell_reason_type = "TIMEOUT"
+                reason = f"⏳ {getattr(TRADING_RULES, 'HOLDING_DAYS')}일 스윙 보유 만료"
+        except Exception:
             pass
 
-        if not is_sell_signal and peak_profit >= getattr(TRADING_RULES,'TRAILING_START_PCT'):
+        if not is_sell_signal and peak_profit >= getattr(TRADING_RULES, 'TRAILING_START_PCT'):
             drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100
-            if drawdown >= getattr(TRADING_RULES,'TRAILING_DRAWDOWN_PCT'):
+            if drawdown >= getattr(TRADING_RULES, 'TRAILING_DRAWDOWN_PCT'):
                 is_sell_signal = True
-                reason = f"🏆 가변익절 (+{getattr(TRADING_RULES,'TRAILING_START_PCT')}% 도달 후 하락)"
-            elif profit_rate <= getattr(TRADING_RULES,'MIN_PROFIT_PRESERVE'):
+                sell_reason_type = "TRAILING"
+                reason = f"🏆 가변익절 (+{getattr(TRADING_RULES, 'TRAILING_START_PCT')}% 도달 후 하락)"
+            elif profit_rate <= getattr(TRADING_RULES, 'MIN_PROFIT_PRESERVE'):
                 is_sell_signal = True
-                reason = f"수익 보존 (최소 {getattr(TRADING_RULES,'MIN_PROFIT_PRESERVE')}%)"
+                sell_reason_type = "TRAILING"
+                reason = f"수익 보존 (최소 {getattr(TRADING_RULES, 'MIN_PROFIT_PRESERVE')}%)"
 
         elif not is_sell_signal and profit_rate <= current_stop_loss:
             is_sell_signal = True
+            sell_reason_type = "LOSS"
             reason = f"🛑 손절선 도달 ({regime_name} 기준 {current_stop_loss}%)"
 
     # ==========================================
     # 🎯 매도 실행 공통 로직 (Smart Sell + ID 정밀 타격 버전)
     # ==========================================
     if is_sell_signal:
-        sell_reason_type = 'PROFIT' if profit_rate > 0 else 'LOSS'
-        
-        sign = "🎊 [익절 주문]" if sell_reason_type == 'PROFIT' else "📉 [손절 주문]"
-        msg = (f"{sign} **{stock['name']} 매도 전송 ({strategy})**\n사유: `{reason}`\n"
-               f"현재가 기준 수익: `{profit_rate:+.2f}%` (고점: {peak_profit:.1f}%)")
+        sign = "📉 [손절 주문]" if sell_reason_type == 'LOSS' else "🎊 [익절 주문]"
+        msg = (
+            f"{sign} **{stock['name']} 매도 전송 ({strategy})**\n"
+            f"사유: `{reason}`\n"
+            f"현재가 기준 수익: `{profit_rate:+.2f}%` (고점: {peak_profit:.1f}%)"
+        )
 
         is_success = False
-        target_id = stock.get('id') # 💡 [핵심] 고유 ID 추출
+        target_id = stock.get('id')
 
-        # 💡 [핵심 교정: 수량 정밀 조회] 전체 계좌 잔고가 아닌, DB에 기록된 해당 매매건(ID)의 최초 주문 수량을 조회합니다.
+        # 수량 조회
         buy_qty = 0
         try:
             with DB.get_session() as session:
@@ -1081,141 +1455,147 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
         except Exception as e:
             print(f"🚨 [DB 조회 에러] ID {target_id} 수량 조회 실패: {e}")
 
-        # DB 조회가 실패했을 때만 메모리 백업 사용
         if buy_qty <= 0:
-            buy_qty = int(stock.get('buy_qty', 0))
+            buy_qty = int(float(stock.get('buy_qty', 0) or 0))
 
-        # 💡 [최후의 방어막] 그래도 수량이 0이라면 전체 계좌 잔고 조회 (단, 경고 메시지 강화)
         if buy_qty <= 0:
             print(f"⚠️ [{stock['name']}] 고유 ID({target_id})의 수량이 0주입니다. 실제 키움 잔고로 폴백합니다...")
             real_inventory = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)
-            real_stock = next((item for item in (real_inventory or []) if item['code'] == code), None)
-            
-            if real_stock and real_stock['qty'] > 0:
-                buy_qty = real_stock['qty']
-                stock['buy_qty'] = buy_qty # 메모리 즉시 복구
+            real_stock = next((item for item in (real_inventory or []) if str(item.get('code', '')).strip()[:6] == code), None)
+
+            if real_stock and int(float(real_stock.get('qty', 0) or 0)) > 0:
+                buy_qty = int(float(real_stock.get('qty', 0) or 0))
+                stock['buy_qty'] = buy_qty
                 print(f"🔄 [수량 폴백] 실제 계좌에서 총 잔고 {buy_qty}주를 매도합니다. (다중 매매건 합산 수량일 수 있음)")
 
         if not admin_id:
             print(f"🚨 [매도실패] {stock['name']}: 관리자 ID가 없습니다.")
-        elif buy_qty <= 0:
+            return
+
+        if buy_qty <= 0:
             print(f"🚨 [매도실패] {stock['name']}: 실제 잔고도 0주입니다! 강제 완료(COMPLETED) 처리.")
             try:
                 with DB.get_session() as session:
                     session.query(RecommendationHistory).filter_by(id=target_id).update({"status": "COMPLETED"})
             except Exception as e:
                 print(f"🚨 [DB 에러] {stock['name']} COMPLETED 전환 실패: {e}")
-            
-            stock['status'] = 'COMPLETED'
 
+            stock['status'] = 'COMPLETED'
+            highest_prices.pop(code, None)
+            return
+
+        # 장부 잠금
+        try:
+            with DB.get_session() as session:
+                session.query(RecommendationHistory).filter_by(id=target_id).update({"status": "SELL_ORDERED"})
+        except Exception as e:
+            print(f"🚨 [DB 에러] {stock['name']} SELL_ORDERED 장부 잠금 실패: {e}")
+
+        stock['status'] = 'SELL_ORDERED'
+        stock['sell_target_price'] = curr_p
+
+        res = kiwoom_orders.send_smart_sell_order(
+            code=code,
+            qty=buy_qty,
+            token=KIWOOM_TOKEN,
+            ws_data=ws_data,
+            reason_type=sell_reason_type
+        )
+
+        ord_no = ''
+
+        if isinstance(res, dict):
+            rt_cd = str(res.get('return_code', res.get('rt_cd', '')))
+            if rt_cd == '0':
+                is_success = True
+                ord_no = str(res.get('ord_no', '') or res.get('odno', ''))
+            else:
+                print(f"❌ [매도거절] {stock['name']}: {res.get('return_msg')}")
+        elif res:
+            is_success = True
+
+        if is_success:
+            print(f"✅ [{stock['name']}] 매도 주문 전송 완료. 체결 영수증 처리 대기 중...")
+            stock['pending_sell_msg'] = msg
+            stock['sell_order_time'] = time.time()
+            if ord_no:
+                stock['sell_odno'] = ord_no
+
+            if strategy == 'SCALPING' and now_t < TIME_19_15:
+                cooldowns[code] = time.time() + 1200
+                alerted_stocks.discard(code)
+                print(f"♻️ [{stock['name']}] 스캘핑 청산 완료 후 20분 쿨타임 진입.")
         else:
-            # 💡 [핵심 방어 1] 장부 잠금 (ID 기반)
+            err_msg = res.get('return_msg', '') if isinstance(res, dict) else ''
+
+            if '매도가능수량' in err_msg:
+                print(f"🚨 [{stock['name']}] 잔고 0주(이미 매도됨). COMPLETED로 강제 전환.")
+                new_status = 'COMPLETED'
+            else:
+                print(f"🚨 [{stock['name']}] 일시적 매도 실패! HOLDING으로 원상복구.")
+                new_status = 'HOLDING'
+
+            stock['status'] = new_status
+
             try:
                 with DB.get_session() as session:
-                    session.query(RecommendationHistory).filter_by(id=target_id).update({"status": "SELL_ORDERED"})
+                    session.query(RecommendationHistory).filter_by(id=target_id).update({"status": new_status})
             except Exception as e:
-                print(f"🚨 [DB 에러] {stock['name']} SELL_ORDERED 장부 잠금 실패: {e}")
+                print(f"🚨 [DB 에러] {stock['name']} 예외 상태({new_status}) 업데이트 실패: {e}")
+                log_error(f"🚨 [DB 에러] {stock['name']} 예외 상태({new_status}) 업데이트 실패: {e}")
 
-            stock['status'] = 'SELL_ORDERED'
-            
-            try: highest_prices.pop(code, None)
-            except: pass
+            if new_status == 'COMPLETED':
+                highest_prices.pop(code, None)
 
-            # 💡 [핵심 방어 2] 스마트 매도 호출 (정확한 ID별 수량 투입)
-            res = kiwoom_orders.send_smart_sell_order(
-                code=code, 
-                qty=buy_qty, 
-                token=KIWOOM_TOKEN, 
-                ws_data=ws_data,
-                reason_type=sell_reason_type
-            )
-            
-            ord_no = '' # 💡 [추가] 취소를 위한 원주문번호 저장 변수
-            
-            if isinstance(res, dict):
-                rt_cd = str(res.get('return_code', res.get('rt_cd', '')))
-                if rt_cd == '0':
-                    is_success = True
-                    # 💡 [추가] 키움 서버가 준 원주문번호(odno)를 추출합니다.
-                    ord_no = str(res.get('ord_no', '') or res.get('odno', '')) 
-                else:
-                    print(f"❌ [매도거절] {stock['name']}: {res.get('return_msg')}")
-            elif res:
-                is_success = True
 
-            if is_success:
-                print(f"✅ [{stock['name']}] 매도 주문 전송 완료. 체결 영수증 처리 대기 중...")
-                event_bus.publish('TELEGRAM_BROADCAST', {'message': msg})
-                
-                # 💡 [신규 핵심 추가] 미체결 타임아웃 감시를 위한 타이머 및 주문번호 기록!
-                stock['sell_order_time'] = time.time()
-                if ord_no:
-                    stock['sell_odno'] = ord_no
-
-                if strategy in ['SCALPING', 'SCALP'] and now_t < datetime.strptime("19:15:00", "%H:%M:%S").time():
-                    cooldowns[code] = time.time() + 1200
-                    try: alerted_stocks.discard(code)
-                    except: pass
-                    print(f"♻️ [{stock['name']}] 스캘핑 청산 완료 후 20분 쿨타임 진입.")
-            else:
-                # 💡 [핵심 교정] 실패 시 복구 로직도 ID 기반으로 수행
-                err_msg = res.get('return_msg', '') if isinstance(res, dict) else ''
-                
-                if '매도가능수량' in err_msg:
-                    print(f"🚨 [{stock['name']}] 잔고 0주(이미 매도됨). COMPLETED로 강제 전환.")
-                    new_status = 'COMPLETED'
-                else:
-                    print(f"🚨 [{stock['name']}] 일시적 매도 실패! HOLDING으로 원상복구.")
-                    new_status = 'HOLDING'
-
-                stock['status'] = new_status
-
-                try:
-                    with DB.get_session() as session:
-                        # 💡 [교정] SELL_ORDERED로 잠갔던 그 ID만 찾아서 상태 복구
-                        session.query(RecommendationHistory).filter_by(id=target_id).update({"status": new_status})
-                except Exception as e:
-                    print(f"🚨 [DB 에러] {stock['name']} 예외 상태({new_status}) 업데이트 실패: {e}")
-                    from src.utils.logger import log_error
-                    log_error(f"🚨 [DB 에러] {stock['name']} 예외 상태({new_status}) 업데이트 실패: {e}")
 
 def handle_buy_ordered_state(stock, code):
     """
     주문 전송 후(BUY_ORDERED) 미체결 상태를 감시하고 타임아웃 시 취소 로직을 호출합니다.
     """
+    target_id = stock.get('id')
     order_time = stock.get('order_time', 0)
     time_elapsed = time.time() - order_time
-    target_id = stock.get('id') # 💡 [핵심] 고유 ID 추출
-    
-    strategy = stock.get('strategy', 'KOSPI_ML')
+
+    raw_strategy = (stock.get('strategy') or 'KOSPI_ML').upper()
+    strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
+
     if stock.get('target_buy_price', 0) > 0:
-        timeout_sec = getattr(TRADING_RULES, 'RESERVE_TIMEOUT_SEC', 1200) 
+        timeout_sec = getattr(TRADING_RULES, 'RESERVE_TIMEOUT_SEC', 1200)
     else:
         timeout_sec = 20 if strategy == 'SCALPING' else getattr(TRADING_RULES, 'ORDER_TIMEOUT_SEC', 30)
-        
+
     if time_elapsed > timeout_sec:
         print(f"⚠️ [{stock['name']}] 매수 대기 {timeout_sec}초 초과. 취소 절차 진입.")
         orig_ord_no = stock.get('odno')
-        db = DBManager()
 
-        # [CASE 1] 원주문번호가 없는 경우 (예외적 상황)
+        # 원주문번호가 없는 경우
         if not orig_ord_no:
             stock['status'] = 'WATCHING'
             stock.pop('order_time', None)
-            
+            stock.pop('odno', None)
+            stock.pop('pending_buy_msg', None)
+            stock.pop('target_buy_price', None)
+            stock.pop('order_price', None)
+            stock.pop('buy_qty', None)
+            highest_prices.pop(code, None)
+            alerted_stocks.discard(code)
+
+            if strategy == 'SCALPING':
+                cooldowns[code] = time.time() + 1200
+
             try:
                 with DB.get_session() as session:
-                    # 💡 [정밀 타격] stock_code 대신 고유 id로 정확히 해당 행만 복구
                     session.query(RecommendationHistory).filter_by(id=target_id).update({
-                        "status": "WATCHING", 
-                        "buy_price": 0
+                        "status": "WATCHING",
+                        "buy_price": 0,
+                        "buy_qty": 0
                     })
             except Exception as e:
                 print(f"🚨 [DB 에러] {stock['name']} 매수 타임아웃 복구 실패: {e}")
             return
 
-        # [CASE 2] 정상적인 취소 로직 호출
-        process_order_cancellation(stock, code, orig_ord_no, db, strategy)
+        process_order_cancellation(stock, code, orig_ord_no, DB, strategy)
     
 # =====================================================================
 # 💸 매도 미체결(SELL_ORDERED) 타임아웃 감시 및 취소 로직
@@ -1225,29 +1605,27 @@ def handle_sell_ordered_state(stock, code):
     주문 전송 후(SELL_ORDERED) 미체결 상태를 감시하고 타임아웃 시 취소 후 HOLDING으로 롤백합니다.
     """
     sell_order_time = stock.get('sell_order_time', 0)
-    
-    # 예외 처리: 타이머가 안 찍혀있으면 현재 시간으로 세팅 후 다음 턴 대기
+
     if sell_order_time == 0:
         stock['sell_order_time'] = time.time()
         return
 
     time_elapsed = time.time() - sell_order_time
     target_id = stock.get('id')
-    
-    # 매도는 시장가/최유리이므로 보통 즉시 체결되어야 함 (VI 발동 등을 감안하여 40초 부여)
-    timeout_sec = getattr(TRADING_RULES, 'SELL_TIMEOUT_SEC', 40) 
-        
+    timeout_sec = getattr(TRADING_RULES, 'SELL_TIMEOUT_SEC', 40)
+
     if time_elapsed > timeout_sec:
         print(f"⚠️ [{stock['name']}] 매도 대기 {timeout_sec}초 초과. 호가 꼬임/VI 의심 ➡️ 취소 후 HOLDING 롤백 절차 진입.")
         orig_ord_no = stock.get('sell_odno')
-        global DB
 
-        # [CASE 1] 원주문번호가 없는 경우 (통신 에러로 번호를 못 받은 경우)
         if not orig_ord_no:
             print(f"🚨 [{stock['name']}] 취소할 원주문번호(odno)가 없습니다. 상태만 HOLDING으로 강제 롤백합니다.")
             stock['status'] = 'HOLDING'
             stock.pop('sell_order_time', None)
-            
+            stock.pop('sell_odno', None)
+            stock.pop('pending_sell_msg', None)
+            stock.pop('sell_target_price', None)
+
             try:
                 with DB.get_session() as session:
                     session.query(RecommendationHistory).filter_by(id=target_id).update({"status": "HOLDING"})
@@ -1255,14 +1633,12 @@ def handle_sell_ordered_state(stock, code):
                 print(f"🚨 [DB 에러] {stock['name']} 매도 타임아웃 복구 실패: {e}")
             return
 
-        # [CASE 2] 정상적인 매도 취소 로직 호출
         process_sell_cancellation(stock, code, orig_ord_no, DB)
 
 def process_sell_cancellation(stock, code, orig_ord_no, db):
     """미체결 매도 주문을 전량 취소하고 상태를 다시 HOLDING으로 되돌립니다."""
-    target_id = stock.get('id') 
+    target_id = stock.get('id')
 
-    # 1. 취소 주문 전송 (수량을 0으로 넣으면 전량 취소됩니다)
     res = kiwoom_orders.send_cancel_order(
         code=code, orig_ord_no=orig_ord_no, token=KIWOOM_TOKEN, qty=0
     )
@@ -1277,32 +1653,32 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
     elif res:
         is_success = True
 
-    # 2. 취소 성공 시: 상태를 다시 HOLDING으로 롤백!
     if is_success:
-        print(f"✅ [{stock['name']}] 미체결 매도 주문 취소 성공! HOLDING(보유) 상태로 복귀하여 다시 매도 타점을 노립니다.")
+        print(f"✅ [{stock['name']}] 미체결 매도 주문 취소 성공! HOLDING(보유) 상태로 복귀합니다.")
         stock['status'] = 'HOLDING'
         stock.pop('sell_odno', None)
         stock.pop('sell_order_time', None)
-        
+        stock.pop('pending_sell_msg', None)
+        stock.pop('sell_target_price', None)
+
         try:
             with DB.get_session() as session:
                 session.query(RecommendationHistory).filter_by(id=target_id).update({"status": "HOLDING"})
         except Exception as e:
-            from src.utils.logger import log_error
             log_error(f"🚨 [DB 에러] {stock['name']} 매도 취소 후 HOLDING 복구 실패: {e}")
         return True
 
-    # 3. 취소 실패 시: 내가 취소하기 직전에 이미 체결되어 버린 경우
     else:
         print(f"🚨 [{stock['name']}] 매도 취소 실패! (사유: {err_msg})")
         if any(keyword in err_msg for keyword in ['취소가능수량', '잔고', '주문없음', '체결']):
             print(f"💡 [{stock['name']}] 간발의 차이로 이미 매도 체결된 것으로 판단합니다. COMPLETED로 전환.")
             stock['status'] = 'COMPLETED'
-            
+            highest_prices.pop(code, None)
+
             try:
                 with DB.get_session() as session:
                     session.query(RecommendationHistory).filter_by(id=target_id).update({"status": "COMPLETED"})
-            except Exception as e:
+            except Exception:
                 pass
         return False
 
@@ -1311,9 +1687,8 @@ def process_order_cancellation(stock, code, orig_ord_no, db, strategy):
     미체결 주문의 실제 취소 처리와 DB/메모리 청소를 담당합니다.
     고유 PK(id)를 사용하여 다중 매매 환경에서도 정확한 레코드를 타겟팅합니다.
     """
-    target_id = stock.get('id') # 💡 [핵심] 메모리에 로드된 고유 ID 확보
+    target_id = stock.get('id')
 
-    # 1. 취소 주문 전송
     res = kiwoom_orders.send_cancel_order(
         code=code, orig_ord_no=orig_ord_no, token=KIWOOM_TOKEN, qty=0
     )
@@ -1328,50 +1703,47 @@ def process_order_cancellation(stock, code, orig_ord_no, db, strategy):
     elif res:
         is_success = True
 
-    # 2. 취소 성공 시: 상태 초기화 및 쿨타임 적용
     if is_success:
         print(f"✅ [{stock['name']}] 미체결 매수 취소 성공. 감시 상태로 복귀합니다.")
         stock['status'] = 'WATCHING'
         stock.pop('odno', None)
         stock.pop('order_time', None)
-        try: highest_prices.pop(code, None)
-        except: pass
-        
-        # 💡 [핵심 교정] DB 업데이트 시 고유 id로 정밀 타격
+        stock.pop('pending_buy_msg', None)
+        stock.pop('target_buy_price', None)
+        stock.pop('order_price', None)
+        stock.pop('buy_qty', None)
+        highest_prices.pop(code, None)
+
         try:
             with DB.get_session() as session:
                 session.query(RecommendationHistory).filter_by(id=target_id).update({
-                    "status": "WATCHING", 
-                    "buy_price": 0
+                    "status": "WATCHING",
+                    "buy_price": 0,
+                    "buy_qty": 0
                 })
         except Exception as e:
-            from src.utils.logger import log_error
             log_error(f"🚨 [DB 에러] {stock['name']} 매수 취소 후 WATCHING 복구 실패: {e}")
 
-        if strategy == 'SCALPING':
-            try: alerted_stocks.discard(code)
-            except: pass
-            cooldowns[code] = time.time() + 1200 # 20분간 휴식
+        if strategy in ['SCALPING', 'SCALP']:
+            alerted_stocks.discard(code)
+            cooldowns[code] = time.time() + 1200
             print(f"♻️ [{stock['name']}] 스캘핑 취소 완료. 20분 쿨타임 진입.")
         return True
 
-    # 3. 취소 실패 시: 이미 체결되었는지 확인
     else:
         print(f"🚨 [{stock['name']}] 매수 취소 실패! (사유: {err_msg})")
         if any(keyword in err_msg for keyword in ['취소가능수량', '잔고', '주문없음']):
             print(f"💡 [{stock['name']}] 이미 전량 체결된 것으로 판단. HOLDING으로 전환.")
             stock['status'] = 'HOLDING'
-            
-            # 💡 [핵심 교정] 이미 체결된 경우에도 해당 id의 레코드만 HOLDING으로 변경
+
             try:
                 with DB.get_session() as session:
                     session.query(RecommendationHistory).filter_by(id=target_id).update({
                         "status": "HOLDING"
                     })
             except Exception as e:
-                from src.utils.logger import log_error
                 log_error(f"🚨 [DB 에러] {stock['name']} 매수 취소 실패 후 HOLDING 전환 실패: {e}")
-                
+
         return False
 
 # ==========================================
@@ -1382,17 +1754,21 @@ def handle_real_execution(exec_data):
     웹소켓에서 주문 체결(00) 통보가 오면 이 함수가 즉시 실행됩니다.
     고유 ID(id)를 추적하여 해당 매매 건의 실제 체결가를 정확히 기록합니다.
     """
-    code = exec_data['code']
-    exec_type = exec_data['type']
-    exec_price = exec_data['price']
-    
-    # 💡 [핵심 교정] DB 입력을 위해 시간 객체 전체(날짜+시간)를 생성합니다.
+    code = str(exec_data.get('code', '')).strip()[:6]
+    exec_type = str(exec_data.get('type', '')).upper()
+
+    try:
+        exec_price = int(float(exec_data.get('price', 0) or 0))
+    except Exception:
+        exec_price = 0
+
+    if not code or exec_price <= 0:
+        return
+
     now = datetime.now()
     now_t = now.time()
-    
-    # 메모리(ACTIVE_TARGETS)에서 현재 활성화된 매매의 고유 ID를 역추적합니다.
-    target_stock = next((s for s in ACTIVE_TARGETS if s['code'] == code), None)
-    
+
+    target_stock = next((s for s in ACTIVE_TARGETS if str(s.get('code', '')).strip()[:6] == code), None)
     if not target_stock:
         print(f"⚠️ [영수증] 메모리에 없는 종목({code})의 체결 통보가 왔습니다. (수동 매매 혹은 지연 통보)")
         return
@@ -1402,72 +1778,98 @@ def handle_real_execution(exec_data):
         print(f"🚨 [영수증] 종목 {code}의 고유 ID가 메모리에 없습니다. DB 업데이트가 불가능합니다.")
         return
 
+    new_watch_id = None
+    is_scalp_revive = False
+    
     # ==========================================
     # 1️⃣ DB 상태 업데이트 (ID 기반 정밀 타격)
     # ==========================================
     if exec_type == 'BUY':
         try:
             with DB.get_session() as session:
-                # 🎯 [정밀 타격] PK(id)를 사용하여 정확히 해당 매매 건만 HOLDING으로 변경
                 session.query(RecommendationHistory).filter_by(id=target_id).update({
                     "buy_price": exec_price,
                     "status": "HOLDING",
-                    "buy_time": now  # 💡 [추가] 실제 체결 시간(매수) 기록!
+                    "buy_time": now
                 })
+
             print(f"✅ [영수증: ID {target_id}] {code} 실제 매수 체결가 {exec_price:,}원 및 시간 반영 완료!")
+
+            pending_msg = target_stock.get('pending_buy_msg')
+            audience = target_stock.get('msg_audience', 'VIP_ALL')
+            if pending_msg:
+                final_msg = pending_msg.replace("그물망 투척!", "그물망 매수 체결!").replace("스나이퍼 포착!", "스나이퍼 매수 체결!")
+                final_msg += f"\n✅ **실제 체결가:** `{exec_price:,}원`"
+                event_bus.publish('TELEGRAM_BROADCAST', {'message': final_msg, 'audience': audience, 'parse_mode': 'Markdown'})
+            else:
+                event_bus.publish(
+                    'TELEGRAM_BROADCAST',
+                    {'message': f"🛒 **[{target_stock.get('name')}]** 매수 체결 완료!\n체결가: `{exec_price:,}원`", 'audience': audience, 'parse_mode': 'Markdown'}
+                )
+
         except Exception as e:
-            from src.utils.logger import log_error
             log_error(f"🚨 [DB 에러] ID {target_id} BUY 처리 중 에러: {e}")
+            return
             
     elif exec_type == 'SELL':
         try:
             with DB.get_session() as session:
-                # 🏁 [정밀 타격] PK(id)를 사용하여 정확히 해당 매매 건의 기록을 완성합니다.
                 record = session.query(RecommendationHistory).filter_by(id=target_id).first()
+                if not record:
+                    return
 
-                if record:
-                    # buy_price가 비어있을(None) 경우 안전하게 0으로 치환하여 시스템 다운을 막습니다.
-                    safe_buy_price = float(record.buy_price) if record.buy_price is not None else 0.0
-                    
-                    if safe_buy_price > 0:
-                        profit_rate = round(((exec_price - safe_buy_price) / safe_buy_price) * 100, 2)
-                    else:
-                        profit_rate = 0.0
-                        print(f"⚠️ [수익률 계산 불가] ID {target_id}의 매수가(buy_price)가 누락되어 수익률을 0%로 처리합니다.")
+                safe_buy_price = float(record.buy_price) if record.buy_price is not None else 0.0
+                if safe_buy_price > 0:
+                    profit_rate = round(((exec_price - safe_buy_price) / safe_buy_price) * 100, 2)
+                else:
+                    profit_rate = 0.0
+                    print(f"⚠️ [수익률 계산 불가] ID {target_id}의 매수가(buy_price)가 누락되어 수익률을 0%로 처리합니다.")
 
-                    strategy = record.strategy
+                raw_strategy = (record.strategy or target_stock.get('strategy') or 'KOSPI_ML').upper()
+                strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
 
-                    # 💡 매수가 누락 여부와 상관없이 무조건 COMPLETED로 장부를 닫아줍니다.
-                    record.status = 'COMPLETED'
-                    record.sell_price = exec_price
-                    record.sell_time = now  # 💡 [추가] 실제 체결 시간(매도) 기록!
-                    record.profit_rate = profit_rate
-                    
-                    print(f"🎉 [매매 완료: ID {target_id}] {code} 실매도가: {exec_price:,}원 / 수익률: {profit_rate}%")
+                record.status = 'COMPLETED'
+                record.sell_price = exec_price
+                record.sell_time = now
+                record.profit_rate = profit_rate
 
-                    # 스캘핑 부활 조건 (새로운 레코드 INSERT)
-                    is_scalp_revive = (strategy == 'SCALPING') and (now_t < datetime.strptime("19:15:00", "%H:%M:%S").time())
-                    
-                    if is_scalp_revive:
-                        today = datetime.now().date()
-                        new_record = RecommendationHistory(
-                            rec_date=today, 
-                            stock_code=code, 
-                            stock_name=record.stock_name, 
-                            status='WATCHING',
-                            strategy='SCALPING',
-                            trade_type='SCALP',
-                            prob=record.prob
-                        )
-                        session.add(new_record)
-                        session.flush() # ID를 즉시 할당받기 위해 flush 수행
-                        
-                        # [메모리 동기화] 메모리의 ID를 새로 생성된 ID로 교체합니다!
-                        target_stock['id'] = new_record.id
-                            
+                print(f"🎉 [매매 완료: ID {target_id}] {code} 실매도가: {exec_price:,}원 / 수익률: {profit_rate}%")
+
+                pending_msg = target_stock.get('pending_sell_msg')
+                audience = target_stock.get('msg_audience', 'VIP_ALL')
+                if pending_msg:
+                    final_msg = pending_msg.replace("매도 전송", "매도 체결 완료").replace("[익절 주문]", "[익절 완료]").replace("[손절 주문]", "[손절 완료]")
+                    final_msg += f"\n✅ **실제 체결가:** `{exec_price:,}원` (확정 수익률: `{profit_rate:+.2f}%`)"
+                    event_bus.publish('TELEGRAM_BROADCAST', {'message': final_msg, 'audience': audience, 'parse_mode': 'Markdown'})
+                else:
+                    sign = "🎊 [익절 완료]" if profit_rate > 0 else "📉 [손절 완료]"
+                    event_bus.publish(
+                        'TELEGRAM_BROADCAST',
+                        {'message': f"{sign} **[{target_stock.get('name')}]** 매도 체결!\n체결가: `{exec_price:,}원`\n수익률: `{profit_rate:+.2f}%`", 'audience': audience, 'parse_mode': 'Markdown'}
+                    )
+
+                # ✅ 일관성 통일: 16:00 이전까지만 스캘핑 부활
+                is_scalp_revive = (strategy == 'SCALPING') and (now_t < TIME_16_00)
+
+                if is_scalp_revive:
+                    new_record = RecommendationHistory(
+                        rec_date=now.date(),
+                        stock_code=code,
+                        stock_name=record.stock_name,
+                        buy_price=0,
+                        status='WATCHING',
+                        strategy='SCALPING',
+                        trade_type='SCALP',
+                        position_tag='MIDDLE',
+                        prob=record.prob
+                    )
+                    session.add(new_record)
+                    session.flush()
+                    new_watch_id = new_record.id
+
         except Exception as e:
-            from src.utils.logger import log_error
             log_error(f"🚨 [DB 에러] ID {target_id} SELL 처리 중 에러: {e}")
+            return
 
     # ==========================================
     # 2️⃣ 스나이퍼 메모리(ACTIVE_TARGETS) 즉시 동기화
@@ -1475,21 +1877,33 @@ def handle_real_execution(exec_data):
     if exec_type == 'BUY':
         target_stock['status'] = 'HOLDING'
         target_stock['buy_price'] = exec_price
-        target_stock['buy_time'] = now.strftime('%H:%M:%S') # 💡 메모리에도 시간 추가
-    
+        target_stock['buy_time'] = now.strftime('%H:%M:%S')
+        highest_prices[code] = exec_price
+        target_stock.pop('pending_buy_msg', None)
+
     elif exec_type == 'SELL':
-        strategy = target_stock.get('strategy', 'KOSPI_ML')
-        if strategy == 'SCALPING' and now_t < datetime.strptime("15:30:00", "%H:%M:%S").time():
+        highest_prices.pop(code, None)
+
+        if is_scalp_revive and new_watch_id is not None:
+            target_stock['id'] = new_watch_id
             target_stock['status'] = 'WATCHING'
             target_stock['buy_price'] = 0
             target_stock['buy_qty'] = 0
-            target_stock.pop('odno', None)
-            target_stock.pop('order_time', None)
-            target_stock.pop('buy_time', None)
-            target_stock.pop('target_buy_price', None)
+            target_stock['added_time'] = time.time()
+            target_stock['position_tag'] = 'MIDDLE'
+
+            for key in [
+                'odno', 'order_time', 'order_price', 'buy_time',
+                'target_buy_price', 'pending_buy_msg',
+                'pending_sell_msg', 'sell_odno', 'sell_order_time',
+                'sell_target_price'
+            ]:
+                target_stock.pop(key, None)
         else:
             target_stock['status'] = 'COMPLETED'
-            target_stock['sell_time'] = now.strftime('%H:%M:%S') # 💡 메모리에도 시간 추가
+            target_stock['sell_time'] = now.strftime('%H:%M:%S')
+            for key in ['sell_odno', 'sell_order_time', 'pending_sell_msg', 'sell_target_price']:
+                target_stock.pop(key, None)
 
 # ==========================================
 # 💡 09:05 주도주 분석, 리포트 발송
@@ -1499,15 +1913,23 @@ def execute_morning_strategy_batch(targets, ws_manager, radar, ai_engine):
     [v13.0] 09:05 주도주 분석, 리포트 발송 일괄 처리합니다.
     고유 PK(id)를 사용하여 정확히 해당 감시 대상의 상태만 변경합니다.
     """
+    if not targets or not ws_manager or not radar or not ai_engine:
+        return
+
     print("🤖 [전략 집행] 09:05 주도주 정렬 및 AI Report 시작합니다.")
-    
-    # 1. 수급 기반 우선순위 재정렬
+
     for stock in targets:
-        ws_data = ws_manager.get_latest_data(stock['code'])
-        stock['priority_score'] = radar.calculate_market_leader_score(ws_data)
-    
-    targets.sort(key=lambda x: x.get('priority_score', 0), reverse=True)
-    top_3 = targets[:3]
+        try:
+            ws_data = ws_manager.get_latest_data(stock['code']) or {}
+            stock['priority_score'] = radar.calculate_market_leader_score(ws_data)
+        except Exception:
+            stock['priority_score'] = 0
+
+    sorted_targets = sorted(targets, key=lambda x: x.get('priority_score', 0), reverse=True)
+    top_3 = sorted_targets[:3]
+    if not top_3:
+        print("⚠️ [전략 집행] 분석할 감시 종목이 없습니다.")
+        return
     
     # 2. 통합 리포트 작성을 위한 변수 초기화
     full_report = "🚀 **[Good Morning AI 주도주 TOP 3 정밀 분석]**\n"
@@ -1516,22 +1938,18 @@ def execute_morning_strategy_batch(targets, ws_manager, radar, ai_engine):
 
     for i, s in enumerate(top_3):
         code = s['code']
-        target_id = s.get('id') # 💡 [핵심] 고유 ID 추출
-        ws_data = ws_manager.get_latest_data(code)
-        ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
-        candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
-        
-        # AI 분석 호출
-        ai_json_str = ai_engine.analyze_morning_leader(s['name'], ws_data, ticks, candles)
-        
         try:
-            import json
-            res = json.loads(ai_json_str)
-            raw_price = str(res.get('target_price', '0'))
-            clean_price = raw_price.replace(',', '').replace('원', '').replace(' ', '').strip()
-            ai_price = int(clean_price) if clean_price.isdigit() else 0
-            
-            # 리포트 텍스트 조립
+            ws_data = ws_manager.get_latest_data(code) or {}
+            ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
+            candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
+
+            ai_json_str = ai_engine.analyze_morning_leader(s['name'], ws_data, ticks, candles)
+
+            if isinstance(ai_json_str, dict):
+                res = ai_json_str
+            else:
+                res = json.loads(ai_json_str)
+
             full_report += f"📍 **{i+1}위. {s['name']}** ({code})\n"
             full_report += f"💬 `{res.get('one_liner', '분석 중...')}`\n"
             full_report += f"📈 패턴: **{res.get('pattern', '-')}**\n"
@@ -1540,19 +1958,20 @@ def execute_morning_strategy_batch(targets, ws_manager, radar, ai_engine):
             full_report += "━━━━━━━━━━━━━━━━━━\n"
 
         except Exception as e:
-            log_error(f"❌ {s['name']} 전략 집행 중 에러: {e}")
+            log_error(f"❌ {s.get('name', code)} 전략 집행 중 에러: {e}")
 
-    # 최종 리포트 발송
-    event_bus.publish('TELEGRAM_BROADCAST', {'message': full_report})
+    event_bus.publish('TELEGRAM_BROADCAST', {'message': full_report, 'parse_mode': 'Markdown'})
     print("✅ 09:05 전략 배치 작업이 완료되었습니다.")
 
 # ==============================================================================
 # 🎯 메인 스나이퍼 엔진 (Phase 3: Event-Driven & 비동기 아키텍처 완전 적용)
 # ==============================================================================
 def run_sniper(is_test_mode=False):
-    global KIWOOM_TOKEN, WS_MANAGER, ACTIVE_TARGETS
+    global KIWOOM_TOKEN, WS_MANAGER, ACTIVE_TARGETS, AI_ENGINE
 
-    run_sniper.morning_report_done = False  # 함수 속성으로 아침 보고 완료 여부 추적
+    run_sniper.morning_report_done = False
+    run_sniper.last_fifo_time = 0
+    run_sniper.last_account_sync_time = 0
 
     admin_id = CONF.get('ADMIN_ID')
     print(f"🔫 스나이퍼 V12.2 멀티 엔진 가동 (관리자: {admin_id})")
@@ -1561,34 +1980,31 @@ def run_sniper(is_test_mode=False):
     if not is_test_mode and not is_open:
         msg = f"🛑 오늘은 {reason} 휴장일이므로 스나이퍼 매매 엔진을 가동하지 않습니다."
         print(msg)
-        # 📢 [콜백 파괴] EventBus 퍼블리싱으로 대체
         event_bus.publish('TELEGRAM_BROADCAST', {'message': msg})
         return
 
     KIWOOM_TOKEN = kiwoom_utils.get_kiwoom_token(CONF)
     if not KIWOOM_TOKEN:
         log_error("❌ 토큰 발급 실패로 엔진을 중단합니다.")
-        event_bus.publish('TELEGRAM_BROADCAST', {'message': "🚨 [시스템 에러] 토큰 발급 실패로 엔진을 중단합니다."}) # 이벤트 발행
+        event_bus.publish('TELEGRAM_BROADCAST', {'message': "🚨 [시스템 에러] 토큰 발급 실패로 엔진을 중단합니다."})
         return
-    
+
     radar = SniperRadar(KIWOOM_TOKEN)
     sync_balance_with_db()
-    # 1. 💡 콜백 파라미터를 완전히 제거하여 결합도를 낮춥니다.
+
     WS_MANAGER = KiwoomWSManager(KIWOOM_TOKEN)
 
-    # 2. 💡 EventBus에 수신기를 등록합니다. 
-    event_bus.subscribe('ORDER_EXECUTED', handle_real_execution)
-    
-    # 🚀 [추가] 조건검색 실시간 PUSH 수신기 장착!
-    event_bus.subscribe('CONDITION_MATCHED', handle_condition_matched)
+    # 중복 subscribe 방지
+    if not getattr(run_sniper, '_subscriptions_registered', False):
+        event_bus.subscribe('ORDER_EXECUTED', handle_real_execution)
+        event_bus.subscribe('CONDITION_MATCHED', handle_condition_matched)
 
-    # 💡 [신규 추가] 웹소켓 재접속 이벤트를 수신하면 동기화 로직을 백그라운드로 실행!
-    # (API 통신 중 스나이퍼 루프가 멈추는 것을 방지하기 위해 데몬 쓰레드로 띄웁니다)
-    def on_ws_reconnect(payload):
-        threading.Thread(target=sync_state_with_broker, daemon=True).start()
-        
-    event_bus.subscribe('WS_RECONNECTED', on_ws_reconnect)
-    
+        def on_ws_reconnect(payload):
+            threading.Thread(target=sync_state_with_broker, daemon=True).start()
+
+        event_bus.subscribe('WS_RECONNECTED', on_ws_reconnect)
+        run_sniper._subscriptions_registered = True
+
     WS_MANAGER.start()
     time.sleep(2)
 
@@ -1597,29 +2013,27 @@ def run_sniper(is_test_mode=False):
     # ==========================================
     # 1. CONF에서 GEMINI_API_KEY 관련 값들만 추출
     # GEMINI_API_KEY, GEMINI_API_KEY_2, GEMINI_API_KEY_3 등을 모두 가져옵니다.
-    api_keys = [v for k, v in CONF.items() if k.startswith("GEMINI_API_KEY")]
-    
-    # 2. 추출된 키 리스트가 비어있는지 확인 후 엔진 생성
-    global AI_ENGINE # 💡 [추가]
+    ai_engine = None
+    AI_ENGINE = None
+
+    api_keys = [v for k, v in CONF.items() if k.startswith("GEMINI_API_KEY") and v]
     if not api_keys:
-        kiwoom_utils.log_error("❌ 제미나이 키 발급 실패로 엔진을 중단합니다.")
+        log_error("❌ 제미나이 키 발급 실패로 엔진을 중단합니다.")
         event_bus.publish('TELEGRAM_BROADCAST', {'message': "🚨 [시스템 에러] 제미나이 키 발급 실패로 엔진을 중단합니다."})
     else:
         ai_engine = GeminiSniperEngine(api_keys=api_keys)
+        AI_ENGINE = ai_engine
         print(f"🤖 제미나이 AI 엔진이 {len(api_keys)}개의 API 키로 가동됩니다.")
 
-    # 💡 DB에서 가져온 타겟을 전역 변수에 연결합니다.
-    ACTIVE_TARGETS = DB.get_active_targets()
+    ACTIVE_TARGETS = DB.get_active_targets() or []
     # ==========================================
     # 💡 [추가 1] 봇 시작 시 불러온 종목들의 진입 시간 기록
     # ==========================================
     for t in ACTIVE_TARGETS:
         t['added_time'] = time.time()
+        t.setdefault('position_tag', 'MIDDLE')
 
-    targets = ACTIVE_TARGETS  # targets는 ACTIVE_TARGETS의 별칭이 되어 동기화됨
-    last_scan_time = time.time()
-
-    # 🚀 [핵심] 외부 스캐너가 DB에 밀어넣은 신규 종목을 감지하기 위한 타이머
+    targets = ACTIVE_TARGETS
     last_db_poll_time = time.time()
 
     current_market_regime = radar.get_market_regime(KIWOOM_TOKEN)
@@ -1627,73 +2041,71 @@ def run_sniper(is_test_mode=False):
     print(f"📊 [시장 판독] 현재 KOSPI는 '{regime_kor}' 상태입니다.")
 
     target_codes = [t['code'] for t in targets]
-    event_bus.publish("COMMAND_WS_REG", {"codes": target_codes})
+    if target_codes:
+        event_bus.publish("COMMAND_WS_REG", {"codes": target_codes})
+
     last_msg_min = -1
 
     try:
         while True:
-            # 💡 [신규 추가] 'restart.flag' 파일이 생성되었는지 확인
             if os.path.exists("restart.flag"):
                 print("🔄 [우아한 종료] 재시작 깃발을 확인했습니다. 시스템을 안전하게 정지합니다.")
                 event_bus.publish('TELEGRAM_BROADCAST', {'message': "🛑 스나이퍼 엔진이 하던 작업을 마치고 우아하게 재시작됩니다."})
-                os.remove("restart.flag")  
-                break  # 무자비한 종료가 아닌, 루프를 스무스하게 빠져나감
+                os.remove("restart.flag")
+                break
 
             now = datetime.now()
             now_t = now.time()
 
-            if not is_test_mode and now_t >= datetime.strptime("20:00:00", "%H:%M:%S").time():
+            if not is_test_mode and now_t >= TIME_20_00:
                 print("🌙 장 마감 시간이 다가와 감시를 종료합니다.")
-                # 🧹 [메모리 누수 방지] 내일을 위해 전역 메모리 초기화
                 highest_prices.clear()
                 alerted_stocks.clear()
                 cooldowns.clear()
                 LAST_AI_CALL_TIMES.clear()
-                ACTIVE_TARGETS.clear() # targets 리스트도 함께 비워주면 좋습니다.
+                ACTIVE_TARGETS.clear()
                 break
 
-            # 🚀 [신규 추가] 5초마다 외부(초단타 스캐너 등)에서 DB에 새로 넣은 종목이 있는지 확인
+            # =====================================================
+            # 신규 DB 타겟 polling
+            # =====================================================
             if time.time() - last_db_poll_time > 5:
-                db_targets = DB.get_active_targets()
+                db_targets = DB.get_active_targets() or []
                 for dt in db_targets:
-                    if not any(t['code'] == dt['code'] for t in targets):
-                        # ==========================================
-                        # 💡 [추가 2] 스캐너가 새로 넣은 종목의 진입 시간 기록
-                        # ==========================================
-                        dt['added_time'] = time.time() 
+                    code = str(dt.get('code', '')).strip()[:6]
+                    if not any(str(t.get('code', '')).strip()[:6] == code for t in targets):
+                        dt['added_time'] = time.time()
+                        dt.setdefault('position_tag', 'MIDDLE')
                         targets.append(dt)
-                        event_bus.publish("COMMAND_WS_REG", {"codes": [dt['code']]})
+                        event_bus.publish("COMMAND_WS_REG", {"codes": [code]})
                 last_db_poll_time = time.time()
-            # =========================================================
-            # ♻️ [신규 핵심] WATCHING 종목 관리 (스캘핑 10분 TTL & FIFO)
-            # =========================================================
+
+            # =====================================================
+            # WATCHING TTL / FIFO
+            # =====================================================
             if time.time() - getattr(run_sniper, 'last_fifo_time', 0) > 10:
-                watching_stocks = [t for t in targets if t['status'] == 'WATCHING']
+                watching_stocks = [t for t in targets if t.get('status') == 'WATCHING']
                 expired_ids = []
                 expired_names = []
-                
-                # 1. 먼저 들어온 순서대로 정렬 (added_time 오름차순)
+
                 watching_stocks.sort(key=lambda x: x.get('added_time', 0))
-                
-                # 2. 120분(7200초) 초과 종목 색출 
-                # 💡 [핵심 교정] 120분 만료(TTL)는 오직 '초단타(SCALP)' 종목에만 적용합니다!
-                # 아침 스캐너가 찾아온 스윙(MAIN, KOSDAQ_ML) 종목은 장 끝날 때까지 철통 보호됩니다.
+
                 for t in watching_stocks:
                     if t.get('strategy') in ['SCALPING', 'SCALP']:
                         if time.time() - t.get('added_time', time.time()) > 7200:
                             expired_ids.append(t['id'])
                             expired_names.append(t['name'])
-                
-                # 3. 40개 초과 시 밀어내기 (FIFO)
-                # 💡 큐 초과 밀어내기도 '스캘핑' 종목의 꼬리만 자릅니다. (우량주는 무조건 보호)
-                scalp_remaining = [t for t in watching_stocks if t.get('strategy') in ['SCALPING', 'SCALP'] and t['id'] not in expired_ids]
+
+                scalp_remaining = [
+                    t for t in watching_stocks
+                    if t.get('strategy') in ['SCALPING', 'SCALP'] and t['id'] not in expired_ids
+                ]
                 if len(scalp_remaining) > 40:
                     overflow = len(scalp_remaining) - 40
                     for t in scalp_remaining[:overflow]:
                         expired_ids.append(t['id'])
                         expired_names.append(t['name'])
-                        
-                # 4. 퇴출 대상 DB 및 메모리 업데이트 (상태를 'EXPIRED'로 변경)
+
                 if expired_ids:
                     try:
                         with DB.get_session() as session:
@@ -1701,107 +2113,91 @@ def run_sniper(is_test_mode=False):
                                 RecommendationHistory.id.in_(expired_ids)
                             ).update({"status": "EXPIRED"}, synchronize_session=False)
                     except Exception as e:
-                        # 💡 글로벌 임포트가 있으므로 바로 함수를 호출하면 됩니다.
                         log_error(f"🚨 FIFO 큐 DB 업데이트 에러: {e}")
-                        
+
                     for t in targets:
                         if t.get('id') in expired_ids:
                             t['status'] = 'EXPIRED'
-                            
+
                     print(f"🗑️ [스캘핑 큐 정리] {len(expired_ids)}개 단기 종목 감시 만료")
-                    if len(expired_names) <= 10:  
+                    if len(expired_names) <= 10:
                         print(f"   └ 만료 종목: {', '.join(expired_names)}")
-                        
+
                 run_sniper.last_fifo_time = time.time()
-            # =========================================================
-            # =========================================================
-            # 🔄 [신규 핵심] 90초 주기 계좌 강제 동기화 (웹소켓 방어막)
-            # =========================================================
+
+            # =====================================================
+            # 90초 주기 계좌 동기화
+            # =====================================================
             if time.time() - getattr(run_sniper, 'last_account_sync_time', 0) > 90:
-                # API 조회가 1~2초 걸리기 때문에, 스나이퍼 루프(타점 감시)가 멈추지 않도록 데몬 쓰레드로 던집니다!
                 threading.Thread(target=periodic_account_sync, daemon=True).start()
                 run_sniper.last_account_sync_time = time.time()
-            # =========================================================
-            # =========================================================
-            # 🎯 [신규] 09:05:00 주도주 우선순위 재정렬 (딱 한 번 실행)
-            # =========================================================
-            nnow_t = datetime.now().time()
-            strategy_start = datetime.strptime("09:05:00", "%H:%M:%S").time()
-            strategy_end = datetime.strptime("09:10:00", "%H:%M:%S").time() # 💡 5분 타이머 윈도우
-            
-            # 💡 [핵심 교정] 9시 10분 ~ 15분 사이에만 실행되도록 시간 제한 (늦게 켰을 때 폭주 방지)
-            if strategy_start <= now_t <= strategy_end and not getattr(run_sniper, 'morning_report_done', False):
-                print("🤖 Gemini AI가 주도주 TOP 3의 차트와 수급을 정밀 분석합니다...")
-                morning_thread = threading.Thread(
-                    target=execute_morning_strategy_batch,
-                    args=(targets, WS_MANAGER, radar, ai_engine),
-                    daemon=True 
-                )
-                morning_thread.start()
-                run_sniper.morning_report_done = True
-                
-            # 💡 [방어막] 이미 9시 10분이 지났다면, 안 한 것으로 치고 넘어갑니다. (플래그만 true로)
-            elif now_t > strategy_end:
-                run_sniper.morning_report_done = True
-            # =========================================================
 
-            # 3. 콘솔 가동 상태 로그 (5분 주기)
-            # 💡 [핵심 교정] 현재 분이 5의 배수일 때만 출력하도록 변경했습니다.
+            # =====================================================
+            # 09:05 아침 배치
+            # =====================================================
+            if TIME_09_05 <= now_t <= TIME_09_10 and not getattr(run_sniper, 'morning_report_done', False):
+                if ai_engine and targets:
+                    print("🤖 Gemini AI가 주도주 TOP 3의 차트와 수급을 정밀 분석합니다...")
+                    morning_thread = threading.Thread(
+                        target=execute_morning_strategy_batch,
+                        args=(targets, WS_MANAGER, radar, ai_engine),
+                        daemon=True
+                    )
+                    morning_thread.start()
+                run_sniper.morning_report_done = True
+            elif now_t > TIME_09_10:
+                run_sniper.morning_report_done = True
+
+            # =====================================================
+            # 상태 로그
+            # =====================================================
             if now_t.minute % 5 == 0 and now_t.minute != last_msg_min:
-                watching_count = len([t for t in targets if t['status'] == 'WATCHING'])
-                holding_count = len([t for t in targets if t['status'] == 'HOLDING'])
+                watching_count = len([t for t in targets if t.get('status') == 'WATCHING'])
+                holding_count = len([t for t in targets if t.get('status') == 'HOLDING'])
                 print(f"💓 [{now.strftime('%H:%M:%S')}] 다중 감시망 가동 중... (감시: {watching_count} / 보유: {holding_count})")
                 last_msg_min = now_t.minute
 
-            # 4. 개별 종목 상태 라우팅
+            # =====================================================
+            # 상태 라우팅
+            # ✅ 주문대기 상태는 ws_data 없이도 먼저 처리
+            # =====================================================
             for stock in targets[:]:
-                code = str(stock['code'])[:6]
-                status = stock['status']
+                code = str(stock.get('code', '')).strip()[:6]
+                status = stock.get('status')
 
-                # -------------------------------------------------------------------------
-                # 💡 [아키텍처 포인트] 이벤트 큐 병목을 피하기 위한 메모리 폴링(Pull) 구간
-                # 웹소켓에서 모든 틱마다 이벤트를 발행(Push)하면 스캘핑 타점에 치명적인 지연이 
-                # 발생하므로, 엔진이 루프를 돌며 가장 최신의 스냅샷 메모리만 읽어옵니다.
-                # -------------------------------------------------------------------------
+                if status == 'BUY_ORDERED':
+                    handle_buy_ordered_state(stock, code)
+                    continue
 
-                ws_data = WS_MANAGER.get_latest_data(code)
-                if not ws_data or ws_data.get('curr', 0) == 0: 
-                    # 1분에 한 번 정도만 출력되게 하거나, 특정 종목 하나만 지정해서 확인 (디버깅용)
-                    #if time.time() % 60 < 1: 
-                    #    print(f"❓ [{stock['name']}] 데이터를 기다리는 중... (현재가: {ws_data.get('curr')})")
+                if status == 'SELL_ORDERED':
+                    handle_sell_ordered_state(stock, code)
+                    continue
+
+                ws_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
+                if not ws_data or ws_data.get('curr', 0) == 0:
                     continue
 
                 if status == 'WATCHING':
                     handle_watching_state(
-                        stock, 
-                        code, 
-                        ws_data, 
-                        admin_id,  
-                        radar=radar,         # 🚀 추가
-                        ai_engine=ai_engine  # 🚀 추가
+                        stock,
+                        code,
+                        ws_data,
+                        admin_id,
+                        radar=radar,
+                        ai_engine=ai_engine
                     )
                 elif status == 'HOLDING':
                     handle_holding_state(
-                        stock, 
-                        code, 
-                        ws_data, 
-                        admin_id,  
+                        stock,
+                        code,
+                        ws_data,
+                        admin_id,
                         current_market_regime,
-                        radar=radar,         # 🚀 추가
-                        ai_engine=ai_engine  # 🚀 추가
+                        radar=radar,
+                        ai_engine=ai_engine
                     )
-                
-                # 👇 [수정] PENDING 대신 BUY_ORDERED 로 확인하고, 방금 만든 새 함수를 호출합니다!
-                elif status == 'BUY_ORDERED':
-                    handle_buy_ordered_state(stock, code)
-                    
-                # 👇 [신규 추가] 매도 대기(SELL_ORDERED) 상태일 때 타임아웃(40초) 감시망 가동!
-                elif status == 'SELL_ORDERED':
-                    handle_sell_ordered_state(stock, code)
 
-            # 💡 [핵심 교정] 매매가 끝났거나(COMPLETED) 큐에서 밀려난(EXPIRED) 종목은 메모리에서 제거
-            targets[:] = [t for t in targets if t['status'] not in ['COMPLETED', 'EXPIRED']]
-
+            targets[:] = [t for t in targets if t.get('status') not in ['COMPLETED', 'EXPIRED']]
             time.sleep(1)
 
     except Exception as e:

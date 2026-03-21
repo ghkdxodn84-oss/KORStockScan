@@ -91,9 +91,8 @@ def _broadcast_alert(message_text, audience='VIP_ALL', parse_mode='HTML'):
             except telebot.apihelper.ApiTelegramException as e:
                 if e.error_code == 403:
                     # 💡 핵심: 사용자가 봇을 차단함
-                    print(f"🚫 [차단 감지] 유저 {chat_id}가 봇을 차단했습니다. DB를 업데이트합니다.")
-                    # db_manager에 해당 유저를 비활성화하는 메서드가 있다고 가정합니다.
-                    db_manager.update_user_active_status(chat_id, is_active=False)
+                    print(f"🚫 [차단 감지] 유저 {chat_id}가 봇을 차단했습니다. DB에서 삭제합니다.")
+                    db_manager.delete_user(chat_id)
                 else:
                     log_error(f"⚠️ 메시지 전송 중 알 수 없는 API 에러 ({chat_id}): {e}")
             except Exception as e:
@@ -213,6 +212,12 @@ def process_analyze_step(message):
     if not code.isdigit() or len(code) != 6:
         bot.send_message(chat_id, "❌ 잘못된 입력입니다. 6자리 숫자로 된 종목코드를 다시 입력해 주세요.")
         return
+    
+    # 💡 [신규] 정상적인 종목코드일 때만 횟수를 1회 차감합니다.
+    is_allowed, remaining, msg_text = db_manager.check_analyze_quota(chat_id, consume=True)
+    if not is_allowed:
+        bot.send_message(chat_id, f"🚫 {msg_text}")
+        return
 
     # 대기 메시지 전송
     bot.send_message(chat_id, f"🔄 `{code}` 종목의 실시간 호가창과 차트를 분석 중입니다. 잠시만 기다려주세요...", parse_mode='Markdown')
@@ -280,14 +285,25 @@ def cmd_restart(message):
 
 @bot.message_handler(func=lambda message: message.text == "🔍 실시간 종목분석")
 def handle_analyze_btn(message):
-    msg = bot.reply_to(message, "🔍 분석할 *종목코드 6자리* 입력", parse_mode='Markdown')
-    # 💡 [핵심 교정 1] 이제 process_manual_add_step 이 아니라 전용 분석 함수로 넘깁니다!
+    chat_id = message.chat.id
+    
+    # 💡 [신규] 권한 및 횟수 단순 검사 (소진 안 함)
+    is_allowed, remaining, msg_text = db_manager.check_analyze_quota(chat_id, consume=False)
+    if not is_allowed:
+        bot.send_message(chat_id, f"🚫 {msg_text}")
+        return
+        
+    remain_text = f"*(남은 횟수: {remaining}회)*" if remaining != -1 else "*(무제한)*"
+    msg = bot.reply_to(message, f"🔍 분석할 *종목코드 6자리* 입력 {remain_text}", parse_mode='Markdown')
     bot.register_next_step_handler(msg, process_analyze_step)
     
 @bot.message_handler(func=lambda message: message.text == "📜 감시/보유 리스트")
 def handle_watch_list(message):
     import pandas as pd
     from src.utils.constants import TRADING_RULES # 상수 안전 임포트
+
+    # 💡 [신규] 실시간 분석이 진행되는 동안 대기 메시지 표시
+    wait_msg = bot.reply_to(message, "🔄 감시 종목들의 실시간 틱/호가창을 분석하여 **AI 확신점수**를 가져옵니다. 잠시만 기다려주세요...", parse_mode='Markdown')
 
     try:
         today = datetime.now().strftime('%Y-%m-%d')
@@ -298,7 +314,7 @@ def handle_watch_list(message):
             df = pd.read_sql(query, session.bind)
 
         if df.empty:
-            bot.reply_to(message, "📭 현재 감시 중이거나 보유 중인 종목이 없습니다.")
+            bot.edit_message_text(chat_id=message.chat.id, message_id=wait_msg.message_id, text="📭 현재 감시 중이거나 보유 중인 종목이 없습니다.")
             return
 
         # 💡 [핵심 교정 1] 중복 제거 기준: 'code' -> 'stock_code'
@@ -315,15 +331,28 @@ def handle_watch_list(message):
         holding = df[df['status'] == 'HOLDING']
         completed = df[df['status'] == 'COMPLETED']
 
+        # 💡 [핵심] 스나이퍼 엔진을 호출하여 WATCHING 종목들의 실시간 AI 점수를 평가합니다.
+        import src.engine.kiwoom_sniper_v2 as kiwoom_sniper_v2
+        watching_codes = watching['stock_code'].tolist()
+        rt_scores = kiwoom_sniper_v2.get_realtime_ai_scores(watching_codes)
+
         msg = "📜 *[KORStockScan 감시/보유 현황]*\n"
         msg += "━━━━━━━━━━━━━━\n"
 
         # 1. 감시 중 (WATCHING)
         msg += f"👀 *감시 대기 (WATCHING)* : {len(watching)}종목\n"
         for _, row in watching.iterrows():
-            prob_val = row['prob'] if pd.notna(row['prob']) else getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.70)
-            # 💡 [핵심 교정 2] 'name' -> 'stock_name', 'code' -> 'stock_code'
-            msg += f" • {row['stock_name']} ({row['stock_code']}) | AI확신: {prob_val * 100:.0f}%\n"
+            code = row['stock_code']
+            rt_score = rt_scores.get(code)
+            
+            # 실시간 점수가 정상적으로 수신되었으면 표기하고, 통신 실패 등의 이유로 없으면 DB에 저장된 과거 기본값을 표기합니다.
+            if rt_score is not None and rt_score != 50:
+                prob_str = f"`{rt_score}점` *(실시간)*"
+            else:
+                prob_val = row['prob'] if pd.notna(row['prob']) else getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.70)
+                prob_str = f"{prob_val * 100:.0f}%"
+                
+            msg += f" • {row['stock_name']} ({code}) | AI확신: {prob_str}\n"
 
         # 2. 주문/체결 대기 (BUY_ORDERED / SELL_ORDERED)
         if not buy_ordered.empty or not sell_ordered.empty:
@@ -350,12 +379,12 @@ def handle_watch_list(message):
                 msg += f" • {row['stock_name']}\n"
 
         msg += "━━━━━━━━━━━━━━"
-        bot.reply_to(message, msg, parse_mode='Markdown')
+        bot.edit_message_text(chat_id=message.chat.id, message_id=wait_msg.message_id, text=msg, parse_mode='Markdown')
 
     except Exception as e:
         from src.utils.logger import log_error
         log_error(f"감시 리스트 조회 에러: {e}")
-        bot.reply_to(message, f"❌ 리스트 조회 중 시스템 에러 발생: {e}")
+        bot.edit_message_text(chat_id=message.chat.id, message_id=wait_msg.message_id, text=f"❌ 리스트 조회 중 시스템 에러 발생: {e}")
 
 @bot.message_handler(func=lambda message: message.text == "🤖 AI 확신지수란?")
 def handle_ai_confidence_info(message):
@@ -506,13 +535,13 @@ def handle_my_chat_member_update(message: types.ChatMemberUpdated):
     
     if new_status in ['kicked', 'left']:
         # 사용자가 봇을 차단(kicked)하거나 그룹에서 봇을 내보냄(left)
-        print(f"👋 [상태변경] 유저 {chat_id}가 봇을 떠났습니다. (상태: {new_status})")
-        db_manager.update_user_active_status(chat_id, is_active=False)
+        print(f"👋 [상태변경] 유저 {chat_id}가 봇을 떠났습니다. (상태: {new_status}) DB에서 삭제합니다.")
+        db_manager.delete_user(chat_id)
         
     elif new_status == 'member':
         # 차단했던 유저가 다시 대화방에 들어오거나 차단을 해제함
         print(f"✅ [상태변경] 유저 {chat_id}가 다시 복귀했습니다!")
-        db_manager.update_user_active_status(chat_id, is_active=True)
+        db_manager.add_new_user(chat_id)
 
 @bot.message_handler(commands=['사유', 'why'])
 def handle_why_not(message):

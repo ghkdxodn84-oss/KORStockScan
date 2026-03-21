@@ -32,6 +32,15 @@ class DBManager:
     def init_db(self):
         """프로그램 기동 시 테이블이 없으면 생성합니다."""
         Base.metadata.create_all(bind=self.engine)
+        
+        # 💡 [자동 마이그레이션] users 테이블에 신규 컬럼이 없으면 자동 추가 (PostgreSQL)
+        try:
+            with self.engine.begin() as conn:
+                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS daily_analyze_count INTEGER DEFAULT 0;"))
+                conn.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS last_analyze_date DATE;"))
+        except Exception as e:
+            print(f"⚠️ 컬럼 추가 확인 중 에러 (최초 생성 시 무시 가능): {e}")
+            
         print("✅ 데이터베이스 초기화 및 테이블 검증 완료")
     
     @contextmanager
@@ -317,6 +326,25 @@ class DBManager:
         except Exception as e:
             from src.utils.logger import log_error
             log_error(f"❌ 유저 활성화 상태 업데이트 에러: {e}")
+            return False
+            
+    def delete_user(self, chat_id: int) -> bool:
+        """
+        💡 [핵심] 사용자가 봇을 차단하거나 방을 나갔을 때 DB에서 완전히 삭제합니다.
+        """
+        try:
+            with self.get_session() as session:
+                user = session.query(User).filter_by(chat_id=chat_id).first()
+                if user:
+                    session.delete(user)
+                    print(f"🗑️ [DBManager] 유저({chat_id})가 DB에서 완전히 삭제되었습니다.")
+                    return True
+                else:
+                    print(f"⚠️ [DBManager] 삭제할 유저({chat_id})를 DB에서 찾을 수 없습니다.")
+                    return False
+        except Exception as e:
+            from src.utils.logger import log_error
+            log_error(f"❌ 유저 삭제 DB 에러: {e}")
             return False
     
     def get_user_level(self, chat_id):

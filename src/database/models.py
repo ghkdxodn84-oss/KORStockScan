@@ -107,6 +107,10 @@ class User(Base):
     auth_group = Column(Text, server_default=text("'USER'"))
     # 💡 [신규 추가] 봇 활성화 상태 (차단/나가기 감지용)
     is_active = Column(Boolean, default=True, server_default=text("true"))
+    
+    # 💡 [신규 추가] 실시간 종목분석 일일 사용량 제한용
+    daily_analyze_count = Column(Integer, default=0, server_default=text("0"))
+    last_analyze_date = Column(Date)
 
     def __repr__(self):
         return f"<User(chat_id={self.chat_id}, auth_group='{self.auth_group}')>"
