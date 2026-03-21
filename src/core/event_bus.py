@@ -25,6 +25,21 @@ class EventBus:
             if callback not in self._subscribers[event_type]:
                 self._subscribers[event_type].append(callback)
 
+    def unsubscribe(self, event_type: str, callback: Callable):
+        """Remove a previously registered subscriber callback."""
+        with self._sub_lock:
+            callbacks = self._subscribers.get(event_type)
+            if not callbacks:
+                return
+
+            try:
+                callbacks.remove(callback)
+            except ValueError:
+                return
+
+            if not callbacks:
+                self._subscribers.pop(event_type, None)
+
     def publish(self, event_type: str, payload: dict = None):
         """이벤트를 발생시키고, 구독 중인 모든 콜백 함수에 데이터를 전달합니다."""
         if payload is None:

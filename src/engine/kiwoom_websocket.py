@@ -2,6 +2,7 @@ import asyncio
 import websockets
 import json
 import threading
+from queue import Queue, Empty
 from datetime import datetime
 
 # 💡 [Level 1 & 2 적용] 독립 로거 및 싱글톤 이벤트 버스 임포트
@@ -32,18 +33,105 @@ class KiwoomWSManager:
         self.websocket = None
         self.lock = threading.Lock()
         self.loop = None
+        self._stop_event = threading.Event()
+        self._state_event_queue = Queue()
+        self._tick_dispatch_event = threading.Event()
+        self._pending_tick_events = {}
+        self._tick_lock = threading.Lock()
+        self._state_dispatch_thread = None
+        self._tick_dispatch_thread = None
+        self._ws_thread = None
+        self._started = False
         
         # 전역 EventBus 인스턴스 획득 및 외부 명령 수신기 장착
         self.event_bus = EventBus()
         self.event_bus.subscribe("COMMAND_WS_REG", self._handle_reg_event)
+        self.event_bus.subscribe("COMMAND_WS_UNREG", self._handle_unreg_event)
         # 💡 [추가] 최초 접속인지, 끊겼다가 다시 붙은(재접속) 것인지 구분하는 플래그
         self.is_reconnected = False
         self.condition_dict = {} # 💡 [추가] 일련번호(seq)와 검색식 이름을 매핑할 사전
         
         print(f"🌐 [WS] 웹소켓 매니저 초기화 완료 (Target: {self.uri})")
     
+    def _enqueue_state_event(self, event_type, payload):
+        if self._stop_event.is_set():
+            return
+        self._state_event_queue.put((event_type, payload or {}))
+
+    def _dispatch_state_events(self):
+        while not self._stop_event.is_set():
+            try:
+                event_type, payload = self._state_event_queue.get(timeout=0.5)
+            except Empty:
+                continue
+
+            try:
+                self.event_bus.publish(event_type, payload)
+            except Exception as e:
+                log_error(f"[WS] state event dispatch failed ({event_type}): {e}")
+
+    def _queue_tick_event(self, code, data):
+        if self._stop_event.is_set():
+            return
+
+        with self._tick_lock:
+            self._pending_tick_events[code] = {
+                'code': code,
+                'data': data
+            }
+        self._tick_dispatch_event.set()
+
+    def _dispatch_tick_events(self):
+        while not self._stop_event.is_set():
+            triggered = self._tick_dispatch_event.wait(timeout=0.5)
+            if not triggered:
+                continue
+
+            with self._tick_lock:
+                pending_items = list(self._pending_tick_events.values())
+                self._pending_tick_events.clear()
+                self._tick_dispatch_event.clear()
+
+            for payload in pending_items:
+                try:
+                    self.event_bus.publish("REALTIME_TICK_ARRIVED", payload)
+                except Exception as e:
+                    log_error(f"[WS] tick event dispatch failed ({payload.get('code')}): {e}")
+
+    def stop(self):
+        if self._stop_event.is_set():
+            return
+
+        self._stop_event.set()
+        self._started = False
+        self._tick_dispatch_event.set()
+
+        try:
+            self.event_bus.unsubscribe("COMMAND_WS_REG", self._handle_reg_event)
+        except Exception:
+            pass
+
+        try:
+            self.event_bus.unsubscribe("COMMAND_WS_UNREG", self._handle_unreg_event)
+        except Exception:
+            pass
+
+        ws = self.websocket
+        if ws and self.loop and self.loop.is_running():
+            try:
+                asyncio.run_coroutine_threadsafe(ws.close(), self.loop)
+            except Exception as e:
+                log_error(f"[WS] stop() websocket close failed: {e}")
+
+        current_thread = threading.current_thread()
+        for thread in [self._state_dispatch_thread, self._tick_dispatch_thread, self._ws_thread]:
+            if thread and thread is not current_thread and thread.is_alive():
+                thread.join(timeout=2)
+
+        self.websocket = None
+
     async def _run_ws(self):
-        while True:
+        while not self._stop_event.is_set():
             try:
                 print(f"🔌 [WS] 키움 서버({self.uri})에 연결을 시도합니다...")
                 async with websockets.connect(self.uri, ping_interval=None) as ws:
@@ -64,7 +152,7 @@ class KiwoomWSManager:
                     # 💡 재접속(Reconnect)인 경우 스나이퍼 엔진에 상태 동기화 명령 하달
                     if self.is_reconnected:
                         print("🔄 [WS] 웹소켓 재접속 감지! EventBus에 상태 동기화 이벤트를 발행합니다.")
-                        self.event_bus.publish("WS_RECONNECTED", {})
+                        self._enqueue_state_event("WS_RECONNECTED", {})
                     
                     # 최초 접속이 끝났으므로, 이후부터 연결되면 무조건 '재접속'으로 간주
                     self.is_reconnected = True
@@ -94,15 +182,20 @@ class KiwoomWSManager:
                         await self._handle_message(message)
 
             except websockets.ConnectionClosed:
+                if self._stop_event.is_set():
+                    break
                 print("⚠️ [WS] 연결 끊김! 3초 후 재접속 시도...")
                 self.websocket = None
                 await asyncio.sleep(3)
             except Exception as e:
+                if self._stop_event.is_set():
+                    break
                 from src.utils.logger import log_error
                 log_error(f"🚨 [WS] 예상치 못한 오류: {e}")
                 print(f"🚨 [WS] 예상치 못한 오류: {e}")
                 self.websocket = None
                 await asyncio.sleep(3)
+        self.websocket = None
 
     async def _handle_message(self, message):
         try:
@@ -165,10 +258,16 @@ class KiwoomWSManager:
             if trnm == 'CNSRREQ':
                 # 💡 [핵심 방어] 키움 서버가 null(None)을 주더라도 안전하게 빈 리스트([])로 바꿔치기합니다!
                 c_data = msg_dict.get('data') or []
-                print(f"📊 [WS] 조건검색 최초 편입 종목 수: {len(c_data)}개 (스나이퍼 큐에 투입합니다)")
+                seq = str(msg_dict.get('seq', '')).strip()
+                cnd_name = self.condition_dict.get(seq) or 'UNKNOWN_CONDITION'
+                print(f"[WS] CNSRREQ init load: {len(c_data)} items (seq={seq}, condition={cnd_name})")
                 for item in c_data:
                     code = item.get('jmcode', '').replace('A', '')
-                    self.event_bus.publish("CONDITION_MATCHED", {'code': code, 'type': 'INIT'})
+                    self._enqueue_state_event("CONDITION_MATCHED", {
+                        'code': code,
+                        'seq': seq,
+                        'condition_name': cnd_name
+                    })
                 return
             
             # =========================================================
@@ -188,14 +287,21 @@ class KiwoomWSManager:
                         insert_type = str(values.get('843', '')).strip() 
                         
                         # 기억해둔 번호로 검색식 이름을 알아냅니다.
-                        cnd_name = self.condition_dict.get(seq, '알수없는검색식') 
+                        cnd_name = self.condition_dict.get(seq) or 'UNKNOWN_CONDITION'
 
                         if insert_type == 'I':
                             print(f"🚨 [조건검색 PUSH] {code} 포착! (출처: {cnd_name})")
                             # 💡 스나이퍼에게 출처(이름표)를 함께 보냅니다!
-                            self.event_bus.publish("CONDITION_MATCHED", {
+                            self._enqueue_state_event("CONDITION_MATCHED", {
                                 'code': code, 
                                 'type': 'REALTIME', 
+                                'condition_name': cnd_name
+                            })
+                        elif insert_type == 'D':
+                            print(f"🧹 [조건검색 PUSH] {code} 이탈! (출처: {cnd_name})")
+                            self._enqueue_state_event("CONDITION_UNMATCHED", {
+                                'code': code,
+                                'type': 'REALTIME',
                                 'condition_name': cnd_name
                             })
                         continue
@@ -222,7 +328,7 @@ class KiwoomWSManager:
                             print(f"🔔 [WS 실제체결] {code} {exec_type} {exec_qty}주 @ {exec_price}원 (주문번호: {order_no})")
                             
                             if exec_price > 0:
-                                self.event_bus.publish("ORDER_EXECUTED", {
+                                self._enqueue_state_event("ORDER_EXECUTED", {
                                     'code': code,
                                     'order_no': order_no,
                                     'type': exec_type,
@@ -236,7 +342,9 @@ class KiwoomWSManager:
                     # [트랙 B] 실시간 주가/호가 데이터 처리
                     # ===================================================
                     item_code = d.get('item', '')
-                    if item_code and real_type != '00': 
+                    if item_code and real_type != '00':
+                        if item_code not in self.subscribed_codes:
+                            continue
                         with self.lock:
                             # 1. 초기 데이터 구조 생성
                             if item_code not in self.realtime_data:
@@ -289,10 +397,7 @@ class KiwoomWSManager:
                             target['time'] = datetime.now().strftime('%H:%M:%S')
                             
                             # 💡 파싱 완료 후 구독자들에게 전파
-                            self.event_bus.publish("REALTIME_TICK_ARRIVED", {
-                                'code': item_code,
-                                'data': target.copy()  
-                            })
+                            self._queue_tick_event(item_code, target.copy())
 
         except websockets.ConnectionClosed:
             pass
@@ -301,12 +406,24 @@ class KiwoomWSManager:
             log_error(f"🚨 [WS] 메시지 파싱 에러 발생: {e} | Payload: {message[:150]}")
 
     def start(self):
+        if self._started:
+            return
+        self._started = True
+        self._stop_event.clear()
+
         def thread_target():
             self.loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self.loop)
             self.loop.run_until_complete(self._run_ws())
+            self.loop.close()
 
-        threading.Thread(target=thread_target, daemon=True).start()
+        self._state_dispatch_thread = threading.Thread(target=self._dispatch_state_events, daemon=True)
+        self._tick_dispatch_thread = threading.Thread(target=self._dispatch_tick_events, daemon=True)
+        self._ws_thread = threading.Thread(target=thread_target, daemon=True)
+
+        self._state_dispatch_thread.start()
+        self._tick_dispatch_thread.start()
+        self._ws_thread.start()
 
     async def _send_reg(self, codes):
         try:
@@ -341,7 +458,7 @@ class KiwoomWSManager:
 
         new_targets = [c for c in codes if c not in self.subscribed_codes]
 
-        if new_targets and self.loop:
+        if new_targets and self.loop and self.loop.is_running() and not self._stop_event.is_set():
             future = asyncio.run_coroutine_threadsafe(self._send_reg(new_targets), self.loop)
 
             def on_complete(fut):
@@ -351,10 +468,33 @@ class KiwoomWSManager:
                     print(f"🚨 [WS] 스레드 통신 간 에러 발생: {e}")
 
             future.add_done_callback(on_complete)
+
+    def execute_unsubscribe(self, codes):
+        if not codes:
+            return
+        if isinstance(codes, str):
+            codes = [codes]
+
+        normalized_codes = {str(code).strip()[:6] for code in codes if code}
+        if not normalized_codes:
+            return
+
+        self.subscribed_codes.difference_update(normalized_codes)
+        with self.lock:
+            for code in normalized_codes:
+                self.realtime_data.pop(code, None)
     
     def _handle_reg_event(self, payload):
+        if self._stop_event.is_set():
+            return
         codes = payload.get("codes", [])
         self.execute_subscribe(codes) 
+
+    def _handle_unreg_event(self, payload):
+        if self._stop_event.is_set():
+            return
+        codes = payload.get("codes", [])
+        self.execute_unsubscribe(codes)
 
     def get_latest_data(self, code):
         with self.lock:

@@ -29,7 +29,7 @@ if str(PROJECT_ROOT) not in sys.path:
 	
 import os
 import time
-from datetime import datetime
+from datetime import datetime, time as dt_time
 import threading   
 import numpy as np
 import pandas as pd
@@ -93,14 +93,65 @@ TIME_20_00 = datetime.strptime("20:00:00", "%H:%M:%S").time()
 TIME_23_59 = datetime.strptime("23:59:59", "%H:%M:%S").time()
 # -------------------------------------------------------------------
 
+def _in_time_window(now_value, start, end):
+    return (start <= now_value <= end) if start <= end else (now_value >= start or now_value <= end)
+
+def resolve_condition_profile(cnd_name):
+    profile = {
+        'strategy': 'SCALPING',
+        'trade_type': 'SCALP',
+        'is_next_day_target': False,
+        'position_tag': 'MIDDLE',
+        'start': None,
+        'end': None,
+    }
+
+    if "scalp_candid_aggressive_01" in cnd_name or "scalp_candid_normal_01" in cnd_name:
+        profile['start'], profile['end'] = dt_time(9, 0), dt_time(9, 30)
+    elif "scalp_strong_01" in cnd_name:
+        profile['start'], profile['end'] = dt_time(9, 20), dt_time(11, 0)
+    elif "scalp_underpress_01" in cnd_name:
+        profile['start'], profile['end'] = dt_time(9, 40), dt_time(13, 0)
+    elif "scalp_shooting_01" in cnd_name:
+        profile['start'], profile['end'] = dt_time(9, 40), dt_time(13, 30)
+    elif "scalp_afternoon_01" in cnd_name:
+        profile['start'], profile['end'] = dt_time(13, 0), dt_time(15, 20)
+    elif "kospi_short_swing_01" in cnd_name or "kospi_midterm_swing_01" in cnd_name:
+        profile['start'], profile['end'] = dt_time(14, 30), dt_time(15, 30)
+        profile['strategy'] = 'KOSPI_ML'
+        profile['trade_type'] = 'MAIN'
+        profile['is_next_day_target'] = True
+    elif "vcp_candid_01" in cnd_name:
+        profile['start'], profile['end'] = dt_time(15, 30), dt_time(7, 0)
+        profile['is_next_day_target'] = True
+        profile['position_tag'] = 'VCP_CANDID'
+    elif "vcp_shooting_01" in cnd_name:
+        profile['start'], profile['end'] = dt_time(9, 0), dt_time(15, 0)
+        profile['position_tag'] = 'VCP_SHOOTING'
+    elif "vcp_shooting_next_01" in cnd_name:
+        profile['start'], profile['end'] = dt_time(15, 30), dt_time(23, 59, 59)
+        profile['is_next_day_target'] = True
+        profile['position_tag'] = 'VCP_NEXT'
+    else:
+        return None
+
+    return profile
+
+def get_condition_target_date(is_next_day_target):
+    if not is_next_day_target:
+        return datetime.now().date()
+
+    import holidays
+
+    kr_hols = holidays.KR(years=[datetime.now().year, datetime.now().year + 1])
+    hol_dates = np.array([np.datetime64(d) for d in kr_hols.keys()], dtype='datetime64[D]')
+    today_np = np.datetime64(datetime.now().date())
+    next_bday_np = np.busday_offset(today_np, 1, holidays=hol_dates)
+    return pd.to_datetime(next_bday_np).date()
+
 def handle_condition_matched(payload):
     """실시간 조건검색(Push)으로 날아온 종목을 즉각 감시망(WATCHING)에 올립니다."""
     global KIWOOM_TOKEN, DB, ACTIVE_TARGETS, event_bus
-    from datetime import time as dt_time
-
-    def in_window(now_value, start, end):
-        return (start <= now_value <= end) if start <= end else (now_value >= start or now_value <= end)
-
     code = str(payload.get('code', '')).strip()[:6]
     cnd_name = str(payload.get('condition_name', '') or '')
     if not code:
@@ -117,27 +168,27 @@ def handle_condition_matched(payload):
     # ⏰ 시간대별 검색식 필터링
     # =========================================================
     if "scalp_candid_aggressive_01" in cnd_name or "scalp_candid_normal_01" in cnd_name:
-        if not in_window(now_t, dt_time(9, 0), dt_time(9, 30)):
+        if not _in_time_window(now_t, dt_time(9, 0), dt_time(9, 30)):
             return
 
     elif "scalp_strong_01" in cnd_name:
-        if not in_window(now_t, dt_time(9, 20), dt_time(11, 0)):
+        if not _in_time_window(now_t, dt_time(9, 20), dt_time(11, 0)):
             return
 
     elif "scalp_underpress_01" in cnd_name:
-        if not in_window(now_t, dt_time(9, 40), dt_time(13, 0)):
+        if not _in_time_window(now_t, dt_time(9, 40), dt_time(13, 0)):
             return
 
     elif "scalp_shooting_01" in cnd_name:
-        if not in_window(now_t, dt_time(9, 40), dt_time(13, 30)):
+        if not _in_time_window(now_t, dt_time(9, 40), dt_time(13, 30)):
             return
 
     elif "scalp_afternoon_01" in cnd_name:
-        if not in_window(now_t, dt_time(13, 0), dt_time(15, 20)):
+        if not _in_time_window(now_t, dt_time(13, 0), dt_time(15, 20)):
             return
 
     elif "kospi_short_swing_01" in cnd_name or "kospi_midterm_swing_01" in cnd_name:
-        if not in_window(now_t, dt_time(14, 30), dt_time(15, 30)):
+        if not _in_time_window(now_t, dt_time(14, 30), dt_time(15, 30)):
             return
         target_strategy = 'KOSPI_ML'
         target_trade_type = 'MAIN'
@@ -145,7 +196,7 @@ def handle_condition_matched(payload):
 
     elif "vcp_candid_01" in cnd_name:
         # ✅ overnight 구간 보정: 15:30 ~ 23:59 or 00:00 ~ 07:00
-        if not in_window(now_t, dt_time(15, 30), dt_time(7, 0)):
+        if not _in_time_window(now_t, dt_time(15, 30), dt_time(7, 0)):
             return
         target_strategy = 'SCALPING'
         target_trade_type = 'SCALP'
@@ -153,12 +204,12 @@ def handle_condition_matched(payload):
         target_position_tag = 'VCP_CANDID'
 
     elif "vcp_shooting_01" in cnd_name:
-        if not in_window(now_t, dt_time(9, 0), dt_time(15, 0)):
+        if not _in_time_window(now_t, dt_time(9, 0), dt_time(15, 0)):
             return
         target_position_tag = 'VCP_SHOOTING'
 
     elif "vcp_shooting_next_01" in cnd_name:
-        if not in_window(now_t, dt_time(15, 30), dt_time(23, 59, 59)):
+        if not _in_time_window(now_t, dt_time(15, 30), dt_time(23, 59, 59)):
             return
         target_strategy = 'SCALPING'
         target_trade_type = 'SCALP'
@@ -344,6 +395,77 @@ def handle_condition_matched(payload):
     except Exception as e:
         log_error(f"🚨 조건검색 편입 처리 에러: {e}")
 
+
+
+def handle_condition_unmatched(payload):
+    """실시간 조건검색(D) 이탈 시 WATCHING 상태 대상을 즉시 제거합니다."""
+    global DB, ACTIVE_TARGETS, event_bus
+
+    code = str(payload.get('code', '')).strip()[:6]
+    cnd_name = str(payload.get('condition_name', '') or '')
+    if not code:
+        return
+
+    profile = resolve_condition_profile(cnd_name)
+    if not profile:
+        return
+
+    target_date = get_condition_target_date(profile['is_next_day_target'])
+    target_strategy = profile['strategy']
+    target_position_tag = profile['position_tag']
+    removed = False
+
+    try:
+        with DB.get_session() as session:
+            query = session.query(RecommendationHistory).filter_by(
+                rec_date=target_date,
+                stock_code=code,
+                status='WATCHING',
+                strategy=target_strategy
+            )
+
+            if target_position_tag != 'MIDDLE':
+                query = query.filter_by(position_tag=target_position_tag)
+
+            records = query.all()
+            for record in records:
+                record.status = 'EXPIRED'
+                removed = True
+
+        retained_targets = []
+        for target in ACTIVE_TARGETS:
+            target_code = str(target.get('code', '')).strip()[:6]
+            target_status = target.get('status')
+            target_strategy_value = (target.get('strategy') or '').upper()
+            normalized_strategy = 'SCALPING' if target_strategy_value in ['SCALPING', 'SCALP'] else target_strategy_value
+            target_position = target.get('position_tag', 'MIDDLE')
+
+            should_remove = (
+                target_code == code and
+                target_status == 'WATCHING' and
+                normalized_strategy == target_strategy and
+                target_position == target_position_tag
+            )
+
+            if should_remove:
+                removed = True
+                continue
+
+            retained_targets.append(target)
+
+        if removed:
+            ACTIVE_TARGETS[:] = retained_targets
+
+            still_tracking = any(
+                str(t.get('code', '')).strip()[:6] == code and
+                t.get('status') not in ['COMPLETED', 'EXPIRED']
+                for t in ACTIVE_TARGETS
+            )
+            if not still_tracking:
+                event_bus.publish("COMMAND_WS_UNREG", {"codes": [code]})
+
+    except Exception as e:
+        log_error(f"🚨 조건검색 이탈 처리 에러: {e}")
 
 
 def sync_balance_with_db():
@@ -1749,6 +1871,38 @@ def process_order_cancellation(stock, code, orig_ord_no, db, strategy):
 # ==========================================
 # 💡 실시간 체결 영수증 처리 (콜백 함수)
 # ==========================================
+def _find_execution_target(code, exec_type, order_no):
+    normalized_order_no = str(order_no or '').strip()
+
+    if exec_type == 'BUY':
+        status_key = 'BUY_ORDERED'
+        order_key = 'odno'
+    else:
+        status_key = 'SELL_ORDERED'
+        order_key = 'sell_odno'
+
+    status_candidates = [
+        stock for stock in ACTIVE_TARGETS
+        if str(stock.get('code', '')).strip()[:6] == code and stock.get('status') == status_key
+    ]
+
+    if normalized_order_no:
+        exact_match = next(
+            (
+                stock for stock in status_candidates
+                if str(stock.get(order_key, '')).strip() == normalized_order_no
+            ),
+            None
+        )
+        if exact_match:
+            return exact_match
+
+    if len(status_candidates) == 1:
+        return status_candidates[0]
+
+    return None
+
+
 def handle_real_execution(exec_data):
     """
     웹소켓에서 주문 체결(00) 통보가 오면 이 함수가 즉시 실행됩니다.
@@ -1756,6 +1910,7 @@ def handle_real_execution(exec_data):
     """
     code = str(exec_data.get('code', '')).strip()[:6]
     exec_type = str(exec_data.get('type', '')).upper()
+    order_no = str(exec_data.get('order_no', '') or '').strip()
 
     try:
         exec_price = int(float(exec_data.get('price', 0) or 0))
@@ -1768,9 +1923,9 @@ def handle_real_execution(exec_data):
     now = datetime.now()
     now_t = now.time()
 
-    target_stock = next((s for s in ACTIVE_TARGETS if str(s.get('code', '')).strip()[:6] == code), None)
+    target_stock = _find_execution_target(code, exec_type, order_no)
     if not target_stock:
-        print(f"⚠️ [영수증] 메모리에 없는 종목({code})의 체결 통보가 왔습니다. (수동 매매 혹은 지연 통보)")
+        print(f"[EXEC_IGNORED] no matching active order. code={code}, type={exec_type}, order_no={order_no}")
         return
 
     target_id = target_stock.get('id')
@@ -1992,12 +2147,19 @@ def run_sniper(is_test_mode=False):
     radar = SniperRadar(KIWOOM_TOKEN)
     sync_balance_with_db()
 
+    if WS_MANAGER:
+        try:
+            WS_MANAGER.stop()
+        except Exception as e:
+            log_error(f"Existing WS manager shutdown failed: {e}")
+
     WS_MANAGER = KiwoomWSManager(KIWOOM_TOKEN)
 
     # 중복 subscribe 방지
     if not getattr(run_sniper, '_subscriptions_registered', False):
         event_bus.subscribe('ORDER_EXECUTED', handle_real_execution)
         event_bus.subscribe('CONDITION_MATCHED', handle_condition_matched)
+        event_bus.subscribe('CONDITION_UNMATCHED', handle_condition_unmatched)
 
         def on_ws_reconnect(payload):
             threading.Thread(target=sync_state_with_broker, daemon=True).start()
@@ -2207,6 +2369,13 @@ def run_sniper(is_test_mode=False):
 
     except KeyboardInterrupt:
         print("\n🛑 스나이퍼 매매 엔진 종료")
+
+    finally:
+        if WS_MANAGER:
+            try:
+                WS_MANAGER.stop()
+            except Exception as e:
+                log_error(f"WS manager stop failed: {e}")
 
 if __name__ == "__main__":
     """
