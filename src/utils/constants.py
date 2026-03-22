@@ -114,6 +114,7 @@ class TradingConfig:
     AI_HOLDING_MIN_COOLDOWN = 15          # 💡 (기존 5초 -> 15초) 주가가 미친듯이 널뛰어도 최소 15초는 무조건 대기
     AI_HOLDING_MAX_COOLDOWN = 50          # 💡 (기존 30초 -> 50초) 평상시 횡보장에서는 50초에 딱 한 번만 AI 호출
     AI_HOLDING_CRITICAL_COOLDOWN = 10     # 💡 [신규 추가] 익절/손절 임박 구간에서는 20초마다 호출
+    AI_WAIT_DROP_COOLDOWN = 300           # 💡 ai score 75점 이하 대기시간 300초
 
     # ==========================================
     # 🎯 AI 엔진 제어값 (OpenAI)
