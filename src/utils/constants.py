@@ -89,7 +89,9 @@ class TradingConfig:
     # 🎯 추가된 스나이퍼 매매/운영 세부 설정값
     # ==========================================
     BUY_SCORE_THRESHOLD: int = 70  # AI 봇이 매수 버튼을 누르는 최소 종합 점수
-    VPW_STRONG_LIMIT: int = 110  # 확신도가 낮을 때 매수를 강행하기 위한 체결강도 허들(%)
+    BUY_SCORE_KOSDAQ_THRESHOLD: int = 80  # AI 봇이 KOSDAQ 매수 버튼을 누르는 최소 종합 점수
+    VPW_STRONG_LIMIT: int = 115  # 확신도가 낮을 때 매수를 강행하기 위한 체결강도 허들(%)
+    VPW_STRONG_KOSDAQ_LIMIT: int = 120  # 확신도가 낮을 때 매수를 강행하기 위한 체결강도 허들(%)
     RALLY_TARGET_PCT: float = 5.0  # 신고가 돌파 시 기본 목표가 (%)
     ORDER_TIMEOUT_SEC: int = 30  # 미체결 주문 취소 대기 시간 (초)
     SCAN_INTERVAL_SEC: int = 1800  # 장중 스캐너 재가동 주기 (초 / 1800초 = 30분)
