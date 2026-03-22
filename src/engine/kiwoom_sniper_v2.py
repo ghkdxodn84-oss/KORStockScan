@@ -1207,11 +1207,14 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             # =========================================================
 
             if current_ai_score < 75 and current_ai_score != 50:
+                # 1. 로그 출력 (기존 유지)
                 if time.time() - last_ai_time < 1.0:
                     action_str = "WAIT(진입 보류)" if current_ai_score > 40 else "DROP(진입 차단)"
                     print(f"🚫 [AI 매수 거부] {stock['name']} {action_str} (AI 점수: {current_ai_score}점)")
 
-                cooldown_time = getattr(TRADING_RULES, 'AI_WAIT_DROP_COOLDOWN', 300) if current_ai_score > 40 else 180
+                # 💡 [수정] 74점 이하는 점수와 상관없이 모두 설정값(기본 300초) 적용
+                cooldown_time = getattr(TRADING_RULES, 'AI_WAIT_DROP_COOLDOWN', 300)
+                
                 cooldowns[code] = time.time() + cooldown_time
                 return
 
