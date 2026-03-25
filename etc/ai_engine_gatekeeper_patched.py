@@ -603,7 +603,6 @@ class GeminiSniperEngine:
                 log_error(f"🚨 [{stock_name}] 주도주 분석 에러: {e}")
                 return json.dumps({"error": str(e), "target_price": 0})
     
-
     def _infer_realtime_mode(self, realtime_ctx):
         """텔레그램 입력은 종목코드만 받고, 서버 내부에서 AUTO -> SCALP / SWING / DUAL 분기"""
         strat_label = str(realtime_ctx.get("strat_label", "")).upper()
@@ -801,6 +800,42 @@ class GeminiSniperEngine:
             except Exception as e:
                 log_error(f"🚨 [{context_name}] AI 에러: {e}")
                 return f"⚠️ AI 실시간 분석 생성 중 에러 발생: {e}"
+
+def extract_realtime_gatekeeper_action(self, report_text):
+    """실시간 리포트 본문에서 최종 행동 라벨을 추출합니다."""
+    if not isinstance(report_text, str) or not report_text:
+        return "UNKNOWN"
+
+    action_labels = [
+        "[즉시 매수]",
+        "[눌림 대기]",
+        "[보유 지속]",
+        "[일부 익절]",
+        "[전량 회피]",
+        "[스캘핑 우선]",
+        "[스윙 우선]",
+        "[둘 다 아님]",
+    ]
+    for label in action_labels:
+        if label in report_text:
+            return label.strip("[]")
+    return "UNKNOWN"
+
+def evaluate_realtime_gatekeeper(self, stock_name, stock_code, realtime_ctx, analysis_mode="AUTO"):
+    """generate_realtime_report 결과를 마지막 진입 게이트 판단용으로 정규화합니다."""
+    report = self.generate_realtime_report(
+        stock_name=stock_name,
+        stock_code=stock_code,
+        input_data_text=realtime_ctx,
+        analysis_mode=analysis_mode,
+    )
+    action_label = self.extract_realtime_gatekeeper_action(report)
+    allow_entry = action_label == "즉시 매수"
+    return {
+        "allow_entry": allow_entry,
+        "action_label": action_label,
+        "report": report,
+    }
     
     # ==========================================
     # 🔍 [신규] 장 마감 후 내일의 주도주 분석 (gemini-3.0-pro 전용)
