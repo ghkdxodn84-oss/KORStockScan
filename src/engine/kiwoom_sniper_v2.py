@@ -669,15 +669,15 @@ bind_analysis_dependencies(
 def run_sniper(is_test_mode=False):
     global KIWOOM_TOKEN, WS_MANAGER, ACTIVE_TARGETS, AI_ENGINE
 
-    from src.utils.logger import log_error
-    log_error(f"[DEBUG] run_sniper started at {datetime.now()}")
+    from src.utils.logger import log_error, log_info
+    log_info(f"[DEBUG] run_sniper started at {datetime.now()}")
     run_sniper.last_fifo_time = 0
     run_sniper.last_account_sync_time = 0
 
     admin_id = CONF.get('ADMIN_ID')
     print(f"🔫 스나이퍼 V12.2 멀티 엔진 가동 (관리자: {admin_id})")
     if not admin_id:
-        log_error("⚠️ ADMIN_ID가 설정되지 않았습니다. 매도 주문이 실행되지 않을 수 있습니다.")
+        log_info("⚠️ ADMIN_ID가 설정되지 않았습니다. 매도 주문이 실행되지 않을 수 있습니다.")
     
     is_open, reason = kiwoom_utils.is_trading_day()
     if not is_test_mode and not is_open:
@@ -698,7 +698,7 @@ def run_sniper(is_test_mode=False):
     bind_overnight_dependencies(kiwoom_token=KIWOOM_TOKEN)
 
     radar = SniperRadar(KIWOOM_TOKEN)
-    log_error(f"[DEBUG] radar 객체 생성 완료: {radar}")
+    log_info(f"[DEBUG] radar 객체 생성 완료: {radar}")
     sync_balance_with_db()
     init_market_regime_service()
 
@@ -882,7 +882,7 @@ def run_sniper(is_test_mode=False):
             # 90초 주기 계좌 동기화
             # =====================================================
             if time.time() - getattr(run_sniper, 'last_account_sync_time', 0) > 90:
-                # from src.utils.logger import log_error
+                # from src.utils.logger import log_error, log_info
                 # log_error(f"[DEBUG] 90초 조건 만족, periodic_account_sync 시작")
                 threading.Thread(target=periodic_account_sync, daemon=True).start()
                 run_sniper.last_account_sync_time = time.time()

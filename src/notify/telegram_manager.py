@@ -19,7 +19,7 @@ if str(BASE_DIR) not in sys.path:
     sys.path.append(str(BASE_DIR))
 
 from src.utils.constants import CONFIG_PATH, DEV_PATH  # 💡 중앙 관리 경로 활용
-from src.utils.logger import log_error
+from src.utils.logger import log_error, log_info
 from src.database.db_manager import DBManager
 from src.core.event_bus import EventBus
 from src.utils import kiwoom_utils
@@ -75,10 +75,10 @@ def _send_to_admin(message_text, parse_mode='HTML'):
             except Exception:
                 pass  # 이미 에러 로깅됨
         print(f"⚠️ 관리자 다이렉트 발송 실패: {e}")
-        log_error(f"⚠️ 관리자 다이렉트 발송 실패: {e}")
+        log_info(f"⚠️ 관리자 다이렉트 발송 실패: {e}")
     except Exception as e:
         print(f"⚠️ 관리자 다이렉트 발송 실패: {e}")
-        log_error(f"⚠️ 관리자 다이렉트 발송 실패: {e}")
+        log_info(f"⚠️ 관리자 다이렉트 발송 실패: {e}")
 
 def _broadcast_alert(message_text, audience='VIP_ALL', parse_mode='HTML'): 
     """권한(Audience)에 따라 가입자에게 브로드캐스트 (중복 함수 병합 완료)"""
@@ -107,10 +107,10 @@ def _broadcast_alert(message_text, audience='VIP_ALL', parse_mode='HTML'):
                         bot.send_message(chat_id, f"⚠️ [형식오류 발생] {clean_text}", parse_mode=None)
                     except Exception:
                         pass  # 이미 에러 로깅됨
-                log_error(f"⚠️ 메시지 전송 중 API 에러: {e}")
+                log_info(f"⚠️ 메시지 전송 중 API 에러: {e}")
             except Exception as e:
                 print(f"⚠️ chat_id {chat_id} 메시지 전송 실패: {e}")
-                log_error(f"⚠️ chat_id {chat_id} 메시지 전송 실패: {e}")
+                log_info(f"⚠️ chat_id {chat_id} 메시지 전송 실패: {e}")
 
 def _is_transient_connection_issue(exc):
     """흔한 네트워크 순단(Reset/Timeout/Remote close)만 조용히 재시도 대상으로 분류"""
@@ -201,7 +201,7 @@ def has_special_auth(chat_id):
         return db_manager.check_special_auth(chat_id_str)
     except Exception as e:
         print(f"⚠️ 권한 체크 중 DB 에러: {e}")
-        log_error(f"⚠️ 권한 체크 중 DB 에러: {e}")
+        log_info(f"⚠️ 권한 체크 중 DB 에러: {e}")
     return False
 
 def get_main_keyboard():
@@ -263,7 +263,7 @@ def process_analyze_step(message):
         bot.send_message(chat_id, report, parse_mode='Markdown')
         
     except Exception as e:
-        from src.utils.logger import log_error
+        from src.utils.logger import log_error, log_info
         log_error(f"실시간 종목분석 에러 ({code}): {e}")
         bot.send_message(chat_id, f"❌ 종목 분석 중 시스템 에러 발생: {e}")
         
@@ -335,7 +335,7 @@ def handle_analyze_btn(message):
 def handle_watch_list(message):
     import pandas as pd
     from src.utils.constants import TRADING_RULES # 상수 안전 임포트
-    from src.utils.logger import log_error
+    from src.utils.logger import log_error, log_info
     import telebot.apihelper
 
     def escape_markdown(text):
@@ -446,7 +446,7 @@ def handle_watch_list(message):
                 raise
 
     except Exception as e:
-        from src.utils.logger import log_error
+        from src.utils.logger import log_error, log_info
         log_error(f"감시 리스트 조회 에러: {e}")
         bot.edit_message_text(chat_id=message.chat.id, message_id=wait_msg.message_id, text=f"❌ 리스트 조회 중 시스템 에러 발생: {e}")
 
@@ -508,7 +508,7 @@ def handle_today_picks(message):
         bot.send_message(chat_id, msg, parse_mode='HTML')
 
     except Exception as e:
-        from src.utils.logger import log_error
+        from src.utils.logger import log_error, log_info
         log_error(f"오늘의 추천종목 에러: {e}")
         bot.send_message(chat_id, f"❌ 추천 종목 로드 실패: {e}")
 
@@ -585,7 +585,7 @@ def process_manual_add_step(message):
         bot.send_message(chat_id, msg_text, parse_mode='Markdown')
 
     except Exception as e:
-        from src.utils.logger import log_error
+        from src.utils.logger import log_error, log_info
         log_error(f"수동 종목 추가 에러: {e}")
         bot.send_message(chat_id, f"❌ 종목 추가 중 시스템 에러 발생: {e}")
 
@@ -635,7 +635,7 @@ def handle_why_not(message):
         bot.send_message(chat_id, report, parse_mode=None)
         
     except Exception as e:
-        from src.utils.logger import log_error
+        from src.utils.logger import log_error, log_info
         log_error(f"미진입 사유 분석 에러 ({code}): {e}")
         bot.send_message(chat_id, f"❌ 사유 분석 중 오류 발생: {e}")
 
@@ -645,7 +645,7 @@ def process_pre_checkout(pre_checkout_query):
     try:
         bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
     except Exception as e:
-        from src.utils.logger import log_error
+        from src.utils.logger import log_error, log_info
         log_error(f"결제 사전 승인 에러: {e}")
 
 @bot.message_handler(content_types=['successful_payment'])
@@ -671,7 +671,7 @@ def handle_payment_success(message):
         event_bus.publish('TELEGRAM_BROADCAST', {'message': admin_msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'})
         
     except Exception as e:
-        from src.utils.logger import log_error
+        from src.utils.logger import log_error, log_info
         log_error(f"결제 완료 처리 중 시스템 에러: {e}")
         bot.send_message(chat_id, "✅ 결제는 확인되었으나 시스템 지연으로 등급 반영이 지연되고 있습니다. 관리자가 곧 수동으로 처리해 드릴 예정입니다.")
 

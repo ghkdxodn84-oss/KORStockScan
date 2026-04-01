@@ -5,7 +5,7 @@ from datetime import datetime
 
 from src.database.models import RecommendationHistory
 from src.utils import kiwoom_utils
-from src.utils.logger import log_error
+from src.utils.logger import log_error, log_info
 
 
 KIWOOM_TOKEN = None
@@ -208,10 +208,10 @@ def run_scalping_overnight_gatekeeper(ai_engine=None):
     global KIWOOM_TOKEN, DB, WS_MANAGER, event_bus, ACTIVE_TARGETS
 
     if ai_engine is None:
-        log_error("⚠️ [15:15 EOD] AI 엔진이 없어 오버나이트 판정을 건너뜁니다.")
+        log_info("⚠️ [15:15 EOD] AI 엔진이 없어 오버나이트 판정을 건너뜁니다.")
         return False
     if DB is None or ACTIVE_TARGETS is None:
-        log_error("⚠️ [15:15 EOD] DB/ACTIVE_TARGETS 의존성 미설정")
+        log_info("⚠️ [15:15 EOD] DB/ACTIVE_TARGETS 의존성 미설정")
         return False
 
     try:
@@ -252,7 +252,7 @@ def run_scalping_overnight_gatekeeper(ai_engine=None):
             sell_count += 1
 
         if not ok:
-            log_error(f"⚠️ [15:15 EOD] {name}({code}) 처리 실패: {action_taken}")
+            log_info(f"⚠️ [15:15 EOD] {name}({code}) 처리 실패: {action_taken}")
 
         summary_rows.append({
             'name': name,

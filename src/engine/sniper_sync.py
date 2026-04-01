@@ -5,7 +5,7 @@ from datetime import datetime
 
 from src.database.models import RecommendationHistory
 from src.utils import kiwoom_utils
-from src.utils.logger import log_error
+from src.utils.logger import log_error, log_info
 from src.engine import kiwoom_orders
 
 
@@ -49,14 +49,14 @@ def _refresh_kiwoom_token(reason, error_detail=None):
     """토큰 문제 발생 시 즉시 재발급 시도."""
     global KIWOOM_TOKEN, CONF
     detail_str = f" | detail={error_detail}" if error_detail else ""
-    log_error(f"🔄 [TOKEN 재발급] 사유={reason}{detail_str}")
+    log_info(f"🔄 [TOKEN 재발급] 사유={reason}{detail_str}")
     if not CONF:
         log_error("❌ [TOKEN 재발급] CONF가 없어 재발급 불가")
         return None
     new_token = kiwoom_utils.get_kiwoom_token(CONF)
     if new_token:
         KIWOOM_TOKEN = new_token
-        log_error("✅ [TOKEN 재발급] 성공")
+        log_info("✅ [TOKEN 재발급] 성공")
     else:
         log_error("❌ [TOKEN 재발급] 실패")
     return new_token
@@ -95,7 +95,7 @@ def sync_balance_with_db():
     if not successful_exchanges:
         last_errors = kiwoom_orders.get_last_inventory_errors()
         if last_errors:
-            log_error(f"⚠️ [동기화 원인] 잔고 조회 실패 상세: {last_errors}")
+            log_info(f"⚠️ [동기화 원인] 잔고 조회 실패 상세: {last_errors}")
         auth_failed, auth_err = _detect_auth_failure()
         if auth_failed:
             _refresh_kiwoom_token("인증 실패(8005)", auth_err)
@@ -169,7 +169,7 @@ def sync_state_with_broker():
 
     real_balances, successful_exchanges = kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN)
     if not successful_exchanges:
-        log_error("⚠️ [상태 동기화] 잔고 조회 실패 -> 토큰 재발급 후 재시도")
+        log_info("⚠️ [상태 동기화] 잔고 조회 실패 -> 토큰 재발급 후 재시도")
         _refresh_kiwoom_token("잔고 조회 실패(상태 동기화)")
         if KIWOOM_TOKEN:
             real_balances, successful_exchanges = kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN)
@@ -245,7 +245,7 @@ def periodic_account_sync():
         _refresh_kiwoom_token("토큰 없음(정기 동기화)")
     real_inventory, successful_exchanges = kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN)
     if not successful_exchanges:
-        log_error("⚠️ [정기 동기화] 잔고 조회 실패 -> 토큰 재발급 후 재시도")
+        log_info("⚠️ [정기 동기화] 잔고 조회 실패 -> 토큰 재발급 후 재시도")
         _refresh_kiwoom_token("잔고 조회 실패(정기 동기화)")
         if KIWOOM_TOKEN:
             real_inventory, successful_exchanges = kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN)

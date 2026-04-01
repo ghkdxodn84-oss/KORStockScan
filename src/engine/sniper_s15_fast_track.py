@@ -7,7 +7,7 @@ from datetime import datetime
 from src.engine import kiwoom_orders
 from src.database.models import RecommendationHistory
 from src.utils import kiwoom_utils
-from src.utils.logger import log_error
+from src.utils.logger import log_error, log_info
 
 
 KIWOOM_TOKEN = None
@@ -327,7 +327,7 @@ def _confirm_s15_cancel_or_reload_remaining(code, state, wait_sec=0.5):
         if real_stock:
             return int(float(real_stock.get('qty', 0) or 0))
     except Exception as exc:
-        log_error(f"⚠️ S15 잔량 재조회 실패 ({code}): {exc}")
+        log_info(f"⚠️ S15 잔량 재조회 실패 ({code}): {exc}")
     with state['lock']:
         return max(0, state['cum_buy_qty'] - state['cum_sell_qty'])
 
