@@ -380,7 +380,6 @@ class KiwoomWSManager:
                                 'condition_name': cnd_name
                             })
                         elif insert_type == 'D':
-                            print(f"🧹 [조건검색 PUSH] {code} 이탈! (출처: {cnd_name})")
                             self._enqueue_state_event("CONDITION_UNMATCHED", {
                                 'code': code,
                                 'type': 'REALTIME',

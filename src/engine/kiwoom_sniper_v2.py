@@ -484,91 +484,175 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
     return None
 
 
+def _parse_holding_started_at(stock):
+    hold_time = stock.get('holding_started_at') or stock.get('buy_time')
+    if not hold_time:
+        return None
+    if isinstance(hold_time, datetime):
+        return hold_time
+    try:
+        return datetime.fromisoformat(str(hold_time))
+    except Exception:
+        return None
+
+
+def evaluate_scalping_exit(stock, code, ws_data, curr_p, buy_p, profit_rate, peak_profit):
+    base_stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -1.5)
+    hard_stop_pct = getattr(TRADING_RULES, 'SCALP_HARD_STOP', -2.5)
+    safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5)
+    trailing_start_pct = getattr(TRADING_RULES, 'SCALP_TRAILING_START_PCT', 0.6)
+    weak_trailing = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_WEAK', 0.4)
+    strong_trailing = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_STRONG', 0.8)
+
+    current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
+    current_vpw = float(ws_data.get('v_pw', 0) or 0.0)
+
+    # v_pw 히스토리 관리
+    recent_vpw = stock.get('recent_vpw_values', [])
+    recent_vpw.append(current_vpw)
+    if len(recent_vpw) > 6:
+        recent_vpw = recent_vpw[-6:]
+    stock['recent_vpw_values'] = recent_vpw
+    avg_vpw = sum(recent_vpw) / len(recent_vpw) if recent_vpw else current_vpw
+
+    weak_vpw_count = int(stock.get('weak_vpw_count', 0) or 0)
+    if current_vpw < 100:
+        weak_vpw_count += 1
+    else:
+        weak_vpw_count = max(0, weak_vpw_count - 1)
+    stock['weak_vpw_count'] = weak_vpw_count
+
+    # 시간 가치(Time Decay)
+    hold_start = _parse_holding_started_at(stock)
+    held_seconds = (datetime.now() - hold_start).total_seconds() if hold_start else 0
+    last_peak_update = stock.get('last_peak_update_at')
+    if last_peak_update is None:
+        stock['last_peak_update_at'] = datetime.now()
+        last_peak_update = stock['last_peak_update_at']
+    elif not isinstance(last_peak_update, datetime):
+        try:
+            last_peak_update = datetime.fromisoformat(str(last_peak_update))
+        except Exception:
+            last_peak_update = datetime.now()
+        stock['last_peak_update_at'] = last_peak_update
+
+    if held_seconds >= 90:
+        if profit_rate < 0.2 and peak_profit < 0.4 and avg_vpw < 105:
+            return "시간가치 소진(90s+ 미미수익 & v_pw 둔화)"
+    if held_seconds >= 180:
+        no_peak = (datetime.now() - last_peak_update).total_seconds() >= 60
+        if abs(profit_rate) < 0.2 and peak_profit < 0.5 and (avg_vpw < 105 or no_peak):
+            return "시간가치 소진(180s+ 정체 & 고점갱신 부재)"
+
+    # Volume Power Crash
+    if weak_vpw_count >= 2 and current_vpw < 100:
+        avg_drop_ok = len(recent_vpw) >= 3 and (avg_vpw - current_vpw) >= 8
+        if profit_rate < 1.0 or avg_drop_ok:
+            return f"매수세 급락(v_pw={current_vpw:.0f})"
+
+    # Hard/Soft Stop 정렬: hard는 더 깊은 손실, soft는 완충 손절
+    soft_stop_pct = max(base_stop_pct, hard_stop_pct)
+    hard_stop_pct = min(base_stop_pct, hard_stop_pct)
+    if profit_rate <= hard_stop_pct:
+        return f"하드스탑 도달 (profit_rate={profit_rate:.2f}% <= {hard_stop_pct}%)"
+
+    if profit_rate <= soft_stop_pct:
+        return f"소프트 손절선 도달 (profit_rate={profit_rate:.2f}% <= {soft_stop_pct}%)"
+
+    # AI 하방 리스크
+    if profit_rate < 0 and current_ai_score <= 35:
+        return f"AI 하방 리스크 포착 (AI 점수 {current_ai_score:.0f})"
+
+    # Dynamic Trailing (peak 확보 이후만)
+    if peak_profit >= trailing_start_pct and profit_rate >= safe_profit_pct:
+        drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100 if highest_prices[code] > 0 else 0
+        if current_ai_score >= 75 and current_vpw >= 110:
+            trailing_limit = strong_trailing
+        elif current_ai_score >= 65 and current_vpw >= 105:
+            trailing_limit = (weak_trailing + strong_trailing) / 2
+        else:
+            trailing_limit = weak_trailing
+        if drawdown >= trailing_limit:
+            return f"고점 대비 밀림 (drawdown={drawdown:.2f}%)"
+
+    # 장 마감 전 현금화 (기존 보존)
+    now_t = datetime.now().time()
+    if now_t >= TIME_15_30 and profit_rate >= getattr(TRADING_RULES, 'MIN_FEE_COVER', 0.1):
+        return "장 마감 전 현금화"
+
+    return None
+
+
+def evaluate_swing_exit(stock, code, ws_data, curr_p, buy_p, profit_rate, peak_profit, market_regime, strategy):
+    if strategy == 'KOSDAQ_ML':
+        if peak_profit >= getattr(TRADING_RULES, 'KOSDAQ_TARGET', 4.0):
+            drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100 if highest_prices[code] > 0 else 0
+            # TODO: KOSDAQ 트레일링 되밀림 폭을 TRAILING_DRAWDOWN_PCT로 통일 검토
+            if drawdown >= 1.0:
+                return f"KOSDAQ 트레일링 익절 (peak_profit={peak_profit:.1f}%)"
+        if profit_rate <= getattr(TRADING_RULES, 'KOSDAQ_STOP', -2.0):
+            return f"KOSDAQ 손절선 도달 (profit_rate={profit_rate:.2f}%)"
+        return None
+
+    pos_tag = stock.get('position_tag', 'MIDDLE')
+    if pos_tag == 'BREAKOUT':
+        current_stop_loss = getattr(TRADING_RULES, 'STOP_LOSS_BREAKOUT')
+    elif pos_tag == 'BOTTOM':
+        current_stop_loss = getattr(TRADING_RULES, 'STOP_LOSS_BOTTOM')
+    else:
+        current_stop_loss = getattr(TRADING_RULES, 'STOP_LOSS_BULL') if market_regime == 'BULL' else getattr(TRADING_RULES, 'STOP_LOSS_BEAR')
+
+    if profit_rate <= current_stop_loss:
+        return f"스윙 손절선 도달 (profit_rate={profit_rate:.2f}% <= {current_stop_loss}%)"
+
+    if peak_profit >= getattr(TRADING_RULES, 'TRAILING_START_PCT'):
+        drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100 if highest_prices[code] > 0 else 0
+        if drawdown >= getattr(TRADING_RULES, 'TRAILING_DRAWDOWN_PCT'):
+            return f"스윙 트레일링 익절 (peak_profit={peak_profit:.1f}%)"
+    return None
+
+
 def check_holding_conditions(stock, code, ws_data, admin_id, market_regime, radar=None, ai_engine=None):
     """
     HOLDING 상태 종목이 SELL_ORDERED로 전환되지 못하는 이유를 분석하여 문자열로 반환합니다.
     모든 조건을 통과하면 None을 반환합니다.
     """
     global highest_prices
-    
+
     raw_strategy = (stock.get('strategy') or 'KOSPI_ML').upper()
     strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
-    
+
     curr_p = int(float(ws_data.get('curr', 0) or 0))
     buy_p = float(stock.get('buy_price', 0) or 0)
     if curr_p <= 0 or buy_p <= 0:
         return "현재가 또는 매수가 유효하지 않음"
-    
+    if not stock.get('holding_started_at'):
+        if stock.get('buy_time'):
+            stock['holding_started_at'] = stock.get('buy_time')
+
     profit_rate = (curr_p - buy_p) / buy_p * 100
     if code in highest_prices:
-        highest_prices[code] = max(highest_prices[code], curr_p)
+        if curr_p > highest_prices[code]:
+            highest_prices[code] = curr_p
+            stock['last_peak_update_at'] = datetime.now()
     else:
         highest_prices[code] = curr_p
+        stock['last_peak_update_at'] = datetime.now()
     peak_profit = (highest_prices[code] - buy_p) / buy_p * 100
-    
-    now_t = datetime.now().time()
-    
-    # 초단타 SCALPING 전략 검사
+
     if strategy == 'SCALPING':
-        base_stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -2.5)
-        safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5)
-        drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100 if highest_prices[code] > 0 else 0
-        
-        # AI 점수 (간략화)
-        current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
-        
-        # 손절 조건
-        if profit_rate <= base_stop_pct:
-            return f"손절선 도달 (profit_rate={profit_rate:.2f}% <= {base_stop_pct}%)"
-        
-        # AI 하방 리스크
-        if profit_rate < 0 and current_ai_score <= 35:
-            return f"AI 하방 리스크 포착 (AI 점수 {current_ai_score:.0f})"
-        
-        # 익절 조건
-        if profit_rate >= safe_profit_pct:
-            if current_ai_score < 50:
-                return f"AI 모멘텀 둔화 (AI 점수 {current_ai_score:.0f})"
-            if drawdown >= getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_WEAK', 0.4):
-                return f"고점 대비 밀림 (drawdown={drawdown:.2f}%)"
-        
-        # 시간 초과 및 장 마감
-        held_time_min = 0  # 계산 생략
-        if now_t >= TIME_15_30 and profit_rate >= getattr(TRADING_RULES, 'MIN_FEE_COVER', 0.1):
-            return "장 마감 전 현금화"
-    
-    # 코스닥 스윙 전략 검사 (간략화)
-    elif strategy == 'KOSDAQ_ML':
-        if peak_profit >= getattr(TRADING_RULES, 'KOSDAQ_TARGET', 4.0):
-            drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100 if highest_prices[code] > 0 else 0
-            if drawdown >= 1.0:
-                return f"KOSDAQ 트레일링 익절 (peak_profit={peak_profit:.1f}%)"
-        if profit_rate <= getattr(TRADING_RULES, 'KOSDAQ_STOP', -2.0):
-            return f"KOSDAQ 손절선 도달 (profit_rate={profit_rate:.2f}%)"
-    
-    # 코스피 스윙 전략 검사 (간략화)
+        reason = evaluate_scalping_exit(stock, code, ws_data, curr_p, buy_p, profit_rate, peak_profit)
+        if reason:
+            return reason
     else:
-        pos_tag = stock.get('position_tag', 'MIDDLE')
-        if pos_tag == 'BREAKOUT':
-            current_stop_loss = getattr(TRADING_RULES, 'STOP_LOSS_BREAKOUT')
-        elif pos_tag == 'BOTTOM':
-            current_stop_loss = getattr(TRADING_RULES, 'STOP_LOSS_BOTTOM')
-        else:
-            current_stop_loss = getattr(TRADING_RULES, 'STOP_LOSS_BULL') if market_regime == 'BULL' else getattr(TRADING_RULES, 'STOP_LOSS_BEAR')
-        
-        if profit_rate <= current_stop_loss:
-            return f"스윙 손절선 도달 (profit_rate={profit_rate:.2f}% <= {current_stop_loss}%)"
-        
-        if peak_profit >= getattr(TRADING_RULES, 'TRAILING_START_PCT'):
-            drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100 if highest_prices[code] > 0 else 0
-            if drawdown >= getattr(TRADING_RULES, 'TRAILING_DRAWDOWN_PCT'):
-                return f"스윙 트레일링 익절 (peak_profit={peak_profit:.1f}%)"
-    
+        reason = evaluate_swing_exit(stock, code, ws_data, curr_p, buy_p, profit_rate, peak_profit, market_regime, strategy)
+        if reason:
+            return reason
+
     # 관리자 ID 체크
     if not admin_id:
         return "관리자 ID 없음"
-    
-    # 모든 조건 통과
+
     return None
 
 

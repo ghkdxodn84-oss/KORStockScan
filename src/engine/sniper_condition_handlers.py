@@ -682,6 +682,7 @@ def handle_condition_unmatched(payload):
                 t.get('status') not in ['COMPLETED', 'EXPIRED']
                 for t in ACTIVE_TARGETS
             )
+            print(f"🧹 [조건검색 실제 이탈] {code} 이탈 처리 완료 (출처: {cnd_name})")
             if not still_tracking:
                 EVENT_BUS.publish("COMMAND_WS_UNREG", {"codes": [code]})
 

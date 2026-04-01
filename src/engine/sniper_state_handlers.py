@@ -537,11 +537,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 except Exception as e:
                     log_error(f"🚨 [DB 에러] {stock['name']} BUY_ORDERED 장부 업데이트 실패: {e}")
 
-                if event_bus:
-                    event_bus.publish(
-                        'TELEGRAM_BROADCAST',
-                        {'message': msg, 'audience': stock.get('msg_audience', 'ADMIN_ONLY')},
-                    )
+                # 매수 주문 전송 알림은 체결 시점에만 발행합니다.
 
             else:
                 print(f"❌ [{stock['name']}] 매수 주문 거절: {res.get('return_msg')}")
@@ -741,24 +737,32 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             except Exception:
                 pass
 
-        base_stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -2.5)
+        base_stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -1.5)
+        hard_stop_pct = getattr(TRADING_RULES, 'SCALP_HARD_STOP', -2.5)
         safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5)
         if highest_prices.get(code, 0) > 0:
             drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100
         else:
             drawdown = 0
 
+        soft_stop_pct = max(base_stop_pct, hard_stop_pct)
+        hard_stop_pct = min(base_stop_pct, hard_stop_pct)
         if current_ai_score >= 75:
-            dynamic_stop_pct = base_stop_pct - 1.0
+            dynamic_stop_pct = max(soft_stop_pct - 1.0, hard_stop_pct)
             dynamic_trailing_limit = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_STRONG', 0.8)
         else:
-            dynamic_stop_pct = base_stop_pct
+            dynamic_stop_pct = soft_stop_pct
             dynamic_trailing_limit = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_WEAK', 0.4)
 
-        if profit_rate <= dynamic_stop_pct:
+        if profit_rate <= hard_stop_pct:
             is_sell_signal = True
             sell_reason_type = "LOSS"
-            reason = f"🔪 무호흡 칼손절 ({dynamic_stop_pct}%) [AI: {current_ai_score:.0f}]"
+            reason = f"🛑 하드스탑 도달 ({hard_stop_pct}%) [AI: {current_ai_score:.0f}]"
+
+        elif profit_rate <= dynamic_stop_pct:
+            is_sell_signal = True
+            sell_reason_type = "LOSS"
+            reason = f"🔪 소프트 손절 ({dynamic_stop_pct}%) [AI: {current_ai_score:.0f}]"
 
         elif profit_rate < 0 and current_ai_score <= 35:
             is_sell_signal = True
@@ -790,6 +794,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             pass
 
         if not is_sell_signal and peak_profit >= getattr(TRADING_RULES, 'KOSDAQ_TARGET', 4.0):
+            # TODO: KOSDAQ 트레일링 되밀림 폭을 TRAILING_DRAWDOWN_PCT로 통일 검토
             drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100
             if drawdown >= 1.0:
                 is_sell_signal = True
@@ -830,10 +835,15 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
         except Exception:
             pass
 
+        # TODO: TRAILING_START_PCT는 스윙 트레일링 시작 수익률로 통일 필요
+        # 현재 로직은 해당 임계 도달 시 즉시 익절로 동작
         if not is_sell_signal and profit_rate >= getattr(TRADING_RULES, 'TRAILING_START_PCT'):
             is_sell_signal = True
             sell_reason_type = "PROFIT"
-            reason = f"🎯 목표 수익률 도달 (+{getattr(TRADING_RULES, 'TRAILING_START_PCT')}%)"
+            reason = (
+                f"🎯 트레일링 시작 수익률 도달 (+{getattr(TRADING_RULES, 'TRAILING_START_PCT')}%) "
+                "(현 로직: 즉시 익절)"
+            )
 
         elif not is_sell_signal and profit_rate <= current_stop_loss:
             is_sell_signal = True

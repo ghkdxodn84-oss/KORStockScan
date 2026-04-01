@@ -56,6 +56,8 @@ def get_my_inventory(token):
     NXT(넥스트트레이드) 잔고 중복 종목은 무시하여 리스트를 구성합니다.
     """
     url = kiwoom_utils.get_api_url("/api/dostk/acnt")
+    token_preview = f"{str(token)[:6]}...{str(token)[-6:]}" if token else "None"
+    log_error(f"🔎 [잔고조회] url={url}, token={token_preview}")
     headers = {
         'Content-Type': 'application/json;charset=UTF-8',
         'authorization': f'Bearer {token}',
@@ -157,6 +159,23 @@ def send_buy_order_market(code, qty, token, order_type="6", price=0):
         log_error(msg)
         EventBus().publish("TELEGRAM_ADMIN_NOTIFY", {"text": msg})
         return None
+
+# -------------------------------------------------------------------
+# Compatibility wrapper (legacy callers)
+# -------------------------------------------------------------------
+def send_buy_order(code, qty, price, order_type_code, token, order_type_desc=None):
+    """
+    Legacy wrapper for send_buy_order_market.
+    - order_type_code: "00" 지정가, "6" 최유리지정가, "3" 시장가
+    - price: 지정가일 때만 사용
+    """
+    return send_buy_order_market(
+        code=code,
+        qty=qty,
+        token=token,
+        order_type=str(order_type_code),
+        price=price or 0,
+    )
 
 def send_sell_order_market(code, qty, token, order_type="3", price=0):
     """

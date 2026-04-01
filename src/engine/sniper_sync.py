@@ -1,5 +1,6 @@
 """Account/DB sync helpers for the sniper engine."""
 
+import time
 from datetime import datetime
 
 from src.database.models import RecommendationHistory
@@ -55,8 +56,12 @@ def sync_balance_with_db():
 
     real_inventory, successful_exchanges = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)
     if not successful_exchanges:
-        print("⚠️ [동기화 보류] 모든 거래소 잔고 조회 실패, 동기화를 건너뜁니다.")
-        return
+        print("⚠️ [동기화 보류] 모든 거래소 잔고 조회 실패, 1회 재시도합니다.")
+        time.sleep(1.5)
+        real_inventory, successful_exchanges = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)
+        if not successful_exchanges:
+            print("⚠️ [동기화 보류] 모든 거래소 잔고 조회 실패, 동기화를 건너뜁니다.")
+            return
 
     real_codes = {
         str(item.get('code', '')).strip()[:6]: item

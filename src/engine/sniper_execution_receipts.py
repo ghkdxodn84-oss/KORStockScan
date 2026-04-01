@@ -227,6 +227,8 @@ def handle_real_execution(exec_data):
         target_stock['status'] = 'HOLDING'
         target_stock['buy_price'] = exec_price
         target_stock['buy_time'] = now
+        if not target_stock.get('holding_started_at'):
+            target_stock['holding_started_at'] = now
         highest_prices[code] = exec_price
 
         raw_strategy = (target_stock.get('strategy') or 'KOSPI_ML').upper()
@@ -367,4 +369,3 @@ def handle_real_execution(exec_data):
             ).start()
 
     # 메모리 업데이트는 각 조건문 내에서 이미 수행됨
-
