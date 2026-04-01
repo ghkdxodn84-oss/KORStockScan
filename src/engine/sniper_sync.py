@@ -15,6 +15,7 @@ ACTIVE_TARGETS = None
 EVENT_BUS = None
 HIGHEST_PRICES = None
 STATE_LOCK = None
+CONF = None
 
 
 def bind_sync_dependencies(
@@ -25,8 +26,9 @@ def bind_sync_dependencies(
     event_bus=None,
     highest_prices=None,
     state_lock=None,
+    conf=None,
 ):
-    global KIWOOM_TOKEN, DB, ACTIVE_TARGETS, EVENT_BUS, HIGHEST_PRICES, STATE_LOCK
+    global KIWOOM_TOKEN, DB, ACTIVE_TARGETS, EVENT_BUS, HIGHEST_PRICES, STATE_LOCK, CONF
     if kiwoom_token is not None:
         KIWOOM_TOKEN = kiwoom_token
     if db is not None:
@@ -39,6 +41,36 @@ def bind_sync_dependencies(
         HIGHEST_PRICES = highest_prices
     if state_lock is not None:
         STATE_LOCK = state_lock
+    if conf is not None:
+        CONF = conf
+
+
+def _refresh_kiwoom_token(reason, error_detail=None):
+    """토큰 문제 발생 시 즉시 재발급 시도."""
+    global KIWOOM_TOKEN, CONF
+    detail_str = f" | detail={error_detail}" if error_detail else ""
+    log_error(f"🔄 [TOKEN 재발급] 사유={reason}{detail_str}")
+    if not CONF:
+        log_error("❌ [TOKEN 재발급] CONF가 없어 재발급 불가")
+        return None
+    new_token = kiwoom_utils.get_kiwoom_token(CONF)
+    if new_token:
+        KIWOOM_TOKEN = new_token
+        log_error("✅ [TOKEN 재발급] 성공")
+    else:
+        log_error("❌ [TOKEN 재발급] 실패")
+    return new_token
+
+
+def _detect_auth_failure():
+    """최근 잔고 조회 오류에서 인증 실패 여부를 판단."""
+    errors = kiwoom_orders.get_last_inventory_errors()
+    for err in errors:
+        msg = str(err.get('return_msg', ''))
+        code = str(err.get('return_code', ''))
+        if '8005' in code or 'Token' in msg or '토큰' in msg or '인증' in msg:
+            return True, err
+    return False, errors[0] if errors else None
 
 
 def _to_int(value):
@@ -53,9 +85,22 @@ def sync_balance_with_db():
     global KIWOOM_TOKEN, DB, ACTIVE_TARGETS
 
     print("🔄 [데이터 동기화] 실제 계좌 잔고와 DB를 대조합니다...")
+    if not KIWOOM_TOKEN:
+        _refresh_kiwoom_token("토큰 없음(초기 동기화)")
+        if not KIWOOM_TOKEN:
+            log_error("❌ [동기화 중단] 토큰 재발급 실패")
+            return
 
     real_inventory, successful_exchanges = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)
     if not successful_exchanges:
+        last_errors = kiwoom_orders.get_last_inventory_errors()
+        if last_errors:
+            log_error(f"⚠️ [동기화 원인] 잔고 조회 실패 상세: {last_errors}")
+        auth_failed, auth_err = _detect_auth_failure()
+        if auth_failed:
+            _refresh_kiwoom_token("인증 실패(8005)", auth_err)
+            if KIWOOM_TOKEN:
+                real_inventory, successful_exchanges = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)
         print("⚠️ [동기화 보류] 모든 거래소 잔고 조회 실패, 1회 재시도합니다.")
         time.sleep(1.5)
         real_inventory, successful_exchanges = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)
@@ -119,9 +164,15 @@ def sync_state_with_broker():
     global KIWOOM_TOKEN, DB, ACTIVE_TARGETS, EVENT_BUS
 
     print("🔄 [상태 동기화] 웹소켓 재접속 감지! 증권사 잔고와 봇 상태를 대조합니다...")
+    if not KIWOOM_TOKEN:
+        _refresh_kiwoom_token("토큰 없음(상태 동기화)")
 
     real_balances, successful_exchanges = kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN)
     if not successful_exchanges:
+        log_error("⚠️ [상태 동기화] 잔고 조회 실패 -> 토큰 재발급 후 재시도")
+        _refresh_kiwoom_token("잔고 조회 실패(상태 동기화)")
+        if KIWOOM_TOKEN:
+            real_balances, successful_exchanges = kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN)
         print("⚠️ [상태 동기화] 모든 거래소 잔고 조회 실패. 다음 턴에 재시도합니다.")
         return
 
@@ -190,8 +241,14 @@ def periodic_account_sync():
     """
     global KIWOOM_TOKEN, DB, ACTIVE_TARGETS, HIGHEST_PRICES, STATE_LOCK
 
+    if not KIWOOM_TOKEN:
+        _refresh_kiwoom_token("토큰 없음(정기 동기화)")
     real_inventory, successful_exchanges = kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN)
     if not successful_exchanges:
+        log_error("⚠️ [정기 동기화] 잔고 조회 실패 -> 토큰 재발급 후 재시도")
+        _refresh_kiwoom_token("잔고 조회 실패(정기 동기화)")
+        if KIWOOM_TOKEN:
+            real_inventory, successful_exchanges = kiwoom_utils.get_account_balance_kt00005(KIWOOM_TOKEN)
         print("⚠️ [정기 동기화] 모든 거래소 잔고 조회 실패, 동기화를 건너뜁니다.")
         return
 

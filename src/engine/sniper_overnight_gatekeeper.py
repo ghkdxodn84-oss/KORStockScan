@@ -202,3 +202,83 @@ def _execute_scalping_hold_overnight(record, mem_stock=None):
         return True, '미체결 매도 취소 후 HOLDING 복귀'
     return False, '미체결 매도 취소 실패'
 
+
+def run_scalping_overnight_gatekeeper(ai_engine=None):
+    """15:15 스캘핑 포지션 오버나이트/당일청산 판정 및 실행."""
+    global KIWOOM_TOKEN, DB, WS_MANAGER, event_bus, ACTIVE_TARGETS
+
+    if ai_engine is None:
+        log_error("⚠️ [15:15 EOD] AI 엔진이 없어 오버나이트 판정을 건너뜁니다.")
+        return False
+    if DB is None or ACTIVE_TARGETS is None:
+        log_error("⚠️ [15:15 EOD] DB/ACTIVE_TARGETS 의존성 미설정")
+        return False
+
+    try:
+        with DB.get_session() as session:
+            records = (
+                session.query(RecommendationHistory)
+                .filter(RecommendationHistory.status.in_(('HOLDING', 'SELL_ORDERED')))
+                .filter(RecommendationHistory.strategy.in_(('SCALPING', 'SCALP')))
+                .all()
+            )
+    except Exception as e:
+        log_error(f"🚨 [15:15 EOD] DB 조회 실패: {e}")
+        return False
+
+    if not records:
+        print("✅ [15:15 EOD] 스캘핑 보유/주문 대기 종목이 없습니다.")
+        return True
+
+    summary_rows = []
+    sell_count = 0
+    hold_count = 0
+
+    for record in records:
+        code = str(record.stock_code).strip()[:6]
+        name = getattr(record, 'stock_name', code)
+        mem_stock = _find_active_target_by_code(code)
+        ws_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
+
+        ctx = _build_scalping_overnight_ctx(record, mem_stock, ws_data)
+        decision = ai_engine.evaluate_scalping_overnight_decision(name, code, ctx)
+        action = str(decision.get('action', 'SELL_TODAY') or 'SELL_TODAY').upper()
+
+        if action == 'HOLD_OVERNIGHT':
+            ok, action_taken = _execute_scalping_hold_overnight(record, mem_stock)
+            hold_count += 1
+        else:
+            ok, action_taken = _execute_scalping_sell_today(record, mem_stock)
+            sell_count += 1
+
+        if not ok:
+            log_error(f"⚠️ [15:15 EOD] {name}({code}) 처리 실패: {action_taken}")
+
+        summary_rows.append({
+            'name': name,
+            'code': code,
+            'action': action,
+            'confidence': int(decision.get('confidence', 0) or 0),
+            'pnl_pct': float(ctx.get('pnl_pct', 0.0) or 0.0),
+            'note': action_taken,
+        })
+
+    if event_bus and escape_markdown and summary_rows:
+        lines = [
+            "🌙 **[15:15 SCALPING EOD 요약]**",
+            f"대상: {len(summary_rows)} | 당일청산: {sell_count} | 오버나이트: {hold_count}",
+        ]
+        for row in summary_rows:
+            esc_name = escape_markdown(row['name'])
+            esc_code = escape_markdown(row['code'])
+            esc_action = escape_markdown(row['action'])
+            esc_note = escape_markdown(row['note'])
+            lines.append(
+                f"- {esc_name}({esc_code}) | {esc_action} | {row['confidence']}점 | PnL {row['pnl_pct']:+.2f}% | {esc_note}"
+            )
+        event_bus.publish(
+            'TELEGRAM_BROADCAST',
+            {'message': "\n".join(lines), 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'}
+        )
+
+    return True

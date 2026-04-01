@@ -160,6 +160,7 @@ bind_sync_dependencies(
     active_targets=ACTIVE_TARGETS,
     highest_prices=highest_prices,
     state_lock=_state_lock,
+    conf=CONF,
 )
 def _set_ai_engine_from_analysis(engine):
     global AI_ENGINE
@@ -690,6 +691,8 @@ def run_sniper(is_test_mode=False):
         log_error("❌ 토큰 발급 실패로 엔진을 중단합니다.")
         event_bus.publish('TELEGRAM_BROADCAST', {'message': "🚨 [시스템 에러] 토큰 발급 실패로 엔진을 중단합니다."})
         return
+    # Ensure sync module has the token before any balance calls.
+    bind_sync_dependencies(kiwoom_token=KIWOOM_TOKEN, conf=CONF)
     bind_state_dependencies(kiwoom_token=KIWOOM_TOKEN)
     bind_execution_dependencies(kiwoom_token=KIWOOM_TOKEN)
     bind_overnight_dependencies(kiwoom_token=KIWOOM_TOKEN)
@@ -713,6 +716,7 @@ def run_sniper(is_test_mode=False):
         event_bus=event_bus,
         highest_prices=highest_prices,
         state_lock=_state_lock,
+        conf=CONF,
     )
     bind_condition_dependencies(kiwoom_token=KIWOOM_TOKEN, ws_manager=WS_MANAGER, db=DB, event_bus=event_bus)
     bind_analysis_dependencies(
