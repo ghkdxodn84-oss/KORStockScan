@@ -277,7 +277,9 @@ def process_analyze_step(message):
 @bot.message_handler(commands=['start', 'help'])
 def handle_start(message):
     db_manager.add_new_user(message.chat.id)
-    db_manager.upgrade_user_level(message.chat.id, level='V')  # 가입 즉시 VIP로 승격 (테스트용)
+    # 관리자는 VIP 승격 패스 (관리자 권한 유지)
+    if str(message.chat.id) != str(ADMIN_ID):
+        db_manager.upgrade_user_level(message.chat.id, level='V')  # 가입 즉시 VIP로 승격 (테스트용)
     # 💡 [교정 1] 마크다운 문법 오류 수정 (닫히지 않은 백틱 제거 및 이탤릭/볼드체로 깔끔하게 정돈)
     welcome_msg = (
     "🎯 *[KORStockScan V13.0] 스나이퍼 엔진 온라인*\n\n"

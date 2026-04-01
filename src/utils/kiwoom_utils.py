@@ -8,7 +8,7 @@ import holidays
 from datetime import datetime, timedelta
 
 # 💡 독립 로거 및 전역 상수 사용
-from src.utils.logger import log_error
+from src.utils.logger import log_error, log_info
 from src.utils.constants import CONFIG_PATH, DEV_PATH, TRADING_RULES  # 필요에 따라 상수를 추가/수정해서 사용
 
 # ==========================================
@@ -44,7 +44,38 @@ KIWOOM_BASE_URL = get_kiwoom_base_url()
 
 def get_api_url(endpoint):
     """엔드포인트를 받아 최종 목적지 URL을 조립합니다."""
-    return f"{KIWOOM_BASE_URL}{endpoint}"
+    url = f"{KIWOOM_BASE_URL}{endpoint}"
+    log_info(f"🌐 [KIWOOM API] base_url={KIWOOM_BASE_URL}, endpoint={endpoint}")
+    return url
+
+
+def normalize_stock_code(code: str) -> str:
+    """종목코드를 6자리 기준으로 정규화합니다. (_AL, A-prefix 허용)"""
+    raw = str(code or "").strip().upper()
+    raw = raw.replace('.0', '')
+    if raw.endswith('_AL'):
+        raw = raw[:-3]
+    if raw.startswith('A') and len(raw) >= 7:
+        raw = raw[1:]
+    digits = ''.join(ch for ch in raw if ch.isdigit())
+    return digits[-6:].zfill(6) if digits else raw
+
+
+def get_effective_kiwoom_code(code: str, db=None, is_nxt=None) -> str:
+    """최신 거래일의 is_nxt 플래그를 참고해 Kiwoom 요청용 코드를 반환합니다."""
+    normalized = normalize_stock_code(code)
+
+    if is_nxt is None:
+        try:
+            if db is None:
+                from src.database.db_manager import DBManager
+                db = DBManager()
+            is_nxt = db.get_latest_is_nxt(normalized)
+        except Exception as e:
+            log_error(f"⚠️ get_effective_kiwoom_code DB 조회 실패 [{normalized}]: {e}")
+            is_nxt = False
+
+    return f"{normalized}_AL" if bool(is_nxt) else normalized
 
 
 def normalize_stock_code(code: str) -> str:
@@ -86,7 +117,7 @@ def get_kiwoom_token(config=None):
     # 1. 💡 [환경 감지] 인자가 없을 경우 스스로 설정 로드
     if config is None:
         target_path = CONFIG_PATH if CONFIG_PATH.exists() else DEV_PATH
-        print(target_path)
+        log_info(f"🔐 [TOKEN] config 로드 경로: {target_path}")
         try:
             with open(target_path, 'r', encoding='utf-8') as f:
                 config = json.load(f)
@@ -103,6 +134,8 @@ def get_kiwoom_token(config=None):
     if not app_key or not sec_key:
         log_error("❌ APP_KEY 또는 SECRET_KEY가 설정 파일에 없습니다.")
         return None
+    masked_key = f"{str(app_key)[:4]}...{str(app_key)[-4:]}" if len(str(app_key)) >= 8 else "***"
+    log_info(f"🔐 [TOKEN] app_key 확인: {masked_key}")
 
     params = {
         'grant_type': 'client_credentials',
@@ -115,11 +148,16 @@ def get_kiwoom_token(config=None):
         # 3. 💡 [중요] 타임아웃(timeout)을 설정하여 무한 대기(Hang) 방지
         # 서버 응답이 5초 이상 없으면 에러를 뱉고 다음 로직으로 넘어가게 합니다.
         res = requests.post(url, headers=headers, json=params, timeout=5)
-        
+
+        log_info(f"🔐 [TOKEN] 응답 코드: {res.status_code}")
         if res.status_code == 200:
             token = res.json().get('access_token') or res.json().get('token')
             # 성공 시 로그를 남겨 흐름 파악을 돕습니다.
             # print(f"✅ 토큰 발급 성공 (목적지: {url})")
+            if token:
+                log_info(f"🔐 [TOKEN] 발급 성공 (len={len(str(token))})")
+            else:
+                log_error("❌ 토큰 발급 응답에 token이 없습니다.")
             return token
         else:
             log_error(f"❌ 토큰 발급 실패 (HTTP {res.status_code}): {res.text}")

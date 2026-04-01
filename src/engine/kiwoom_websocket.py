@@ -375,8 +375,8 @@ class KiwoomWSManager:
                             print(f"🚨 [조건검색 PUSH] {code} 포착! (출처: {cnd_name})")
                             # 💡 스나이퍼에게 출처(이름표)를 함께 보냅니다!
                             self._enqueue_state_event("CONDITION_MATCHED", {
-                                'code': code, 
-                                'type': 'REALTIME', 
+                                'code': code,
+                                'type': 'REALTIME',
                                 'condition_name': cnd_name
                             })
                         elif insert_type == 'D':
