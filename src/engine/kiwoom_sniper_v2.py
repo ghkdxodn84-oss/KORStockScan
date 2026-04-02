@@ -105,6 +105,7 @@ from src.engine.sniper_overnight_gatekeeper import bind_overnight_dependencies
 import src.engine.sniper_market_regime as sniper_market_regime
 from src.engine.sniper_market_regime import bind_market_regime_dependencies
 import src.engine.sniper_trade_utils as sniper_trade_utils
+from src.engine.trade_pause_control import bind_event_bus as bind_trade_pause_event_bus, is_buy_side_paused
 
 # 💡 뇌(AI)와 눈(웹소켓, 레이더) 임포트
 from src.engine import kiwoom_orders
@@ -142,6 +143,7 @@ AI_ENGINE = None  # 💡 [추가] AI 엔진을 전역으로 끌어올립니다.
 SHEET_MANAGER = GoogleSheetsManager(CREDENTIALS_PATH, 'KOSPIScanner')
 DB = DBManager()  
 event_bus = EventBus() # 💡 [신규] 전역 이벤트 버스 장착!
+bind_trade_pause_event_bus(event_bus)
 bind_s15_dependencies(db=DB)
 
 # 💡 [스레드 안전성] 공유 상태 접근용 락
@@ -669,15 +671,20 @@ bind_analysis_dependencies(
 def run_sniper(is_test_mode=False):
     global KIWOOM_TOKEN, WS_MANAGER, ACTIVE_TARGETS, AI_ENGINE
 
-    from src.utils.logger import log_error
-    log_error(f"[DEBUG] run_sniper started at {datetime.now()}")
+    from src.utils.logger import log_error, log_info
+    log_info(f"[DEBUG] run_sniper started at {datetime.now()}")
     run_sniper.last_fifo_time = 0
     run_sniper.last_account_sync_time = 0
+    # EventBus 즉시성 반영용 런타임 캐시입니다.
+    # 최종 BUY 차단 판단은 각 게이트에서 file truth source(is_buy_side_paused)로 다시 확인합니다.
+    run_sniper.runtime_pause_state = is_buy_side_paused()
 
     admin_id = CONF.get('ADMIN_ID')
     print(f"🔫 스나이퍼 V12.2 멀티 엔진 가동 (관리자: {admin_id})")
+    if run_sniper.runtime_pause_state:
+        log_info("⏸ 부팅 시 pause.flag 감지: 신규 매수 및 추가매수 중단 상태로 시작합니다.")
     if not admin_id:
-        log_error("⚠️ ADMIN_ID가 설정되지 않았습니다. 매도 주문이 실행되지 않을 수 있습니다.")
+        log_info("⚠️ ADMIN_ID가 설정되지 않았습니다. 매도 주문이 실행되지 않을 수 있습니다.")
     
     is_open, reason = kiwoom_utils.is_trading_day()
     if not is_test_mode and not is_open:
@@ -696,9 +703,10 @@ def run_sniper(is_test_mode=False):
     bind_state_dependencies(kiwoom_token=KIWOOM_TOKEN)
     bind_execution_dependencies(kiwoom_token=KIWOOM_TOKEN)
     bind_overnight_dependencies(kiwoom_token=KIWOOM_TOKEN)
+    bind_trade_pause_event_bus(event_bus)
 
     radar = SniperRadar(KIWOOM_TOKEN)
-    log_error(f"[DEBUG] radar 객체 생성 완료: {radar}")
+    log_info(f"[DEBUG] radar 객체 생성 완료: {radar}")
     sync_balance_with_db()
     init_market_regime_service()
 
@@ -734,9 +742,27 @@ def run_sniper(is_test_mode=False):
         event_bus.subscribe('CONDITION_MATCHED', handle_condition_matched)
         event_bus.subscribe('CONDITION_UNMATCHED', handle_condition_unmatched)
 
+        def on_trading_paused(payload):
+            payload = payload or {}
+            status = str(payload.get('status', '')).upper()
+            if status == 'PAUSED':
+                run_sniper.runtime_pause_state = True
+                log_info("[TRADING_PAUSED] runtime state updated immediately via EventBus: PAUSED")
+            elif status == 'RESUMED':
+                run_sniper.runtime_pause_state = False
+                log_info("[TRADING_RESUMED] runtime state updated immediately via EventBus: RESUMED")
+            else:
+                run_sniper.runtime_pause_state = is_buy_side_paused()
+                tag = "TRADING_PAUSED" if run_sniper.runtime_pause_state else "TRADING_RESUMED"
+                log_info(
+                    f"[{tag}] runtime state refreshed from file truth source after unknown EventBus payload; "
+                    f"fallback_to_flag={run_sniper.runtime_pause_state}"
+                )
+
         def on_ws_reconnect(payload):
             threading.Thread(target=sync_state_with_broker, daemon=True).start()
 
+        event_bus.subscribe('TRADING_PAUSED', on_trading_paused)
         event_bus.subscribe('WS_RECONNECTED', on_ws_reconnect)
         run_sniper._subscriptions_registered = True
 
@@ -789,6 +815,8 @@ def run_sniper(is_test_mode=False):
     current_market_regime = radar.get_market_regime(KIWOOM_TOKEN)
     regime_kor = "상승장 🐂" if current_market_regime == 'BULL' else "조정장 🐻"
     print(f"📊 [시장 판독] 현재 KOSPI는 '{regime_kor}' 상태입니다.")
+    if is_buy_side_paused():
+        log_info("[TRADING_PAUSED] engine booted with 신규 매수 및 추가매수 중단 상태 active")
 
     target_codes = [t['code'] for t in targets]
     if target_codes:
@@ -806,6 +834,7 @@ def run_sniper(is_test_mode=False):
 
             now = datetime.now()
             now_t = now.time()
+            run_sniper.runtime_pause_state = is_buy_side_paused()
 
             if not is_test_mode and now_t >= TIME_20_00:
                 print("🌙 장 마감 시간이 다가와 감시를 종료합니다.")
@@ -882,7 +911,7 @@ def run_sniper(is_test_mode=False):
             # 90초 주기 계좌 동기화
             # =====================================================
             if time.time() - getattr(run_sniper, 'last_account_sync_time', 0) > 90:
-                # from src.utils.logger import log_error
+                # from src.utils.logger import log_error, log_info
                 # log_error(f"[DEBUG] 90초 조건 만족, periodic_account_sync 시작")
                 threading.Thread(target=periodic_account_sync, daemon=True).start()
                 run_sniper.last_account_sync_time = time.time()

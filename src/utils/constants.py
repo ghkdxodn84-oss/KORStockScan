@@ -6,6 +6,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = PROJECT_ROOT / 'data'
 LOGS_DIR = PROJECT_ROOT / 'logs'
+RESTART_FLAG_PATH = PROJECT_ROOT / 'restart.flag'
 CONFIG_PATH = DATA_DIR / 'config_prod.json'
 CREDENTIALS_PATH = DATA_DIR / 'credentials.json'
 DEV_PATH = DATA_DIR / 'config_dev.json'
@@ -37,6 +38,36 @@ class TradingConfig:
     # 3. 매매 타점 및 익절/손절 (Sniper Engine)
     # ==========================================
     SNIPER_AGGRESSIVE_PROB: float = 0.75     # 🏆 AI 진입 확신도 임계값 (기존 0.85 -> 0.75 완화)
+
+    # ==========================================
+    # 3.1 추가매수(물타기/불타기) 공통 설정
+    # ==========================================
+    ENABLE_SCALE_IN: bool = True  # add scale-in 활성화
+    SCALE_IN_REQUIRE_HISTORY_TABLE: bool = False  # holding_add_history 준비 완료
+    SCALE_IN_FAIL_CLOSED_ON_PROTECTION_ERROR: bool = True  # 보호선 재설정 실패 시 fail-closed
+    MAX_POSITION_PCT: float = 0.20  # 남은 리스크 예산 우선
+    SCALE_IN_COOLDOWN_SEC: int = 180  # 추가매수 재시도 쿨다운
+    ADD_JUDGMENT_LOCK_SEC: int = 20  # 추가매수 판단 락(스팸 판단 방지)
+
+    # ==========================================
+    # 3.2 추가매수(스캘핑) 설정
+    # ==========================================
+    SCALPING_ENABLE_AVG_DOWN: bool = False
+    SCALPING_MAX_AVG_DOWN_COUNT: int = 0
+    SCALPING_MAX_PYRAMID_COUNT: int = 2
+    SCALPING_AVG_DOWN_MIN_DROP_PCT: float = -3.0
+    SCALPING_AVG_DOWN_MAX_DROP_PCT: float = -6.0
+    SCALPING_PYRAMID_MIN_PROFIT_PCT: float = 1.5
+
+    # ==========================================
+    # 3.3 추가매수(스윙) 설정
+    # ==========================================
+    SWING_ENABLE_AVG_DOWN: bool = True
+    SWING_MAX_AVG_DOWN_COUNT: int = 1
+    SWING_MAX_PYRAMID_COUNT: int = 1
+    SWING_AVG_DOWN_MIN_DROP_PCT: float = -5.0
+    SWING_PYRAMID_MIN_PROFIT_PCT: float = 4.0
+    BLOCK_SWING_AVG_DOWN_IN_BEAR: bool = True
 
     # [매매 비중 설정] 전략별 주문 가능 현금 대비 1회 매수 투입 비율
     INVEST_RATIO_KOSPI: float = 0.25  # DEPRECATED: MIN/MAX 비중으로 대체됨
@@ -98,6 +129,24 @@ class TradingConfig:
     ORDER_TIMEOUT_SEC: int = 30  # 미체결 주문 취소 대기 시간 (초)
     SCAN_INTERVAL_SEC: int = 1800  # DEPRECATED: 런타임 미사용
     MAX_WATCHING_SLOTS: int = 5  # DEPRECATED: 런타임 미사용
+
+    # ==========================================
+    # 🧪 Big-Bite 보조 확증 신호 (Scalping)
+    # ==========================================
+    BIG_BITE_WINDOW_MS: int = 500  # 체결 집계 시간창(ms)
+    BIG_BITE_MIN_VALUE: int = 50_000_000  # 집계 체결대금 최소 기준
+    BIG_BITE_IMPACT_RATIO: float = 0.30  # ask1~3 잔량 대비 소진 비율 기준
+    BIG_BITE_COOLDOWN_MS: int = 1500  # 동일 묶음 중복 트리거 방지 쿨다운
+    BIG_BITE_CONFIRM_MS: int = 1000  # 트리거 이후 후속 확인 시간창
+    BIG_BITE_MAX_CHASE_PCT: float = 0.8  # 트리거 대비 허용 추격 폭(%)
+    BIG_BITE_MIN_ASK_1_3_TOTAL: int = 8_000  # ask1~3 최소 잔량 기준 (과민반응 방지)
+    BIG_BITE_MIN_VPW_AFTER_TRIGGER: int = 110  # 트리거 이후 체결강도 유지 최소치
+    BIG_BITE_BOOST_SCORE: int = 5  # 확증 시 진입 점수 보수적 가산치
+    BIG_BITE_ARMED_ENTRY_BONUS: int = 2  # armed 상태 가벼운 보너스(옵션)
+    BIG_BITE_HARD_GATE_ENABLED: bool = False  # 특정 구간에서 Big-Bite 없으면 진입 차단
+    BIG_BITE_HARD_GATE_TAGS_SCALPING = ("VCP", "BREAK", "BRK", "SHOOT", "NEXT", "SCANNER")  # 스캘핑 하드 게이트 태그
+    BIG_BITE_HARD_GATE_TAGS_KOSDAQ = ()  # 코스닥 스윙 하드 게이트 태그(기본 미사용)
+    BIG_BITE_HARD_GATE_TAGS_KOSPI = ()  # 코스피 스윙 하드 게이트 태그(기본 미사용)
 
     # ==========================================
     # 🕒 거래 시간 제어값 (KRX 거래시간 확대 대응)

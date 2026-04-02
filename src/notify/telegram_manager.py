@@ -7,6 +7,7 @@ from telebot import types
 import time
 from datetime import datetime
 from pathlib import Path
+import logging
 
 # ==========================================
 # 🚀 1. 경로 자동 탐지 (어느 위치에서 실행해도 OK)
@@ -18,11 +19,22 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.append(str(BASE_DIR))
 
-from src.utils.constants import CONFIG_PATH, DEV_PATH  # 💡 중앙 관리 경로 활용
-from src.utils.logger import log_error
+from src.utils.constants import CONFIG_PATH, DEV_PATH, RESTART_FLAG_PATH  # 💡 중앙 관리 경로 활용
+from src.utils.logger import log_error, log_info
 from src.database.db_manager import DBManager
 from src.core.event_bus import EventBus
 from src.utils import kiwoom_utils
+from src.utils.runtime_flags import clear_trading_paused, is_trading_paused, set_trading_paused
+from src.engine.trade_pause_control import (
+    bind_event_bus as bind_trade_pause_event_bus,
+    get_pause_state_label,
+    is_buy_side_paused,
+)
+from src.engine.sniper_entry_metrics import (
+    format_entry_metrics_summary_compact,
+    format_entry_metrics_summary,
+    summarize_today_entry_metrics,
+)
 
 
 # ==========================================
@@ -41,18 +53,58 @@ CONF = _load_config()
 TOKEN = CONF.get('TELEGRAM_TOKEN')
 ADMIN_ID = str(CONF.get('ADMIN_ID', ''))
 
+def _configure_telebot_http():
+    """telebot 내부 요청 세션을 재시도 가능하도록 설정"""
+    try:
+        import requests
+        from requests.adapters import HTTPAdapter
+        from urllib3.util.retry import Retry
+        import telebot.apihelper as apihelper
+
+        retry = Retry(
+            total=5,
+            connect=5,
+            read=5,
+            status=5,
+            backoff_factor=0.5,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset(["GET", "POST"]),
+        )
+        session = requests.Session()
+        adapter = HTTPAdapter(max_retries=retry, pool_connections=10, pool_maxsize=10)
+        session.mount("https://", adapter)
+        session.mount("http://", adapter)
+
+        apihelper.SESSION = session
+        apihelper.RETRY_ON_ERROR = True
+        apihelper.CONNECT_TIMEOUT = 10
+        apihelper.READ_TIMEOUT = 60
+
+        # telebot 내부 로그 과다 출력 방지
+        try:
+            telebot.logger.setLevel(logging.CRITICAL)
+        except Exception:
+            pass
+    except Exception as e:
+        log_info(f"⚠️ telebot HTTP 설정 스킵: {e}")
+
+def _create_bot_instance():
+    if not TOKEN:
+        raise ValueError("TELEGRAM_TOKEN 이 비어 있습니다.")
+    # TeleBot 인스턴스 생성 자체는 네트워크를 사용하지 않으므로,
+    # import 시점에는 연결 검증(get_me 등)을 하지 않습니다.
+    bot_instance = telebot.TeleBot(TOKEN)
+    _configure_telebot_http()
+    return bot_instance
+
 # ==========================================
 # 3. 핵심 객체 단일 초기화
 # ==========================================
 try:
-    if not TOKEN:
-        raise ValueError("TELEGRAM_TOKEN 이 비어 있습니다.")
-
-    # TeleBot 인스턴스 생성 자체는 네트워크를 사용하지 않으므로,
-    # import 시점에는 연결 검증(get_me 등)을 하지 않습니다.
-    bot = telebot.TeleBot(TOKEN)
+    bot = _create_bot_instance()
     db_manager = DBManager()
     event_bus = EventBus()
+    bind_trade_pause_event_bus(event_bus)
 
     print(f"🤖 Telegram Bot 초기화 완료 - 관리자 ID: {ADMIN_ID or '미설정'}")
 except Exception as e:
@@ -75,10 +127,10 @@ def _send_to_admin(message_text, parse_mode='HTML'):
             except Exception:
                 pass  # 이미 에러 로깅됨
         print(f"⚠️ 관리자 다이렉트 발송 실패: {e}")
-        log_error(f"⚠️ 관리자 다이렉트 발송 실패: {e}")
+        log_info(f"⚠️ 관리자 다이렉트 발송 실패: {e}")
     except Exception as e:
         print(f"⚠️ 관리자 다이렉트 발송 실패: {e}")
-        log_error(f"⚠️ 관리자 다이렉트 발송 실패: {e}")
+        log_info(f"⚠️ 관리자 다이렉트 발송 실패: {e}")
 
 def _broadcast_alert(message_text, audience='VIP_ALL', parse_mode='HTML'): 
     """권한(Audience)에 따라 가입자에게 브로드캐스트 (중복 함수 병합 완료)"""
@@ -107,10 +159,10 @@ def _broadcast_alert(message_text, audience='VIP_ALL', parse_mode='HTML'):
                         bot.send_message(chat_id, f"⚠️ [형식오류 발생] {clean_text}", parse_mode=None)
                     except Exception:
                         pass  # 이미 에러 로깅됨
-                log_error(f"⚠️ 메시지 전송 중 API 에러: {e}")
+                log_info(f"⚠️ 메시지 전송 중 API 에러: {e}")
             except Exception as e:
                 print(f"⚠️ chat_id {chat_id} 메시지 전송 실패: {e}")
-                log_error(f"⚠️ chat_id {chat_id} 메시지 전송 실패: {e}")
+                log_info(f"⚠️ chat_id {chat_id} 메시지 전송 실패: {e}")
 
 def _is_transient_connection_issue(exc):
     """흔한 네트워크 순단(Reset/Timeout/Remote close)만 조용히 재시도 대상으로 분류"""
@@ -201,14 +253,103 @@ def has_special_auth(chat_id):
         return db_manager.check_special_auth(chat_id_str)
     except Exception as e:
         print(f"⚠️ 권한 체크 중 DB 에러: {e}")
-        log_error(f"⚠️ 권한 체크 중 DB 에러: {e}")
+        log_info(f"⚠️ 권한 체크 중 DB 에러: {e}")
     return False
 
-def get_main_keyboard():
+
+def _is_admin_message(message):
+    return str(message.chat.id) == str(ADMIN_ID)
+
+
+def _is_admin_chat_id(chat_id):
+    return str(chat_id) == str(ADMIN_ID)
+
+
+def _get_admin_pause_status_label():
+    return "⏸ 현재: 매매중단" if is_trading_paused() else "✅ 현재: 정상운영"
+
+
+def _reply_pause_status(message):
+    paused = is_trading_paused()
+    if paused:
+        text = "현재 상태: 신규 매수/추가매수 중단"
+    else:
+        text = "현재 상태: 정상운영"
+    bot.reply_to(message, text)
+
+
+def _reply_entry_metrics(message):
+    if not _is_admin_message(message):
+        bot.reply_to(message, "⛔ 권한이 없습니다.")
+        return
+
+    summary = summarize_today_entry_metrics()
+    bot.reply_to(message, format_entry_metrics_summary_compact(summary))
+
+
+def _publish_pause_state(status):
+    event_bus.publish('TRADING_PAUSED', {'status': status})
+
+    # 기존 pause 제어 계층의 즉시성도 유지합니다.
+    event_bus.publish(
+        'BUY_SIDE_PAUSE_CHANGED',
+        {
+            'paused': status == 'PAUSED',
+            'source': 'telegram_admin',
+            'reason': 'manual_pause_toggle',
+            'label': get_pause_state_label(),
+        },
+    )
+
+
+def _handle_pause_toggle(message, *, paused):
+    if not _is_admin_message(message):
+        log_info(f"[TRADING_PAUSED] unauthorized telegram access chat_id={message.chat.id}")
+        bot.reply_to(message, "⛔ 권한이 없습니다.")
+        return
+
+    try:
+        if paused:
+            set_trading_paused()
+            log_info(f"[TRADING_PAUSED] pause flag set by admin chat_id={message.chat.id}")
+            try:
+                _publish_pause_state('PAUSED')
+            except Exception as exc:
+                log_error(f"[TRADING_PAUSED] EventBus publish failed after pause: {exc}")
+            msg = (
+                "신규 매수 및 추가매수(AVG_DOWN, PYRAMID)가 중단되었습니다.\n"
+                "기존 보유 종목의 익절/손절 감시는 계속 동작합니다."
+            )
+        else:
+            clear_trading_paused()
+            log_info(f"[TRADING_RESUMED] pause flag cleared by admin chat_id={message.chat.id}")
+            try:
+                _publish_pause_state('RESUMED')
+            except Exception as exc:
+                log_error(f"[TRADING_RESUMED] EventBus publish failed after resume: {exc}")
+            msg = "신규 매수 및 추가매수가 다시 활성화되었습니다."
+    except Exception as exc:
+        action = "pause" if paused else "resume"
+        tag = "TRADING_PAUSED" if paused else "TRADING_RESUMED"
+        log_error(f"[{tag}] {action} failed chat_id={message.chat.id}: {exc}")
+        bot.reply_to(message, f"⚠️ 매매 상태 변경 중 오류가 발생했습니다: {exc}")
+        return
+
+    bot.reply_to(message, msg, reply_markup=get_main_keyboard(chat_id=message.chat.id))
+    event_bus.publish(
+        'TELEGRAM_BROADCAST',
+        {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'HTML'},
+    )
+
+def get_main_keyboard(chat_id=None):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add("🏆 오늘의 추천종목", "🔍 실시간 종목분석")
     markup.add("📜 감시/보유 리스트", "➕ 수동 종목 추가")
     markup.add("☕ 서버 운영 후원하기", "🤖 AI 확신지수란?")
+    if chat_id is not None and _is_admin_chat_id(chat_id):
+        markup.add(_get_admin_pause_status_label(), "📛 현재 매매 상태")
+        markup.add("🛑 긴급 매매 중단", "▶️ 매매 재개")
+        markup.add("📊 진입 지표")
     return markup
 
 def get_user_badge(chat_id):
@@ -263,7 +404,7 @@ def process_analyze_step(message):
         bot.send_message(chat_id, report, parse_mode='Markdown')
         
     except Exception as e:
-        from src.utils.logger import log_error
+        from src.utils.logger import log_error, log_info
         log_error(f"실시간 종목분석 에러 ({code}): {e}")
         bot.send_message(chat_id, f"❌ 종목 분석 중 시스템 에러 발생: {e}")
         
@@ -290,7 +431,12 @@ def handle_start(message):
     "✓ `[Action]` 찰나를 파고드는 가변 익절/손절 스마트 트레일링 스탑\n\n"
     "💡 _시장의 노이즈를 뚫고, 가장 완벽한 타점만 저격합니다._" 
     )
-    bot.send_message(message.chat.id, welcome_msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
+    bot.send_message(
+        message.chat.id,
+        welcome_msg,
+        reply_markup=get_main_keyboard(chat_id=message.chat.id),
+        parse_mode='Markdown',
+    )
 
 @bot.message_handler(commands=['상태', 'status'])
 def handle_status(message):
@@ -312,10 +458,72 @@ def cmd_restart(message):
     if str(message.chat.id) == str(ADMIN_ID):
         bot.reply_to(message, "🔄 수동 재시작 플래그를 작동합니다. 관제탑이 안전하게 재가동됩니다.")
         # bot_main.py의 메인 루프가 이 파일을 감지하고 우아하게 종료합니다.
-        with open("restart.flag", "w") as f: 
+        with open(RESTART_FLAG_PATH, "w") as f:
             f.write("restart")
     else:
         bot.reply_to(message, "⛔ 권한이 없습니다.")
+
+
+@bot.message_handler(commands=['pause', 'buy_pause', '매수중단'])
+def cmd_pause_buy_side(message):
+    _handle_pause_toggle(message, paused=True)
+
+
+@bot.message_handler(commands=['resume', 'buy_resume', '매수재개'])
+def cmd_resume_buy_side(message):
+    _handle_pause_toggle(message, paused=False)
+
+
+@bot.message_handler(commands=['pause_status', '매수상태'])
+def cmd_pause_status(message):
+    if not _is_admin_message(message):
+        bot.reply_to(message, "⛔ 권한이 없습니다.")
+        return
+    _reply_pause_status(message)
+
+
+@bot.message_handler(commands=['trading_status'])
+def cmd_trading_status(message):
+    if not _is_admin_message(message):
+        bot.reply_to(message, "⛔ 권한이 없습니다.")
+        return
+    _reply_pause_status(message)
+
+
+@bot.message_handler(commands=['entry_metrics', '진입지표'])
+def cmd_entry_metrics(message):
+    _reply_entry_metrics(message)
+
+
+@bot.message_handler(func=lambda message: message.text == "🛑 긴급 매매 중단")
+def handle_pause_button(message):
+    cmd_pause_buy_side(message)
+
+
+@bot.message_handler(func=lambda message: message.text == "▶️ 매매 재개")
+def handle_resume_button(message):
+    cmd_resume_buy_side(message)
+
+
+@bot.message_handler(func=lambda message: message.text in {"⏸ 현재: 매매중단", "✅ 현재: 정상운영"})
+def handle_pause_status_button(message):
+    if not _is_admin_message(message):
+        bot.reply_to(message, "⛔ 권한이 없습니다.")
+        return
+    _reply_pause_status(message)
+
+
+@bot.message_handler(func=lambda message: message.text == "📛 현재 매매 상태")
+def handle_trading_status_button(message):
+    if not _is_admin_message(message):
+        bot.reply_to(message, "⛔ 권한이 없습니다.")
+        return
+    _reply_pause_status(message)
+
+
+@bot.message_handler(func=lambda message: message.text == "📊 진입 지표")
+def handle_entry_metrics_button(message):
+    _reply_entry_metrics(message)
 
 @bot.message_handler(func=lambda message: message.text == "🔍 실시간 종목분석")
 def handle_analyze_btn(message):
@@ -335,7 +543,7 @@ def handle_analyze_btn(message):
 def handle_watch_list(message):
     import pandas as pd
     from src.utils.constants import TRADING_RULES # 상수 안전 임포트
-    from src.utils.logger import log_error
+    from src.utils.logger import log_error, log_info
     import telebot.apihelper
 
     def escape_markdown(text):
@@ -446,7 +654,7 @@ def handle_watch_list(message):
                 raise
 
     except Exception as e:
-        from src.utils.logger import log_error
+        from src.utils.logger import log_error, log_info
         log_error(f"감시 리스트 조회 에러: {e}")
         bot.edit_message_text(chat_id=message.chat.id, message_id=wait_msg.message_id, text=f"❌ 리스트 조회 중 시스템 에러 발생: {e}")
 
@@ -508,7 +716,7 @@ def handle_today_picks(message):
         bot.send_message(chat_id, msg, parse_mode='HTML')
 
     except Exception as e:
-        from src.utils.logger import log_error
+        from src.utils.logger import log_error, log_info
         log_error(f"오늘의 추천종목 에러: {e}")
         bot.send_message(chat_id, f"❌ 추천 종목 로드 실패: {e}")
 
@@ -585,7 +793,7 @@ def process_manual_add_step(message):
         bot.send_message(chat_id, msg_text, parse_mode='Markdown')
 
     except Exception as e:
-        from src.utils.logger import log_error
+        from src.utils.logger import log_error, log_info
         log_error(f"수동 종목 추가 에러: {e}")
         bot.send_message(chat_id, f"❌ 종목 추가 중 시스템 에러 발생: {e}")
 
@@ -635,7 +843,7 @@ def handle_why_not(message):
         bot.send_message(chat_id, report, parse_mode=None)
         
     except Exception as e:
-        from src.utils.logger import log_error
+        from src.utils.logger import log_error, log_info
         log_error(f"미진입 사유 분석 에러 ({code}): {e}")
         bot.send_message(chat_id, f"❌ 사유 분석 중 오류 발생: {e}")
 
@@ -645,7 +853,7 @@ def process_pre_checkout(pre_checkout_query):
     try:
         bot.answer_pre_checkout_query(pre_checkout_query.id, ok=True)
     except Exception as e:
-        from src.utils.logger import log_error
+        from src.utils.logger import log_error, log_info
         log_error(f"결제 사전 승인 에러: {e}")
 
 @bot.message_handler(content_types=['successful_payment'])
@@ -671,13 +879,17 @@ def handle_payment_success(message):
         event_bus.publish('TELEGRAM_BROADCAST', {'message': admin_msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'})
         
     except Exception as e:
-        from src.utils.logger import log_error
+        from src.utils.logger import log_error, log_info
         log_error(f"결제 완료 처리 중 시스템 에러: {e}")
         bot.send_message(chat_id, "✅ 결제는 확인되었으나 시스템 지연으로 등급 반영이 지연되고 있습니다. 관리자가 곧 수동으로 처리해 드릴 예정입니다.")
 
 @bot.message_handler(func=lambda message: True)
 def handle_text_messages(message):
-    bot.send_message(message.chat.id, "메뉴 버튼을 이용해 주세요.", reply_markup=get_main_keyboard())
+    bot.send_message(
+        message.chat.id,
+        "메뉴 버튼을 이용해 주세요.",
+        reply_markup=get_main_keyboard(chat_id=message.chat.id),
+    )
 
 # ==========================================
 # 🚀 8. 봇 구동 진입점 (bot_main.py에서 호출됨)
@@ -687,7 +899,6 @@ def start_telegram_bot():
     import requests.exceptions
     import random
     import traceback
-    import logging  # 💡 logging 모듈 추가
     global bot
     
     retry_delay = 5  # seconds
@@ -734,7 +945,7 @@ def start_telegram_bot():
         if consecutive_failures >= max_consecutive_failures:
             print(f"🔄 연속 {consecutive_failures}회 실패로 봇 인스턴스를 재생성합니다.")
             try:
-                bot = telebot.TeleBot(TOKEN)
+                bot = _create_bot_instance()
                 print("🤖 새로운 봇 인스턴스 생성 완료.")
             except Exception as e:
                 log_error(f"봇 인스턴스 재생성 실패: {e}")

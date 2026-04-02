@@ -20,7 +20,7 @@ import numpy as np
 
 # 💡 Level 1 공통 모듈 (경로, 로거, 피처 엔지니어링)
 from src.utils.constants import DATA_DIR
-from src.utils.logger import log_error
+from src.utils.logger import log_error, log_info
 from src.model.feature_engineering_v2 import calculate_all_features
 
 # ==========================================
@@ -114,5 +114,5 @@ def predict_prob_for_df(df: pd.DataFrame, models: tuple) -> float:
 
     except Exception as e:
         # 에러 발생 시 0.0을 반환하여, 스캐너가 이 종목을 'AI 확신도 부족(0점)' 통계로 정상 분류하게 만듭니다.
-        # log_error(f"⚠️ AI 추론 연산 중 에러 발생: {e}") # 로그가 너무 많이 찍히는 것을 방지하려면 주석 처리
+        # log_info(f"⚠️ AI 추론 연산 중 에러 발생: {e}") # 로그가 너무 많이 찍히는 것을 방지하려면 주석 처리
         return 0.0

@@ -30,10 +30,15 @@ from datetime import datetime
 
 # 💡 내부 모듈 임포트
 from src.utils import kiwoom_utils
+from src.utils.runtime_flags import is_trading_paused
 from src.database.db_manager import DBManager
 from src.core.event_bus import EventBus
 import src.engine.kiwoom_sniper_v2 as kiwoom_sniper_v2
 import src.notify.telegram_manager as telegram_manager # 우리가 완성한 텔레그램 수신탑
+from src.engine.sniper_entry_metrics import (
+    format_entry_metrics_summary,
+    summarize_today_entry_metrics,
+)
 
 # ==========================================
 # 📝 모든 print()를 가로채서 파일로 저장하는 로거
@@ -155,6 +160,23 @@ def crisis_monitor_loop():
         # 1시간 대기 (3600초)
         time.sleep(3600)
 
+
+def broadcast_entry_metrics_job():
+    """장 마감 후 관리자에게 latency-aware entry 요약을 1회 전송합니다."""
+    try:
+        event_bus = EventBus()
+        summary = summarize_today_entry_metrics()
+        msg = format_entry_metrics_summary(summary)
+        event_bus.publish(
+            'TELEGRAM_BROADCAST',
+            {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': None},
+        )
+        print("📊 [시스템] 장 마감 진입 지표 요약을 관리자에게 전송했습니다.")
+    except Exception as e:
+        from src.utils.logger import log_error
+
+        log_error(f"장 마감 진입 지표 브로드캐스트 실패: {e}")
+
 # ==========================================
 # 🎯 메인 실행부 (Main Thread)
 # ==========================================
@@ -171,6 +193,14 @@ if __name__ == '__main__':
     tele_thread = threading.Thread(target=telegram_manager.start_telegram_bot, daemon=True)
     tele_thread.start()
     print("✅ [시스템] 텔레그램 수신탑 (백그라운드) 가동 완료.")
+
+    if is_trading_paused():
+        pause_boot_msg = "⏸ 부팅 시 pause.flag 감지: 신규 매수 및 추가매수 중단 상태로 시작합니다."
+        print(pause_boot_msg)
+        event_bus.publish(
+            'TELEGRAM_BROADCAST',
+            {'message': pause_boot_msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'HTML'},
+        )
 
     # 💡 2. [신규 추가] 글로벌 위기 감지 모니터는 주말/휴일 상관없이 365일 돌아가야 합니다.
     crisis_thread = threading.Thread(target=crisis_monitor_loop, daemon=True)
@@ -213,6 +243,7 @@ if __name__ == '__main__':
     
     # 💡 [아키텍처 포인트 4] 메인 쓰레드는 오직 시스템 스케줄링과 예외 종료 감시만 수행합니다.
     morning_report_sent = False
+    entry_metrics_report_sent = False
 
     while True:
         try:
@@ -226,6 +257,12 @@ if __name__ == '__main__':
             # 자정이 지나면 내일 아침 리포트를 위해 플래그 초기화
             if now.hour == 0 and now.minute == 1:
                 morning_report_sent = False
+                entry_metrics_report_sent = False
+
+            # [스케줄러 1-1] 장 마감 후 진입 지표 요약 관리자 전송
+            if now.hour == 15 and now.minute == 40 and not entry_metrics_report_sent:
+                broadcast_entry_metrics_job()
+                entry_metrics_report_sent = True
 
             # [스케줄러 2] 야간(23:50) 시스템 자동 재시작
             if now.hour == 23 and now.minute == 50:
