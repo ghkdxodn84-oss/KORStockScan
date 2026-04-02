@@ -58,6 +58,26 @@ def test_format_entry_metrics_summary():
 
     text = entry_metrics.format_entry_metrics_summary(summary)
 
-    assert "SAFE 2 / CAUTION 1 / DANGER 3" in text
-    assert "normal 2 / fallback 1" in text
-    assert "IOC->16 promotions: 1" in text
+    assert "안정 구간 `SAFE`: 2건" in text
+    assert "분할 진입 `fallback`: 1건" in text
+    assert "정찰병(scout)+본대(main)" in text
+    assert "`IOC -> 16` 승격: 1건" in text
+
+
+def test_format_entry_metrics_summary_compact():
+    summary = entry_metrics.EntryMetricsSummary(date="2026-04-02")
+    summary.latency_counts.update({"SAFE": 2, "CAUTION": 1, "DANGER": 3})
+    summary.submission_mode_counts.update({"normal": 2, "fallback": 1})
+    summary.order_tag_counts.update({"fallback_scout": 1, "fallback_main": 1})
+    summary.fill_tag_counts.update({"fallback_scout": 1, "fallback_main": 1})
+    summary.bundle_filled_mode_counts.update({"fallback": 1})
+    summary.order_type_counts.update({"16": 1, "00": 1})
+    summary.order_tif_counts.update({"IOC": 1, "DAY": 1})
+    summary.tif_promotions = 1
+
+    text = entry_metrics.format_entry_metrics_summary_compact(summary)
+
+    assert "📊 장중 진입 지표 (2026-04-02)" in text
+    assert "지연 판정: SAFE 2건 / CAUTION 1건 / DANGER 3건" in text
+    assert "진입 방식: 일반 2건 / fallback 1건" in text
+    assert "SAFE=일반 진입 가능, CAUTION=fallback 검토, DANGER=신규 진입 차단" in text

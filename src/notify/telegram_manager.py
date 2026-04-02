@@ -31,6 +31,7 @@ from src.engine.trade_pause_control import (
     is_buy_side_paused,
 )
 from src.engine.sniper_entry_metrics import (
+    format_entry_metrics_summary_compact,
     format_entry_metrics_summary,
     summarize_today_entry_metrics,
 )
@@ -283,7 +284,7 @@ def _reply_entry_metrics(message):
         return
 
     summary = summarize_today_entry_metrics()
-    bot.reply_to(message, format_entry_metrics_summary(summary))
+    bot.reply_to(message, format_entry_metrics_summary_compact(summary))
 
 
 def _publish_pause_state(status):

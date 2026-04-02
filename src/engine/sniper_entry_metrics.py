@@ -101,9 +101,7 @@ def summarize_today_entry_metrics(now: datetime | None = None) -> EntryMetricsSu
     return summary
 
 
-def format_entry_metrics_summary(summary: EntryMetricsSummary) -> str:
-    """Render a Telegram-friendly report for admins."""
-
+def _extract_display_values(summary: EntryMetricsSummary) -> dict[str, int | str]:
     safe = summary.latency_counts.get("SAFE", 0)
     caution = summary.latency_counts.get("CAUTION", 0)
     danger = summary.latency_counts.get("DANGER", 0)
@@ -114,14 +112,80 @@ def format_entry_metrics_summary(summary: EntryMetricsSummary) -> str:
     scout_fill = summary.fill_tag_counts.get("fallback_scout", 0)
     main_fill = summary.fill_tag_counts.get("fallback_main", 0)
     fallback_filled = summary.bundle_filled_mode_counts.get("fallback", 0)
+    order_types = ", ".join(
+        f"{order_type} {count}건"
+        for order_type, count in sorted(summary.order_type_counts.items())
+    ) or "없음"
+    tif_usage = ", ".join(
+        f"{tif} {count}건"
+        for tif, count in sorted(summary.order_tif_counts.items())
+    ) or "없음"
+
+    return {
+        "safe": safe,
+        "caution": caution,
+        "danger": danger,
+        "normal": normal,
+        "fallback": fallback,
+        "scout_sent": scout_sent,
+        "main_sent": main_sent,
+        "scout_fill": scout_fill,
+        "main_fill": main_fill,
+        "fallback_filled": fallback_filled,
+        "order_types": order_types,
+        "tif_usage": tif_usage,
+        "tif_promotions": summary.tif_promotions,
+    }
+
+
+def format_entry_metrics_summary_compact(summary: EntryMetricsSummary) -> str:
+    """Render a compact intraday summary for manual admin lookups."""
+
+    values = _extract_display_values(summary)
+    return (
+        f"📊 장중 진입 지표 ({summary.date})\n"
+        f"- 지연 판정: SAFE {values['safe']}건 / CAUTION {values['caution']}건 / DANGER {values['danger']}건\n"
+        f"- 진입 방식: 일반 {values['normal']}건 / fallback {values['fallback']}건\n"
+        f"- fallback 진행: 정찰병 전송 {values['scout_sent']}건, 본대 전송 {values['main_sent']}건\n"
+        f"- fallback 체결: 정찰병 {values['scout_fill']}건, 본대 {values['main_fill']}건, 완전체결 {values['fallback_filled']}건\n"
+        f"- 주문 참고: 타입 {values['order_types']} / TIF {values['tif_usage']} / IOC→16 {values['tif_promotions']}건\n"
+        "  SAFE=일반 진입 가능, CAUTION=fallback 검토, DANGER=신규 진입 차단"
+    )
+
+
+def format_entry_metrics_summary(summary: EntryMetricsSummary) -> str:
+    """Render a detailed end-of-day report for admins."""
+
+    values = _extract_display_values(summary)
 
     return (
         f"📊 진입 지표 요약 ({summary.date})\n"
-        f"- latency: SAFE {safe} / CAUTION {caution} / DANGER {danger}\n"
-        f"- decision: normal {normal} / fallback {fallback}\n"
-        f"- fallback sent: scout {scout_sent} / main {main_sent}\n"
-        f"- fallback fill: scout {scout_fill} / main {main_fill} / bundle_done {fallback_filled}\n"
-        f"- order types: {dict(summary.order_type_counts)}\n"
-        f"- tif usage: {dict(summary.order_tif_counts)}\n"
-        f"- IOC->16 promotions: {summary.tif_promotions}"
+        "\n"
+        "1. 지연 상태 판정\n"
+        f"- 안정 구간 `SAFE`: {values['safe']}건\n"
+        "  지금 진입해도 괜찮다고 본 케이스입니다.\n"
+        f"- 주의 구간 `CAUTION`: {values['caution']}건\n"
+        "  약간 애매해서 정찰병+본대 fallback 대상으로 본 케이스입니다.\n"
+        f"- 위험 구간 `DANGER`: {values['danger']}건\n"
+        "  지연/호가 상태가 불안해서 신규 진입을 막은 케이스입니다.\n"
+        "\n"
+        "2. 실제 진입 방식\n"
+        f"- 일반 진입 `normal`: {values['normal']}건\n"
+        "  지연 상태가 안정적이라 단일 진입으로 처리한 횟수입니다.\n"
+        f"- 분할 진입 `fallback`: {values['fallback']}건\n"
+        "  정찰병(scout)+본대(main)로 나눠 보수적으로 진입한 횟수입니다.\n"
+        "\n"
+        "3. fallback 주문/체결 진행\n"
+        f"- 정찰병 주문 전송: {values['scout_sent']}건\n"
+        f"- 본대 주문 전송: {values['main_sent']}건\n"
+        f"- 정찰병 체결: {values['scout_fill']}건\n"
+        f"- 본대 체결: {values['main_fill']}건\n"
+        f"- fallback 묶음 완전체결: {values['fallback_filled']}건\n"
+        "  scout/main이 모두 채워져 fallback 진입이 끝난 횟수입니다.\n"
+        "\n"
+        "4. 주문 방식 참고\n"
+        f"- 주문 타입 사용량: {values['order_types']}\n"
+        f"- TIF 사용량: {values['tif_usage']}\n"
+        f"- `IOC -> 16` 승격: {values['tif_promotions']}건\n"
+        "  Kiwoom 제약으로 IOC 매수 요청이 최유리 IOC(16)로 변환된 횟수입니다."
     )
