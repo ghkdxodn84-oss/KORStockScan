@@ -5,6 +5,11 @@ import time
 from datetime import datetime
 
 from src.database.models import RecommendationHistory
+from src.engine.sniper_entry_state import (
+    ENTRY_LOCK,
+    get_terminal_entry_order,
+    move_orders_to_terminal,
+)
 from src.engine.sniper_scale_in_utils import record_add_history_event
 from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
@@ -19,7 +24,7 @@ highest_prices = None
 _get_fast_state = None
 _weighted_avg = None
 _now_ts = None
-RECEIPT_LOCK = threading.Lock()
+RECEIPT_LOCK = ENTRY_LOCK
 
 
 def bind_execution_dependencies(
@@ -58,6 +63,34 @@ def _find_execution_target(code, exec_type, order_no):
     normalized_order_no = str(order_no or '').strip()
 
     if exec_type == 'BUY':
+        if normalized_order_no:
+            bundle_match = next(
+                (
+                    stock for stock in ACTIVE_TARGETS
+                    if str(stock.get('code', '')).strip()[:6] == code
+                    and any(
+                        str(order.get('ord_no', '') or '').strip() == normalized_order_no
+                        for order in (stock.get('pending_entry_orders') or [])
+                    )
+                ),
+                None,
+            )
+            if bundle_match:
+                return bundle_match
+
+            terminal_match = get_terminal_entry_order(normalized_order_no)
+            if terminal_match:
+                stock_code = str(terminal_match.get('stock_code', '') or '').strip()[:6]
+                target = next(
+                    (
+                        stock for stock in ACTIVE_TARGETS
+                        if str(stock.get('code', '')).strip()[:6] == stock_code
+                    ),
+                    None,
+                )
+                if target:
+                    return target
+
         status_key = 'BUY_ORDERED'
         order_key = 'odno'
     else:
@@ -199,34 +232,46 @@ def _refresh_scalp_preset_exit_order(target_stock, code, total_qty):
             f"⚠️ [ADD_PROTECT] {target_stock.get('name')}({code}) refreshed preset TP order number missing."
         )
         return False
+    log_info(
+        f"[ENTRY_TP_REFRESH] {target_stock.get('name')}({code}) qty={total_qty} "
+        f"tp_price={preset_tp_price} ord_no={new_ord_no}"
+    )
     return True
 
 
 def _update_db_for_buy(target_id, exec_price, now, target_stock):
     """비동기로 실행되는 BUY 체결 DB 업데이트 및 알림"""
     try:
+        buy_qty = int(target_stock.get('buy_qty') or 0)
+        avg_buy_price = float(target_stock.get('buy_price') or exec_price or 0)
         with DB.get_session() as session:
             session.query(RecommendationHistory).filter_by(id=target_id).update({
-                "buy_price": exec_price,
+                "buy_price": avg_buy_price,
+                "buy_qty": buy_qty,
                 "status": "HOLDING",
                 "buy_time": now
             })
 
-        print(f"✅ [영수증: ID {target_id}] {target_stock.get('code')} 실제 매수 체결가 {exec_price:,}원 및 시간 반영 완료!")
+        print(f"✅ [영수증: ID {target_id}] {target_stock.get('code')} 실제 매수 체결 반영 완료! avg={avg_buy_price:,} qty={buy_qty}")
 
-        pending_msg = target_stock.get('pending_buy_msg')
-        audience = target_stock.get('msg_audience', 'ADMIN_ONLY')
-        if pending_msg:
-            final_msg = pending_msg.replace("그물망 투척!", "그물망 매수 체결!").replace("스나이퍼 포착!", "스나이퍼 매수 체결!")
-            final_msg += f"\n✅ **실제 체결가:** `{exec_price:,}원`"
-            event_bus.publish('TELEGRAM_BROADCAST', {'message': final_msg, 'audience': audience, 'parse_mode': 'Markdown'})
-        else:
-            event_bus.publish(
-                'TELEGRAM_BROADCAST',
-                {'message': f"🛒 **[{target_stock.get('name')}]** 매수 체결 완료!\n체결가: `{exec_price:,}원`", 'audience': audience, 'parse_mode': 'Markdown'}
-            )
-        # 메모리에서 pending_buy_msg 제거 (스레드에서 제거)
-        target_stock.pop('pending_buy_msg', None)
+        if not target_stock.get('buy_execution_notified'):
+            pending_msg = target_stock.get('pending_buy_msg')
+            audience = target_stock.get('msg_audience', 'ADMIN_ONLY')
+            if pending_msg:
+                final_msg = pending_msg.replace("그물망 투척!", "그물망 매수 체결!").replace("스나이퍼 포착!", "스나이퍼 매수 체결!")
+                final_msg += f"\n✅ **평균 체결가:** `{avg_buy_price:,.0f}원` / **체결수량:** `{buy_qty}주`"
+                event_bus.publish('TELEGRAM_BROADCAST', {'message': final_msg, 'audience': audience, 'parse_mode': 'Markdown'})
+            else:
+                event_bus.publish(
+                    'TELEGRAM_BROADCAST',
+                    {
+                        'message': f"🛒 **[{target_stock.get('name')}]** 매수 체결 완료!\n평균 체결가: `{avg_buy_price:,.0f}원`\n체결수량: `{buy_qty}주`",
+                        'audience': audience,
+                        'parse_mode': 'Markdown',
+                    }
+                )
+            target_stock['buy_execution_notified'] = True
+            target_stock.pop('pending_buy_msg', None)
     except Exception as e:
         log_error(f"🚨 [DB 에러] ID {target_id} BUY 처리 중 에러: {e}")
 
@@ -482,21 +527,63 @@ def handle_real_execution(exec_data):
                     f"new_avg={new_avg} new_qty={new_qty} add_count={target_stock.get('add_count')}"
                 )
             else:
-                # 신규 진입 체결: 기존 로직 유지
+                # 신규 진입 체결: 단일 주문/복수 fallback 주문 공통 누적 처리
+                old_qty = int(target_stock.get('buy_qty') or 0)
+                old_price = float(target_stock.get('buy_price') or 0)
+                new_qty = old_qty + exec_qty
+                new_avg = weighted_avg_price(old_price, old_qty, exec_price, exec_qty) if old_qty > 0 else exec_price
+
+                pending_entry_orders = target_stock.get('pending_entry_orders') or []
+                if pending_entry_orders and order_no:
+                    for pending_order in pending_entry_orders:
+                        if str(pending_order.get('ord_no', '') or '').strip() != order_no:
+                            continue
+                        pending_order['filled_qty'] = int(pending_order.get('filled_qty', 0) or 0) + exec_qty
+                        requested_qty = int(pending_order.get('qty', 0) or 0)
+                        if requested_qty > 0 and pending_order['filled_qty'] >= requested_qty:
+                            pending_order['status'] = 'FILLED'
+                        else:
+                            pending_order['status'] = 'PARTIAL'
+                        pending_order['last_fill_price'] = exec_price
+                        pending_order['last_fill_at'] = time.time()
+                        log_info(
+                            f"[ENTRY_FILL] {target_stock.get('name')}({code}) "
+                            f"tag={pending_order.get('tag')} ord_no={order_no} "
+                            f"fill_qty={exec_qty} filled={pending_order.get('filled_qty')}/{requested_qty} "
+                            f"fill_price={exec_price}"
+                        )
+                        break
+
                 target_stock['status'] = 'HOLDING'
-                target_stock['buy_price'] = exec_price
+                target_stock['buy_price'] = new_avg
+                target_stock['buy_qty'] = new_qty
+                target_stock['entry_filled_qty'] = int(target_stock.get('entry_filled_qty', 0) or 0) + exec_qty
+                target_stock['entry_fill_amount'] = int(target_stock.get('entry_fill_amount', 0) or 0) + (exec_price * exec_qty)
                 target_stock['buy_time'] = now
                 if not target_stock.get('holding_started_at'):
                     target_stock['holding_started_at'] = now
-                highest_prices[code] = exec_price
+                highest_prices[code] = max(highest_prices.get(code, 0), exec_price)
+
+                requested_entry_qty = int(target_stock.get('entry_requested_qty', target_stock.get('requested_buy_qty', 0)) or 0)
+                if requested_entry_qty > 0 and new_qty >= requested_entry_qty:
+                    log_info(
+                        f"[ENTRY_BUNDLE_FILLED] {target_stock.get('name')}({code}) "
+                        f"mode={target_stock.get('entry_mode', 'normal')} "
+                        f"filled_qty={new_qty}/{requested_entry_qty} avg_buy={new_avg}"
+                    )
+                    move_orders_to_terminal(target_stock, reason='entry_bundle_filled')
+                    target_stock.pop('pending_entry_orders', None)
+                    target_stock.pop('entry_requested_qty', None)
+                    target_stock.pop('requested_buy_qty', None)
+                    target_stock.pop('entry_filled_qty', None)
+                    target_stock.pop('entry_fill_amount', None)
+                    target_stock.pop('entry_bundle_id', None)
 
                 raw_strategy = (target_stock.get('strategy') or 'KOSPI_ML').upper()
                 pos_tag = target_stock.get('position_tag', 'MIDDLE')
 
                 if raw_strategy in ['SCALPING', 'SCALP'] and pos_tag == 'MIDDLE':
-                    # 부분체결 다중 이벤트 방지: 1회만 셋업
-                    if target_stock.get('exit_mode') != 'SCALP_PRESET_TP' and not target_stock.get('preset_tp_ord_no'):
-                        target_stock['exit_mode'] = 'SCALP_PRESET_TP'
+                    target_stock['exit_mode'] = 'SCALP_PRESET_TP'
 
                     # 가능한 경우 누적 buy_qty / buy_price 기준 사용, 불가하면 exec_price 폴백
                     base_buy_price = int(target_stock.get('buy_price') or exec_price or 0)
@@ -514,20 +601,18 @@ def handle_real_execution(exec_data):
                     target_stock['exit_order_type'] = None
                     target_stock['exit_order_time'] = None
 
-                    from src.engine import kiwoom_orders
                     sell_qty = int(target_stock.get('buy_qty') or exec_qty or 0)
-                    sell_res = kiwoom_orders.send_sell_order_market(
-                        code=code, qty=sell_qty, token=KIWOOM_TOKEN, order_type="00", price=preset_tp_price
-                    )
-                    target_stock['preset_tp_ord_no'] = sell_res.get('ord_no') if isinstance(sell_res, dict) else ''
+                    refreshed = _refresh_scalp_preset_exit_order(target_stock, code, sell_qty)
 
                     # 지정가 주문 실패 시에도 출구 엔진 자체는 유지
-                    if not target_stock['preset_tp_ord_no']:
+                    if not refreshed or not target_stock.get('preset_tp_ord_no'):
                         print(f"⚠️ [SCALP 출구엔진] {target_stock.get('name')} 지정가 매도 주문번호 미수신. 보유 감시로 보강 필요.")
                     else:
-                        print(f"🎯 [SCALP 출구엔진 셋업] {target_stock.get('name')} +1.5% 지정가({preset_tp_price:,}원) 1차 매도망 전개 완료.")
+                        print(
+                            f"🎯 [SCALP 출구엔진 셋업] {target_stock.get('name')} "
+                            f"+1.5% 지정가({preset_tp_price:,}원) {sell_qty}주 매도망 전개 완료."
+                        )
 
-                # pending_buy_msg는 백그라운드 스레드에서 제거
                 # 백그라운드 DB 업데이트 실행
                 threading.Thread(
                     target=_update_db_for_buy,
@@ -607,11 +692,14 @@ def handle_real_execution(exec_data):
                 target_stock['buy_qty'] = 0
                 target_stock['added_time'] = time.time()
                 target_stock['position_tag'] = 'MIDDLE'
+                move_orders_to_terminal(target_stock, reason='sell_revive_cleanup')
                 for key in [
                     'odno', 'order_time', 'order_price', 'buy_time',
                     'target_buy_price', 'pending_buy_msg',
                     'pending_sell_msg', 'sell_odno', 'sell_order_time',
-                    'sell_target_price'
+                    'sell_target_price', 'pending_entry_orders', 'entry_mode',
+                    'entry_requested_qty', 'entry_filled_qty', 'entry_fill_amount',
+                    'entry_bundle_id', 'requested_buy_qty', 'buy_execution_notified'
                 ]:
                     target_stock.pop(key, None)
             else:
@@ -619,6 +707,13 @@ def handle_real_execution(exec_data):
                 highest_prices.pop(code, None)
                 target_stock['status'] = 'COMPLETED'
                 target_stock['sell_time'] = now.strftime('%H:%M:%S')
+                move_orders_to_terminal(target_stock, reason='sell_completed_cleanup')
+                for key in [
+                    'pending_entry_orders', 'entry_mode', 'entry_requested_qty',
+                    'entry_filled_qty', 'entry_fill_amount', 'entry_bundle_id', 'requested_buy_qty',
+                    'buy_execution_notified'
+                ]:
+                    target_stock.pop(key, None)
                 # pending_sell_msg는 백그라운드에서 제거
                 # 백그라운드 DB 업데이트 실행
                 threading.Thread(

@@ -2,6 +2,7 @@
 
 import time
 from datetime import datetime, timedelta
+from uuid import uuid4
 
 import numpy as np
 
@@ -29,6 +30,12 @@ from src.engine.sniper_scale_in import (
     calc_scale_in_qty,
 )
 from src.engine.sniper_scale_in_utils import record_add_history_event
+from src.engine.trade_pause_control import is_buy_side_paused, get_pause_state_label
+from src.engine.sniper_entry_latency import (
+    clear_signal_reference,
+    evaluate_live_buy_entry,
+)
+from src.engine.sniper_entry_state import ENTRY_LOCK, move_orders_to_terminal
 
 
 KIWOOM_TOKEN = None
@@ -124,6 +131,208 @@ def _send_exit_best_ioc(code, qty, token):
     return SEND_EXIT_BEST_IOC(code, qty, token)
 
 
+def _publish_entry_mode_summary(stock, code, *, entry_mode, latency_gate):
+    if EVENT_BUS is None:
+        return
+    if entry_mode not in {'fallback'}:
+        return
+
+    orders = latency_gate.get('orders') or []
+    summary = ", ".join(
+        f"{order.get('tag')}:{order.get('qty')}@{order.get('price')}[{order.get('tif')}]"
+        for order in orders
+    )
+    msg = (
+        f"🧭 **[{stock.get('name')} ({code})] fallback 진입 활성화**\n"
+        f"latency=`{latency_gate.get('latency_state')}` / decision=`{latency_gate.get('decision')}`\n"
+        f"signal=`{latency_gate.get('signal_price')}` latest=`{latency_gate.get('latest_price')}`\n"
+        f"orders: `{summary}`"
+    )
+    EVENT_BUS.publish(
+        'TELEGRAM_BROADCAST',
+        {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'},
+    )
+
+
+def _iter_pending_entry_orders(stock):
+    orders = stock.get('pending_entry_orders') or []
+    if not isinstance(orders, list):
+        return []
+    return orders
+
+
+def _clear_pending_entry_meta(stock):
+    with ENTRY_LOCK:
+        move_orders_to_terminal(stock, reason='pending_entry_meta_cleared')
+        for key in [
+            'pending_entry_orders',
+            'entry_mode',
+            'entry_requested_qty',
+            'entry_filled_qty',
+            'entry_fill_amount',
+            'requested_buy_qty',
+            'entry_bundle_id',
+        ]:
+            stock.pop(key, None)
+
+
+def _has_open_pending_entry_orders(stock):
+    return any(
+        str(order.get('status', 'OPEN')).upper() in {'OPEN', 'PARTIAL', 'SENT'}
+        for order in _iter_pending_entry_orders(stock)
+    )
+
+
+def _cancel_pending_entry_orders(stock, code, *, force=False):
+    """
+    Cancel unresolved entry BUY orders.
+
+    Returns:
+    - 'cancelled': all remaining orders cancelled or already gone
+    - 'resolved': nothing left to cancel
+    - 'failed': at least one order remains uncertain
+    """
+
+    with ENTRY_LOCK:
+        open_orders = [
+            order for order in _iter_pending_entry_orders(stock)
+            if str(order.get('status', 'OPEN')).upper() in {'OPEN', 'PARTIAL', 'SENT'}
+            and str(order.get('ord_no', '') or '').strip()
+        ]
+        if not open_orders:
+            _clear_pending_entry_meta(stock)
+            return 'resolved'
+
+        had_failure = False
+        for order in open_orders:
+            ord_no = str(order.get('ord_no', '') or '').strip()
+            res = kiwoom_orders.send_cancel_order(code=code, orig_ord_no=ord_no, token=KIWOOM_TOKEN, qty=0)
+            is_success = False
+            err_msg = str(res)
+            if isinstance(res, dict):
+                if str(res.get('return_code', res.get('rt_cd', ''))) == '0':
+                    is_success = True
+                err_msg = str(res.get('return_msg', '') or '')
+            elif res:
+                is_success = True
+
+            if is_success or any(keyword in err_msg for keyword in ['취소가능수량', '잔고', '주문없음', '체결']):
+                order['status'] = 'CANCELLED'
+                order['cancelled_at'] = time.time()
+                continue
+
+            had_failure = True
+            log_error(
+                f"⚠️ [ENTRY_CANCEL] {stock.get('name')}({code}) "
+                f"tag={order.get('tag')} ord_no={ord_no} cancel_failed msg={err_msg}"
+            )
+            if not force:
+                break
+
+        if had_failure:
+            return 'failed'
+
+        _clear_pending_entry_meta(stock)
+        return 'cancelled'
+
+
+def _finalize_buy_order_submission(stock, code, curr_price, requested_qty, msg, entry_orders):
+    with ENTRY_LOCK:
+        stock['status'] = 'BUY_ORDERED'
+        stock['order_time'] = time.time()
+        stock['order_price'] = curr_price
+        stock['requested_buy_qty'] = requested_qty
+        stock['entry_requested_qty'] = requested_qty
+        stock['entry_filled_qty'] = 0
+        stock['entry_fill_amount'] = 0
+        stock['pending_entry_orders'] = entry_orders
+        stock.setdefault('entry_bundle_id', f"{code}-{uuid4().hex[:12]}")
+        primary_ord_no = str((entry_orders[0] or {}).get('ord_no', '') or '') if entry_orders else ''
+        if primary_ord_no:
+            stock['odno'] = primary_ord_no
+        stock['pending_buy_msg'] = msg
+        log_info(
+            f"[ENTRY_SUBMISSION_BUNDLE] {stock.get('name')}({code}) "
+            f"mode={stock.get('entry_mode', 'unknown')} requested_qty={requested_qty} "
+            f"legs={len(entry_orders)} primary_ord_no={primary_ord_no}"
+        )
+
+
+def _resolve_live_entry_order_request(strategy, entry_mode, planned_order, default_order_type_code, default_price):
+    tif = str(planned_order.get('tif', 'DAY') or 'DAY').upper()
+    tag = str(planned_order.get('tag', 'normal') or 'normal')
+    qty = int(planned_order.get('qty', 0) or 0)
+    price = int(planned_order.get('price', default_price) or default_price or 0)
+
+    if tif == 'IOC':
+        return {
+            'qty': qty,
+            'price': 0,
+            'order_type_code': '16',
+            'tif': tif,
+            'tag': tag,
+        }
+
+    if strategy == 'SCALPING' or entry_mode == 'fallback':
+        return {
+            'qty': qty,
+            'price': price,
+            'order_type_code': '00',
+            'tif': tif,
+            'tag': tag,
+        }
+
+    return {
+        'qty': qty,
+        'price': int(default_price or 0),
+        'order_type_code': default_order_type_code,
+        'tif': tif,
+        'tag': tag,
+    }
+
+
+def _reconcile_pending_entry_orders(stock, code, strategy):
+    if not _has_open_pending_entry_orders(stock):
+        return
+
+    order_time = float(stock.get('order_time', 0) or 0)
+    if order_time <= 0:
+        return
+
+    timeout_sec = 20 if strategy == 'SCALPING' else getattr(TRADING_RULES, 'ORDER_TIMEOUT_SEC', 30)
+    if time.time() - order_time <= timeout_sec:
+        return
+
+    result = _cancel_pending_entry_orders(stock, code, force=True)
+    if result == 'failed':
+        return
+
+    if int(stock.get('buy_qty', 0) or 0) > 0:
+        stock['status'] = 'HOLDING'
+        stock.pop('odno', None)
+        log_info(f"[ENTRY_RECONCILED] {stock.get('name')}({code}) partial fill kept, remaining entry orders cancelled")
+    else:
+        stock['status'] = 'WATCHING'
+        stock.pop('odno', None)
+        stock.pop('order_time', None)
+        stock.pop('pending_buy_msg', None)
+        stock.pop('target_buy_price', None)
+        stock.pop('order_price', None)
+        HIGHEST_PRICES.pop(code, None)
+        ALERTED_STOCKS.discard(code)
+        if strategy in ['SCALPING', 'SCALP']:
+            COOLDOWNS[code] = time.time() + 1200
+        try:
+            with DB.get_session() as session:
+                session.query(RecommendationHistory).filter_by(id=stock.get('id')).update({
+                    "status": "WATCHING",
+                    "buy_price": 0,
+                    "buy_qty": 0,
+                })
+        except Exception as exc:
+            log_error(f"🚨 [DB 에러] {stock.get('name')} pending entry timeout 복구 실패: {exc}")
+
+
 # =====================================================================
 # 🧠 상태 머신 (State Machine) 핸들러
 # =====================================================================
@@ -143,6 +352,17 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
         f"위치태그={stock.get('position_tag')}, radar={'있음' if radar else '없음'}, "
         f"ai_engine={'있음' if ai_engine else '없음'}"
     )
+
+    if is_buy_side_paused():
+        now_ts = time.time()
+        last_log = float(stock.get('last_pause_block_log_ts', 0) or 0)
+        if (now_ts - last_log) >= 60:
+            log_info(
+                f"[TRADING_PAUSED_BLOCK] WATCHING buy skipped "
+                f"{stock.get('name')}({code}) state={get_pause_state_label()}"
+            )
+            stock['last_pause_block_log_ts'] = now_ts
+        return
 
     MAX_SCALP_SURGE_PCT = getattr(TRADING_RULES, 'MAX_SCALP_SURGE_PCT', 20.0)
     MAX_INTRADAY_SURGE = getattr(TRADING_RULES, 'MAX_INTRADAY_SURGE', 15.0)
@@ -602,14 +822,49 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             order_type_code = "6"
             final_price = 0
 
-        res = kiwoom_orders.send_buy_order(
-            code,
-            real_buy_qty,
-            final_price,
-            order_type_code,
-            token=KIWOOM_TOKEN,
-            order_type_desc="매수" if strategy == 'SCALPING' else "최유리지정가",
+        latency_signal_strength = float(stock.get('rt_ai_prob', stock.get('prob', 0.0)) or 0.0)
+        latency_gate = evaluate_live_buy_entry(
+            stock=stock,
+            code=code,
+            ws_data=ws_data,
+            strategy_id=strategy,
+            planned_qty=real_buy_qty,
+            signal_price=curr_price,
+            signal_strength=latency_signal_strength,
+            target_buy_price=final_price if strategy == 'SCALPING' else 0,
         )
+        stock['latency_entry_state'] = latency_gate.get('latency_state')
+        stock['latency_entry_decision'] = latency_gate.get('decision')
+        stock['latency_entry_reason'] = latency_gate.get('reason')
+
+        entry_mode = latency_gate.get('mode', 'reject')
+        log_info(
+            f"[LATENCY_ENTRY_DECISION] {stock.get('name')}({code}) "
+            f"mode={entry_mode} decision={latency_gate.get('decision')} "
+            f"latency={latency_gate.get('latency_state')} "
+            f"signal={latency_gate.get('signal_price')} latest={latency_gate.get('latest_price')} "
+            f"allowed_slippage={latency_gate.get('computed_allowed_slippage')} "
+            f"orders={len(latency_gate.get('orders') or [])}"
+        )
+        if not latency_gate.get('allowed') or entry_mode == 'reject':
+            log_info(
+                f"[LATENCY_ENTRY_BLOCK] {stock.get('name')}({code}) "
+                f"decision={latency_gate.get('decision')} "
+                f"latency={latency_gate.get('latency_state')} "
+                f"reason={latency_gate.get('reason')} "
+                f"signal={latency_gate.get('signal_price')} latest={latency_gate.get('latest_price')} "
+                f"ws_age_ms={latency_gate.get('ws_age_ms')}"
+            )
+            clear_signal_reference(stock)
+            return
+
+        if is_buy_side_paused():
+            log_info(
+                f"[TRADING_PAUSED_BLOCK] buy order blocked "
+                f"{stock.get('name')}({code}) strategy={strategy} state={get_pause_state_label()}"
+            )
+            clear_signal_reference(stock)
+            return
 
         big_bite_summary = ""
         if stock.get('big_bite_triggered') or stock.get('big_bite_confirmed'):
@@ -630,45 +885,97 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             f"{big_bite_summary}"
         )
 
-        if res is None:
-            print(f"❌ [{stock['name']}] 매수 주문 전송 실패 (None 반환)")
+        successful_orders = []
+        planned_orders = latency_gate.get('orders') or []
+        for planned_order in planned_orders:
+            request = _resolve_live_entry_order_request(
+                strategy=strategy,
+                entry_mode=entry_mode,
+                planned_order=planned_order,
+                default_order_type_code=order_type_code,
+                default_price=final_price,
+            )
+            qty = request['qty']
+            price = request['price']
+            if qty <= 0:
+                continue
+
+            res = kiwoom_orders.send_buy_order(
+                code,
+                qty,
+                price,
+                request['order_type_code'],
+                token=KIWOOM_TOKEN,
+                order_type_desc="매수" if strategy == 'SCALPING' else "최유리지정가",
+                tif=request['tif'],
+            )
+
+            if not isinstance(res, dict):
+                continue
+            rt_cd = str(res.get('return_code', res.get('rt_cd', '')))
+            if rt_cd != '0':
+                log_info(
+                    f"[LATENCY_ENTRY_ORDER_FAIL] {stock.get('name')}({code}) "
+                    f"tag={planned_order.get('tag')} msg={res.get('return_msg')}"
+                )
+                continue
+
+            ord_no = str(res.get('ord_no', '') or res.get('odno', ''))
+            successful_orders.append({
+                'tag': request['tag'],
+                'qty': qty,
+                'price': price,
+                'ord_no': ord_no,
+                'tif': request['tif'],
+                'order_type': request['order_type_code'],
+                'status': 'OPEN',
+                'filled_qty': 0,
+                'sent_at': time.time(),
+            })
+            log_info(
+                f"[LATENCY_ENTRY_ORDER_SENT] {stock.get('name')}({code}) "
+                f"tag={request['tag']} qty={qty} price={price} "
+                f"type={request['order_type_code']} tif={request['tif']} ord_no={ord_no}"
+            )
+
+        if not successful_orders:
+            print(f"❌ [{stock['name']}] 매수 주문 전송 실패 (성공 주문 없음)")
+            clear_signal_reference(stock)
             return
 
-        if isinstance(res, dict):
-            rt_cd = str(res.get('return_code', res.get('rt_cd', '')))
-            if rt_cd == '0':
-                ord_no = str(res.get('ord_no', '') or res.get('odno', ''))
-                log_info(f"[DEBUG] {stock['name']} 매수 주문 성공. ord_no={ord_no}")
-                stock['status'] = 'BUY_ORDERED'
-                stock['order_time'] = time.time()
-                stock['order_price'] = curr_price
-                stock['buy_qty'] = real_buy_qty
-                if ord_no:
-                    stock['odno'] = ord_no
-                stock['pending_buy_msg'] = msg
+        stock['entry_mode'] = entry_mode
+        _finalize_buy_order_submission(
+            stock=stock,
+            code=code,
+            curr_price=curr_price,
+            requested_qty=real_buy_qty,
+            msg=msg,
+            entry_orders=successful_orders,
+        )
 
-                if strategy in ['SCALPING', 'SCALP']:
-                    alerted_stocks.add(code)
-                else:
-                    stock['msg_audience'] = 'VIP_ALL'
-
-                try:
-                    with DB.get_session() as session:
-                        session.query(RecommendationHistory).filter_by(id=stock.get('id')).update({
-                            "status": "BUY_ORDERED",
-                            "buy_price": curr_price,
-                            "buy_qty": real_buy_qty,
-                        })
-                except Exception as e:
-                    log_error(f"🚨 [DB 에러] {stock['name']} BUY_ORDERED 장부 업데이트 실패: {e}")
-
-                # 매수 주문 전송 알림은 체결 시점에만 발행합니다.
-
-            else:
-                print(f"❌ [{stock['name']}] 매수 주문 거절: {res.get('return_msg')}")
-
+        if strategy in ['SCALPING', 'SCALP']:
+            alerted_stocks.add(code)
         else:
-            print(f"❌ [{stock['name']}] 매수 주문 전송 실패 (응답 파싱 실패)")
+            stock['msg_audience'] = 'VIP_ALL'
+
+        _publish_entry_mode_summary(
+            stock,
+            code,
+            entry_mode=entry_mode,
+            latency_gate=latency_gate,
+        )
+
+        try:
+            with DB.get_session() as session:
+                session.query(RecommendationHistory).filter_by(id=stock.get('id')).update({
+                    "status": "BUY_ORDERED",
+                    "buy_price": curr_price,
+                    "buy_qty": real_buy_qty,
+                })
+        except Exception as e:
+            log_error(f"🚨 [DB 에러] {stock['name']} BUY_ORDERED 장부 업데이트 실패: {e}")
+
+        clear_signal_reference(stock)
 
 
 
@@ -687,6 +994,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
 
     curr_p = int(float(ws_data.get('curr', 0) or 0))
     buy_p = float(stock.get('buy_price', 0) or 0)
+    _reconcile_pending_entry_orders(stock, code, strategy)
     if curr_p <= 0 or buy_p <= 0:
         return
 
@@ -1001,6 +1309,15 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             reason = f"🛑 손절선 도달 ({regime_name} 기준 {current_stop_loss}%)"
 
     if is_sell_signal:
+        if _has_open_pending_entry_orders(stock):
+            cancel_state = _cancel_pending_entry_orders(stock, code, force=False)
+            if cancel_state == 'failed':
+                log_error(
+                    f"⚠️ [ENTRY_CANCEL] {stock.get('name')}({code}) "
+                    "pending entry orders unresolved; delaying sell until next loop"
+                )
+                return
+
         sign = "📉 [손절 주문]" if sell_reason_type == 'LOSS' else "🎊 [익절 주문]"
         msg = (
             f"{sign} **{stock['name']} 매도 전송 ({strategy})**\n"
@@ -1156,11 +1473,18 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
     else:
         last_block = float(stock.get('last_add_block_log_ts', 0) or 0)
         if time.time() - last_block >= 30:
-            log_info(
-                "[ADD_BLOCKED] "
-                f"{stock.get('name')}({code}) "
-                f"strategy={strategy} reason={gate.get('reason')}"
-            )
+            if gate.get('reason') == 'buy_side_paused':
+                log_info(
+                    f"[TRADING_PAUSED_BLOCK] HOLDING add skipped "
+                    f"{stock.get('name')}({code}) strategy={strategy} "
+                    f"state={get_pause_state_label()}"
+                )
+            else:
+                log_info(
+                    "[ADD_BLOCKED] "
+                    f"{stock.get('name')}({code}) "
+                    f"strategy={strategy} reason={gate.get('reason')}"
+                )
             stock['last_add_block_log_ts'] = time.time()
 
 
@@ -1198,6 +1522,9 @@ def can_consider_scale_in(stock, code, ws_data, strategy, market_regime):
 
     if not getattr(TRADING_RULES, 'ENABLE_SCALE_IN', False):
         return {"allowed": False, "reason": "scale_in_disabled"}
+
+    if is_buy_side_paused():
+        return {"allowed": False, "reason": "buy_side_paused"}
 
     if stock.get('scale_in_locked'):
         return {"allowed": False, "reason": "scale_in_locked"}
@@ -1548,6 +1875,14 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         order_type_code = "6"
         final_price = 0
 
+    if is_buy_side_paused():
+        log_info(
+            f"[TRADING_PAUSED_BLOCK] add order blocked "
+            f"{stock.get('name')}({code}) strategy={strategy} type={add_type} "
+            f"state={get_pause_state_label()}"
+        )
+        return None
+
     res = kiwoom_orders.send_buy_order(
         code,
         qty,
@@ -1634,6 +1969,10 @@ def handle_buy_ordered_state(stock, code):
     else:
         timeout_sec = 20 if strategy == 'SCALPING' else getattr(TRADING_RULES, 'ORDER_TIMEOUT_SEC', 30)
 
+    if _has_open_pending_entry_orders(stock) and time_elapsed > timeout_sec:
+        _reconcile_pending_entry_orders(stock, code, strategy)
+        return
+
     if time_elapsed > timeout_sec:
         print(f"⚠️ [{stock['name']}] 매수 대기 {timeout_sec}초 초과. 취소 절차 진입.")
         orig_ord_no = stock.get('odno')
@@ -1646,6 +1985,7 @@ def handle_buy_ordered_state(stock, code):
             stock.pop('target_buy_price', None)
             stock.pop('order_price', None)
             stock.pop('buy_qty', None)
+            _clear_pending_entry_meta(stock)
             highest_prices.pop(code, None)
             alerted_stocks.discard(code)
 
@@ -1761,6 +2101,33 @@ def process_order_cancellation(stock, code, orig_ord_no, db, strategy):
 
     target_id = stock.get('id')
 
+    if _has_open_pending_entry_orders(stock):
+        result = _cancel_pending_entry_orders(stock, code, force=True)
+        if result != 'failed':
+            stock['status'] = 'WATCHING'
+            stock.pop('odno', None)
+            stock.pop('order_time', None)
+            stock.pop('pending_buy_msg', None)
+            stock.pop('target_buy_price', None)
+            stock.pop('order_price', None)
+            stock.pop('buy_qty', None)
+            highest_prices.pop(code, None)
+
+            try:
+                with DB.get_session() as session:
+                    session.query(RecommendationHistory).filter_by(id=target_id).update({
+                        "status": "WATCHING",
+                        "buy_price": 0,
+                        "buy_qty": 0,
+                    })
+            except Exception as e:
+                log_error(f"🚨 [DB 에러] {stock['name']} 매수 취소 후 WATCHING 복구 실패: {e}")
+
+            if strategy in ['SCALPING', 'SCALP']:
+                alerted_stocks.discard(code)
+                cooldowns[code] = time.time() + 1200
+            return True
+
     res = kiwoom_orders.send_cancel_order(code=code, orig_ord_no=orig_ord_no, token=KIWOOM_TOKEN, qty=0)
 
     is_success = False
@@ -1782,6 +2149,7 @@ def process_order_cancellation(stock, code, orig_ord_no, db, strategy):
         stock.pop('target_buy_price', None)
         stock.pop('order_price', None)
         stock.pop('buy_qty', None)
+        _clear_pending_entry_meta(stock)
         highest_prices.pop(code, None)
 
         try:

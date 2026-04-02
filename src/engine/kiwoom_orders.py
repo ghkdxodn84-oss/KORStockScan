@@ -6,6 +6,7 @@ import re
 from src.utils.logger import log_error, log_info
 from src.core.event_bus import EventBus
 from src.utils import kiwoom_utils
+from src.engine.trade_pause_control import is_buy_side_paused, get_pause_state_label
 
 # ==========================================
 # 1. 계좌 및 자산 조회 API
@@ -124,7 +125,45 @@ def get_my_inventory(token):
 # ==========================================
 # 2. 주문 실행 API
 # ==========================================
-def send_buy_order_market(code, qty, token, order_type="6", price=0):
+def _resolve_buy_order_type(order_type, price=0, tif=None):
+    """
+    Normalize legacy buy order request into Kiwoom order code + price.
+
+    Project convention:
+    - DAY limit: `00`
+    - Best/marketable IOC: `16`
+    - Market: `3`
+    - Best: `6`
+
+    NOTE:
+    - Kiwoom IOC BUY requests are normalized to best-IOC (`16`).
+    - The incoming limit price is advisory only and is discarded in payload.
+    """
+    tif_value = str(tif or "DAY").upper()
+    requested_type = str(order_type or "6").upper()
+    requested_price = int(price or 0)
+
+    if tif_value == "IOC":
+        if requested_type in {"00", "LIMIT", "6", "BEST", "16"}:
+            if requested_price > 0:
+                log_info(
+                    f"[ENTRY_TIF_MAP] IOC buy request promoted to best-IOC(16); "
+                    f"requested_limit_price={requested_price} is advisory only"
+                )
+            return "16", 0
+        if requested_type in {"3", "MARKET"}:
+            return "3", 0
+
+    if requested_type in {"00", "LIMIT"}:
+        return "00", requested_price
+    if requested_type in {"3", "MARKET"}:
+        return "3", 0
+    if requested_type in {"16", "BEST_IOC"}:
+        return "16", 0
+    return str(order_type), requested_price
+
+
+def send_buy_order_market(code, qty, token, order_type="6", price=0, tif=None):
     """
     [kt10000] 매수 주문 - return_code 대응 수정 및 지정가(00) 기능 추가
     - order_type: "00" (지정가 - 스캘핑 눌림목 그물망용)
@@ -133,6 +172,18 @@ def send_buy_order_market(code, qty, token, order_type="6", price=0):
     - price: 지정가 주문 시 입력할 1주당 단가 (시장가/최유리 지정가일 경우 0 또는 생략)
     """
     if qty <= 0: return None
+
+    if is_buy_side_paused():
+        clean_code = str(code)[:6]
+        msg = f"[TRADING_PAUSED_BLOCK] buy order blocked 종목:{clean_code}, 상태:{get_pause_state_label()}"
+        log_info(msg)
+        EventBus().publish("TELEGRAM_ADMIN_NOTIFY", {"text": msg})
+        return {
+            "rt_cd": "PAUSED",
+            "return_code": "PAUSED",
+            "return_msg": get_pause_state_label(),
+            "ord_no": "",
+        }
 
     clean_code = str(code)[:6]
     url = kiwoom_utils.get_api_url("/api/dostk/ordr")
@@ -144,15 +195,15 @@ def send_buy_order_market(code, qty, token, order_type="6", price=0):
         'api-id': 'kt10000'
     }
 
-    # 💡 [핵심 개조] 지정가("00")일 때는 전달받은 price를 넣고, 아닐 때는 빈칸("")으로 둡니다.
-    ord_price_str = str(int(price)) if str(order_type) == "00" and price > 0 else ""
+    normalized_type, normalized_price = _resolve_buy_order_type(order_type, price=price, tif=tif)
+    ord_price_str = str(int(normalized_price)) if str(normalized_type) == "00" and normalized_price > 0 else ""
 
     payload = {
         "dmst_stex_tp": "SOR",
         "stk_cd": clean_code,
         "ord_qty": str(qty),
         "ord_uv": ord_price_str,
-        "trde_tp": str(order_type),
+        "trde_tp": str(normalized_type),
         "cond_uv": ""
     }
 
@@ -183,7 +234,7 @@ def send_buy_order_market(code, qty, token, order_type="6", price=0):
 # -------------------------------------------------------------------
 # Compatibility wrapper (legacy callers)
 # -------------------------------------------------------------------
-def send_buy_order(code, qty, price, order_type_code, token, order_type_desc=None):
+def send_buy_order(code, qty, price, order_type_code, token, order_type_desc=None, tif=None):
     """
     Legacy wrapper for send_buy_order_market.
     - order_type_code: "00" 지정가, "6" 최유리지정가, "3" 시장가
@@ -195,6 +246,7 @@ def send_buy_order(code, qty, price, order_type_code, token, order_type_desc=Non
         token=token,
         order_type=str(order_type_code),
         price=price or 0,
+        tif=tif,
     )
 
 def send_sell_order_market(code, qty, token, order_type="3", price=0):
@@ -392,4 +444,3 @@ def reserve_buy_order_ai(code, ai_target_price, deposit, token, ratio=0.05):
     except Exception as e:
         print(f"❌ [예약주문 실패] {code}: {str(e)}")
         return None
-

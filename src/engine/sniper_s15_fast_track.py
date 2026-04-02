@@ -5,7 +5,9 @@ import time
 from datetime import datetime
 
 from src.engine import kiwoom_orders
+from src.engine.sniper_entry_latency import evaluate_live_buy_entry
 from src.database.models import RecommendationHistory
+from src.utils.runtime_flags import is_trading_paused
 from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
 
@@ -339,6 +341,22 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
     try:
         cleanup_allowed = False
         actual_entry_happened = False
+        if is_trading_paused():
+            with state['lock']:
+                state['status'] = 'BLOCKED'
+                state['updated_at'] = _now_ts()
+            cleanup_allowed = True
+            log_info(
+                f"[TRADING_PAUSED_BLOCK] S15 fast-track buy skipped "
+                f"{name}({code}) state=신규 매수 및 추가매수 중단 상태"
+            )
+            update_s15_shadow_record(
+                state.get('shadow_id'),
+                status='WATCHING',
+                position_tag='S15_FAST_PAUSED',
+            )
+            return
+
         rt_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
         curr_price = int(float((rt_data or {}).get('curr', 0) or 0))
         if curr_price <= 0:
@@ -368,13 +386,41 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
             update_s15_shadow_record(state.get('shadow_id'), status='EXPIRED')
             return
 
-        buy_price = _price_ticks_up(curr_price, 2)
         deposit = kiwoom_orders.get_deposit(KIWOOM_TOKEN)
-        req_qty = kiwoom_orders.calc_buy_qty(buy_price, deposit, ratio=ratio)
+        req_qty = kiwoom_orders.calc_buy_qty(curr_price, deposit, ratio=ratio)
         if req_qty <= 0:
             state['status'] = 'FAILED'
             update_s15_shadow_record(state.get('shadow_id'), status='EXPIRED')
             return
+
+        latency_gate = evaluate_live_buy_entry(
+            stock=state,
+            code=code,
+            ws_data=rt_data,
+            strategy_id='S15_FAST',
+            planned_qty=req_qty,
+            signal_price=int(trigger_price or curr_price),
+            signal_strength=float(ai_res.get('score', 0) or 0) / 100.0,
+            target_buy_price=0,
+        )
+        if not latency_gate.get('allowed'):
+            state['status'] = 'BLOCKED'
+            state['updated_at'] = _now_ts()
+            log_info(
+                f"[LATENCY_ENTRY_BLOCK] S15 {name}({code}) "
+                f"decision={latency_gate.get('decision')} "
+                f"latency={latency_gate.get('latency_state')} "
+                f"reason={latency_gate.get('reason')} "
+                f"signal={latency_gate.get('signal_price')} latest={latency_gate.get('latest_price')}"
+            )
+            update_s15_shadow_record(
+                state.get('shadow_id'),
+                status='WATCHING',
+                position_tag='S15_FAST_LATENCY_BLOCKED',
+            )
+            return
+
+        buy_price = int(float(latency_gate.get('order_price', curr_price) or curr_price))
 
         buy_res = _send_s15_limit_buy(code, req_qty, buy_price)
         if not _is_ok_response(buy_res):

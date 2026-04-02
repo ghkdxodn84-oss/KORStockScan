@@ -6,6 +6,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = PROJECT_ROOT / 'data'
 LOGS_DIR = PROJECT_ROOT / 'logs'
+RESTART_FLAG_PATH = PROJECT_ROOT / 'restart.flag'
 CONFIG_PATH = DATA_DIR / 'config_prod.json'
 CREDENTIALS_PATH = DATA_DIR / 'credentials.json'
 DEV_PATH = DATA_DIR / 'config_dev.json'

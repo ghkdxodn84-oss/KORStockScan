@@ -19,11 +19,21 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 if str(BASE_DIR) not in sys.path:
     sys.path.append(str(BASE_DIR))
 
-from src.utils.constants import CONFIG_PATH, DEV_PATH  # 💡 중앙 관리 경로 활용
+from src.utils.constants import CONFIG_PATH, DEV_PATH, RESTART_FLAG_PATH  # 💡 중앙 관리 경로 활용
 from src.utils.logger import log_error, log_info
 from src.database.db_manager import DBManager
 from src.core.event_bus import EventBus
 from src.utils import kiwoom_utils
+from src.utils.runtime_flags import clear_trading_paused, is_trading_paused, set_trading_paused
+from src.engine.trade_pause_control import (
+    bind_event_bus as bind_trade_pause_event_bus,
+    get_pause_state_label,
+    is_buy_side_paused,
+)
+from src.engine.sniper_entry_metrics import (
+    format_entry_metrics_summary,
+    summarize_today_entry_metrics,
+)
 
 
 # ==========================================
@@ -93,6 +103,7 @@ try:
     bot = _create_bot_instance()
     db_manager = DBManager()
     event_bus = EventBus()
+    bind_trade_pause_event_bus(event_bus)
 
     print(f"🤖 Telegram Bot 초기화 완료 - 관리자 ID: {ADMIN_ID or '미설정'}")
 except Exception as e:
@@ -244,11 +255,100 @@ def has_special_auth(chat_id):
         log_info(f"⚠️ 권한 체크 중 DB 에러: {e}")
     return False
 
-def get_main_keyboard():
+
+def _is_admin_message(message):
+    return str(message.chat.id) == str(ADMIN_ID)
+
+
+def _is_admin_chat_id(chat_id):
+    return str(chat_id) == str(ADMIN_ID)
+
+
+def _get_admin_pause_status_label():
+    return "⏸ 현재: 매매중단" if is_trading_paused() else "✅ 현재: 정상운영"
+
+
+def _reply_pause_status(message):
+    paused = is_trading_paused()
+    if paused:
+        text = "현재 상태: 신규 매수/추가매수 중단"
+    else:
+        text = "현재 상태: 정상운영"
+    bot.reply_to(message, text)
+
+
+def _reply_entry_metrics(message):
+    if not _is_admin_message(message):
+        bot.reply_to(message, "⛔ 권한이 없습니다.")
+        return
+
+    summary = summarize_today_entry_metrics()
+    bot.reply_to(message, format_entry_metrics_summary(summary))
+
+
+def _publish_pause_state(status):
+    event_bus.publish('TRADING_PAUSED', {'status': status})
+
+    # 기존 pause 제어 계층의 즉시성도 유지합니다.
+    event_bus.publish(
+        'BUY_SIDE_PAUSE_CHANGED',
+        {
+            'paused': status == 'PAUSED',
+            'source': 'telegram_admin',
+            'reason': 'manual_pause_toggle',
+            'label': get_pause_state_label(),
+        },
+    )
+
+
+def _handle_pause_toggle(message, *, paused):
+    if not _is_admin_message(message):
+        log_info(f"[TRADING_PAUSED] unauthorized telegram access chat_id={message.chat.id}")
+        bot.reply_to(message, "⛔ 권한이 없습니다.")
+        return
+
+    try:
+        if paused:
+            set_trading_paused()
+            log_info(f"[TRADING_PAUSED] pause flag set by admin chat_id={message.chat.id}")
+            try:
+                _publish_pause_state('PAUSED')
+            except Exception as exc:
+                log_error(f"[TRADING_PAUSED] EventBus publish failed after pause: {exc}")
+            msg = (
+                "신규 매수 및 추가매수(AVG_DOWN, PYRAMID)가 중단되었습니다.\n"
+                "기존 보유 종목의 익절/손절 감시는 계속 동작합니다."
+            )
+        else:
+            clear_trading_paused()
+            log_info(f"[TRADING_RESUMED] pause flag cleared by admin chat_id={message.chat.id}")
+            try:
+                _publish_pause_state('RESUMED')
+            except Exception as exc:
+                log_error(f"[TRADING_RESUMED] EventBus publish failed after resume: {exc}")
+            msg = "신규 매수 및 추가매수가 다시 활성화되었습니다."
+    except Exception as exc:
+        action = "pause" if paused else "resume"
+        tag = "TRADING_PAUSED" if paused else "TRADING_RESUMED"
+        log_error(f"[{tag}] {action} failed chat_id={message.chat.id}: {exc}")
+        bot.reply_to(message, f"⚠️ 매매 상태 변경 중 오류가 발생했습니다: {exc}")
+        return
+
+    bot.reply_to(message, msg, reply_markup=get_main_keyboard(chat_id=message.chat.id))
+    event_bus.publish(
+        'TELEGRAM_BROADCAST',
+        {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'HTML'},
+    )
+
+def get_main_keyboard(chat_id=None):
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
     markup.add("🏆 오늘의 추천종목", "🔍 실시간 종목분석")
     markup.add("📜 감시/보유 리스트", "➕ 수동 종목 추가")
     markup.add("☕ 서버 운영 후원하기", "🤖 AI 확신지수란?")
+    if chat_id is not None and _is_admin_chat_id(chat_id):
+        markup.add(_get_admin_pause_status_label(), "📛 현재 매매 상태")
+        markup.add("🛑 긴급 매매 중단", "▶️ 매매 재개")
+        markup.add("📊 진입 지표")
     return markup
 
 def get_user_badge(chat_id):
@@ -330,7 +430,12 @@ def handle_start(message):
     "✓ `[Action]` 찰나를 파고드는 가변 익절/손절 스마트 트레일링 스탑\n\n"
     "💡 _시장의 노이즈를 뚫고, 가장 완벽한 타점만 저격합니다._" 
     )
-    bot.send_message(message.chat.id, welcome_msg, reply_markup=get_main_keyboard(), parse_mode='Markdown')
+    bot.send_message(
+        message.chat.id,
+        welcome_msg,
+        reply_markup=get_main_keyboard(chat_id=message.chat.id),
+        parse_mode='Markdown',
+    )
 
 @bot.message_handler(commands=['상태', 'status'])
 def handle_status(message):
@@ -352,10 +457,72 @@ def cmd_restart(message):
     if str(message.chat.id) == str(ADMIN_ID):
         bot.reply_to(message, "🔄 수동 재시작 플래그를 작동합니다. 관제탑이 안전하게 재가동됩니다.")
         # bot_main.py의 메인 루프가 이 파일을 감지하고 우아하게 종료합니다.
-        with open("restart.flag", "w") as f: 
+        with open(RESTART_FLAG_PATH, "w") as f:
             f.write("restart")
     else:
         bot.reply_to(message, "⛔ 권한이 없습니다.")
+
+
+@bot.message_handler(commands=['pause', 'buy_pause', '매수중단'])
+def cmd_pause_buy_side(message):
+    _handle_pause_toggle(message, paused=True)
+
+
+@bot.message_handler(commands=['resume', 'buy_resume', '매수재개'])
+def cmd_resume_buy_side(message):
+    _handle_pause_toggle(message, paused=False)
+
+
+@bot.message_handler(commands=['pause_status', '매수상태'])
+def cmd_pause_status(message):
+    if not _is_admin_message(message):
+        bot.reply_to(message, "⛔ 권한이 없습니다.")
+        return
+    _reply_pause_status(message)
+
+
+@bot.message_handler(commands=['trading_status'])
+def cmd_trading_status(message):
+    if not _is_admin_message(message):
+        bot.reply_to(message, "⛔ 권한이 없습니다.")
+        return
+    _reply_pause_status(message)
+
+
+@bot.message_handler(commands=['entry_metrics', '진입지표'])
+def cmd_entry_metrics(message):
+    _reply_entry_metrics(message)
+
+
+@bot.message_handler(func=lambda message: message.text == "🛑 긴급 매매 중단")
+def handle_pause_button(message):
+    cmd_pause_buy_side(message)
+
+
+@bot.message_handler(func=lambda message: message.text == "▶️ 매매 재개")
+def handle_resume_button(message):
+    cmd_resume_buy_side(message)
+
+
+@bot.message_handler(func=lambda message: message.text in {"⏸ 현재: 매매중단", "✅ 현재: 정상운영"})
+def handle_pause_status_button(message):
+    if not _is_admin_message(message):
+        bot.reply_to(message, "⛔ 권한이 없습니다.")
+        return
+    _reply_pause_status(message)
+
+
+@bot.message_handler(func=lambda message: message.text == "📛 현재 매매 상태")
+def handle_trading_status_button(message):
+    if not _is_admin_message(message):
+        bot.reply_to(message, "⛔ 권한이 없습니다.")
+        return
+    _reply_pause_status(message)
+
+
+@bot.message_handler(func=lambda message: message.text == "📊 진입 지표")
+def handle_entry_metrics_button(message):
+    _reply_entry_metrics(message)
 
 @bot.message_handler(func=lambda message: message.text == "🔍 실시간 종목분석")
 def handle_analyze_btn(message):
@@ -717,7 +884,11 @@ def handle_payment_success(message):
 
 @bot.message_handler(func=lambda message: True)
 def handle_text_messages(message):
-    bot.send_message(message.chat.id, "메뉴 버튼을 이용해 주세요.", reply_markup=get_main_keyboard())
+    bot.send_message(
+        message.chat.id,
+        "메뉴 버튼을 이용해 주세요.",
+        reply_markup=get_main_keyboard(chat_id=message.chat.id),
+    )
 
 # ==========================================
 # 🚀 8. 봇 구동 진입점 (bot_main.py에서 호출됨)
