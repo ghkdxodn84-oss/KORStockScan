@@ -324,10 +324,17 @@ latency-aware 진입 기준:
 
 주요 화면:
 
-- 일일 리포트: `/` 또는 `/daily-report`
+- 통합 대시보드: `/` 또는 `/dashboard`
+- 일일 리포트: `/daily-report`
 - 동적 체결강도 대시보드: `/strength-momentum`
 - 진입 게이트 플로우 대시보드: `/entry-pipeline-flow`
 - 실제 매매 복기 화면: `/trade-review`
+
+통합 대시보드는 아래 3개 화면을 탭 형태로 전환합니다.
+
+- 일일 전략 리포트
+- 진입 게이트 차단
+- 실제 매매 복기
 
 주요 API:
 
@@ -344,21 +351,28 @@ latency-aware 진입 기준:
   `python3 src/tests/test_daily_report.py --date 2026-04-03`
 - `bot_main.py` 부팅 시 1회 자동 생성
 - 매 영업일 `08:45`에 웹/API용 JSON 자동 갱신
+- 강제 재생성 확인:
+  `/daily-report?date=YYYY-MM-DD&refresh=1`
 
-자동기동:
+운영 참고:
 
-- 웹 서비스 파일: `deploy/systemd/korstockscan-web.service`
+- 장중 또는 장마감 직후에는 요청일보다 최근 시세일 기준으로 리포트가 생성될 수 있습니다.
+- 예: `2026-04-03` 요청 시 `2026-04-02` 일봉 기준으로 생성되며, 이 경우 경고 문구가 함께 표시됩니다.
+
+웹 서비스 자동기동:
+
+- Gunicorn 서비스 파일: `deploy/systemd/korstockscan-gunicorn.service`
 - 서버 반영 후:
-  `sudo systemctl enable --now korstockscan-web.service`
+  `sudo systemctl enable --now korstockscan-gunicorn.service`
 - 상태 확인:
-  `sudo systemctl status korstockscan-web.service`
+  `sudo systemctl status korstockscan-gunicorn.service`
 - 로그 확인:
-  `sudo journalctl -u korstockscan-web.service -f`
+  `sudo journalctl -u korstockscan-gunicorn.service -f`
 
 운영 원칙:
 
 - `bot_main.py`는 리포트 JSON 생성 담당
-- `src/web/app.py`는 별도 프로세스(systemd)로 상시 실행
+- `src/web/app.py`는 `gunicorn + nginx` 조합으로 외부 공개
 - Flutter 앱은 위 JSON API를 그대로 소비하는 것을 기준으로 설계
 
 ### EC2 외부 서비스 운영

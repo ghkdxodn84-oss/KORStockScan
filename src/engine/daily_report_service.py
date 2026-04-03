@@ -218,7 +218,7 @@ def _build_market_snapshot(target_date: str, ctx: _ReportContext) -> dict:
         import pandas as pd
         import numpy as np
         import joblib
-        import kiwoom_utils
+        from src.utils import kiwoom_utils
         from src.model.feature_engineering_v2 import calculate_all_features
         _, text = _import_sqlalchemy()
         engine = _get_engine()

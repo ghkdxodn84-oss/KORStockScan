@@ -40,6 +40,129 @@ def daily_report_api():
 
 
 @app.route("/")
+@app.route("/dashboard")
+def dashboard_home():
+    default_tab = request.args.get("tab") or "daily-report"
+    target_date = request.args.get("date") or datetime.now().strftime("%Y-%m-%d")
+    since = request.args.get("since")
+    resolved_since = _resolve_dashboard_since(target_date, since)
+    top = request.args.get("top", default=10, type=int)
+
+    tab_map = {
+        "daily-report": f"/daily-report?date={target_date}",
+        "entry-pipeline-flow": f"/entry-pipeline-flow?date={target_date}&top={max(1, int(top or 10))}" + (f"&since={resolved_since}" if resolved_since else ""),
+        "trade-review": f"/trade-review?date={target_date}",
+    }
+    active_src = tab_map.get(default_tab, tab_map["daily-report"])
+
+    template = """
+    <!doctype html>
+    <html lang="ko">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>KORStockScan Dashboard</title>
+      <style>
+        :root {
+          --bg: #eef4ee;
+          --card: #fcfffa;
+          --ink: #1b2a22;
+          --muted: #6c7f73;
+          --line: #d7e2d5;
+          --accent: #1d7a52;
+          --navy: #183153;
+        }
+        body {
+          margin: 0;
+          background: linear-gradient(180deg, #eef6ef 0%, var(--bg) 100%);
+          color: var(--ink);
+          font-family: "Pretendard", "Noto Sans KR", sans-serif;
+        }
+        .wrap { max-width: 1240px; margin: 0 auto; padding: 20px 16px 28px; }
+        .hero {
+          background: linear-gradient(135deg, var(--navy), var(--accent));
+          color: white;
+          padding: 22px;
+          border-radius: 20px;
+          box-shadow: 0 18px 44px rgba(24, 49, 83, 0.16);
+        }
+        .hero h1 { margin: 0 0 8px; font-size: 26px; }
+        .hero p { margin: 0; opacity: 0.92; }
+        .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+        .chip { background: rgba(255,255,255,0.16); padding: 8px 12px; border-radius: 999px; font-size: 13px; }
+        .tabs { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
+        .tab {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          padding: 11px 16px;
+          border-radius: 14px;
+          border: 1px solid var(--line);
+          background: white;
+          color: var(--ink);
+          text-decoration: none;
+          font-weight: 600;
+        }
+        .tab.active {
+          background: #e7f6ee;
+          border-color: #b8dfc8;
+          color: #176942;
+        }
+        .frame-card {
+          margin-top: 16px;
+          background: var(--card);
+          border: 1px solid var(--line);
+          border-radius: 18px;
+          padding: 10px;
+          box-shadow: 0 12px 26px rgba(27, 42, 34, 0.05);
+        }
+        iframe {
+          width: 100%;
+          min-height: 1650px;
+          border: 0;
+          border-radius: 12px;
+          background: white;
+        }
+        @media (max-width: 900px) {
+          iframe { min-height: 1900px; }
+        }
+      </style>
+    </head>
+    <body>
+      <div class="wrap">
+        <div class="hero">
+          <h1>KORStockScan 통합 대시보드</h1>
+          <p>일일 전략 리포트, 진입 게이트 차단, 실제 매매 복기를 한 화면에서 전환합니다.</p>
+          <div class="chips">
+            <div class="chip">date: {{ target_date }}</div>
+            <div class="chip">since: {{ resolved_since or '전체' }}</div>
+            <div class="chip">API는 기존 경로 유지</div>
+          </div>
+        </div>
+
+        <div class="tabs">
+          <a class="tab {% if active_tab == 'daily-report' %}active{% endif %}" href="/dashboard?tab=daily-report&date={{ target_date }}">일일 전략 리포트</a>
+          <a class="tab {% if active_tab == 'entry-pipeline-flow' %}active{% endif %}" href="/dashboard?tab=entry-pipeline-flow&date={{ target_date }}{% if resolved_since %}&since={{ resolved_since }}{% endif %}&top={{ top }}">진입 게이트 차단</a>
+          <a class="tab {% if active_tab == 'trade-review' %}active{% endif %}" href="/dashboard?tab=trade-review&date={{ target_date }}">실제 매매 복기</a>
+        </div>
+
+        <div class="frame-card">
+          <iframe src="{{ active_src }}" title="KORStockScan dashboard view"></iframe>
+        </div>
+      </div>
+    </body>
+    </html>
+    """
+    return render_template_string(
+        template,
+        active_tab=default_tab,
+        active_src=active_src,
+        target_date=target_date,
+        resolved_since=resolved_since,
+        top=max(1, int(top or 10)),
+    )
+
+
 @app.route("/daily-report")
 def index():
     from datetime import datetime
