@@ -56,14 +56,23 @@ class EntryMetricsSummary:
 
 
 def _iter_today_lines(log_path: Path, *, target_date: str) -> list[str]:
-    if not log_path.exists():
-        return []
     lines: list[str] = []
-    with open(log_path, "r", encoding="utf-8") as handle:
-        for raw_line in handle:
-            if f"[{target_date}" not in raw_line:
-                continue
-            lines.append(raw_line.strip())
+    candidate_paths = [log_path]
+    candidate_paths.extend(
+        sorted(
+            log_path.parent.glob(f"{log_path.name}.*"),
+            key=lambda path: path.name,
+        )
+    )
+
+    for candidate in candidate_paths:
+        if not candidate.exists() or not candidate.is_file():
+            continue
+        with open(candidate, "r", encoding="utf-8") as handle:
+            for raw_line in handle:
+                if f"[{target_date}" not in raw_line:
+                    continue
+                lines.append(raw_line.strip())
     return lines
 
 

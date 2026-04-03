@@ -1,30 +1,94 @@
-# src/utils/logger.py
 import os
 import inspect
+import logging
+import time
 from datetime import datetime
-from src.utils.constants import LOGS_DIR
+from logging.handlers import RotatingFileHandler
+
+from src.utils.constants import LEGACY_LOGS_DIR, LOGS_DIR, TRADING_RULES
+
+
+_MODULE_LOGGERS = {}
+_MAINTENANCE_RAN_AT = 0.0
+
+
+def _run_log_maintenance_if_needed():
+    global _MAINTENANCE_RAN_AT
+
+    now_ts = time.time()
+    if now_ts - _MAINTENANCE_RAN_AT < 3600:
+        return
+
+    retention_days = max(1, int(getattr(TRADING_RULES, 'LOG_RETENTION_DAYS', 14) or 14))
+    cutoff_ts = now_ts - (retention_days * 86400)
+    candidate_dirs = [LOGS_DIR, LEGACY_LOGS_DIR]
+
+    for log_dir in candidate_dirs:
+        try:
+            if not os.path.isdir(log_dir):
+                continue
+
+            for entry in os.scandir(log_dir):
+                if not entry.is_file():
+                    continue
+                if ".log" not in entry.name:
+                    continue
+                if entry.stat().st_mtime >= cutoff_ts:
+                    continue
+                try:
+                    os.remove(entry.path)
+                except FileNotFoundError:
+                    pass
+        except Exception as exc:
+            print(f"[WARN] 로그 정리 중 오류 발생 ({log_dir}): {exc}")
+
+    _MAINTENANCE_RAN_AT = now_ts
+
+
+def _get_module_logger(caller_filename: str, level: str):
+    logger_key = f"{caller_filename}:{level}"
+    logger = _MODULE_LOGGERS.get(logger_key)
+    if logger is not None:
+        return logger
+
+    os.makedirs(LOGS_DIR, exist_ok=True)
+    log_filepath = LOGS_DIR / f"{caller_filename}_{level}.log"
+
+    logger = logging.getLogger(f"module_logger.{logger_key}")
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
+
+    if not logger.handlers:
+        handler = RotatingFileHandler(
+            log_filepath,
+            maxBytes=int(getattr(TRADING_RULES, 'MODULE_LOG_MAX_BYTES', 20 * 1024 * 1024) or 20 * 1024 * 1024),
+            backupCount=int(getattr(TRADING_RULES, 'MODULE_LOG_BACKUP_COUNT', 10) or 10),
+            encoding='utf-8',
+        )
+        formatter = logging.Formatter('[%(asctime)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+        handler.setFormatter(formatter)
+        logger.addHandler(handler)
+
+    _MODULE_LOGGERS[logger_key] = logger
+    return logger
 
 def log_error(msg: str, send_telegram: bool = False):
     """
     중앙 집중형 에러 관리 함수 (호출한 파일명으로 분리 & 상세 원인 자동 기록)
     """
     try:
+        _run_log_maintenance_if_needed()
+
         # 1. 누가 나를 불렀는지 역추적
         caller_frame = inspect.stack()[1]
         caller_filename = os.path.basename(caller_frame.filename).replace('.py', '')
         
         # 2. 에러 메시지 포맷팅
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        log_message = f"[{timestamp}] 🚨 ERROR in {caller_filename}: {msg}\n"
-        
-        # 3. 파일에 기록 (logs/파일명_error.log)
-        os.makedirs(LOGS_DIR, exist_ok=True)
-        log_filepath = LOGS_DIR / f"{caller_filename}_error.log"
-        
-        with open(log_filepath, 'a', encoding='utf-8') as f:
-            f.write(log_message)
+        log_payload = f"🚨 ERROR in {caller_filename}: {msg}"
+        _get_module_logger(caller_filename, 'error').error(log_payload)
             
-        print(log_message.strip()) # 콘솔에도 출력
+        print(f"[{timestamp}] {log_payload}") # 콘솔에도 출력
         
         # 💡 주의: 텔레그램 발송 기능은 순환 참조 방지를 위해 여기서 직접 import하지 않고,
         # bot_main.py나 최상단 계층에서 비동기로 처리하는 것이 안전해!
@@ -39,20 +103,15 @@ def log_info(msg: str, send_telegram: bool = False):
     중앙 집중형 정보 로깅 함수 (호출한 파일명으로 분리 & 자동 기록)
     """
     try:
+        _run_log_maintenance_if_needed()
+
         # 1. 누가 나를 불렀는지 역추적
         caller_frame = inspect.stack()[1]
         caller_filename = os.path.basename(caller_frame.filename).replace('.py', '')
         
         # 2. 정보 메시지 포맷팅
-        timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        log_message = f"[{timestamp}] 📢 INFO in {caller_filename}: {msg}\n"
-        
-        # 3. 파일에 기록 (logs/파일명_info.log)
-        os.makedirs(LOGS_DIR, exist_ok=True)
-        log_filepath = LOGS_DIR / f"{caller_filename}_info.log"
-        
-        with open(log_filepath, 'a', encoding='utf-8') as f:
-            f.write(log_message)
+        log_payload = f"📢 INFO in {caller_filename}: {msg}"
+        _get_module_logger(caller_filename, 'info').info(log_payload)
         
         # 💡 주의: 텔레그램 발송 기능은 순환 참조 방지를 위해 여기서 직접 import하지 않고,
         # bot_main.py나 최상단 계층에서 비동기로 처리하는 것이 안전해!

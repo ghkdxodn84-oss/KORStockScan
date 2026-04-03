@@ -473,6 +473,15 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 f"[DEBUG] {code} 과매수 위험 차단 (fluctuation={fluctuation:.2f} >= {MAX_SURGE} "
                 f"또는 intraday_surge={intraday_surge:.2f} >= {MAX_INTRADAY_SURGE})"
             )
+            _log_entry_pipeline(
+                stock,
+                code,
+                "blocked_overbought",
+                fluctuation=f"{fluctuation:.2f}",
+                intraday_surge=f"{intraday_surge:.2f}",
+                max_surge=f"{MAX_SURGE:.2f}",
+                max_intraday_surge=f"{MAX_INTRADAY_SURGE:.2f}",
+            )
             return
 
         # --------------------------
@@ -530,6 +539,15 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 f"(required={hard_gate_required}, triggered={big_bite_armed}, confirmed={big_bite_confirmed})"
             )
             stock['big_bite_block_reason'] = 'hard_gate'
+            _log_entry_pipeline(
+                stock,
+                code,
+                "blocked_big_bite_hard_gate",
+                required=hard_gate_required,
+                triggered=big_bite_armed,
+                confirmed=big_bite_confirmed,
+                position_tag=pos_tag,
+            )
             return
 
         if big_bite_info:
@@ -553,15 +571,30 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
         else:
             if radar is None:
                 log_info(f"[DEBUG] {code} radar 객체 없음")
+                _log_entry_pipeline(stock, code, "blocked_missing_radar", strategy=strategy)
                 return
 
             if current_vpw < VPW_SCALP_LIMIT:
                 log_info(f"[DEBUG] {code} VPW 불충족 (current_vpw={current_vpw:.1f} < VPW_SCALP_LIMIT)")
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "blocked_vpw",
+                    current_vpw=f"{current_vpw:.1f}",
+                    threshold=VPW_SCALP_LIMIT,
+                )
                 return
             if liquidity_value < MIN_LIQUIDITY:
                 log_info(
                     f"[DEBUG] {code} 유동성 불충족 (liquidity_value={liquidity_value:,.0f} "
                     f"< MIN_LIQUIDITY={MIN_LIQUIDITY:,.0f})"
+                )
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "blocked_liquidity",
+                    liquidity_value=int(liquidity_value),
+                    min_liquidity=MIN_LIQUIDITY,
                 )
                 return
 
@@ -573,6 +606,14 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                         print(f"⚠️ [{stock['name']}] 포착가 대비 너무 오름 (갭 +{gap_pct:.1f}%). 추격매수 포기.")
                         cooldowns[code] = time.time() + 1200
                     log_info(f"[DEBUG] {code} 포착가 대비 갭 상승 (gap_pct={gap_pct:.1f}% >= 1.5%)")
+                    _log_entry_pipeline(
+                        stock,
+                        code,
+                        "blocked_gap_from_scan",
+                        gap_pct=f"{gap_pct:.1f}",
+                        scanner_price=int(scanner_price),
+                        curr_price=curr_price,
+                    )
                     return
 
             current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
@@ -655,6 +696,14 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 if ai_call_executed and last_ai_time == 0:
                     if not big_bite_confirmed:
                         log_info(f"[DEBUG] {code} 첫 AI 분석 턴 대기 (SCALPING)")
+                        _log_entry_pipeline(
+                            stock,
+                            code,
+                            "first_ai_wait",
+                            ai_score=f"{current_ai_score:.1f}",
+                            big_bite_confirmed=big_bite_confirmed,
+                            vip_target=is_vip_target,
+                        )
                         return
                     log_info(f"[DEBUG] {code} Big-Bite 확인으로 첫 AI 분석 대기 스킵")
 
@@ -686,6 +735,14 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
 
                 cooldowns[code] = time.time() + cooldown_time
                 log_info(f"[DEBUG] {code} AI 점수 불충족 (current_ai_score={current_ai_score} < 75)")
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "blocked_ai_score",
+                    ai_score=f"{current_ai_score:.1f}",
+                    threshold=75,
+                    cooldown_sec=cooldown_time,
+                )
                 return
 
             final_target_buy_price, final_used_drop_pct = radar.get_smart_target_price(
@@ -705,6 +762,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
     elif strategy in ['KOSDAQ_ML', 'KOSPI_ML']:
         if radar is None:
             log_info(f"[DEBUG] {code} radar 객체 없음 (KOSDAQ_ML/KOSPI_ML)")
+            _log_entry_pipeline(stock, code, "blocked_missing_radar", strategy=strategy)
             return
 
         if strategy == 'KOSDAQ_ML':
@@ -712,6 +770,14 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             if fluctuation >= max_gap:
                 log_info(
                     f"[DEBUG] {code} 갭상승 너무 큼 (fluctuation={fluctuation:.2f} >= max_gap={max_gap})"
+                )
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "blocked_swing_gap",
+                    strategy=strategy,
+                    fluctuation=f"{fluctuation:.2f}",
+                    threshold=f"{max_gap:.2f}",
                 )
                 return
 
@@ -731,6 +797,14 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             if fluctuation >= max_gap:
                 log_info(
                     f"[DEBUG] {code} 갭상승 너무 큼 (fluctuation={fluctuation:.2f} >= max_gap={max_gap})"
+                )
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "blocked_swing_gap",
+                    strategy=strategy,
+                    fluctuation=f"{fluctuation:.2f}",
+                    threshold=f"{max_gap:.2f}",
                 )
                 return
 
@@ -758,6 +832,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             if not ai_engine:
                 log_error(f"🚨 [{strategy} Gatekeeper 미초기화] {stock['name']}({code})")
                 cooldowns[code] = time.time() + gatekeeper_error_cd
+                _log_entry_pipeline(stock, code, "blocked_gatekeeper_missing", strategy=strategy)
                 return
 
             try:
@@ -791,11 +866,26 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             except Exception as e:
                 log_error(f"🚨 [{strategy} Gatekeeper 오류] {stock['name']}({code}): {e}")
                 cooldowns[code] = time.time() + gatekeeper_error_cd
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "blocked_gatekeeper_error",
+                    strategy=strategy,
+                    cooldown_sec=gatekeeper_error_cd,
+                )
                 return
 
             if not gatekeeper_allow:
                 print(f"🚫 [{strategy} Gatekeeper 거부] {stock['name']} ({action_label})")
                 cooldowns[code] = time.time() + gatekeeper_reject_cd
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "blocked_gatekeeper_reject",
+                    strategy=strategy,
+                    action=action_label,
+                    cooldown_sec=gatekeeper_reject_cd,
+                )
                 return
 
             blocked, block_reason = _should_block_swing_entry(stock.get('strategy', ''))

@@ -6,6 +6,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = PROJECT_ROOT / 'data'
 LOGS_DIR = PROJECT_ROOT / 'logs'
+LEGACY_LOGS_DIR = PROJECT_ROOT / 'src' / 'logs'
 RESTART_FLAG_PATH = PROJECT_ROOT / 'restart.flag'
 CONFIG_PATH = DATA_DIR / 'config_prod.json'
 CREDENTIALS_PATH = DATA_DIR / 'credentials.json'
@@ -188,6 +189,14 @@ class TradingConfig:
     GPT_FAST_MODEL = "gpt-4.1-mini"
     GPT_DEEP_MODEL = "gpt-4o"
     GPT_ENGINE_MIN_INTERVAL: float = 0.5 # OpenAI 서버에 쏘는 최소 간격 (초 단위, 0.5초 = 500ms)
+
+    # ==========================================
+    # 📝 로그 운영 설정
+    # ==========================================
+    MODULE_LOG_MAX_BYTES: int = 20 * 1024 * 1024  # 파일별 info/error 로그 최대 20MB
+    MODULE_LOG_BACKUP_COUNT: int = 10  # 파일별 순환 보관 개수
+    LOG_RETENTION_DAYS: int = 14  # 오래된 로그 자동 삭제 기준
+    BOT_HISTORY_BACKUP_COUNT: int = 7  # 콘솔 히스토리 일별 보관 개수
 
 
 # 전역 싱글톤 인스턴스 생성

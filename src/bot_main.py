@@ -39,6 +39,7 @@ from src.engine.sniper_entry_metrics import (
     format_entry_metrics_summary,
     summarize_today_entry_metrics,
 )
+from src.utils.constants import TRADING_RULES
 
 # ==========================================
 # 📝 모든 print()를 가로채서 파일로 저장하는 로거
@@ -55,7 +56,7 @@ class DualLogger:
             filename='logs/bot_history.log',
             when='midnight',
             interval=1,
-            backupCount=7,
+            backupCount=getattr(TRADING_RULES, 'BOT_HISTORY_BACKUP_COUNT', 7),
             encoding='utf-8'
         )
         formatter = logging.Formatter('[%(asctime)s] %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
