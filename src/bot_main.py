@@ -39,6 +39,11 @@ from src.engine.sniper_entry_metrics import (
     format_entry_metrics_summary,
     summarize_today_entry_metrics,
 )
+from src.engine.sniper_strength_shadow_feedback import (
+    evaluate_shadow_candidates,
+    format_shadow_feedback_summary,
+)
+from src.engine.daily_report_service import save_daily_report, build_daily_report
 from src.utils.constants import TRADING_RULES
 
 # ==========================================
@@ -167,16 +172,40 @@ def broadcast_entry_metrics_job():
     try:
         event_bus = EventBus()
         summary = summarize_today_entry_metrics()
-        msg = format_entry_metrics_summary(summary)
+        today = datetime.now().strftime('%Y-%m-%d')
+        shadow_summary = evaluate_shadow_candidates(today)
+        msg = (
+            f"{format_entry_metrics_summary(summary)}\n\n"
+            f"{format_shadow_feedback_summary(shadow_summary)}"
+        )
         event_bus.publish(
             'TELEGRAM_BROADCAST',
             {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': None},
         )
-        print("📊 [시스템] 장 마감 진입 지표 요약을 관리자에게 전송했습니다.")
+        print("📊 [시스템] 장 마감 진입 지표 및 shadow 피드백 요약을 관리자에게 전송했습니다.")
     except Exception as e:
         from src.utils.logger import log_error
 
         log_error(f"장 마감 진입 지표 브로드캐스트 실패: {e}")
+
+
+def generate_daily_report_job(target_date: str | None = None):
+    """웹/API용 일일 리포트 JSON을 생성합니다."""
+    try:
+        report = build_daily_report(target_date)
+        path = save_daily_report(report)
+        warnings = report.get("meta", {}).get("warnings", []) or []
+        print(
+            f"📘 [시스템] 일일 리포트 생성 완료: {path} "
+            f"(시장상태={report.get('stats', {}).get('status_text', '-')}, 경고={len(warnings)}건)"
+        )
+        return report
+    except Exception as e:
+        from src.utils.logger import log_error
+
+        log_error(f"일일 리포트 생성 실패: {e}")
+        print(f"⚠️ [시스템] 일일 리포트 생성 실패: {e}")
+        return None
 
 # ==========================================
 # 🎯 메인 실행부 (Main Thread)
@@ -186,6 +215,9 @@ if __name__ == '__main__':
     
     db_manager = DBManager()
     db_manager.init_db()
+
+    # 웹/API에서 바로 읽을 수 있도록 부팅 시점에 최신 리포트 1회 생성
+    generate_daily_report_job()
     
     # 전역 이벤트 버스 초기화
     event_bus = EventBus()
@@ -245,6 +277,7 @@ if __name__ == '__main__':
     # 💡 [아키텍처 포인트 4] 메인 쓰레드는 오직 시스템 스케줄링과 예외 종료 감시만 수행합니다.
     morning_report_sent = False
     entry_metrics_report_sent = False
+    daily_report_sent = False
 
     while True:
         try:
@@ -259,6 +292,12 @@ if __name__ == '__main__':
             if now.hour == 0 and now.minute == 1:
                 morning_report_sent = False
                 entry_metrics_report_sent = False
+                daily_report_sent = False
+
+            # [스케줄러 1-0] 아침 리포트 JSON 생성
+            if now.hour == 8 and now.minute == 45 and not daily_report_sent:
+                generate_daily_report_job()
+                daily_report_sent = True
 
             # [스케줄러 1-1] 장 마감 후 진입 지표 요약 관리자 전송
             if now.hour == 15 and now.minute == 40 and not entry_metrics_report_sent:

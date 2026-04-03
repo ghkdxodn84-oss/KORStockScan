@@ -254,6 +254,97 @@ latency-aware 진입 기준:
 - 매수 수량은 `주문가능금액 x 전략비중 x 안전계수`를 기본으로 계산하고, 1주도 안 나오는 경우에만 완화 안전계수 재시도로 과도한 0주 판정을 줄임
 - pause 상태에서는 신규 스캘핑 BUY도 차단
 
+### 동적 체결강도 관측과 shadow 피드백
+스캘핑 진입에서는 기존 `VPW_SCALP_LIMIT` 하드 게이트를 유지하면서, 별도로 동적 체결강도 가속도 관측을 병행합니다.
+
+핵심 개념:
+
+- 누적 체결강도는 최소 베이스 확인용으로만 사용
+- 같은 window 안의 BUY 체결대금, BUY 체결량 비율, 순매수 체결량을 함께 확인해 휩소를 방어
+- 정적 `VPW_SCALP_LIMIT`에는 막혔지만 동적 조건은 통과한 후보는 `shadow candidate`로 저장
+- 장마감에는 이 후보들이 실제로 진입 가치가 있었는지 분봉 기준으로 사후 평가
+
+현재 기본 동작:
+
+- 웹소켓 실시간 체결 데이터에서 동적 체결강도 지표를 계산
+- `sniper_state_handlers.py`가 `strength_momentum_observed`, `strength_momentum_pass` 로그를 남김
+- `SCALP_DYNAMIC_VPW_OBSERVE_ONLY=False`이면 동적 게이트를 실전 진입에 적용하고, `dynamic_vpw_override_pass`로 정적 `VPW_SCALP_LIMIT` 우회 진입을 기록
+- `SCALP_DYNAMIC_VPW_OBSERVE_ONLY=True`로 돌리면 정적 `VPW_SCALP_LIMIT`에 막히면서도 동적 조건은 통과한 경우 `shadow_candidate_recorded` 로그를 남기고 후보를 저장
+- 장마감 요약 시 기존 진입 지표 요약 뒤에 `shadow feedback` 결과를 함께 관리자에게 전송
+
+주요 로그 위치:
+
+- 실시간 파이프라인 로그: `logs/sniper_state_handlers_info.log`
+- 운영 히스토리 로그: `logs/bot_history.log`
+
+주요 로그 키워드:
+
+- `strength_momentum_observed`
+- `strength_momentum_pass`
+- `blocked_vpw`
+- `blocked_strength_momentum`
+- `dynamic_vpw_override_pass`
+- `shadow_candidate_recorded`
+
+저장 파일:
+
+- shadow 후보: `data/shadow/strength_shadow_candidates_YYYY-MM-DD.jsonl`
+- shadow 평가: `data/shadow/strength_shadow_evaluations_YYYY-MM-DD.jsonl`
+
+수동 점검 명령:
+
+- 동적 관측 집계:
+  `python3 src/tests/test_strength_momentum_observation.py --date 2026-04-03 --top 10`
+- shadow 피드백 평가:
+  `python3 src/tests/test_strength_shadow_feedback.py --date 2026-04-03`
+
+운영 해석 포인트:
+
+- `blocked_vpw`인데 `dynamic_allowed=True`면 기존 120 하드게이트 때문에 놓친 후보일 수 있음
+- `shadow_candidate_recorded`가 쌓이면 이후 장마감 리포트에서 실제 가치가 있었는지 `GOOD/NEUTRAL/BAD`로 확인 가능
+- 분봉 평가는 신호 즉시 틱 재현이 아니라 “신호 직후 다음 분부터”의 보수적 성과 측정 기준을 사용
+- 수동 평가 스크립트는 `kiwoom_utils` 의존성을 타므로 실행 환경에 `pandas` 등 런타임 의존성이 필요
+
+### 웹 리포트와 일일 대시보드
+운영 화면은 Flask 웹 서버가 제공하며, 실시간 관측 대시보드와 일일 전략 리포트를 같은 톤으로 확인할 수 있습니다.
+
+주요 화면:
+
+- 일일 리포트: `/` 또는 `/daily-report`
+- 동적 체결강도 대시보드: `/strength-momentum`
+- 진입 게이트 플로우 대시보드: `/entry-pipeline-flow`
+
+주요 API:
+
+- 일일 리포트 JSON: `/api/daily-report?date=YYYY-MM-DD`
+- 동적 체결강도 JSON: `/api/strength-momentum?date=YYYY-MM-DD&since=HH:MM:SS&top=10`
+- 진입 게이트 플로우 JSON: `/api/entry-pipeline-flow?date=YYYY-MM-DD&since=HH:MM:SS&top=10`
+
+일일 리포트 생성:
+
+- 수동 생성:
+  `python3 src/web/daily_report_generator.py --date 2026-04-03`
+- 점검 요약:
+  `python3 src/tests/test_daily_report.py --date 2026-04-03`
+- `bot_main.py` 부팅 시 1회 자동 생성
+- 매 영업일 `08:45`에 웹/API용 JSON 자동 갱신
+
+자동기동:
+
+- 웹 서비스 파일: `deploy/systemd/korstockscan-web.service`
+- 서버 반영 후:
+  `sudo systemctl enable --now korstockscan-web.service`
+- 상태 확인:
+  `sudo systemctl status korstockscan-web.service`
+- 로그 확인:
+  `sudo journalctl -u korstockscan-web.service -f`
+
+운영 원칙:
+
+- `bot_main.py`는 리포트 JSON 생성 담당
+- `src/web/app.py`는 별도 프로세스(systemd)로 상시 실행
+- Flutter 앱은 위 JSON API를 그대로 소비하는 것을 기준으로 설계
+
 ### 스캘핑 매도 로직
 스캘핑 매도는 스윙보다 더 짧은 주기로 손절/익절/모멘텀 약화를 감시합니다.
 
@@ -431,6 +522,8 @@ latency-aware 진입 기준:
 - 메인 실행: `src/bot_main.py`
 - 일봉/야간 배치: `src/utils/update_kospi.py`
 - 일일 추천 생성: `src/model/recommend_daily_v2.py`
+- 동적 체결강도 관측 집계: `src/tests/test_strength_momentum_observation.py`
+- shadow 피드백 수동 평가: `src/tests/test_strength_shadow_feedback.py`
 
 필요 파일:
 
