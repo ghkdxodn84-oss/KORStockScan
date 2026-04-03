@@ -151,7 +151,13 @@ def _publish_entry_mode_summary(stock, code, *, entry_mode, latency_gate):
     EVENT_BUS.publish(
         'TELEGRAM_BROADCAST',
         {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'},
-    )
+        )
+
+
+def _log_entry_pipeline(stock, code, stage, **fields):
+    parts = [f"{key}={value}" for key, value in fields.items()]
+    suffix = f" {' '.join(parts)}" if parts else ""
+    log_info(f"[ENTRY_PIPELINE] {stock.get('name')}({code}) stage={stage}{suffix}")
 
 
 def _iter_pending_entry_orders(stock):
@@ -605,6 +611,14 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                             print(
                                 f"💎 [VIP AI 확답 완료: {stock['name']}] {action} | 점수: {ai_score}점 | {reason}"
                             )
+                            _log_entry_pipeline(
+                                stock,
+                                code,
+                                "ai_confirmed",
+                                action=action,
+                                ai_score=ai_score,
+                                vip_target=is_vip_target,
+                            )
 
                             if action == "BUY":
                                 ai_msg = (
@@ -788,7 +802,17 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             if blocked:
                 print(f"⛔ [시장환경필터] {stock['name']}({code}) 스윙 진입 보류 - {block_reason}")
                 log_info(f"[DEBUG] {code} 시장환경필터에 의한 스윙 진입 보류 (reason: {block_reason})")
+                _log_entry_pipeline(stock, code, "market_regime_block", strategy=strategy)
                 return
+
+            _log_entry_pipeline(
+                stock,
+                code,
+                "market_regime_pass",
+                strategy=strategy,
+                gatekeeper=action_label,
+                score=round(float(score), 2),
+            )
 
             score_weight = max(0.0, min(1.0, (float(score) - buy_threshold) / max(1.0, (100 - buy_threshold))))
             ratio = ratio_min + (score_weight * (ratio_max - ratio_min))
@@ -804,16 +828,52 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
         if not admin_id:
             print(f"⚠️ [매수보류] {stock['name']}: 관리자 ID가 없습니다.")
             log_info(f"[DEBUG] {code} 관리자 ID 없음")
+            _log_entry_pipeline(stock, code, "blocked_no_admin")
             return
 
         deposit = kiwoom_orders.get_deposit(KIWOOM_TOKEN)
-        real_buy_qty = kiwoom_orders.calc_buy_qty(curr_price, deposit, ratio)
+        target_budget, safe_budget, real_buy_qty, used_safety_ratio = kiwoom_orders.describe_buy_capacity(
+            curr_price,
+            deposit,
+            ratio,
+        )
 
         if real_buy_qty <= 0:
-            print(f"⚠️ [매수보류] {stock['name']}: 매수 수량이 0주입니다. (자금 부족으로 20분 제외)")
-            log_info(f"[DEBUG] {code} 매수 수량 0주 (자금 부족)")
+            print(
+                f"⚠️ [매수보류] {stock['name']}: 매수 수량이 0주입니다. "
+                f"(주문가능금액 {deposit:,}원, 전략비중 {ratio:.1%}, 안전계수 {used_safety_ratio:.0%}, "
+                f"실사용예산 {safe_budget:,}원, 현재가 {curr_price:,}원)"
+            )
+            log_info(
+                f"[DEBUG] {code} 매수 수량 0주 "
+                f"(deposit={deposit}, ratio={ratio:.4f}, target_budget={target_budget}, "
+                f"safe_budget={safe_budget}, safety_ratio={used_safety_ratio:.4f}, curr_price={curr_price})"
+            )
             cooldowns[code] = time.time() + 1200
+            _log_entry_pipeline(
+                stock,
+                code,
+                "blocked_zero_qty",
+                deposit=deposit,
+                ratio=f"{ratio:.4f}",
+                target_budget=target_budget,
+                safe_budget=safe_budget,
+                safety_ratio=f"{used_safety_ratio:.4f}",
+                curr_price=curr_price,
+            )
             return
+
+        _log_entry_pipeline(
+            stock,
+            code,
+            "budget_pass",
+            deposit=deposit,
+            ratio=f"{ratio:.4f}",
+            target_budget=target_budget,
+            safe_budget=safe_budget,
+            safety_ratio=f"{used_safety_ratio:.4f}",
+            qty=real_buy_qty,
+        )
 
         if strategy == 'SCALPING':
             order_type_code = "00"
@@ -856,7 +916,25 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 f"ws_age_ms={latency_gate.get('ws_age_ms')}"
             )
             clear_signal_reference(stock)
+            _log_entry_pipeline(
+                stock,
+                code,
+                "latency_block",
+                decision=latency_gate.get('decision'),
+                latency=latency_gate.get('latency_state'),
+                reason=latency_gate.get('reason'),
+            )
             return
+
+        _log_entry_pipeline(
+            stock,
+            code,
+            "latency_pass",
+            mode=entry_mode,
+            decision=latency_gate.get('decision'),
+            latency=latency_gate.get('latency_state'),
+            orders=len(latency_gate.get('orders') or []),
+        )
 
         if is_buy_side_paused():
             log_info(
@@ -864,6 +942,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 f"{stock.get('name')}({code}) strategy={strategy} state={get_pause_state_label()}"
             )
             clear_signal_reference(stock)
+            _log_entry_pipeline(stock, code, "blocked_pause", strategy=strategy)
             return
 
         big_bite_summary = ""
@@ -898,7 +977,24 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             qty = request['qty']
             price = request['price']
             if qty <= 0:
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "skip_order_leg_zero_qty",
+                    tag=request['tag'],
+                )
                 continue
+
+            _log_entry_pipeline(
+                stock,
+                code,
+                "order_leg_request",
+                tag=request['tag'],
+                qty=qty,
+                price=price,
+                order_type=request['order_type_code'],
+                tif=request['tif'],
+            )
 
             res = kiwoom_orders.send_buy_order(
                 code,
@@ -911,12 +1007,21 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             )
 
             if not isinstance(res, dict):
+                _log_entry_pipeline(stock, code, "order_leg_no_response", tag=request['tag'])
                 continue
             rt_cd = str(res.get('return_code', res.get('rt_cd', '')))
             if rt_cd != '0':
                 log_info(
                     f"[LATENCY_ENTRY_ORDER_FAIL] {stock.get('name')}({code}) "
                     f"tag={planned_order.get('tag')} msg={res.get('return_msg')}"
+                )
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "order_leg_fail",
+                    tag=request['tag'],
+                    return_code=rt_cd,
+                    message=res.get('return_msg') or res.get('err_msg'),
                 )
                 continue
 
@@ -937,10 +1042,12 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 f"tag={request['tag']} qty={qty} price={price} "
                 f"type={request['order_type_code']} tif={request['tif']} ord_no={ord_no}"
             )
+            _log_entry_pipeline(stock, code, "order_leg_sent", tag=request['tag'], ord_no=ord_no)
 
         if not successful_orders:
             print(f"❌ [{stock['name']}] 매수 주문 전송 실패 (성공 주문 없음)")
             clear_signal_reference(stock)
+            _log_entry_pipeline(stock, code, "order_bundle_failed")
             return
 
         stock['entry_mode'] = entry_mode
@@ -951,6 +1058,14 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             requested_qty=real_buy_qty,
             msg=msg,
             entry_orders=successful_orders,
+        )
+        _log_entry_pipeline(
+            stock,
+            code,
+            "order_bundle_submitted",
+            entry_mode=entry_mode,
+            requested_qty=real_buy_qty,
+            legs=len(successful_orders),
         )
 
         if strategy in ['SCALPING', 'SCALP']:
@@ -1862,8 +1977,15 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         strategy=stock.get('strategy', ''),
     )
     if qty <= 0:
-        print(f"⚠️ [추가매수보류] {stock.get('name')}: 추가매수 수량 0주")
-        log_info(f"[ADD_BLOCKED] {stock.get('name')}({code}) reason=zero_qty")
+        log_info(
+            f"[ADD_BLOCKED] {stock.get('name')}({code}) "
+            f"reason=zero_qty deposit={deposit} curr_price={curr_price} "
+            f"buy_qty={stock.get('buy_qty', 0)} add_type={add_type}"
+        )
+        print(
+            f"⚠️ [추가매수보류] {stock.get('name')}: 추가매수 수량 0주 "
+            f"(주문가능금액 {deposit:,}원, 현재가 {curr_price:,}원)"
+        )
         return None
 
     raw_strategy = (stock.get('strategy') or 'KOSPI_ML').upper()

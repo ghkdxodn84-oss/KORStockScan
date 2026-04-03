@@ -4,6 +4,7 @@ import re
 
 # 💡 Level 1 & 2 공통 모듈
 from src.utils.logger import log_error, log_info
+from src.utils.constants import TRADING_RULES
 from src.core.event_bus import EventBus
 from src.utils import kiwoom_utils
 from src.engine.trade_pause_control import is_buy_side_paused, get_pause_state_label
@@ -21,14 +22,39 @@ def calc_buy_qty(current_price, total_deposit, ratio=0.1):
     """
     [v12.1] 예수금 대비 비중을 계산하여 정수 수량 산출
     """
-    if current_price <= 0 or total_deposit <= 0:
-        return 0
+    _, _, qty, _ = describe_buy_capacity(current_price, total_deposit, ratio)
+    return qty
 
-    target_budget = total_deposit * ratio
-    safe_budget = target_budget * 0.95  # 슬리피지 대비 95% 사용
+
+def describe_buy_capacity(current_price, total_deposit, ratio=0.1, safety_ratio=None):
+    """
+    주문가능금액과 전략 비중을 바탕으로 실제 주문 가능 예산/수량을 설명합니다.
+    """
+    if current_price <= 0 or total_deposit <= 0:
+        return 0, 0, 0, 0.0
+
+    if safety_ratio is None:
+        safety_ratio = getattr(TRADING_RULES, "BUY_BUDGET_SAFETY_RATIO", 0.95)
+    safe_ratio = max(0.0, min(float(safety_ratio), 1.0))
+    target_budget = max(float(total_deposit) * float(ratio), 0.0)
+    safe_budget = target_budget * safe_ratio  # 슬리피지 대비 95% 사용
 
     qty = int(safe_budget // current_price)
-    return qty
+    used_ratio = safe_ratio
+
+    if qty <= 0 and target_budget >= float(current_price):
+        relaxed_ratio = max(
+            safe_ratio,
+            min(float(getattr(TRADING_RULES, "BUY_BUDGET_RELAXED_SAFETY_RATIO", 1.0) or 1.0), 1.0),
+        )
+        relaxed_budget = target_budget * relaxed_ratio
+        relaxed_qty = int(relaxed_budget // current_price)
+        if relaxed_qty > 0:
+            safe_budget = relaxed_budget
+            qty = relaxed_qty
+            used_ratio = relaxed_ratio
+
+    return int(target_budget), int(safe_budget), qty, float(used_ratio)
 
 def get_deposit(token):
     """

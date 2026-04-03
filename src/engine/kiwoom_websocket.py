@@ -373,7 +373,6 @@ class KiwoomWSManager:
                         cnd_name = self.condition_dict.get(seq) or 'UNKNOWN_CONDITION'
 
                         if insert_type == 'I':
-                            print(f"🚨 [조건검색 PUSH] {code} 포착! (출처: {cnd_name})")
                             # 💡 스나이퍼에게 출처(이름표)를 함께 보냅니다!
                             self._enqueue_state_event("CONDITION_MATCHED", {
                                 'code': code,
@@ -381,7 +380,6 @@ class KiwoomWSManager:
                                 'condition_name': cnd_name
                             })
                         elif insert_type == 'D':
-                            print(f"🧹 [조건검색 PUSH] {code} 이탈! (출처: {cnd_name})")
                             self._enqueue_state_event("CONDITION_UNMATCHED", {
                                 'code': code,
                                 'type': 'REALTIME',

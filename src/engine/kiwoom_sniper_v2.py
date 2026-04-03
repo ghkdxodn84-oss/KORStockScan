@@ -479,9 +479,17 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
     # 매수 수량 체크 (자금 부족)
     deposit = kiwoom_orders.get_deposit(KIWOOM_TOKEN)
     ratio = stock.get('ratio', 0.1)  # 기본 비율
-    real_buy_qty = kiwoom_orders.calc_buy_qty(curr_price, deposit, ratio)
+    target_budget, safe_budget, real_buy_qty, used_safety_ratio = kiwoom_orders.describe_buy_capacity(
+        curr_price,
+        deposit,
+        ratio,
+    )
     if real_buy_qty <= 0:
-        return "매수 수량 0주 (자금 부족)"
+        return (
+            "매수 수량 0주 "
+            f"(deposit={deposit}, ratio={ratio:.4f}, target_budget={target_budget}, "
+            f"safe_budget={safe_budget}, safety_ratio={used_safety_ratio:.4f}, curr_price={curr_price})"
+        )
     
     # 모든 조건 통과
     return None

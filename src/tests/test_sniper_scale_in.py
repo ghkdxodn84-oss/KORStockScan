@@ -64,6 +64,18 @@ def test_weighted_avg_price():
     assert round(avg, 4) == 9833.3333
 
 
+def test_describe_buy_capacity_relaxes_when_one_share_is_affordable():
+    target_budget, safe_budget, qty, used_ratio = kiwoom_orders.describe_buy_capacity(
+        current_price=1000,
+        total_deposit=10000,
+        ratio=0.10,
+    )
+    assert target_budget == 1000
+    assert safe_budget == 1000
+    assert qty == 1
+    assert used_ratio == 1.0
+
+
 def test_add_count_increment_once_on_partial_fills(monkeypatch):
     # Prepare execution receipts environment
     receipts.ACTIVE_TARGETS = []

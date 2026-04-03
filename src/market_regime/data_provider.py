@@ -7,6 +7,19 @@ class YahooMarketDataProvider:
     WTI_TICKER = "CL=F"
     BRENT_TICKER = "BZ=F"
 
+    @staticmethod
+    def _normalize_column_name(col) -> str:
+        if isinstance(col, tuple):
+            parts = [str(part).strip() for part in col if str(part).strip() and str(part).strip().lower() != "nan"]
+            if not parts:
+                return ""
+            for part in parts:
+                lowered = part.lower()
+                if lowered in {"date", "datetime", "open", "high", "low", "close", "adj close", "volume"}:
+                    return lowered
+            return parts[0].lower()
+        return str(col).strip().lower()
+
     def fetch_history(self, ticker: str, period: str = "3mo", interval: str = "1d") -> pd.DataFrame:
         df = yf.download(
             tickers=ticker,
@@ -22,11 +35,10 @@ class YahooMarketDataProvider:
 
         df = df.reset_index()
 
-        rename_map = {}
-        for col in df.columns:
-            col_str = str(col).lower()
-            rename_map[col] = col_str
-        df = df.rename(columns=rename_map)
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = [self._normalize_column_name(col) for col in df.columns]
+        else:
+            df = df.rename(columns={col: self._normalize_column_name(col) for col in df.columns})
 
         if "date" not in df.columns and "datetime" in df.columns:
             df["date"] = df["datetime"]

@@ -79,7 +79,9 @@ class TradingConfig:
     INVEST_RATIO_KOSDAQ_MIN: float = 0.05  # 코스닥 AI 점수 60점일 때 (5%)
     INVEST_RATIO_KOSDAQ_MAX: float = 0.15  # 코스닥 AI 점수 100점일 때 (15%)
     INVEST_RATIO_KOSPI_MIN: float = 0.10   # 코스피 우량주 AI 점수 60점일 때 (10%)
-    INVEST_RATIO_KOSPI_MAX: float = 0.30   # 코스피 우량주 AI 점수 100점일 때 (30%)
+    INVEST_RATIO_KOSPI_MAX: float = 0.40   # 코스피 우량주 AI 점수 100점일 때 (40%)
+    BUY_BUDGET_SAFETY_RATIO: float = 0.95  # 기본 주문 안전계수
+    BUY_BUDGET_RELAXED_SAFETY_RATIO: float = 1.00  # 1주도 안 나올 때만 재시도하는 완화 안전계수
 
     # 💡 [변경] 스윙 손절선 (백테스트 기준 -3.0% 반영)
     STOP_LOSS_BULL: float = -3.0  # 🏆 상승장 손절선 (최적화 결과 -3.0 반영)

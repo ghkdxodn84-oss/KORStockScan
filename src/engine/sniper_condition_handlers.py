@@ -51,6 +51,7 @@ HYSTERESIS_DROP_PCT_MED = 0.012      # -1.2% (scalp_underpress_01, scalp_afterno
 HYSTERESIS_DROP_PCT_SWING = 0.040    # -4.0% (kospi_short_swing_01, kospi_midterm_swing_01)
 
 _CONDITION_STATE = {}
+_UNMATCH_LOG_STATE = {}
 
 
 def bind_condition_dependencies(
@@ -81,6 +82,24 @@ def _escape(text):
     if ESCAPE_MARKDOWN is None:
         return text
     return ESCAPE_MARKDOWN(text)
+
+
+def _should_log_unmatch_event(key, cooldown_sec=300):
+    now_ts = time.time()
+    last_ts = float(_UNMATCH_LOG_STATE.get(key, 0) or 0)
+    if now_ts - last_ts < cooldown_sec:
+        return False
+    _UNMATCH_LOG_STATE[key] = now_ts
+    return True
+
+
+def _should_log_match_event(key, cooldown_sec=300):
+    now_ts = time.time()
+    last_ts = float(_UNMATCH_LOG_STATE.get(f"match:{key}", 0) or 0)
+    if now_ts - last_ts < cooldown_sec:
+        return False
+    _UNMATCH_LOG_STATE[f"match:{key}"] = now_ts
+    return True
 
 
 def _condition_key(code, target_date, strategy, position_tag):
@@ -386,8 +405,6 @@ def handle_condition_matched(payload):
             return
         # =========================================================
 
-        print(f"🦅 [V3 헌터] 조건검색 0.1초 포착! {name}({code}) 감시망 편입 준비 (목표일: {target_date})")
-
         with DB.get_session() as session:
             # =====================================================
             # 1) VCP_SHOOTING: 전일 VCP_CANDID가 있어야 승격
@@ -431,6 +448,9 @@ def handle_condition_matched(payload):
                     'TELEGRAM_BROADCAST',
                     {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'}
                 )
+                log_key = f"{code}:{cnd_name}:vcp_shooting"
+                if _should_log_match_event(log_key):
+                    print(f"🎯 [조건검색 포착] {name}({code}) VCP_SHOOTING 승격 및 감시망 투입 (출처: {cnd_name})")
                 return
 
             # =====================================================
@@ -476,6 +496,9 @@ def handle_condition_matched(payload):
                         'TELEGRAM_BROADCAST',
                         {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'}
                     )
+                    log_key = f"{code}:{cnd_name}:vcp_next"
+                    if _should_log_match_event(log_key):
+                        print(f"🌙 [조건검색 포착] {name}({code}) 익일 VCP_NEXT 예약 생성 (출처: {cnd_name})")
                 return
 
             # =====================================================
@@ -507,6 +530,7 @@ def handle_condition_matched(payload):
                     record.position_tag = target_position_tag
 
             if not is_next_day_target:
+                newly_added_to_active = False
                 if not any(str(t.get('code', '')).strip()[:6] == code for t in ACTIVE_TARGETS):
                     new_target = {
                         'id': record.id,
@@ -518,12 +542,21 @@ def handle_condition_matched(payload):
                         'position_tag': getattr(record, 'position_tag', target_position_tag) or target_position_tag
                     }
                     ACTIVE_TARGETS.append(new_target)
+                    newly_added_to_active = True
 
                 EVENT_BUS.publish("COMMAND_WS_REG", {"codes": [code]})
                 if is_debounce_target:
                     state = _CONDITION_STATE.get(key)
                     if state:
                         state['confirmed'] = True
+
+                if newly_created or newly_added_to_active:
+                    log_key = f"{code}:{cnd_name}:{target_position_tag}:active"
+                    if _should_log_match_event(log_key):
+                        detail = f"strategy={record.strategy or target_strategy}"
+                        if target_position_tag not in ["", "MIDDLE"]:
+                            detail += f", tag={target_position_tag}"
+                        print(f"🎯 [조건검색 포착] {name}({code}) 감시망 편입 완료 (출처: {cnd_name}, {detail})")
 
             else:
                 if newly_created:
@@ -559,7 +592,9 @@ def handle_condition_matched(payload):
                         'TELEGRAM_BROADCAST',
                         {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'}
                     )
-                    print(f"🌙 [{name}] 종가 무렵 포착 완료. 내일({target_date}) 감시 대상({target_strategy})으로 DB 예약 성공!")
+                    log_key = f"{code}:{cnd_name}:{target_position_tag}:nextday"
+                    if _should_log_match_event(log_key):
+                        print(f"🌙 [조건검색 포착] {name}({code}) 내일({target_date}) 감시 예약 완료 (출처: {cnd_name}, strategy={target_strategy}, tag={target_position_tag})")
 
     except Exception as exc:
         log_error(f"🚨 조건검색 편입 처리 에러: {exc}")
@@ -595,6 +630,8 @@ def handle_condition_unmatched(payload):
     now_ts = time.time()
     state = _CONDITION_STATE.get(key)
     removed = False
+    removal_reason = "unmatched"
+    unmatched_age_sec = 0
 
     if state and not state.get('confirmed'):
         age = now_ts - state.get('first_seen', now_ts)
@@ -608,6 +645,7 @@ def handle_condition_unmatched(payload):
         return
 
     if state and state.get('confirmed'):
+        unmatched_age_sec = max(0, int(now_ts - state.get('last_seen', now_ts)))
         if state.get('hold_until', 0) > now_ts:
             return
         if state.get('last_unmatched') == 0:
@@ -619,8 +657,10 @@ def handle_condition_unmatched(payload):
         current_price = float(_get_latest_price(code) or 0)
         open_price, vwap_price = _get_latest_open_and_vwap(code)
         if open_price > 0 and current_price > 0 and current_price < open_price:
+            removal_reason = "below_open"
             _CONDITION_STATE.pop(key, None)
         elif vwap_price > 0 and current_price > 0 and current_price < vwap_price:
+            removal_reason = "below_vwap"
             _CONDITION_STATE.pop(key, None)
         else:
             drop_pct = _get_hysteresis_drop_pct(cnd_name)
@@ -635,7 +675,9 @@ def handle_condition_unmatched(payload):
                     state['unmatched_since'] = now_ts
                 if (now_ts - state['unmatched_since']) < UNMATCH_MAX_HOLD_SEC:
                     return
+                removal_reason = "unmatched_timeout"
             else:
+                removal_reason = "drop_trigger" if drop_triggered else "ma20_broken"
                 _CONDITION_STATE.pop(key, None)
 
     if state:
@@ -687,7 +729,14 @@ def handle_condition_unmatched(payload):
                 t.get('status') not in ['COMPLETED', 'EXPIRED']
                 for t in ACTIVE_TARGETS
             )
-            print(f"🧹 [조건검색 실제 이탈] {code} 이탈 처리 완료 (출처: {cnd_name})")
+            log_key = f"{code}:{cnd_name}:{removal_reason}"
+            if _should_log_unmatch_event(log_key):
+                detail = f"reason={removal_reason}"
+                if unmatched_age_sec > 0:
+                    detail += f", unmatched_age={unmatched_age_sec}s"
+                if target_position_tag not in ["", "MIDDLE"]:
+                    detail += f", tag={target_position_tag}"
+                print(f"🧹 [조건검색 실제 이탈] {code} 이탈 처리 완료 (출처: {cnd_name}, {detail})")
             if not still_tracking:
                 EVENT_BUS.publish("COMMAND_WS_UNREG", {"codes": [code]})
 

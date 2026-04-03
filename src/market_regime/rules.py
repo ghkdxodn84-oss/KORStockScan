@@ -84,26 +84,36 @@ def evaluate_market_regime(vix_df: pd.DataFrame, oil_df: pd.DataFrame, fng_data:
 
     # --- Score 기반 스윙 진입 판정 ---
     score = 0
+    component_scores = {
+        "vix": 0,
+        "oil": 0,
+        "fng": 0,
+    }
 
     # VIX 비중
     if snapshot.vix_extreme and snapshot.vix_two_day_down:
         score += 40
+        component_scores["vix"] = 40
         snapshot.reasons.append("VIX 극점 후 2일 연속 하락")
     elif snapshot.vix_peak_passed:
         score += 25
+        component_scores["vix"] = 25
         snapshot.reasons.append("VIX 3일선 하향 이탈")
 
     # Oil 비중
     if snapshot.oil_reversal:
         score += 35
+        component_scores["oil"] = 35
         snapshot.reasons.append("원유 반전 시그널")
 
     # Fear & Greed 비중
     if snapshot.fng_recovery:
         score += 20
+        component_scores["fng"] = 20
         snapshot.reasons.append("공포탐욕지수 회복")
     elif snapshot.fng_extreme_fear:
         score -= 10
+        component_scores["fng"] = -10
         snapshot.reasons.append("공포탐욕지수 극단적 공포 유지")
 
     snapshot.swing_score = score
@@ -130,6 +140,10 @@ def evaluate_market_regime(vix_df: pd.DataFrame, oil_df: pd.DataFrame, fng_data:
         "fng_curr": fng_curr,
         "fng_prev": fng_prev,
         "score_threshold": 70,
+        "component_scores": component_scores,
+        "vix_signal": "extreme_two_day_down" if component_scores["vix"] == 40 else ("below_ma3" if component_scores["vix"] == 25 else "none"),
+        "oil_signal": "reversal" if snapshot.oil_reversal else "none",
+        "fng_signal": "recovery" if component_scores["fng"] == 20 else ("extreme_fear" if component_scores["fng"] == -10 else "none"),
     }
 
     snapshot.fng_description = str(fng_data.get("description", "") or "")
