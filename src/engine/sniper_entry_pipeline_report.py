@@ -17,28 +17,44 @@ _ENTRY_RE = re.compile(
     r"stage=(?P<stage>[^\s]+)(?P<rest>.*)$"
 )
 _FIELD_RE = re.compile(r"(?P<key>[A-Za-z_]+)=(?P<value>[^\s]+)")
+_IGNORED_STOCK_KEYS = {
+    ("TEST", "123456"),
+}
+_EXECUTION_BLOCK_STAGES = {
+    "blocked_no_admin",
+    "blocked_zero_qty",
+    "blocked_liquidity",
+    "latency_block",
+    "blocked_pause",
+    "order_leg_fail",
+    "order_leg_no_response",
+    "order_bundle_failed",
+}
 
 _DISPLAY_STAGE_LABELS = {
     "watching": "감시중",
     "ai_confirmed": "AI 확답",
+    "strength_momentum_observed": "동적 체결강도 관측",
     "strength_momentum_pass": "동적 체결강도 통과",
     "dynamic_vpw_override_pass": "정적 120 우회",
     "entry_armed": "진입 자격 확보",
     "entry_armed_resume": "진입 자격 유지",
     "budget_pass": "수량 계산 통과",
-    "latency_pass": "Latency 통과",
+    "latency_pass": "지연 리스크 통과",
     "order_leg_sent": "주문 전송",
     "order_bundle_submitted": "주문 제출 완료",
     "first_ai_wait": "첫 AI 대기",
     "blocked_strength_momentum": "동적 체결강도 차단",
     "blocked_liquidity": "유동성 차단",
     "blocked_ai_score": "AI 점수 차단",
-    "latency_block": "Latency 차단",
+    "latency_block": "지연 리스크 차단",
     "blocked_zero_qty": "수량 0주 차단",
     "blocked_gap_from_scan": "포착가 갭 차단",
     "blocked_overbought": "과열 차단",
     "blocked_big_bite_hard_gate": "Big-Bite 차단",
     "blocked_vpw": "정적 체결강도 차단",
+    "blocked_gatekeeper_reject": "게이트키퍼 거부",
+    "blocked_swing_gap": "스윙 갭상승 차단",
 }
 
 _SUMMARY_PASS_STAGES = {
@@ -46,6 +62,16 @@ _SUMMARY_PASS_STAGES = {
     "strength_momentum_pass",
     "dynamic_vpw_override_pass",
     "entry_armed",
+    "budget_pass",
+    "latency_pass",
+    "order_leg_sent",
+    "order_bundle_submitted",
+}
+
+_CONFIRMED_FLOW_ANCHOR_STAGES = {
+    "ai_confirmed",
+    "entry_armed",
+    "entry_armed_resume",
     "budget_pass",
     "latency_pass",
     "order_leg_sent",
@@ -110,6 +136,14 @@ def _parse_event(line: str) -> PipelineEvent | None:
     )
 
 
+def _event_sort_key(event: PipelineEvent) -> tuple[datetime, str, str]:
+    try:
+        parsed = datetime.strptime(event.timestamp, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        parsed = datetime.min
+    return parsed, event.name, event.stage
+
+
 def _event_to_row(event: PipelineEvent) -> dict:
     return {
         "timestamp": event.timestamp,
@@ -118,6 +152,15 @@ def _event_to_row(event: PipelineEvent) -> dict:
         "stage": event.stage,
         "fields": dict(event.fields),
     }
+
+
+def _should_ignore_event(event: PipelineEvent) -> bool:
+    key = (str(event.name or "").strip().upper(), str(event.code or "").strip())
+    if key in _IGNORED_STOCK_KEYS:
+        return True
+    if key[0] in {"TEST", "DUMMY", "MOCK"}:
+        return True
+    return False
 
 
 def _classify_stage(stage: str) -> str:
@@ -135,15 +178,69 @@ def _friendly_gate_name(stage: str) -> str:
         "blocked_strength_momentum": "동적 체결강도",
         "blocked_liquidity": "유동성",
         "blocked_ai_score": "AI 점수",
-        "latency_block": "Latency",
+        "latency_block": "지연 리스크",
         "blocked_zero_qty": "주문 가능 수량",
         "blocked_gap_from_scan": "포착가 대비 갭",
         "blocked_overbought": "과열",
         "blocked_big_bite_hard_gate": "Big-Bite 하드게이트",
         "blocked_vpw": "정적 체결강도",
+        "blocked_gatekeeper_reject": "게이트키퍼 거부",
+        "blocked_swing_gap": "스윙 갭상승",
         "first_ai_wait": "첫 AI 대기",
     }
     return mapping.get(stage, stage)
+
+
+_BLOCKER_GUIDE = {
+    "동적 체결강도": {
+        "description": "실시간 체결대금·매수비율·체결강도 기준을 못 채운 경우",
+        "check": "window_buy_value, buy_ratio, vpw base",
+    },
+    "유동성": {
+        "description": "호가 잔량이나 거래대금이 부족해 즉시 진입 품질이 낮은 경우",
+        "check": "ask/bid depth, liquidity_value",
+    },
+    "AI 점수": {
+        "description": "실시간 AI 확답 점수가 전략 기준에 못 미친 경우",
+        "check": "current_ai_score, threshold",
+    },
+    "지연 리스크": {
+        "description": "신호 시점 대비 현재 체결 위치가 늦거나 슬리피지 위험이 큰 경우",
+        "check": "latency_state, slippage, ws_age",
+    },
+    "주문 가능 수량": {
+        "description": "예수금·비중·안전계수 적용 후 실제 주문 수량이 0주인 경우",
+        "check": "deposit, ratio, safe_budget",
+    },
+    "포착가 대비 갭": {
+        "description": "포착 시점보다 현재가가 너무 멀어져 추격 진입을 막은 경우",
+        "check": "scan_price gap",
+    },
+    "과열": {
+        "description": "급등/과열 상태로 판단되어 진입을 보류한 경우",
+        "check": "fluctuation, overbought gate",
+    },
+    "Big-Bite 하드게이트": {
+        "description": "초기 강한 매수 신호 없이 Big-Bite 진입 조건이 미충족인 경우",
+        "check": "big_bite trigger/confirm",
+    },
+    "정적 체결강도": {
+        "description": "기존 체결강도 120 하드게이트를 넘지 못한 경우",
+        "check": "current_vpw vs limit",
+    },
+    "게이트키퍼 거부": {
+        "description": "스윙 게이트키퍼가 실시간 컨텍스트를 보고 진입을 거부한 경우",
+        "check": "gatekeeper action/report",
+    },
+    "스윙 갭상승": {
+        "description": "스윙 진입 기준 대비 갭상승 폭이 너무 커서 추격을 막은 경우",
+        "check": "fluctuation vs max_gap",
+    },
+    "첫 AI 대기": {
+        "description": "첫 AI 분석 턴으로 즉시 진입하지 않고 다음 확인을 기다리는 상태",
+        "check": "first_ai_wait path",
+    },
+}
 
 
 def _display_stage_label(stage: str) -> str:
@@ -193,9 +290,18 @@ def _build_summary_flow(item_events: list[PipelineEvent], latest: PipelineEvent)
 
 def _build_pass_flow(item_events: list[PipelineEvent]) -> list[dict]:
     flow = [{"stage": "watching", "label": _display_stage_label("watching"), "kind": "start"}]
+    anchor_idx = next(
+        (idx for idx, event in enumerate(item_events) if event.stage in _CONFIRMED_FLOW_ANCHOR_STAGES),
+        None,
+    )
+    if anchor_idx is None:
+        return flow
+
     seen_passes: set[str] = set()
-    for event in item_events:
+    for idx, event in enumerate(item_events):
         if event.stage not in _SUMMARY_PASS_STAGES or event.stage in seen_passes:
+            continue
+        if idx < anchor_idx and event.stage in {"strength_momentum_pass", "dynamic_vpw_override_pass"}:
             continue
         flow.append({
             "stage": event.stage,
@@ -217,10 +323,84 @@ def _build_latest_status(latest: PipelineEvent) -> dict:
     }
 
 
+def _build_confirmed_failure(item_events: list[PipelineEvent]) -> dict | None:
+    anchor_idx = next(
+        (idx for idx, event in enumerate(item_events) if event.stage in _CONFIRMED_FLOW_ANCHOR_STAGES),
+        None,
+    )
+    if anchor_idx is None:
+        return None
+
+    for event in reversed(item_events[anchor_idx:]):
+        if event.stage not in _EXECUTION_BLOCK_STAGES:
+            continue
+        return {
+            "stage": event.stage,
+            "label": _display_stage_label(event.stage),
+            "reason": event.fields.get("reason") or event.fields.get("dynamic_reason") or "",
+            "timestamp": event.timestamp,
+            "fields": dict(event.fields),
+            "details": _build_failure_details(event),
+        }
+    return None
+
+
+def _build_failure_details(event: PipelineEvent) -> list[dict[str, str]]:
+    details: list[dict[str, str]] = []
+    field_map = [
+        ("decision", "판정"),
+        ("latency", "지연상태"),
+        ("ws_age_ms", "WS 나이"),
+        ("ws_jitter_ms", "WS 지터"),
+        ("spread_ratio", "호가스프레드"),
+        ("quote_stale", "시세정체"),
+        ("deposit", "주문가능금액"),
+        ("qty", "수량"),
+    ]
+    for key, label in field_map:
+        value = event.fields.get(key)
+        if value in (None, "", "None"):
+            continue
+        if key in {"ws_age_ms", "ws_jitter_ms"}:
+            display_value = f"{value}ms"
+        else:
+            display_value = str(value)
+        details.append({"label": label, "value": display_value})
+    return details
+
+
+def _build_precheck_passes(item_events: list[PipelineEvent]) -> list[dict]:
+    anchor_idx = next(
+        (idx for idx, event in enumerate(item_events) if event.stage in _CONFIRMED_FLOW_ANCHOR_STAGES),
+        None,
+    )
+    if anchor_idx is not None:
+        return []
+
+    precheck_stages = []
+    seen = set()
+    for event in item_events:
+        if event.stage not in {"strength_momentum_pass", "dynamic_vpw_override_pass"}:
+            continue
+        if event.stage in seen:
+            continue
+        seen.add(event.stage)
+        precheck_stages.append({
+            "stage": event.stage,
+            "label": _display_stage_label(event.stage),
+            "kind": "pass",
+        })
+    return precheck_stages
+
+
 def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = None, top_n: int = 20) -> dict:
     log_path = LOGS_DIR / "sniper_state_handlers_info.log"
     lines = _iter_target_lines(log_path, target_date=target_date)
-    events = [event for line in lines if (event := _parse_event(line))]
+    events = [
+        event
+        for line in lines
+        if (event := _parse_event(line)) and not _should_ignore_event(event)
+    ]
     since_dt = _parse_since_datetime(target_date, since_time)
     if since_dt is not None:
         filtered_events: list[PipelineEvent] = []
@@ -232,6 +412,8 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
             if event_dt >= since_dt:
                 filtered_events.append(event)
         events = filtered_events
+
+    events.sort(key=_event_sort_key)
 
     stock_events: dict[tuple[str, str], list[PipelineEvent]] = defaultdict(list)
     for event in events:
@@ -268,7 +450,9 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
             "latest_reason": latest_status["reason"],
             "flow": compact_flow,
             "pass_flow": pass_flow,
+            "precheck_passes": _build_precheck_passes(item_events),
             "latest_status": latest_status,
+            "confirmed_failure": _build_confirmed_failure(item_events),
             "summary_flow": _build_summary_flow(item_events, latest),
             "events": [_event_to_row(event) for event in item_events[-min(len(item_events), 20):]],
         })
@@ -294,6 +478,14 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
         "blocker_breakdown": [
             {"gate": gate, "count": count}
             for gate, count in blocker_counts.most_common(12)
+        ],
+        "blocker_guide": [
+            {
+                "gate": gate,
+                "description": _BLOCKER_GUIDE.get(gate, {}).get("description", "운영 로그에서 상세 사유 확인 필요"),
+                "check": _BLOCKER_GUIDE.get(gate, {}).get("check", "-"),
+            }
+            for gate, _count in blocker_counts.most_common(12)
         ],
         "sections": {
             "recent_stocks": per_stock_rows[:top_n],

@@ -27,7 +27,8 @@ class EntryConfig:
     enable_ioc_for_fallback_scout: bool = True
     enable_ioc_for_fallback_main: bool = False
 
-    max_spread_ratio: float = 0.003
+    max_spread_ratio_for_safe: float = 0.003
+    max_spread_ratio_for_caution: float = 0.005
     max_ws_age_ms_for_safe: int = 250
     max_ws_age_ms_for_caution: int = 700
     max_ws_jitter_ms_for_safe: int = 120

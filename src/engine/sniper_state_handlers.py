@@ -162,6 +162,22 @@ def _log_entry_pipeline(stock, code, stage, **fields):
     log_info(f"[ENTRY_PIPELINE] {stock.get('name')}({code}) stage={stage}{suffix}")
 
 
+def _sanitize_pipeline_field(value):
+    text = str(value)
+    return text.replace(" ", "|")
+
+
+def _log_holding_pipeline(stock, code, stage, **fields):
+    record_id = stock.get("id")
+    merged_fields = {}
+    if record_id not in (None, "", 0):
+        merged_fields["id"] = record_id
+    merged_fields.update(fields)
+    parts = [f"{key}={_sanitize_pipeline_field(value)}" for key, value in merged_fields.items()]
+    suffix = f" {' '.join(parts)}" if parts else ""
+    log_info(f"[HOLDING_PIPELINE] {stock.get('name')}({code}) stage={stage}{suffix}")
+
+
 def _log_strength_momentum_observation(stock, code, result):
     if not isinstance(result, dict):
         return
@@ -1178,7 +1194,10 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 f"latency={latency_gate.get('latency_state')} "
                 f"reason={latency_gate.get('reason')} "
                 f"signal={latency_gate.get('signal_price')} latest={latency_gate.get('latest_price')} "
-                f"ws_age_ms={latency_gate.get('ws_age_ms')}"
+                f"ws_age_ms={latency_gate.get('ws_age_ms')} "
+                f"ws_jitter_ms={latency_gate.get('ws_jitter_ms')} "
+                f"spread_ratio={latency_gate.get('spread_ratio')} "
+                f"quote_stale={latency_gate.get('quote_stale')}"
             )
             clear_signal_reference(stock)
             _log_entry_pipeline(
@@ -1188,6 +1207,10 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 decision=latency_gate.get('decision'),
                 latency=latency_gate.get('latency_state'),
                 reason=latency_gate.get('reason'),
+                ws_age_ms=latency_gate.get('ws_age_ms'),
+                ws_jitter_ms=latency_gate.get('ws_jitter_ms'),
+                spread_ratio=f"{float(latency_gate.get('spread_ratio', 0.0) or 0.0):.6f}",
+                quote_stale=bool(latency_gate.get('quote_stale')),
             )
             return
 
@@ -1504,10 +1527,33 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
 
     last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
     current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
+    ai_low_score_hits = int(stock.get('ai_low_score_loss_hits', 0) or 0)
+    ai_exit_score_limit = int(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_MAX_SCORE', 35))
+    ai_exit_min_loss_pct = float(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_MIN_LOSS_PCT', -0.7))
+    ai_exit_min_hold_sec = int(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_MIN_HOLD_SEC', 180))
+    ai_exit_needed_hits = int(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_CONSECUTIVE_HITS', 3))
 
     last_ai_profit = stock.get('last_ai_profit', profit_rate)
     price_change = abs(profit_rate - last_ai_profit)
     time_elapsed = time.time() - last_ai_time
+    held_time_min = 0
+    if 'order_time' in stock and stock.get('order_time'):
+        held_time_min = (time.time() - stock['order_time']) / 60
+    elif stock.get('buy_time'):
+        try:
+            bt = stock['buy_time']
+            if isinstance(bt, datetime):
+                b_dt = bt
+            else:
+                bt_str = str(bt)
+                try:
+                    b_dt = datetime.fromisoformat(bt_str)
+                except Exception:
+                    b_time = datetime.strptime(bt_str, '%H:%M:%S').time()
+                    b_dt = datetime.combine(datetime.now().date(), b_time)
+            held_time_min = (datetime.now() - b_dt).total_seconds() / 60
+        except Exception:
+            pass
 
     if strategy == 'SCALPING' and ai_engine and radar:
         safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5)
@@ -1535,9 +1581,29 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                     stock['last_ai_profit'] = profit_rate
                     current_ai_score = smoothed_score
 
+                    if held_time_min * 60 >= ai_exit_min_hold_sec and profit_rate <= ai_exit_min_loss_pct and current_ai_score <= ai_exit_score_limit:
+                        ai_low_score_hits += 1
+                    else:
+                        ai_low_score_hits = 0
+
+                    stock['ai_low_score_loss_hits'] = ai_low_score_hits
+                    stock['last_ai_reviewed_at'] = time.time()
+
                     print(
                         f"👁️ [AI 보유감시: {stock['name']}] 수익: {profit_rate:+.2f}% | "
-                        f"AI: {current_ai_score:.0f}점 | 갱신주기: {dynamic_max_cd}초"
+                        f"AI: {current_ai_score:.0f}점 | 하방카운트: {ai_low_score_hits}/{ai_exit_needed_hits} | "
+                        f"갱신주기: {dynamic_max_cd}초"
+                    )
+                    _log_holding_pipeline(
+                        stock,
+                        code,
+                        "ai_holding_review",
+                        profit_rate=f"{profit_rate:+.2f}",
+                        ai_score=f"{current_ai_score:.0f}",
+                        low_score_hits=f"{ai_low_score_hits}/{ai_exit_needed_hits}",
+                        held_sec=int(held_time_min * 60),
+                        price_change=f"{price_change:.2f}",
+                        review_cd_sec=dynamic_max_cd,
                     )
 
             except Exception as e:
@@ -1556,25 +1622,6 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
         reason = f"🔥 보호 트레일링 이탈 ({trailing_stop_price:,.0f}원)"
 
     elif strategy == 'SCALPING':
-        held_time_min = 0
-        if 'order_time' in stock and stock.get('order_time'):
-            held_time_min = (time.time() - stock['order_time']) / 60
-        elif stock.get('buy_time'):
-            try:
-                bt = stock['buy_time']
-                if isinstance(bt, datetime):
-                    b_dt = bt
-                else:
-                    bt_str = str(bt)
-                    try:
-                        b_dt = datetime.fromisoformat(bt_str)
-                    except Exception:
-                        b_time = datetime.strptime(bt_str, '%H:%M:%S').time()
-                        b_dt = datetime.combine(datetime.now().date(), b_time)
-                held_time_min = (datetime.now() - b_dt).total_seconds() / 60
-            except Exception:
-                pass
-
         base_stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -1.5)
         hard_stop_pct = getattr(TRADING_RULES, 'SCALP_HARD_STOP', -2.5)
         safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5)
@@ -1602,10 +1649,22 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             sell_reason_type = "LOSS"
             reason = f"🔪 소프트 손절 ({dynamic_stop_pct}%) [AI: {current_ai_score:.0f}]"
 
-        elif profit_rate < 0 and current_ai_score <= 35:
+        elif profit_rate >= 0 and ai_low_score_hits:
+            stock['ai_low_score_loss_hits'] = 0
+            ai_low_score_hits = 0
+
+        elif (
+            held_time_min * 60 >= ai_exit_min_hold_sec
+            and profit_rate <= ai_exit_min_loss_pct
+            and current_ai_score <= ai_exit_score_limit
+            and ai_low_score_hits >= ai_exit_needed_hits
+        ):
             is_sell_signal = True
             sell_reason_type = "LOSS"
-            reason = f"🚨 AI 하방 리스크 포착 ({current_ai_score:.0f}점). 조기 손절 ({profit_rate:.2f}%)"
+            reason = (
+                f"🚨 AI 하방 리스크 연속 확인 {ai_low_score_hits}/{ai_exit_needed_hits}회 "
+                f"({current_ai_score:.0f}점). 조기 손절 ({profit_rate:.2f}%)"
+            )
 
         elif profit_rate >= safe_profit_pct:
             if current_ai_score < 50:
@@ -1689,6 +1748,20 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             reason = f"🛑 손절선 도달 ({regime_name} 기준 {current_stop_loss}%)"
 
     if is_sell_signal:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "exit_signal",
+            sell_reason_type=sell_reason_type,
+            reason=reason,
+            profit_rate=f"{profit_rate:+.2f}",
+            peak_profit=f"{peak_profit:+.2f}",
+            current_ai_score=f"{current_ai_score:.0f}",
+            held_sec=int(held_time_min * 60),
+            curr_price=curr_p,
+            buy_price=buy_p,
+            buy_qty=int(stock.get("buy_qty", 0) or 0),
+        )
         if _has_open_pending_entry_orders(stock):
             cancel_state = _cancel_pending_entry_orders(stock, code, force=False)
             if cancel_state == 'failed':
@@ -1785,6 +1858,16 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             stock['sell_order_time'] = time.time()
             if ord_no:
                 stock['sell_odno'] = ord_no
+            _log_holding_pipeline(
+                stock,
+                code,
+                "sell_order_sent",
+                sell_reason_type=sell_reason_type,
+                qty=buy_qty,
+                ord_no=ord_no or "-",
+                order_type=stock.get("exit_order_type") or "-",
+                profit_rate=f"{profit_rate:+.2f}",
+            )
 
             if strategy == 'SCALPING' and now_t < TIME_15_30:
                 cooldowns[code] = time.time() + 1200
@@ -1801,6 +1884,15 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                 new_status = 'HOLDING'
 
             stock['status'] = new_status
+            _log_holding_pipeline(
+                stock,
+                code,
+                "sell_order_failed",
+                sell_reason_type=sell_reason_type,
+                new_status=new_status,
+                error=err_msg or "unknown",
+                profit_rate=f"{profit_rate:+.2f}",
+            )
 
             try:
                 with DB.get_session() as session:

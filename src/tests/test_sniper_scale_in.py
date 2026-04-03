@@ -1218,3 +1218,118 @@ def test_protection_price_triggers_sell_before_add(monkeypatch):
 
     assert called["sell"] == 1
     assert called["gate"] is False
+
+
+def test_scalping_ai_early_exit_requires_depth_and_hold_guards(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 101}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    called = {"sell": False, "gate": False}
+
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: called.__setitem__("sell", True) or {"return_code": "0", "ord_no": "S1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: called.__setitem__("gate", True) or {"allowed": False, "reason": "test_block"},
+    )
+
+    stock = {
+        "id": 11,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 100,
+        "buy_qty": 10,
+        "buy_time": datetime.now() - timedelta(seconds=60),
+        "rt_ai_prob": 0.29,
+        "ai_low_score_loss_hits": 3,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 99.4, "orderbook": {"bids": [{"price": 99, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    assert called["sell"] is False
+    assert called["gate"] is True
+    assert stock["status"] == "HOLDING"
+
+
+def test_scalping_ai_early_exit_requires_consecutive_low_score_hits(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 101}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    sell_calls = []
+
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+
+    base_stock = {
+        "id": 12,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 100,
+        "buy_qty": 10,
+        "buy_time": datetime.now() - timedelta(seconds=240),
+        "rt_ai_prob": 0.29,
+    }
+
+    stock = dict(base_stock, ai_low_score_loss_hits=2)
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 99.2, "orderbook": {"bids": [{"price": 99, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+    assert sell_calls == []
+    assert stock["status"] == "HOLDING"
+
+    stock = dict(base_stock, ai_low_score_loss_hits=3)
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 99.2, "orderbook": {"bids": [{"price": 99, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+    assert len(sell_calls) == 1
+    assert stock["status"] == "SELL_ORDERED"

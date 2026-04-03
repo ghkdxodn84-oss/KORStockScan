@@ -103,6 +103,7 @@ class TradingConfig:
     SCALP_DYNAMIC_VPW_ENABLED: bool = True  # 동적 체결강도 게이트 관측/사용 여부
     SCALP_DYNAMIC_VPW_OBSERVE_ONLY: bool = False  # False면 동적 체결강도 게이트를 실전 진입에 적용
     SCALP_ENTRY_ARM_TTL_SEC: int = 20  # 스캘핑 자격 게이트 통과 후 재평가 없이 주문 단계로 유지할 시간
+    WS_REG_BATCH_SIZE: int = 20  # 웹소켓 REG 패킷당 종목 등록 개수
     SCALP_VPW_WINDOW_SECONDS: int = 8  # 단기 체결 가속도 판정 시간창(초)
     SCALP_VPW_MIN_BASE: float = 95.0  # 누적 체결강도 최소 베이스
     SCALP_VPW_TARGET_DELTA: float = 0.0  # DEPRECATED: 로그 관측용만 유지, 진입 조건문에는 미사용
@@ -116,6 +117,10 @@ class TradingConfig:
     SCALP_TARGET: float = 1.5  # 초단타 익절 1.5% (분석용 목표)
     SCALP_STOP: float = -1.5  # 초단타 완충 손절(soft stop)
     SCALP_HARD_STOP: float = -2.5  # 초단타 최종 안전장치(hard stop)
+    SCALP_AI_EARLY_EXIT_MAX_SCORE: int = 35  # AI 하방 리스크 조기손절 점수 상한
+    SCALP_AI_EARLY_EXIT_MIN_LOSS_PCT: float = -0.7  # 조기손절을 허용하는 최소 손실폭
+    SCALP_AI_EARLY_EXIT_MIN_HOLD_SEC: int = 180  # 진입 직후 블라인드 타임(초)
+    SCALP_AI_EARLY_EXIT_CONSECUTIVE_HITS: int = 3  # 연속 저점수 확인 횟수
     SCALP_TRAILING_START_PCT: float = 0.6  # 초단타 트레일링 시작 수익률
     SCALP_TRAILING_LIMIT: float = 0.5  # DEPRECATED: STRONG/WEAK로 대체됨
     MIN_SCALP_LIQUIDITY: int = 500_000_000  # 최소 호가 잔량 대금 (5억)

@@ -64,7 +64,10 @@ def test_orchestrator_caution_path_returns_fallback():
 
 
 def test_orchestrator_danger_path_rejects():
-    config = EntryConfig(max_spread_ratio=0.0001)
+    config = EntryConfig(
+        max_spread_ratio_for_safe=0.0001,
+        max_spread_ratio_for_caution=0.0001,
+    )
     orchestrator = _build_orchestrator(config, order_rtt_avg_ms=100)
     result = orchestrator.process(_snapshot())
     assert result["mode"] == "reject"

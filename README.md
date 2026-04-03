@@ -254,6 +254,19 @@ latency-aware 진입 기준:
 - 매수 수량은 `주문가능금액 x 전략비중 x 안전계수`를 기본으로 계산하고, 1주도 안 나오는 경우에만 완화 안전계수 재시도로 과도한 0주 판정을 줄임
 - pause 상태에서는 신규 스캘핑 BUY도 차단
 
+### 웹소켓 실시간 등록 운영 주의사항
+스캘핑/실시간 엔진은 감시 종목을 웹소켓 `REG` 패킷으로 등록합니다. 이 구간은 운영 안정성에 직접 영향을 주므로 아래 규칙을 유지해야 합니다.
+
+- 웹소켓 `REG`는 한 번에 너무 많은 종목을 보내면 서버가 연결을 닫을 수 있어, 현재는 `WS_REG_BATCH_SIZE` 기준 배치 전송을 사용
+- 현재 기본 배치 크기는 `20`이며, 값은 `src/utils/constants.py`의 `WS_REG_BATCH_SIZE`로 조정
+- 실시간 등록 대상 코드는 `숫자 6자리`만 허용하고, `0010F0` 같은 비정상 코드는 자동 제외
+- 재접속 루프가 발생하면 먼저 `logs/bot_history.log`에서 아래 로그를 확인
+  - `⚠️ [WS] 연결 끊김! (code=..., reason=...)`
+  - `⚠️ [WS] 실시간 등록 제외 코드: [...]`
+  - `📚 [WS] 조건검색식 목록 수신: ...`
+- `타겟 조건검색식을 찾을 수 없습니다`는 조건검색식 PUSH 미등록 경고이고, 연결 끊김의 직접 원인과는 별개일 수 있음
+- 따라서 재연결 루프가 보이면 우선순위는 `REG payload 크기/등록 건수`와 `비정상 코드 포함 여부`를 먼저 확인
+
 ### 동적 체결강도 관측과 shadow 피드백
 스캘핑 진입에서는 기존 `VPW_SCALP_LIMIT` 하드 게이트를 유지하면서, 별도로 동적 체결강도 가속도 관측을 병행합니다.
 
@@ -314,12 +327,14 @@ latency-aware 진입 기준:
 - 일일 리포트: `/` 또는 `/daily-report`
 - 동적 체결강도 대시보드: `/strength-momentum`
 - 진입 게이트 플로우 대시보드: `/entry-pipeline-flow`
+- 실제 매매 복기 화면: `/trade-review`
 
 주요 API:
 
 - 일일 리포트 JSON: `/api/daily-report?date=YYYY-MM-DD`
 - 동적 체결강도 JSON: `/api/strength-momentum?date=YYYY-MM-DD&since=HH:MM:SS&top=10`
 - 진입 게이트 플로우 JSON: `/api/entry-pipeline-flow?date=YYYY-MM-DD&since=HH:MM:SS&top=10`
+- 실제 매매 복기 JSON: `/api/trade-review?date=YYYY-MM-DD&code=000000`
 
 일일 리포트 생성:
 
@@ -345,6 +360,34 @@ latency-aware 진입 기준:
 - `bot_main.py`는 리포트 JSON 생성 담당
 - `src/web/app.py`는 별도 프로세스(systemd)로 상시 실행
 - Flutter 앱은 위 JSON API를 그대로 소비하는 것을 기준으로 설계
+
+### EC2 외부 서비스 운영
+EC2에서 외부 공개형 웹서비스로 운영할 때의 권장 구조는 아래와 같습니다.
+
+- `Domain -> Elastic IP -> Nginx(80/443) -> Gunicorn(127.0.0.1:5000) -> Flask`
+- 외부 공개 포트는 `80`, `443`만 사용
+- Gunicorn은 로컬 루프백에서만 수신
+- TLS는 `certbot --nginx`로 관리
+
+배포 참고 파일:
+
+- Gunicorn systemd: `deploy/systemd/korstockscan-gunicorn.service`
+- Nginx 샘플: `deploy/nginx/korstockscan.conf`
+
+주요 운영 명령:
+
+- Gunicorn 상태 확인:
+  `sudo systemctl status korstockscan-gunicorn.service`
+- Nginx 상태 확인:
+  `sudo systemctl status nginx`
+- Gunicorn 로그:
+  `sudo journalctl -u korstockscan-gunicorn.service -f`
+- Nginx 로그:
+  `sudo journalctl -u nginx -f`
+- 인증서 갱신 점검:
+  `sudo certbot renew --dry-run`
+
+상세 절차는 `docs/ec2_web_service_runbook.md`를 참고합니다.
 
 ### 스캘핑 매도 로직
 스캘핑 매도는 스윙보다 더 짧은 주기로 손절/익절/모멘텀 약화를 감시합니다.

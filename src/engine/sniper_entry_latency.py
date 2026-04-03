@@ -167,6 +167,7 @@ def evaluate_live_buy_entry(
         "ws_age_ms": latency.ws_age_ms,
         "ws_jitter_ms": latency.ws_jitter_ms,
         "spread_ratio": latency.spread_ratio,
+        "quote_stale": latency.quote_stale,
         "target_buy_price": int(target_buy_price or 0),
         "order_price": 0,
     }

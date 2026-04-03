@@ -58,6 +58,17 @@ def bind_execution_dependencies(
     if now_ts is not None:
         _now_ts = now_ts
 
+
+def _log_holding_pipeline(name, code, target_id, stage, **fields):
+    merged_fields = {}
+    if target_id not in (None, "", 0):
+        merged_fields["id"] = target_id
+    merged_fields.update(fields)
+    parts = [f"{key}={str(value).replace(' ', '|')}" for key, value in merged_fields.items()]
+    suffix = f" {' '.join(parts)}" if parts else ""
+    log_info(f"[HOLDING_PIPELINE] {name}({code}) stage={stage}{suffix}")
+
+
 # ==========================================
 def _find_execution_target(code, exec_type, order_no):
     normalized_order_no = str(order_no or '').strip()
@@ -361,6 +372,16 @@ def _update_db_for_sell(target_id, exec_price, now, target_stock, strategy, is_s
                     'TELEGRAM_BROADCAST',
                     {'message': f"{sign} **[{target_stock.get('name')}]** 매도 체결!\n체결가: `{exec_price:,}원`\n수익률: `{profit_rate:+.2f}%`", 'audience': audience, 'parse_mode': 'HTML'}
                 )
+            _log_holding_pipeline(
+                target_stock.get('name'),
+                str(target_stock.get('code', '')).strip()[:6],
+                target_id,
+                'sell_completed',
+                sell_price=int(exec_price or 0),
+                profit_rate=f"{profit_rate:+.2f}",
+                revive=bool(is_scalp_revive),
+                strategy=strategy,
+            )
             # 메모리에서 pending_sell_msg 제거
             target_stock.pop('pending_sell_msg', None)
     except Exception as e:
@@ -526,6 +547,18 @@ def handle_real_execution(exec_data):
                     f"type={add_type} exec={exec_price:,} "
                     f"new_avg={new_avg} new_qty={new_qty} add_count={target_stock.get('add_count')}"
                 )
+                _log_holding_pipeline(
+                    target_stock.get('name'),
+                    code,
+                    target_id,
+                    'scale_in_executed',
+                    add_type=add_type,
+                    fill_price=int(exec_price or 0),
+                    fill_qty=int(exec_qty or 0),
+                    new_avg_price=f"{float(new_avg or 0):.2f}",
+                    new_buy_qty=int(new_qty or 0),
+                    add_count=int(target_stock.get('add_count', 0) or 0),
+                )
             else:
                 # 신규 진입 체결: 단일 주문/복수 fallback 주문 공통 누적 처리
                 old_qty = int(target_stock.get('buy_qty') or 0)
@@ -597,6 +630,8 @@ def handle_real_execution(exec_data):
                     target_stock['ai_review_done'] = False
                     target_stock['ai_review_score'] = None
                     target_stock['ai_review_action'] = None
+                    target_stock['ai_low_score_loss_hits'] = 0
+                    target_stock['last_ai_reviewed_at'] = None
                     target_stock['exit_requested'] = False
                     target_stock['exit_order_type'] = None
                     target_stock['exit_order_time'] = None
@@ -612,6 +647,29 @@ def handle_real_execution(exec_data):
                             f"🎯 [SCALP 출구엔진 셋업] {target_stock.get('name')} "
                             f"+1.5% 지정가({preset_tp_price:,}원) {sell_qty}주 매도망 전개 완료."
                         )
+                        _log_holding_pipeline(
+                            target_stock.get('name'),
+                            code,
+                            target_id,
+                            'preset_exit_setup',
+                            preset_tp_price=int(preset_tp_price or 0),
+                            qty=int(sell_qty or 0),
+                            ord_no=str(target_stock.get('preset_tp_ord_no', '') or '-'),
+                        )
+
+                _log_holding_pipeline(
+                    target_stock.get('name'),
+                    code,
+                    target_id,
+                    'holding_started',
+                    strategy=target_stock.get('strategy'),
+                    position_tag=target_stock.get('position_tag'),
+                    buy_price=f"{float(new_avg or 0):.2f}",
+                    buy_qty=int(new_qty or 0),
+                    fill_price=int(exec_price or 0),
+                    fill_qty=int(exec_qty or 0),
+                    entry_mode=target_stock.get('entry_mode', 'normal'),
+                )
 
                 # 백그라운드 DB 업데이트 실행
                 threading.Thread(
@@ -681,6 +739,16 @@ def handle_real_execution(exec_data):
                                 'TELEGRAM_BROADCAST',
                                 {'message': f"{sign} **[{target_stock.get('name')}]** 매도 체결!\n체결가: `{exec_price:,}원`\n수익률: `{profit_rate:+.2f}%`", 'audience': audience, 'parse_mode': 'HTML'}
                             )
+                        _log_holding_pipeline(
+                            target_stock.get('name'),
+                            code,
+                            target_id,
+                            'sell_completed',
+                            sell_price=int(exec_price or 0),
+                            profit_rate=f"{profit_rate:+.2f}",
+                            revive=True,
+                            new_watch_id=int(new_watch_id or 0),
+                        )
                 except Exception as e:
                     log_error(f"🚨 [DB 에러] ID {target_id} SELL 처리 중 에러: {e}")
                     return

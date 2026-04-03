@@ -20,18 +20,20 @@ class LatencyMonitor:
         quote_stale: bool,
         spread_ratio: float,
     ) -> LatencyStatus:
-        if quote_stale or spread_ratio > self.config.max_spread_ratio:
+        if quote_stale:
             state = LatencyState.DANGER
         elif (
             ws_age_ms <= self.config.max_ws_age_ms_for_safe
             and ws_jitter_ms <= self.config.max_ws_jitter_ms_for_safe
             and order_rtt_avg_ms <= self.config.max_order_rtt_avg_ms_for_safe
+            and spread_ratio <= self.config.max_spread_ratio_for_safe
         ):
             state = LatencyState.SAFE
         elif (
             ws_age_ms <= self.config.max_ws_age_ms_for_caution
             and ws_jitter_ms <= self.config.max_ws_jitter_ms_for_caution
             and order_rtt_avg_ms <= self.config.max_order_rtt_avg_ms_for_caution
+            and spread_ratio <= self.config.max_spread_ratio_for_caution
         ):
             state = LatencyState.CAUTION
         else:

@@ -518,6 +518,10 @@ def _parse_holding_started_at(stock):
 def evaluate_scalping_exit(stock, code, ws_data, curr_p, buy_p, profit_rate, peak_profit):
     base_stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -1.5)
     hard_stop_pct = getattr(TRADING_RULES, 'SCALP_HARD_STOP', -2.5)
+    ai_exit_score_limit = int(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_MAX_SCORE', 35))
+    ai_exit_min_loss_pct = float(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_MIN_LOSS_PCT', -0.7))
+    ai_exit_min_hold_sec = int(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_MIN_HOLD_SEC', 180))
+    ai_exit_needed_hits = int(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_CONSECUTIVE_HITS', 3))
     safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5)
     trailing_start_pct = getattr(TRADING_RULES, 'SCALP_TRAILING_START_PCT', 0.6)
     weak_trailing = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_WEAK', 0.4)
@@ -579,8 +583,17 @@ def evaluate_scalping_exit(stock, code, ws_data, curr_p, buy_p, profit_rate, pea
         return f"소프트 손절선 도달 (profit_rate={profit_rate:.2f}% <= {soft_stop_pct}%)"
 
     # AI 하방 리스크
-    if profit_rate < 0 and current_ai_score <= 35:
-        return f"AI 하방 리스크 포착 (AI 점수 {current_ai_score:.0f})"
+    ai_low_score_hits = int(stock.get('ai_low_score_loss_hits', 0) or 0)
+    if (
+        held_seconds >= ai_exit_min_hold_sec
+        and profit_rate <= ai_exit_min_loss_pct
+        and current_ai_score <= ai_exit_score_limit
+        and ai_low_score_hits >= ai_exit_needed_hits
+    ):
+        return (
+            f"AI 하방 리스크 연속 확인 ({ai_low_score_hits}/{ai_exit_needed_hits}, "
+            f"AI 점수 {current_ai_score:.0f})"
+        )
 
     # Dynamic Trailing (peak 확보 이후만)
     if peak_profit >= trailing_start_pct and profit_rate >= safe_profit_pct:

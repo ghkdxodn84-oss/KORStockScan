@@ -57,6 +57,12 @@ class KiwoomWSManager:
         self.market_session_remaining = ''
         
         print(f"🌐 [WS] 웹소켓 매니저 초기화 완료 (Target: {self.uri})")
+
+    @staticmethod
+    def _chunked(items, size):
+        chunk_size = max(1, int(size or 1))
+        for idx in range(0, len(items), chunk_size):
+            yield items[idx:idx + chunk_size]
     
     @staticmethod
     def _safe_abs_int(val, default=0):
@@ -82,6 +88,56 @@ class KiwoomWSManager:
     @staticmethod
     def _normalize_code(code):
         return str(code or '').strip()[:6]
+
+    def _normalize_subscribe_codes(self, codes):
+        normalized = []
+        invalid = []
+        seen = set()
+
+        for raw_code in codes or []:
+            code = self._normalize_code(raw_code)
+            if not code:
+                continue
+            if len(code) != 6 or not code.isdigit():
+                invalid.append(str(raw_code))
+                continue
+            if code in seen:
+                continue
+            seen.add(code)
+            normalized.append(code)
+
+        if invalid:
+            print(f"⚠️ [WS] 실시간 등록 제외 코드: {invalid}")
+        return normalized
+
+    @staticmethod
+    def _parse_condition_list_rows(data_list):
+        rows = []
+        for entry in data_list or []:
+            seq = ""
+            name = ""
+            if isinstance(entry, dict):
+                seq = str(
+                    entry.get('seq')
+                    or entry.get('cond_seq')
+                    or entry.get('search_seq')
+                    or entry.get('id')
+                    or ''
+                ).strip()
+                name = str(
+                    entry.get('condition_name')
+                    or entry.get('cond_nm')
+                    or entry.get('name')
+                    or entry.get('search_name')
+                    or ''
+                ).strip()
+            elif isinstance(entry, (list, tuple)) and len(entry) >= 2:
+                seq = str(entry[0] or '').strip()
+                name = str(entry[1] or '').strip()
+
+            if seq or name:
+                rows.append((seq, name))
+        return rows
 
     def _append_strength_momentum(self, target, *, current_price, current_vpw, signed_qty, tick_value, buy_ratio, buy_qty, sell_qty):
         history = target.get('strength_momentum_history')
@@ -342,10 +398,14 @@ class KiwoomWSManager:
                         message = await ws.recv()
                         await self._handle_message(message)
 
-            except websockets.ConnectionClosed:
+            except websockets.ConnectionClosed as e:
                 if self._stop_event.is_set():
                     break
-                print("⚠️ [WS] 연결 끊김! 3초 후 재접속 시도...")
+                print(
+                    "⚠️ [WS] 연결 끊김! "
+                    f"(code={getattr(e, 'code', '?')}, reason={getattr(e, 'reason', '') or '-'}) "
+                    "3초 후 재접속 시도..."
+                )
                 self.websocket = None
                 await asyncio.sleep(3)
             except Exception as e:
@@ -377,6 +437,8 @@ class KiwoomWSManager:
             # =========================================================
             if trnm == 'CNSRLST':
                 data_list = msg_dict.get('data', [])
+                parsed_rows = self._parse_condition_list_rows(data_list)
+                self.condition_dict.clear()
                 target_seqs = []
 
                 # 💡 HTS에서 만든 시간대별 모든 식을 다 찾습니다! (이름은 HTS 저장명에 맞게 추가하세요)
@@ -397,7 +459,19 @@ class KiwoomWSManager:
                 ]
                 # 🚨 주의: 다중 검색식을 찾을 때는 여기서 break를 쓰면 안 됩니다!
 
-                for seq, name in data_list:
+                if parsed_rows:
+                    preview = ", ".join(
+                        f"{name or 'NO_NAME'}({seq or '?'})"
+                        for seq, name in parsed_rows[:20]
+                    )
+                    print(
+                        f"📚 [WS] 조건검색식 목록 수신: {len(parsed_rows)}개"
+                        + (f" | {preview}" if preview else "")
+                    )
+                else:
+                    print(f"⚠️ [WS] 조건검색식 목록 응답이 비었거나 파싱되지 않았습니다. payload={msg_dict}")
+
+                for seq, name in parsed_rows:
                     if any(k in name for k in target_keywords): 
                         target_seqs.append((seq, name))
                         self.condition_dict[str(seq)] = name # 💡 [핵심] 번호와 이름을 기억해 둡니다.
@@ -412,7 +486,14 @@ class KiwoomWSManager:
                             await self.websocket.send(json.dumps(req_packet))
                             await asyncio.sleep(0.2) 
                 else:
-                    print("⚠️ [WS] 타겟 조건검색식을 찾을 수 없습니다.")
+                    available_names = [name for _, name in parsed_rows if name]
+                    print(
+                        "⚠️ [WS] 타겟 조건검색식을 찾을 수 없습니다."
+                        + (
+                            f" 수신 목록={available_names[:20]}"
+                            if available_names else " 수신 목록이 비어 있습니다."
+                        )
+                    )
                 return
             
             # =========================================================
@@ -653,27 +734,39 @@ class KiwoomWSManager:
 
     async def _send_reg(self, codes):
         try:
+            normalized_codes = self._normalize_subscribe_codes(codes)
+            if not normalized_codes:
+                print("⚠️ [WS] 등록 가능한 유효 종목코드가 없어 REG 전송을 생략합니다.")
+                return
+
             for _ in range(50):
                 if self.websocket: break
                 await asyncio.sleep(0.1)
 
             if self.websocket:
-                print(f"📝 [WS] 종목 등록(REG) 전송 시도: {codes}")
-                reg_packet = {
-                    'trnm': 'REG',
-                    'grp_no': '1',
-                    'refresh': '1',
-                    'data': [
-                        {'item': codes, 'type': ['0B']},
-                        {'item': codes, 'type': ['0D']},
-                        {'item': codes, 'type': ['0w']}
-                    ]
-                }
-                await self.websocket.send(json.dumps(reg_packet))
-                self.subscribed_codes.update(codes)
-                print(f"📡 [WS] 종목 등록 패킷 전송 완료(실수신 대기): {codes}")
+                batch_size = int(getattr(TRADING_RULES, 'WS_REG_BATCH_SIZE', 20) or 20)
+                total_batches = (len(normalized_codes) + batch_size - 1) // batch_size
+                print(f"📝 [WS] 종목 등록(REG) 전송 시도: {normalized_codes} (batch_size={batch_size})")
+                for batch_index, batch_codes in enumerate(self._chunked(normalized_codes, batch_size), start=1):
+                    reg_packet = {
+                        'trnm': 'REG',
+                        'grp_no': '1',
+                        'refresh': '1',
+                        'data': [
+                            {'item': batch_codes, 'type': ['0B']},
+                            {'item': batch_codes, 'type': ['0D']},
+                            {'item': batch_codes, 'type': ['0w']}
+                        ]
+                    }
+                    await self.websocket.send(json.dumps(reg_packet))
+                    self.subscribed_codes.update(batch_codes)
+                    print(
+                        "📡 [WS] 종목 등록 패킷 전송 완료(실수신 대기): "
+                        f"batch={batch_index}/{total_batches} codes={batch_codes}"
+                    )
+                    await asyncio.sleep(0.15)
             else:
-                print(f"⚠️ [WS] 연결된 웹소켓이 없어 전송 실패: {codes}")
+                print(f"⚠️ [WS] 연결된 웹소켓이 없어 전송 실패: {normalized_codes}")
 
         except Exception as e:
             log_error(f"🚨 [WS] _send_reg 에러 발생: {e}")
@@ -683,7 +776,8 @@ class KiwoomWSManager:
         if not codes: return
         if isinstance(codes, str): codes = [codes]
 
-        new_targets = [c for c in codes if c not in self.subscribed_codes]
+        normalized_codes = self._normalize_subscribe_codes(codes)
+        new_targets = [c for c in normalized_codes if c not in self.subscribed_codes]
 
         if new_targets and self.loop and self.loop.is_running() and not self._stop_event.is_set():
             future = asyncio.run_coroutine_threadsafe(self._send_reg(new_targets), self.loop)

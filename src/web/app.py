@@ -1,6 +1,7 @@
 from flask import Flask, jsonify, render_template_string, request
 import os
 import sys
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
@@ -10,10 +11,22 @@ if PROJECT_ROOT not in sys.path:
 
 from src.engine.sniper_strength_observation_report import build_strength_momentum_report
 from src.engine.sniper_entry_pipeline_report import build_entry_pipeline_flow_report
+from src.engine.sniper_trade_review_report import build_trade_review_report
 from src.engine.daily_report_service import (
     list_available_report_dates,
     load_or_build_daily_report,
 )
+
+_DEFAULT_DASHBOARD_LOOKBACK_MINUTES = 120
+
+
+def _resolve_dashboard_since(target_date: str, since: str | None) -> str | None:
+    if since:
+        return since
+    today = datetime.now().strftime("%Y-%m-%d")
+    if str(target_date).strip() != today:
+        return None
+    return (datetime.now() - timedelta(minutes=_DEFAULT_DASHBOARD_LOOKBACK_MINUTES)).strftime("%H:%M:%S")
 
 @app.route("/api/daily-report")
 def daily_report_api():
@@ -346,9 +359,8 @@ def strength_momentum_api():
     since = request.args.get('since')
     top = request.args.get('top', default=10, type=int)
     if not target_date:
-        from datetime import datetime
-
         target_date = datetime.now().strftime('%Y-%m-%d')
+    since = _resolve_dashboard_since(target_date, since)
     report = build_strength_momentum_report(
         target_date=target_date,
         top_n=max(1, int(top or 10)),
@@ -363,9 +375,8 @@ def strength_momentum_preview():
     since = request.args.get('since')
     top = request.args.get('top', default=5, type=int)
     if not target_date:
-        from datetime import datetime
-
         target_date = datetime.now().strftime('%Y-%m-%d')
+    since = _resolve_dashboard_since(target_date, since)
 
     report = build_strength_momentum_report(
         target_date=target_date,
@@ -532,9 +543,8 @@ def entry_pipeline_flow_api():
     since = request.args.get('since')
     top = request.args.get('top', default=10, type=int)
     if not target_date:
-        from datetime import datetime
-
         target_date = datetime.now().strftime('%Y-%m-%d')
+    since = _resolve_dashboard_since(target_date, since)
     report = build_entry_pipeline_flow_report(
         target_date=target_date,
         since_time=since,
@@ -549,9 +559,8 @@ def entry_pipeline_flow_preview():
     since = request.args.get('since')
     top = request.args.get('top', default=10, type=int)
     if not target_date:
-        from datetime import datetime
-
         target_date = datetime.now().strftime('%Y-%m-%d')
+    since = _resolve_dashboard_since(target_date, since)
 
     report = build_entry_pipeline_flow_report(
         target_date=target_date,
@@ -560,6 +569,7 @@ def entry_pipeline_flow_preview():
     )
     metrics = report.get('metrics', {}) or {}
     blockers = report.get('blocker_breakdown', []) or []
+    blocker_guide = report.get('blocker_guide', []) or []
     recent_stocks = report.get('sections', {}).get('recent_stocks', []) or []
 
     template = """
@@ -619,7 +629,13 @@ def entry_pipeline_flow_preview():
         .row:first-child { border-top: 0; padding-top: 0; }
         .title { font-weight: 700; }
         .meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
+        .guide-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .guide-table th, .guide-table td { padding: 9px 10px; border-top: 1px solid var(--line); text-align: left; vertical-align: top; }
+        .guide-table th { color: var(--muted); font-weight: 600; font-size: 12px; }
+        .guide-table tr:first-child th, .guide-table tr:first-child td { border-top: 0; }
         .flow { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+        .detail-flow { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+        .detail-chip { border-radius: 999px; padding: 4px 9px; font-size: 12px; background: #f3f7f2; border: 1px solid var(--line); color: var(--ink); }
         .tag { border-radius: 999px; padding: 5px 10px; font-size: 12px; background: #edf5ee; border: 1px solid var(--line); }
         .tag.start { background: #f2f6f3; }
         .tag.pass { background: #e7f6ee; border-color: #b8dfc8; color: #176942; }
@@ -647,10 +663,9 @@ def entry_pipeline_flow_preview():
         </div>
 
         <div class="grid">
-          <div class="card"><div class="label">총 이벤트</div><div class="value">{{ metrics.total_events }}</div></div>
           <div class="card"><div class="label">추적 종목</div><div class="value">{{ metrics.tracked_stocks }}</div></div>
           <div class="card"><div class="label">차단 종목</div><div class="value blocked">{{ metrics.blocked_stocks }}</div></div>
-          <div class="card"><div class="label">대기 종목</div><div class="value waiting">{{ metrics.waiting_stocks }}</div></div>
+          <div class="card"><div class="label">첫 AI 대기 종목</div><div class="value waiting">{{ metrics.waiting_stocks }}</div></div>
           <div class="card"><div class="label">주문 제출 종목</div><div class="value submitted">{{ metrics.submitted_stocks }}</div></div>
         </div>
 
@@ -670,6 +685,28 @@ def entry_pipeline_flow_preview():
         </div>
 
         <div class="section card">
+          <h2>게이트별 차단 설명</h2>
+          <table class="guide-table">
+            <tr>
+              <th>게이트</th>
+              <th>설명</th>
+              <th>우선 확인</th>
+            </tr>
+            {% for item in blocker_guide %}
+              <tr>
+                <td>{{ item.gate }}</td>
+                <td>{{ item.description }}</td>
+                <td>{{ item.check }}</td>
+              </tr>
+            {% else %}
+              <tr>
+                <td colspan="3" class="meta">데이터 없음</td>
+              </tr>
+            {% endfor %}
+          </table>
+        </div>
+
+        <div class="section card">
           <h2>종목별 최신 플로우</h2>
           <div class="stock-list">
             {% for row in recent_stocks %}
@@ -681,7 +718,7 @@ def entry_pipeline_flow_preview():
                   {% if row.latest_status.reason %}/ {{ row.latest_status.reason }}{% endif %}
                   / {{ row.latest_status.timestamp }}
                 </div>
-                <div class="meta" style="margin-top: 8px;">누적 통과 단계</div>
+                <div class="meta" style="margin-top: 8px;">확정 통과 단계</div>
                 <div class="flow">
                   {% for item in row.pass_flow %}
                     <span class="tag {{ item.kind }}">{{ item.label }}</span>
@@ -690,6 +727,34 @@ def entry_pipeline_flow_preview():
                     {% endif %}
                   {% endfor %}
                 </div>
+                {% if row.precheck_passes %}
+                  <div class="meta" style="margin-top: 10px;">예비 통과 이력</div>
+                  <div class="flow">
+                    {% for item in row.precheck_passes %}
+                      <span class="tag {{ item.kind }}">{{ item.label }}</span>
+                      {% if not loop.last %}
+                        <span class="arrow">→</span>
+                      {% endif %}
+                    {% endfor %}
+                  </div>
+                {% endif %}
+                {% if row.confirmed_failure %}
+                  <div class="meta" style="margin-top: 10px;">마지막 확정 진입 실패</div>
+                  <div class="flow">
+                    <span class="tag blocked">{{ row.confirmed_failure.label }}</span>
+                    {% if row.confirmed_failure.reason %}
+                      <span class="tag blocked">{{ row.confirmed_failure.reason }}</span>
+                    {% endif %}
+                    <span class="meta">{{ row.confirmed_failure.timestamp }}</span>
+                  </div>
+                  {% if row.confirmed_failure.details %}
+                    <div class="detail-flow">
+                      {% for item in row.confirmed_failure.details %}
+                        <span class="detail-chip">{{ item.label }}: {{ item.value }}</span>
+                      {% endfor %}
+                    </div>
+                  {% endif %}
+                {% endif %}
                 {% if row.latest_status.kind in ['blocked', 'waiting'] %}
                   <div class="meta" style="margin-top: 10px;">마지막 차단/대기</div>
                   <div class="flow">
@@ -711,7 +776,289 @@ def entry_pipeline_flow_preview():
         report=report,
         metrics=metrics,
         blockers=blockers,
+        blocker_guide=blocker_guide,
         recent_stocks=recent_stocks,
+    )
+
+
+@app.route('/api/trade-review')
+def trade_review_api():
+    target_date = request.args.get('date')
+    since = request.args.get('since')
+    code = request.args.get('code')
+    top = request.args.get('top', default=10, type=int)
+    if not target_date:
+        target_date = datetime.now().strftime('%Y-%m-%d')
+    since = _resolve_dashboard_since(target_date, since)
+    report = build_trade_review_report(
+        target_date=target_date,
+        code=code,
+        since_time=since,
+        top_n=max(1, int(top or 10)),
+    )
+    return jsonify(report)
+
+
+@app.route('/trade-review')
+def trade_review_preview():
+    target_date = request.args.get('date')
+    since = request.args.get('since')
+    code = request.args.get('code')
+    top = request.args.get('top', default=10, type=int)
+    if not target_date:
+        target_date = datetime.now().strftime('%Y-%m-%d')
+    since = _resolve_dashboard_since(target_date, since)
+
+    report = build_trade_review_report(
+        target_date=target_date,
+        code=code,
+        since_time=since,
+        top_n=max(1, int(top or 10)),
+    )
+    metrics = report.get('metrics', {}) or {}
+    recent_trades = report.get('sections', {}).get('recent_trades', []) or []
+    event_breakdown = report.get('event_breakdown', []) or []
+    warnings = report.get('meta', {}).get('warnings', []) or []
+    available_codes = report.get('meta', {}).get('available_codes', []) or []
+
+    template = """
+    <!doctype html>
+    <html lang="ko">
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1">
+      <title>Trade Review</title>
+      <style>
+        :root {
+          --bg: #f4f7ef;
+          --card: #fcfffa;
+          --ink: #1b2a22;
+          --muted: #6c7f73;
+          --line: #d7e2d5;
+          --accent: #1d7a52;
+          --warn: #b7791f;
+          --bad: #b83232;
+          --navy: #183153;
+        }
+        body {
+          margin: 0;
+          background: linear-gradient(180deg, #eef6ef 0%, var(--bg) 100%);
+          color: var(--ink);
+          font-family: "Pretendard", "Noto Sans KR", sans-serif;
+        }
+        .wrap { max-width: 1080px; margin: 0 auto; padding: 24px 16px 48px; }
+        .hero {
+          background: linear-gradient(135deg, var(--navy), var(--accent));
+          color: white;
+          padding: 22px;
+          border-radius: 20px;
+          box-shadow: 0 18px 44px rgba(24, 49, 83, 0.16);
+        }
+        .hero-top {
+          display: flex;
+          justify-content: space-between;
+          gap: 12px;
+          align-items: flex-start;
+          flex-wrap: wrap;
+        }
+        .hero h1 { margin: 0 0 8px; font-size: 24px; }
+        .hero p { margin: 0; opacity: 0.92; }
+        .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+        .toolbar input, .toolbar select, .toolbar button {
+          border: 0;
+          border-radius: 12px;
+          padding: 10px 12px;
+          font-size: 14px;
+        }
+        .toolbar button {
+          background: rgba(255,255,255,0.18);
+          color: white;
+          cursor: pointer;
+        }
+        .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+        .chip { background: rgba(255,255,255,0.16); padding: 8px 12px; border-radius: 999px; font-size: 13px; }
+        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin-top: 18px; }
+        .card {
+          background: var(--card);
+          border: 1px solid var(--line);
+          border-radius: 18px;
+          padding: 16px;
+          box-shadow: 0 12px 26px rgba(27, 42, 34, 0.05);
+        }
+        .label { color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+        .value { font-size: 24px; font-weight: 700; }
+        .good { color: var(--accent); }
+        .warn { color: var(--warn); }
+        .bad { color: var(--bad); }
+        .section { margin-top: 20px; }
+        .section h2 { margin: 0 0 10px; font-size: 18px; }
+        .row { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 12px; }
+        .row:first-child { border-top: 0; padding-top: 0; margin-top: 0; }
+        .title { font-weight: 700; font-size: 16px; }
+        .meta { color: var(--muted); font-size: 13px; margin-top: 4px; }
+        .bars { display: grid; gap: 10px; }
+        .bar-row { display: grid; grid-template-columns: 150px 1fr 52px; gap: 10px; align-items: center; }
+        .bar { background: #e7efe5; border-radius: 999px; overflow: hidden; height: 12px; }
+        .fill { background: linear-gradient(90deg, #1d7a52, #4ea974); height: 100%; }
+        .flow { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+        .tag { border-radius: 999px; padding: 5px 10px; font-size: 12px; background: #edf5ee; border: 1px solid var(--line); }
+        .tag.good { background: #e7f6ee; border-color: #b8dfc8; color: #176942; }
+        .tag.warn { background: #fff3df; border-color: #f1d29d; color: #9a5b10; }
+        .tag.bad { background: #fdeaea; border-color: #efb8b8; color: #a12b2b; }
+        .arrow { color: var(--muted); font-size: 12px; }
+        .detail-flow { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
+        .detail-chip { border-radius: 999px; padding: 4px 9px; font-size: 12px; background: #f3f7f2; border: 1px solid var(--line); color: var(--ink); }
+        .warning-box {
+          margin-top: 16px;
+          background: #fff5e8;
+          color: #8a5418;
+          border: 1px solid #f2d4a9;
+          border-radius: 16px;
+          padding: 14px 16px;
+        }
+      </style>
+    </head>
+    <body>
+      <div class="wrap">
+        <div class="hero">
+          <div class="hero-top">
+            <div>
+              <h1>실제 매매 복기</h1>
+              <p>보유감시에서 청산 체결까지 한 종목의 실제 매매 흐름을 복기합니다.</p>
+            </div>
+            <form method="GET" action="/trade-review" class="toolbar">
+              <input type="date" name="date" value="{{ report.date }}">
+              <input type="text" name="code" placeholder="종목코드 6자리" value="{{ report.code or '' }}">
+              <input type="text" name="since" placeholder="HH:MM:SS" value="{{ request.args.get('since', '') }}">
+              <button type="submit">조회</button>
+            </form>
+          </div>
+          <div class="chips">
+            <div class="chip">date: {{ report.date }}</div>
+            <div class="chip">since: {{ report.since or '전체' }}</div>
+            <div class="chip">종목: {{ report.code or '전체' }}</div>
+            <div class="chip">복기 로그 {{ metrics.holding_events }}건</div>
+          </div>
+        </div>
+
+        {% if warnings %}
+          <div class="warning-box">
+            <strong>리포트 경고</strong>
+            {% for item in warnings %}
+              <div class="meta" style="color: inherit;">{{ item }}</div>
+            {% endfor %}
+          </div>
+        {% endif %}
+
+        <div class="grid">
+          <div class="card"><div class="label">총 거래</div><div class="value">{{ metrics.total_trades }}</div></div>
+          <div class="card"><div class="label">종료 거래</div><div class="value">{{ metrics.completed_trades }}</div></div>
+          <div class="card"><div class="label">미종료 거래</div><div class="value warn">{{ metrics.open_trades }}</div></div>
+          <div class="card"><div class="label">실현손익</div><div class="value {% if metrics.realized_pnl_krw > 0 %}good{% elif metrics.realized_pnl_krw < 0 %}bad{% endif %}">{{ "{:,}".format(metrics.realized_pnl_krw) }}원</div></div>
+          <div class="card"><div class="label">평균 손익률</div><div class="value">{{ metrics.avg_profit_rate }}%</div></div>
+          <div class="card"><div class="label">승 / 패</div><div class="value">{{ metrics.win_trades }} / {{ metrics.loss_trades }}</div></div>
+        </div>
+
+        {% if available_codes %}
+          <div class="section card">
+            <h2>당일 거래 종목</h2>
+            <div class="flow">
+              {% for item in available_codes[:20] %}
+                <a class="tag" href="/trade-review?date={{ report.date }}&code={{ item }}">{{ item }}</a>
+              {% endfor %}
+            </div>
+          </div>
+        {% endif %}
+
+        <div class="section card">
+          <h2>보유 이벤트 분포</h2>
+          <div class="bars">
+            {% for item in event_breakdown %}
+              <div class="bar-row">
+                <div>{{ item.label }}</div>
+                <div class="bar"><div class="fill" style="width: {{ (item.count / event_breakdown[0].count * 100) if event_breakdown and event_breakdown[0].count else 0 }}%"></div></div>
+                <div>{{ item.count }}</div>
+              </div>
+            {% else %}
+              <div class="meta">데이터 없음</div>
+            {% endfor %}
+          </div>
+        </div>
+
+        <div class="section card">
+          <h2>거래별 복기</h2>
+          {% for row in recent_trades %}
+            <div class="row">
+              <div class="title">{{ row.name }} ({{ row.code }}) / ID {{ row.id }}</div>
+              <div class="meta">
+                {{ row.strategy }} · {{ row.status }} · 매수 {{ "{:,}".format(row.buy_price|int) }}원 x {{ row.buy_qty }}주
+                {% if row.sell_time %}
+                  · 매도 {{ "{:,}".format(row.sell_price|int) }}원 · {{ row.sell_time }}
+                {% endif %}
+              </div>
+              <div class="meta">
+                손익률 <span class="{{ row.tone }}">{{ "%+.2f"|format(row.profit_rate) }}%</span>
+                / 실현손익 {{ "{:,}".format(row.realized_pnl_krw) }}원
+                / 보유시간 {{ row.holding_duration_text }}
+              </div>
+              {% if row.exit_signal %}
+                <div class="meta" style="margin-top: 10px;">마지막 청산 시그널</div>
+                <div class="flow">
+                  <span class="tag bad">{{ row.exit_signal.label }}</span>
+                  {% if row.exit_signal.sell_reason_type %}
+                    <span class="tag bad">{{ row.exit_signal.sell_reason_type }}</span>
+                  {% endif %}
+                  {% if row.exit_signal.reason %}
+                    <span class="tag bad">{{ row.exit_signal.reason }}</span>
+                  {% endif %}
+                  <span class="meta">{{ row.exit_signal.timestamp }}</span>
+                </div>
+              {% endif %}
+              {% if row.timeline %}
+                <div class="meta" style="margin-top: 10px;">핵심 흐름</div>
+                <div class="flow">
+                  {% for item in row.timeline %}
+                    <span class="tag {% if item.stage == 'sell_completed' %}good{% elif item.stage in ['exit_signal','sell_order_failed'] %}bad{% elif item.stage == 'ai_holding_review' %}warn{% endif %}">{{ item.label }}</span>
+                    {% if not loop.last %}
+                      <span class="arrow">→</span>
+                    {% endif %}
+                  {% endfor %}
+                </div>
+              {% endif %}
+              {% if row.ai_reviews %}
+                <div class="meta" style="margin-top: 10px;">최근 AI 보유감시</div>
+                <div class="detail-flow">
+                  {% for item in row.ai_reviews %}
+                    <span class="detail-chip">{{ item.timestamp }} / AI {{ item.ai_score }} / 수익 {{ item.profit_rate }}% / 카운트 {{ item.low_score_hits }}</span>
+                  {% endfor %}
+                </div>
+              {% endif %}
+              {% if row.latest_event and row.latest_event.details %}
+                <div class="meta" style="margin-top: 10px;">최신 이벤트 세부값</div>
+                <div class="detail-flow">
+                  {% for item in row.latest_event.details %}
+                    <span class="detail-chip">{{ item.label }}: {{ item.value }}</span>
+                  {% endfor %}
+                </div>
+              {% endif %}
+            </div>
+          {% else %}
+            <div class="meta">표시할 거래가 없습니다.</div>
+          {% endfor %}
+        </div>
+      </div>
+    </body>
+    </html>
+    """
+    return render_template_string(
+        template,
+        report=report,
+        metrics=metrics,
+        recent_trades=recent_trades,
+        event_breakdown=event_breakdown,
+        warnings=warnings,
+        available_codes=available_codes,
+        request=request,
     )
 
 if __name__ == '__main__':
