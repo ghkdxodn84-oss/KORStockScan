@@ -146,3 +146,70 @@ def test_performance_tuning_report_builds_metrics(monkeypatch):
     assert report["strategy_rows"][0]["outcomes"]["completed_rows"] == 2
     assert report["strategy_rows"][0]["outcomes"]["realized_pnl_krw"] == -8000
     assert report["auto_comments"]
+
+
+def test_gatekeeper_age_sentinel_handling(monkeypatch):
+    """age sentinel ("-") 처리 검증 - p95 오염 방지"""
+    entry_lines = [
+        # 이벤트 1: age 없음 (초기 상태)
+        "[2026-04-03 10:00:00] [ENTRY_PIPELINE] 테스트A(000001) stage=gatekeeper_fast_reuse_bypass strategy=KOSDAQ_ML score=82.5 age_sec=0.5 ws_age_sec=0.1 action_age_sec=- allow_entry_age_sec=- sig_delta=curr_price:12150->12200 reason_codes=missing_action",
+        # 이벤트 2: age 정상값
+        "[2026-04-03 10:00:05] [ENTRY_PIPELINE] 테스트B(000002) stage=gatekeeper_fast_reuse_bypass strategy=KOSDAQ_ML score=82.5 age_sec=0.5 ws_age_sec=0.1 action_age_sec=5.0 allow_entry_age_sec=5.0 sig_delta=spread_tick:1->2 reason_codes=sig_changed",
+    ]
+    holding_lines = []
+
+    def _fake_iter(log_path, *, target_date, marker):
+        return entry_lines if marker == "[ENTRY_PIPELINE]" else holding_lines
+
+    monkeypatch.setattr(report_mod, "_iter_target_lines", _fake_iter)
+    monkeypatch.setattr(
+        report_mod,
+        "build_trade_review_report",
+        lambda target_date, since_time=None, top_n=10000, scope="all": {
+            "meta": {"warnings": []},
+            "sections": {"recent_trades": [], "open_trades": []},
+            "history": [],
+        },
+    )
+
+    report = report_mod.build_performance_tuning_report(target_date="2026-04-03", since_time=None)
+
+    # p95는 sentinel을 제외한 정상값만 포함해야 함 (5.0만)
+    assert report["metrics"]["gatekeeper_action_age_p95"] == 5.0
+    assert report["metrics"]["gatekeeper_allow_entry_age_p95"] == 5.0
+    # sentinel을 포함한 총 bypass evaluation 샘플 수는 2건
+    assert report["metrics"]["gatekeeper_bypass_evaluation_samples"] == 2
+
+
+def test_gatekeeper_sig_delta_parsing(monkeypatch):
+    """sig_delta 파싱 및 필드 추출 검증"""
+    entry_lines = [
+        "[2026-04-03 10:00:00] [ENTRY_PIPELINE] 테스트A(000001) stage=gatekeeper_fast_reuse_bypass strategy=KOSDAQ_ML score=82.5 age_sec=0.5 ws_age_sec=0.1 action_age_sec=10.0 allow_entry_age_sec=10.0 sig_delta=curr_price:12150->12200,spread_tick:1->2,v_pw_now:5.0->5.2 reason_codes=sig_changed",
+        "[2026-04-03 10:00:05] [ENTRY_PIPELINE] 테스트B(000002) stage=gatekeeper_fast_reuse_bypass strategy=KOSDAQ_ML score=82.5 age_sec=0.5 ws_age_sec=0.1 action_age_sec=11.0 allow_entry_age_sec=11.0 sig_delta=curr_price:12200->12250 reason_codes=sig_changed",
+    ]
+    holding_lines = []
+
+    def _fake_iter(log_path, *, target_date, marker):
+        return entry_lines if marker == "[ENTRY_PIPELINE]" else holding_lines
+
+    monkeypatch.setattr(report_mod, "_iter_target_lines", _fake_iter)
+    monkeypatch.setattr(
+        report_mod,
+        "build_trade_review_report",
+        lambda target_date, since_time=None, top_n=10000, scope="all": {
+            "meta": {"warnings": []},
+            "sections": {"recent_trades": [], "open_trades": []},
+            "history": [],
+        },
+    )
+
+    report = report_mod.build_performance_tuning_report(target_date="2026-04-03", since_time=None)
+
+    # sig_deltas 분포 검증: curr_price 2회, spread_tick 1회, v_pw_now 1회
+    sig_deltas = report["breakdowns"]["gatekeeper_sig_deltas"]
+    sig_deltas_dict = {item["label"]: item["count"] for item in sig_deltas}
+    assert sig_deltas_dict["curr_price"] == 2
+    assert sig_deltas_dict["spread_tick"] == 1
+    assert sig_deltas_dict["v_pw_now"] == 1
+    # age 검증
+    assert report["metrics"]["gatekeeper_action_age_p95"] == 11.0

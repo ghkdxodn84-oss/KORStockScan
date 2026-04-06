@@ -407,6 +407,25 @@ def _build_gatekeeper_fast_signature(stock, ws_data, strategy, score):
     )
 
 
+def _build_gatekeeper_fast_snapshot(stock, ws_data, strategy, score):
+    """Gatekeeper fast signature 변경 추적용 dict 스냅샷 (sig_delta 비교용)"""
+    best_ask, best_bid = _get_best_levels_from_ws(ws_data)
+    curr_price = ws_data.get('curr', 0)
+    price_bucket = _price_bucket_step(curr_price)
+    buy_exec = _coerce_int_value(ws_data.get('buy_exec_volume', 0))
+    sell_exec = _coerce_int_value(ws_data.get('sell_exec_volume', 0))
+    
+    return {
+        "curr_price": _bucket_int(curr_price, price_bucket),
+        "score": _floor_bucket_float(score, 5.0),
+        "v_pw_now": _floor_bucket_float(ws_data.get('v_pw', 0.0), 5.0),
+        "buy_ratio_ws": _floor_bucket_float(ws_data.get('buy_ratio', 0.0), 8.0),
+        "spread_tick": max(0, _bucket_int(best_ask, price_bucket) - _bucket_int(best_bid, price_bucket)),
+        "prog_delta_qty": _bucket_int(ws_data.get('prog_delta_qty', 0), 2_000),
+        "net_buy_exec_volume": _bucket_int(buy_exec - sell_exec, 5_000),
+    }
+
+
 def _build_holding_ai_fast_snapshot(ws_data):
     best_ask, best_bid = _get_best_levels_from_ws(ws_data)
     curr_price = ws_data.get('curr', 0)
@@ -1320,6 +1339,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
 
             try:
                 gatekeeper_fast_sig = _build_gatekeeper_fast_signature(stock, ws_data, strategy, score)
+                gatekeeper_fast_snapshot = _build_gatekeeper_fast_snapshot(stock, ws_data, strategy, score)
                 gatekeeper_fast_reuse_sec = _resolve_gatekeeper_fast_reuse_sec()
                 gatekeeper_fast_max_ws_age = float(getattr(TRADING_RULES, 'AI_GATEKEEPER_FAST_REUSE_MAX_WS_AGE_SEC', 2.0) or 2.0)
                 gatekeeper_ws_age_sec = _get_ws_snapshot_age_sec(ws_data)
@@ -1358,7 +1378,21 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                         age_sec=f"{fast_sig_age:.1f}",
                         ws_age_sec="-" if gatekeeper_ws_age_sec is None else f"{gatekeeper_ws_age_sec:.2f}",
                     )
+                    is_new_evaluation = False
                 else:
+                    now_ts = time.time()
+                    # age 계산: 값이 없으면 "-" sentinel 사용 (p95 오염 방지)
+                    last_action_at = float(stock.get('last_gatekeeper_action_at') or 0) if stock.get('last_gatekeeper_action_at') is not None else None
+                    last_allow_at = float(stock.get('last_gatekeeper_allow_entry_at') or 0) if stock.get('last_gatekeeper_allow_entry_at') is not None else None
+                    
+                    action_age_sec_str = "-" if last_action_at is None else f"{now_ts - last_action_at:.2f}"
+                    allow_age_sec_str = "-" if last_allow_at is None else f"{now_ts - last_allow_at:.2f}"
+                    
+                    sig_delta = _describe_snapshot_deltas(
+                        stock.get('last_gatekeeper_fast_snapshot', {}), 
+                        gatekeeper_fast_snapshot,
+                        limit=5
+                    ) or "-"
                     _log_entry_pipeline(
                         stock,
                         code,
@@ -1367,6 +1401,9 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                         score=round(float(score), 2),
                         age_sec=f"{fast_sig_age:.1f}",
                         ws_age_sec="-" if gatekeeper_ws_age_sec is None else f"{gatekeeper_ws_age_sec:.2f}",
+                        action_age_sec=action_age_sec_str,
+                        allow_entry_age_sec=allow_age_sec_str,
+                        sig_delta=sig_delta,
                         reason_codes=_reason_codes(
                             sig_changed=fast_sig_matches,
                             age_expired=fast_sig_fresh,
@@ -1409,6 +1446,14 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                         realtime_ctx=realtime_ctx,
                         gatekeeper=gatekeeper,
                     )
+                    # 신규 평가 결과는 저장하고 timestamp 갱신 (fast_reuse는 갱신 안 함)
+                    is_new_evaluation = True
+                    current_time = time.time()
+                    stock['last_gatekeeper_action_at'] = current_time
+                    stock['last_gatekeeper_allow_entry_at'] = current_time
+                    stock['last_gatekeeper_fast_snapshot'] = gatekeeper_fast_snapshot
+                    stock['last_gatekeeper_fast_at'] = current_time
+                    
                 LAST_AI_CALL_TIMES[code] = time.time()
                 action_label = gatekeeper.get('action_label', 'UNKNOWN')
                 gatekeeper_allow = bool(gatekeeper.get('allow_entry', False))
@@ -1419,7 +1464,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 stock['last_gatekeeper_allow_entry'] = gatekeeper_allow
                 stock['last_gatekeeper_cache_mode'] = gatekeeper_cache_mode
                 stock['last_gatekeeper_fast_signature'] = gatekeeper_fast_sig
-                stock['last_gatekeeper_fast_at'] = time.time()
             except Exception as e:
                 log_error(f"🚨 [{strategy} Gatekeeper 오류] {stock['name']}({code}): {e}")
                 cooldowns[code] = time.time() + gatekeeper_error_cd

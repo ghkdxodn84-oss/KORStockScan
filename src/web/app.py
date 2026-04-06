@@ -80,6 +80,9 @@ def dashboard_home():
     since = request.args.get("since")
     resolved_since = _resolve_dashboard_since(target_date, since)
     top = request.args.get("top", default=10, type=int)
+    theme = (request.args.get("theme") or "light").strip().lower()
+    if theme not in {"light", "dark"}:
+        theme = "light"
     tab_labels = {
         "daily-report": "일일 전략 리포트",
         "entry-pipeline-flow": "진입 게이트 차단",
@@ -101,34 +104,104 @@ def dashboard_home():
 
     template = """
     <!doctype html>
-    <html lang="ko">
+    <html lang="ko" class="{{ theme_class }}">
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1">
       <title>KORStockScan Dashboard</title>
+      <link rel="preconnect" href="https://fonts.googleapis.com">
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
       <style>
         :root {
-          --bg: #eef4ee;
-          --card: #fcfffa;
-          --ink: #1b2a22;
-          --muted: #6c7f73;
-          --line: #d7e2d5;
-          --accent: #1d7a52;
-          --navy: #183153;
+          --bg: #f8fafc;
+          --bg-elevated: #ffffff;
+          --bg-soft: #f1f5f9;
+          --card: #ffffff;
+          --ink: #0f172a;
+          --muted: #64748b;
+          --line: rgba(148, 163, 184, 0.24);
+          --line-strong: rgba(148, 163, 184, 0.4);
+          --accent: #0053db;
+          --accent-strong: #0b57d0;
+          --success: #10b981;
+          --navy: #0f172a;
+          --hero-start: #ffffff;
+          --hero-end: #eff6ff;
+          --hero-border: rgba(37, 99, 235, 0.14);
+          --frame-bg: #ffffff;
+          --shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+        }
+        html.dark {
+          --bg: #000000;
+          --bg-elevated: #111111;
+          --bg-soft: #0b0b0b;
+          --card: #111111;
+          --ink: #f8fafc;
+          --muted: #94a3b8;
+          --line: #222222;
+          --line-strong: #333333;
+          --accent: #3b82f6;
+          --accent-strong: #60a5fa;
+          --success: #10b981;
+          --navy: #000000;
+          --hero-start: #0a0a0a;
+          --hero-end: #111111;
+          --hero-border: #1f2937;
+          --frame-bg: #050505;
+          --shadow: none;
         }
         body {
           margin: 0;
-          background: linear-gradient(180deg, #eef6ef 0%, var(--bg) 100%);
+          background:
+            radial-gradient(circle at top left, rgba(0, 83, 219, 0.09), transparent 28%),
+            radial-gradient(circle at top right, rgba(16, 185, 129, 0.08), transparent 24%),
+            var(--bg);
           color: var(--ink);
-          font-family: "Pretendard", "Noto Sans KR", sans-serif;
+          font-family: "Inter", "Pretendard", "Noto Sans KR", sans-serif;
         }
-        .wrap { max-width: 1240px; margin: 0 auto; padding: 20px 16px 28px; }
+        .wrap { max-width: 1440px; margin: 0 auto; padding: 24px 20px 32px; }
+        .topbar {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          gap: 16px;
+          margin-bottom: 14px;
+        }
+        .topbar-copy small {
+          display: block;
+          color: var(--muted);
+          font-size: 12px;
+          letter-spacing: 0.12em;
+          text-transform: uppercase;
+          margin-bottom: 6px;
+        }
+        .topbar-copy h1 {
+          margin: 0;
+          font-family: "Manrope", "Inter", sans-serif;
+          font-size: 28px;
+          line-height: 1.15;
+        }
+        .theme-toggle {
+          display: inline-flex;
+          align-items: center;
+          gap: 10px;
+          border: 1px solid var(--line-strong);
+          background: var(--bg-elevated);
+          color: var(--ink);
+          border-radius: 999px;
+          padding: 10px 16px;
+          font-weight: 700;
+          box-shadow: var(--shadow);
+          cursor: pointer;
+        }
         .hero {
-          background: linear-gradient(135deg, var(--navy), var(--accent));
-          color: white;
-          padding: 22px;
-          border-radius: 20px;
-          box-shadow: 0 18px 44px rgba(24, 49, 83, 0.16);
+          background: linear-gradient(145deg, var(--hero-start), var(--hero-end));
+          color: var(--ink);
+          padding: 24px;
+          border-radius: 28px;
+          border: 1px solid var(--hero-border);
+          box-shadow: var(--shadow);
         }
         .hero-top {
           display: flex;
@@ -138,15 +211,20 @@ def dashboard_home():
           flex-wrap: wrap;
         }
         .hero-copy { max-width: 720px; }
-        .hero h1 { margin: 0 0 8px; font-size: 26px; }
-        .hero p { margin: 0; opacity: 0.92; }
+        .hero h2 {
+          margin: 0 0 10px;
+          font-family: "Manrope", "Inter", sans-serif;
+          font-size: 34px;
+          line-height: 1.08;
+        }
+        .hero p { margin: 0; color: var(--muted); max-width: 760px; }
         .hero-meta {
           min-width: 260px;
-          background: rgba(255,255,255,0.12);
-          border: 1px solid rgba(255,255,255,0.16);
-          border-radius: 18px;
+          background: var(--bg-elevated);
+          border: 1px solid var(--line);
+          border-radius: 22px;
           padding: 14px;
-          backdrop-filter: blur(8px);
+          box-shadow: var(--shadow);
         }
         .hero-meta-grid {
           display: grid;
@@ -154,7 +232,7 @@ def dashboard_home():
           gap: 10px;
         }
         .hero-meta-card {
-          background: rgba(255,255,255,0.08);
+          background: var(--bg-soft);
           border-radius: 14px;
           padding: 10px 12px;
         }
@@ -162,7 +240,7 @@ def dashboard_home():
           font-size: 11px;
           letter-spacing: 0.04em;
           text-transform: uppercase;
-          opacity: 0.72;
+          color: var(--muted);
           margin-bottom: 6px;
         }
         .hero-meta-value {
@@ -177,8 +255,8 @@ def dashboard_home():
           margin-top: 14px;
           padding: 10px 14px;
           border-radius: 999px;
-          background: rgba(255,255,255,0.16);
-          border: 1px solid rgba(255,255,255,0.18);
+          background: var(--bg-elevated);
+          border: 1px solid var(--line);
           font-size: 13px;
           font-weight: 600;
         }
@@ -186,8 +264,8 @@ def dashboard_home():
           width: 9px;
           height: 9px;
           border-radius: 999px;
-          background: #9ef3c3;
-          box-shadow: 0 0 0 4px rgba(158,243,195,0.16);
+          background: var(--success);
+          box-shadow: 0 0 0 4px rgba(16, 185, 129, 0.15);
         }
         .tabs { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 18px; }
         .tab {
@@ -195,17 +273,18 @@ def dashboard_home():
           align-items: center;
           justify-content: center;
           padding: 11px 16px;
-          border-radius: 14px;
+          border-radius: 16px;
           border: 1px solid var(--line);
-          background: white;
+          background: var(--bg-elevated);
           color: var(--ink);
           text-decoration: none;
           font-weight: 600;
+          box-shadow: var(--shadow);
         }
         .tab.active {
-          background: #e7f6ee;
-          border-color: #b8dfc8;
-          color: #176942;
+          background: color-mix(in srgb, var(--accent) 10%, var(--bg-elevated));
+          border-color: color-mix(in srgb, var(--accent) 26%, var(--line));
+          color: var(--accent-strong);
         }
         .tab small {
           display: block;
@@ -220,38 +299,105 @@ def dashboard_home():
           align-items: center;
           line-height: 1.2;
         }
+        .dashboard-grid {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) 300px;
+          gap: 18px;
+          margin-top: 18px;
+        }
         .frame-card {
-          margin-top: 16px;
           background: var(--card);
           border: 1px solid var(--line);
-          border-radius: 18px;
+          border-radius: 24px;
           padding: 10px;
-          box-shadow: 0 12px 26px rgba(27, 42, 34, 0.05);
+          box-shadow: var(--shadow);
         }
         iframe {
           width: 100%;
           min-height: 1650px;
           border: 0;
-          border-radius: 12px;
-          background: white;
+          border-radius: 16px;
+          background: var(--frame-bg);
+        }
+        .rail {
+          display: grid;
+          gap: 18px;
+        }
+        .rail-card {
+          background: var(--bg-elevated);
+          border: 1px solid var(--line);
+          border-radius: 24px;
+          padding: 18px;
+          box-shadow: var(--shadow);
+        }
+        .rail-card h3 {
+          margin: 0 0 10px;
+          font-family: "Manrope", "Inter", sans-serif;
+          font-size: 18px;
+        }
+        .rail-card p,
+        .rail-card li {
+          color: var(--muted);
+          font-size: 14px;
+          line-height: 1.6;
+        }
+        .rail-card ul {
+          margin: 0;
+          padding-left: 18px;
+        }
+        .rail-kpi {
+          display: grid;
+          grid-template-columns: 1fr 1fr;
+          gap: 10px;
+          margin-top: 14px;
+        }
+        .rail-kpi-item {
+          background: var(--bg-soft);
+          border-radius: 16px;
+          padding: 12px;
+        }
+        .rail-kpi-label {
+          color: var(--muted);
+          font-size: 11px;
+          text-transform: uppercase;
+          letter-spacing: 0.05em;
+          margin-bottom: 6px;
+        }
+        .rail-kpi-value {
+          font-size: 15px;
+          font-weight: 800;
         }
         @media (max-width: 900px) {
           .hero-meta { width: 100%; }
           .hero-meta-grid { grid-template-columns: 1fr 1fr; }
           iframe { min-height: 1900px; }
+          .dashboard-grid { grid-template-columns: 1fr; }
         }
         @media (max-width: 640px) {
           .hero-meta-grid { grid-template-columns: 1fr; }
+          .topbar { align-items: stretch; flex-direction: column; }
+          .hero h2 { font-size: 28px; }
+          .rail-kpi { grid-template-columns: 1fr; }
         }
       </style>
     </head>
     <body>
       <div class="wrap">
+        <div class="topbar">
+          <div class="topbar-copy">
+            <small>Integrated Monitor Shell</small>
+            <h1>주식 트레이딩 시스템 모니터링 대시보드</h1>
+          </div>
+          <button id="theme-toggle" class="theme-toggle" type="button" aria-label="테마 전환">
+            <span id="theme-icon">{{ '☀' if theme_class == 'dark' else '☾' }}</span>
+            <span id="theme-label">{{ '화이트 모드' if theme_class == 'dark' else '다크 모드' }}</span>
+          </button>
+        </div>
         <div class="hero">
           <div class="hero-top">
             <div class="hero-copy">
-              <h1>KORStockScan 통합 대시보드</h1>
-              <p>일일 전략 리포트, 진입 게이트 차단, 실제 매매 복기를 한 화면에서 전환합니다.</p>
+              <h2>운영 화면을 한 셸에서 읽는 통합 대시보드</h2>
+              <p>일일 전략 리포트, 진입 게이트 차단, 실제 매매 복기, 전략 성과 분석, Gatekeeper 리플레이, 성능 튜닝 모니터를 같은 관제 흐름에서 넘겨보도록 정리했습니다.</p>
               <div class="hero-status">
                 <span class="hero-status-dot"></span>
                 <span>현재 보고 있는 탭: {{ active_tab_label }}</span>
@@ -290,6 +436,9 @@ def dashboard_home():
           <a class="tab {% if active_tab == 'trade-review' %}active{% endif %}" href="/dashboard?tab=trade-review&date={{ target_date }}">
             <span class="tab-label">실제 매매 복기<small>체결 이후 흐름</small></span>
           </a>
+          <a class="tab {% if active_tab == 'strategy-performance' %}active{% endif %}" href="/dashboard?tab=strategy-performance&date={{ target_date }}">
+            <span class="tab-label">전략 성과 분석<small>전략·태그 성과 비교</small></span>
+          </a>
           <a class="tab {% if active_tab == 'gatekeeper-replay' %}active{% endif %}" href="/dashboard?tab=gatekeeper-replay&date={{ target_date }}">
             <span class="tab-label">Gatekeeper 리플레이<small>진입 전 AI 판단 복기</small></span>
           </a>
@@ -298,10 +447,78 @@ def dashboard_home():
           </a>
         </div>
 
-        <div class="frame-card">
-          <iframe src="{{ active_src }}" title="KORStockScan dashboard view"></iframe>
+        <div class="dashboard-grid">
+          <div>
+            <div class="frame-card">
+              <iframe src="{{ active_src }}" title="KORStockScan dashboard view"></iframe>
+            </div>
+          </div>
+          <div class="rail">
+            <div class="rail-card">
+              <h3>운영 포인트</h3>
+              <p>최근에 추가된 복기 정규화, 전략 성과, 성능 튜닝 화면까지 같은 셸에서 확인할 수 있도록 `main` 기준 기능셋을 유지한 채 레이아웃을 재구성했습니다.</p>
+              <div class="rail-kpi">
+                <div class="rail-kpi-item">
+                  <div class="rail-kpi-label">활성 탭</div>
+                  <div class="rail-kpi-value">{{ active_tab_label }}</div>
+                </div>
+                <div class="rail-kpi-item">
+                  <div class="rail-kpi-label">탭 개수</div>
+                  <div class="rail-kpi-value">6개</div>
+                </div>
+                <div class="rail-kpi-item">
+                  <div class="rail-kpi-label">조회 범위</div>
+                  <div class="rail-kpi-value">{{ resolved_since or '전체 구간' }}</div>
+                </div>
+                <div class="rail-kpi-item">
+                  <div class="rail-kpi-label">상위 표시</div>
+                  <div class="rail-kpi-value">TOP {{ top }}</div>
+                </div>
+              </div>
+            </div>
+            <div class="rail-card">
+              <h3>API 바로가기</h3>
+              <ul>
+                <li>`/api/daily-report?date=YYYY-MM-DD`</li>
+                <li>`/api/entry-pipeline-flow?date=YYYY-MM-DD&since=HH:MM:SS&top=10`</li>
+                <li>`/api/trade-review?date=YYYY-MM-DD&code=000000`</li>
+                <li>`/api/strategy-performance?date=YYYY-MM-DD`</li>
+                <li>`/api/gatekeeper-replay?date=YYYY-MM-DD`</li>
+                <li>`/api/performance-tuning?date=YYYY-MM-DD&since=HH:MM:SS`</li>
+              </ul>
+            </div>
+            <div class="rail-card">
+              <h3>디자인 메모</h3>
+              <p>`develop` 브랜치에서 진행했던 topbar, 테마 전환, 넓은 셸 레이아웃을 `main`의 최신 대시보드 기능과 합쳐 반영했습니다. 기존 데이터 경로와 라우팅은 그대로 유지합니다.</p>
+            </div>
+          </div>
         </div>
       </div>
+      <script>
+        (function () {
+          const root = document.documentElement;
+          const button = document.getElementById("theme-toggle");
+          const icon = document.getElementById("theme-icon");
+          const label = document.getElementById("theme-label");
+          const storageKey = "korstockscan-dashboard-theme";
+
+          const sync = (nextTheme) => {
+            const isDark = nextTheme === "dark";
+            root.classList.toggle("dark", isDark);
+            icon.textContent = isDark ? "☀" : "☾";
+            label.textContent = isDark ? "화이트 모드" : "다크 모드";
+          };
+
+          const initial = localStorage.getItem(storageKey) || (root.classList.contains("dark") ? "dark" : "light");
+          sync(initial);
+
+          button.addEventListener("click", function () {
+            const next = root.classList.contains("dark") ? "light" : "dark";
+            localStorage.setItem(storageKey, next);
+            sync(next);
+          });
+        }());
+      </script>
     </body>
     </html>
     """
@@ -313,6 +530,7 @@ def dashboard_home():
         target_date=target_date,
         resolved_since=resolved_since,
         top=max(1, int(top or 10)),
+        theme_class="dark" if theme == "dark" else "",
     )
 
 
@@ -1671,6 +1889,39 @@ def performance_tuning_preview():
             </div>
             <div class="meta" style="margin-top: 12px;">
               fast reuse {{ metrics.gatekeeper_fast_reuse_ratio }}% / AI cache hit {{ metrics.gatekeeper_ai_cache_hit_ratio }}% / eval p95 {{ metrics.gatekeeper_eval_ms_p95 }}ms
+            </div>
+            <div class="meta" style="margin-top: 8px; font-size: 0.85em; color: #999;">
+              action_age p95 {{ metrics.gatekeeper_action_age_p95 }}s / allow_entry_age p95 {{ metrics.gatekeeper_allow_entry_age_p95 }}s
+            </div>
+          </div>
+        </div>
+
+        <div class="section two-col">
+          <div class="card">
+            <h2>Gatekeeper 재사용 차단 사유</h2>
+            <div class="list">
+              {% for item in breakdowns.gatekeeper_reuse_blockers %}
+                <div class="row">
+                  <div class="title">{{ item.label }}</div>
+                  <div class="meta">{{ item.count }}건</div>
+                </div>
+              {% else %}
+                <div class="meta">데이터 없음</div>
+              {% endfor %}
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>Gatekeeper 시그니처 변경 필드</h2>
+            <div class="list">
+              {% for item in breakdowns.gatekeeper_sig_deltas %}
+                <div class="row">
+                  <div class="title">{{ item.label }}</div>
+                  <div class="meta">{{ item.count }}회</div>
+                </div>
+              {% else %}
+                <div class="meta">데이터 없음</div>
+              {% endfor %}
             </div>
           </div>
         </div>

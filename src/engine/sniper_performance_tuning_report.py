@@ -851,11 +851,40 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
             holding_reuse_blockers[_friendly_reason_name(reason_code)] += 1
 
     gatekeeper_reuse_blockers = Counter()
+    gatekeeper_action_ages = []
+    gatekeeper_allow_ages = []
+    gatekeeper_sig_deltas = Counter()
+    gatekeeper_bypass_evaluation_samples = 0
+    
     for event in entry_events:
         if event.stage != "gatekeeper_fast_reuse_bypass":
             continue
+        gatekeeper_bypass_evaluation_samples += 1
         for reason_code in _split_reason_codes(event.fields.get("reason_codes")):
             gatekeeper_reuse_blockers[_friendly_reason_name(reason_code)] += 1
+        
+        # 신규: lifecycle age 수집
+        action_age_str = event.fields.get("action_age_sec")
+        if action_age_str and action_age_str != "-":
+            try:
+                gatekeeper_action_ages.append(float(action_age_str))
+            except (ValueError, TypeError):
+                pass
+        
+        allow_age_str = event.fields.get("allow_entry_age_sec")
+        if allow_age_str and allow_age_str != "-":
+            try:
+                gatekeeper_allow_ages.append(float(allow_age_str))
+            except (ValueError, TypeError):
+                pass
+        
+        # 신규: sig_delta 상위 필드 추출
+        sig_delta_str = event.fields.get("sig_delta")
+        if sig_delta_str and sig_delta_str != "-":
+            for delta_field in sig_delta_str.split(","):
+                if ":" in delta_field:
+                    field_name = delta_field.split(":")[0].strip()
+                    gatekeeper_sig_deltas[field_name] += 1
 
     total_holding_samples = len(holding_reviews) + len(holding_skips)
     total_gatekeeper_samples = len(gatekeeper_decisions)
@@ -877,6 +906,9 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
         "gatekeeper_eval_ms_avg": _avg(gatekeeper_eval_ms),
         "gatekeeper_eval_ms_p95": round(_percentile(gatekeeper_eval_ms, 95), 2),
         "gatekeeper_fast_reuse_ws_age_p95": round(_percentile(gatekeeper_fast_ws_ages, 95), 2),
+        "gatekeeper_action_age_p95": round(_percentile(gatekeeper_action_ages, 95), 2) if gatekeeper_action_ages else 0,
+        "gatekeeper_allow_entry_age_p95": round(_percentile(gatekeeper_allow_ages, 95), 2) if gatekeeper_allow_ages else 0,
+        "gatekeeper_bypass_evaluation_samples": gatekeeper_bypass_evaluation_samples,
         "exit_signals": len(exit_signals),
     }
 
@@ -948,6 +980,7 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
             "holding_reuse_blockers": [{"label": key, "count": value} for key, value in holding_reuse_blockers.most_common()],
             "gatekeeper_cache_modes": [{"label": key, "count": value} for key, value in gatekeeper_cache_modes.most_common()],
             "gatekeeper_reuse_blockers": [{"label": key, "count": value} for key, value in gatekeeper_reuse_blockers.most_common()],
+            "gatekeeper_sig_deltas": [{"label": key, "count": value} for key, value in gatekeeper_sig_deltas.most_common()],
             "gatekeeper_actions": [{"label": key, "count": value} for key, value in gatekeeper_actions.most_common()],
             "exit_rules": [{"label": key, "count": value} for key, value in exit_rule_counts.most_common()],
         },
