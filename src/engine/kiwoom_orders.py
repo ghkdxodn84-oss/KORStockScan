@@ -3,6 +3,7 @@ import json
 import re
 
 # 💡 Level 1 & 2 공통 모듈
+from src.engine import sniper_config
 from src.utils.logger import log_error, log_info
 from src.utils.constants import TRADING_RULES
 from src.core.event_bus import EventBus
@@ -13,6 +14,7 @@ from src.engine.trade_pause_control import is_buy_side_paused, get_pause_state_l
 # 1. 계좌 및 자산 조회 API
 # ==========================================
 _LAST_INVENTORY_ERRORS = []
+_LAST_DEPOSIT_OVERRIDE = None
 
 def get_last_inventory_errors():
     """최근 잔고 조회 실패 원인을 반환합니다."""
@@ -56,10 +58,42 @@ def describe_buy_capacity(current_price, total_deposit, ratio=0.1, safety_ratio=
 
     return int(target_budget), int(safe_budget), qty, float(used_ratio)
 
+
+def _get_virtual_orderable_amount():
+    """설정된 가상 주문가능금액이 있으면 반환합니다."""
+    conf = getattr(sniper_config, "CONF", {}) or {}
+    for key in ("VIRTUAL_ORDERABLE_AMOUNT", "FIXED_ORDERABLE_AMOUNT"):
+        raw_value = conf.get(key, 0)
+        try:
+            amount = int(float(raw_value or 0))
+        except (TypeError, ValueError):
+            amount = 0
+        if amount > 0:
+            return amount, key
+    return 0, None
+
+
+def _log_virtual_orderable_amount_once(amount, key):
+    global _LAST_DEPOSIT_OVERRIDE
+    marker = (key, int(amount))
+    if _LAST_DEPOSIT_OVERRIDE == marker:
+        return
+    log_info(
+        f"💰 [주문가능금액] 가상 주문가능금액 사용 "
+        f"({key}={int(amount):,}원)"
+    )
+    _LAST_DEPOSIT_OVERRIDE = marker
+
+
 def get_deposit(token):
     """
     [kt00001] 예수금 조회 - return_code 대응 수정
     """
+    virtual_amount, config_key = _get_virtual_orderable_amount()
+    if virtual_amount > 0:
+        _log_virtual_orderable_amount_once(virtual_amount, config_key)
+        return virtual_amount
+
     url = kiwoom_utils.get_api_url("/api/dostk/acnt")
     headers = {
         'Content-Type': 'application/json;charset=UTF-8',
