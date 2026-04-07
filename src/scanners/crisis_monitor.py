@@ -37,6 +37,17 @@ def calculate_severity(title):
     score = sum(1 for kw in WAR_KEYWORDS + PANDEMIC_KEYWORDS if kw in title_lower)
     return category, min(score, 5)
 
+def is_telegram_send_allowed():
+    """
+    텔레그램 브로드캐스트가 허용된 시간인지 확인
+    9PM(21:00) ~ 8AM(08:00) 사이는 텔레그램 전송 차단
+    """
+    current_hour = datetime.now().hour
+    # 21시 이상 또는 8시 미만이면 전송 불가 (9PM ~ 8AM)
+    if current_hour >= 21 or current_hour < 8:
+        return False
+    return True
+
 def run_crisis_monitor():
     now = datetime.now()
     print(f"🌍 [{now.strftime('%Y-%m-%d %H:%M:%S')}] 글로벌 위기 감지 스캐너 가동...")
@@ -79,8 +90,13 @@ def run_crisis_monitor():
                 except: ko_title = alert["en_title"]
                 msg += f"▪️ **[{alert['category']}]** {ko_title}\n"
 
-            event_bus.publish('TELEGRAM_BROADCAST', {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'})
-            print(f"📢 위기 경보 브로드캐스트 완료 (누적: {risk_count}건)")
+            # ⏰ 텔레그램 전송 가능 시간 확인 (9PM ~ 8AM 제외)
+            if is_telegram_send_allowed():
+                event_bus.publish('TELEGRAM_BROADCAST', {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'})
+                print(f"📢 위기 경보 브로드캐스트 완료 (누적: {risk_count}건)")
+            else:
+                current_hour = datetime.now().hour
+                print(f"⏸️ 위기 경보 텔레그램 전송 차단 (현재: {current_hour}시 - 야간 조용한 시간 21시~8시)")
 
 if __name__ == "__main__":
     run_crisis_monitor()
