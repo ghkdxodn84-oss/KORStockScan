@@ -44,6 +44,7 @@ from src.engine.sniper_dynamic_thresholds import (
     get_dynamic_scalp_thresholds,
     get_dynamic_swing_gap_threshold,
 )
+from src.engine.trade_profit import calculate_net_profit_rate
 from src.engine.sniper_position_tags import (
     normalize_position_tag,
     normalize_strategy,
@@ -220,7 +221,12 @@ def _publish_entry_mode_summary(stock, code, *, entry_mode, latency_gate):
 
 
 def _log_entry_pipeline(stock, code, stage, **fields):
-    parts = [f"{key}={_sanitize_pipeline_field(value)}" for key, value in fields.items()]
+    merged_fields = {}
+    record_id = stock.get("id") if isinstance(stock, dict) else None
+    if record_id not in (None, "", 0):
+        merged_fields["id"] = record_id
+    merged_fields.update(fields)
+    parts = [f"{key}={_sanitize_pipeline_field(value)}" for key, value in merged_fields.items()]
     suffix = f" {' '.join(parts)}" if parts else ""
     log_info(f"[ENTRY_PIPELINE] {stock.get('name')}({code}) stage={stage}{suffix}")
 
@@ -241,8 +247,8 @@ def _log_holding_pipeline(stock, code, stage, **fields):
     log_info(f"[HOLDING_PIPELINE] {stock.get('name')}({code}) stage={stage}{suffix}")
 
 
-def _log_dual_persona_shadow_result(stock_name, code, strategy, payload):
-    stock_stub = {"name": stock_name}
+def _log_dual_persona_shadow_result(stock_name, code, strategy, payload, record_id=None):
+    stock_stub = {"name": stock_name, "id": record_id}
     if not isinstance(payload, dict):
         _log_entry_pipeline(
             stock_stub,
@@ -289,7 +295,7 @@ def _log_dual_persona_shadow_result(stock_name, code, strategy, payload):
     )
 
 
-def _submit_gatekeeper_dual_persona_shadow(*, stock_name, code, strategy, realtime_ctx, gatekeeper):
+def _submit_gatekeeper_dual_persona_shadow(*, stock_name, code, strategy, realtime_ctx, gatekeeper, record_id=None):
     if DUAL_PERSONA_ENGINE is None:
         return
     try:
@@ -299,7 +305,13 @@ def _submit_gatekeeper_dual_persona_shadow(*, stock_name, code, strategy, realti
             strategy=strategy,
             realtime_ctx=realtime_ctx,
             gemini_result=gatekeeper,
-            callback=lambda payload: _log_dual_persona_shadow_result(stock_name, code, strategy, payload),
+            callback=lambda payload: _log_dual_persona_shadow_result(
+                stock_name,
+                code,
+                strategy,
+                payload,
+                record_id=record_id,
+            ),
         )
     except Exception as e:
         log_error(f"🚨 [Gatekeeper 듀얼 페르소나 shadow 제출 실패] {stock_name}({code}): {e}")
@@ -382,6 +394,26 @@ def _get_ws_snapshot_age_sec(ws_data):
         return max(0.0, float(age))
     except Exception:
         return None
+
+
+def _resolve_reference_age_sec(primary_ts, *, fallback_ts=None, now_ts=None):
+    def _coerce_ts(value):
+        if value in (None, "", 0, "0", "None"):
+            return None
+        try:
+            ts = float(value)
+        except Exception:
+            return None
+        return ts if ts > 0 else None
+
+    reference_ts = _coerce_ts(primary_ts)
+    if reference_ts is None:
+        reference_ts = _coerce_ts(fallback_ts)
+    if reference_ts is None:
+        return None
+
+    current_ts = time.time() if now_ts is None else float(now_ts)
+    return max(0.0, float(current_ts - reference_ts))
 
 
 def _bucket_int(value, bucket):
@@ -1541,6 +1573,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                         strategy=strategy,
                         realtime_ctx=realtime_ctx,
                         gatekeeper=gatekeeper,
+                        record_id=stock.get('id'),
                     )
             except Exception as e:
                 log_error(f"🚨 [{strategy} Gatekeeper 오류] {stock['name']}({code}): {e}")
@@ -1913,8 +1946,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
         highest_prices[code] = curr_p
     highest_prices[code] = max(highest_prices[code], curr_p)
 
-    profit_rate = (curr_p - buy_p) / buy_p * 100
-    peak_profit = (highest_prices[code] - buy_p) / buy_p * 100
+    profit_rate = calculate_net_profit_rate(buy_p, curr_p)
+    peak_profit = calculate_net_profit_rate(buy_p, highest_prices[code])
     trailing_stop_price = float(stock.get('trailing_stop_price') or 0)
     hard_stop_price = float(stock.get('hard_stop_price') or 0)
 
@@ -1932,7 +1965,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
         if stock.get('exit_requested'):
             return
 
-        profit_rate = (curr_p - buy_p) / buy_p * 100 if buy_p > 0 else 0.0
+        profit_rate = calculate_net_profit_rate(buy_p, curr_p) if buy_p > 0 else 0.0
         orig_ord_no = stock.get('preset_tp_ord_no', '')
         expected_qty = stock.get('buy_qty', 0)
 
@@ -2066,20 +2099,27 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
         if time_elapsed > dynamic_min_cd and (price_change >= dynamic_price_trigger or time_elapsed > dynamic_max_cd):
             holding_ai_review_started = time.perf_counter()
             try:
+                now_ts = time.time()
                 market_snapshot = _build_holding_ai_fast_snapshot(ws_data)
                 market_signature = tuple(market_snapshot.values())
                 reuse_sec = _resolve_holding_ai_fast_reuse_sec(is_critical_zone, dynamic_max_cd)
                 max_ws_age_sec = float(getattr(TRADING_RULES, 'AI_HOLDING_FAST_REUSE_MAX_WS_AGE_SEC', 1.5) or 1.5)
                 ws_age_sec = _get_ws_snapshot_age_sec(ws_data)
                 fast_sig_matches = market_signature == stock.get('last_ai_market_signature')
-                fast_sig_age = time.time() - float(stock.get('last_ai_market_signature_at', 0) or 0)
+                fast_sig_age = _resolve_reference_age_sec(
+                    stock.get('last_ai_market_signature_at'),
+                    fallback_ts=stock.get('last_ai_reviewed_at'),
+                    now_ts=now_ts,
+                )
+                fast_sig_age_str = "-" if fast_sig_age is None else f"{fast_sig_age:.1f}"
                 sig_delta = _describe_snapshot_deltas(stock.get('last_ai_market_snapshot'), market_snapshot)
                 near_ai_exit_band = abs(profit_rate - ai_exit_min_loss_pct) <= 0.20
                 near_safe_profit_band = abs(profit_rate - safe_profit_pct) <= 0.20
                 near_low_score_band = current_ai_score <= (ai_exit_score_limit + 5)
-                fast_sig_fresh = fast_sig_age < reuse_sec
+                fast_sig_fresh = fast_sig_age is not None and fast_sig_age < reuse_sec
                 price_change_ok = price_change < (dynamic_price_trigger * 1.25)
                 ws_fresh = ws_age_sec is None or ws_age_sec <= max_ws_age_sec
+                shadow_action = "review"
 
                 if (
                     fast_sig_matches
@@ -2090,6 +2130,21 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                     and not near_safe_profit_band
                     and not near_low_score_band
                 ):
+                    shadow_action = "skip"
+                    _log_holding_pipeline(
+                        stock,
+                        code,
+                        "ai_holding_shadow_band",
+                        profit_rate=f"{profit_rate:+.2f}",
+                        ai_score=f"{current_ai_score:.0f}",
+                        ai_exit_min_loss_pct=f"{ai_exit_min_loss_pct:+.2f}",
+                        safe_profit_pct=f"{safe_profit_pct:+.2f}",
+                        near_ai_exit=near_ai_exit_band,
+                        near_safe_profit=near_safe_profit_band,
+                        distance_to_ai_exit=f"{profit_rate - ai_exit_min_loss_pct:+.2f}",
+                        distance_to_safe_profit=f"{profit_rate - safe_profit_pct:+.2f}",
+                        action=shadow_action,
+                    )
                     _log_holding_pipeline(
                         stock,
                         code,
@@ -2099,10 +2154,24 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                         held_sec=int(held_time_min * 60),
                         price_change=f"{price_change:.2f}",
                         reuse_sec=f"{reuse_sec:.1f}",
-                        age_sec=f"{fast_sig_age:.1f}",
+                        age_sec=fast_sig_age_str,
                         ws_age_sec="-" if ws_age_sec is None else f"{ws_age_sec:.2f}",
                     )
                 else:
+                    _log_holding_pipeline(
+                        stock,
+                        code,
+                        "ai_holding_shadow_band",
+                        profit_rate=f"{profit_rate:+.2f}",
+                        ai_score=f"{current_ai_score:.0f}",
+                        ai_exit_min_loss_pct=f"{ai_exit_min_loss_pct:+.2f}",
+                        safe_profit_pct=f"{safe_profit_pct:+.2f}",
+                        near_ai_exit=near_ai_exit_band,
+                        near_safe_profit=near_safe_profit_band,
+                        distance_to_ai_exit=f"{profit_rate - ai_exit_min_loss_pct:+.2f}",
+                        distance_to_safe_profit=f"{profit_rate - safe_profit_pct:+.2f}",
+                        action=shadow_action,
+                    )
                     _log_holding_pipeline(
                         stock,
                         code,
@@ -2112,7 +2181,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                         held_sec=int(held_time_min * 60),
                         price_change=f"{price_change:.2f}",
                         reuse_sec=f"{reuse_sec:.1f}",
-                        age_sec=f"{fast_sig_age:.1f}",
+                        age_sec=fast_sig_age_str,
                         ws_age_sec="-" if ws_age_sec is None else f"{ws_age_sec:.2f}",
                         sig_delta=sig_delta or "-",
                         reason_codes=_reason_codes(
@@ -2150,10 +2219,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                             ai_low_score_hits = 0
 
                         stock['ai_low_score_loss_hits'] = ai_low_score_hits
-                        stock['last_ai_reviewed_at'] = time.time()
+                        review_completed_ts = time.time()
+                        stock['last_ai_reviewed_at'] = review_completed_ts
                         stock['last_ai_market_signature'] = market_signature
                         stock['last_ai_market_snapshot'] = market_snapshot
-                        stock['last_ai_market_signature_at'] = time.time()
+                        stock['last_ai_market_signature_at'] = review_completed_ts
 
                         print(
                             f"👁️ [AI 보유감시: {stock['name']}] 수익: {profit_rate:+.2f}% | "

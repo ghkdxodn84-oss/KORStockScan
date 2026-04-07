@@ -1449,3 +1449,97 @@ def test_holding_exit_signal_logs_exit_rule(monkeypatch):
     assert stock["last_exit_rule"] == "scalp_soft_stop_pct"
     assert exit_logs and exit_logs[-1]["exit_rule"] == "scalp_soft_stop_pct"
     assert sent_logs and sent_logs[-1]["exit_rule"] == "scalp_soft_stop_pct"
+
+
+def test_holding_shadow_band_logs_review_for_near_safe_profit(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 10080}
+    state_handlers.LAST_AI_CALL_TIMES = {"123456": state_handlers.time.time() - 15}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    pipeline_logs = []
+
+    def fake_log_holding_pipeline(stock, code, stage, **fields):
+        pipeline_logs.append((stage, fields))
+
+    class DummyAI:
+        def analyze_target(self, *args, **kwargs):
+            return {"score": 70, "cache_hit": False}
+
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", fake_log_holding_pipeline)
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda *args, **kwargs: [{"price": 10080, "volume": 1, "dir": "BUY"}],
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_utils,
+        "get_minute_candles_ka10080",
+        lambda *args, **kwargs: [{"Close": 10080}],
+    )
+
+    ws_data = {
+        "curr": 10080,
+        "fluctuation": 1.2,
+        "v_pw": 120.0,
+        "buy_ratio": 64.0,
+        "ask_tot": 180000,
+        "bid_tot": 190000,
+        "net_bid_depth": 12000,
+        "net_ask_depth": -8000,
+        "buy_exec_volume": 9000,
+        "sell_exec_volume": 5000,
+        "tick_trade_value": 24000,
+        "last_ws_update_ts": state_handlers.time.time(),
+        "orderbook": {
+            "asks": [{"price": 10090, "volume": 1200}],
+            "bids": [{"price": 10080, "volume": 1500}],
+        },
+    }
+    snapshot = state_handlers._build_holding_ai_fast_snapshot(ws_data)
+    now_ts = state_handlers.time.time()
+    current_profit_rate = state_handlers.calculate_net_profit_rate(10000, 10080)
+
+    stock = {
+        "id": 21,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+        "buy_time": datetime.now() - timedelta(seconds=240),
+        "rt_ai_prob": 0.70,
+        "last_ai_profit": current_profit_rate,
+        "last_ai_market_signature": tuple(snapshot.values()),
+        "last_ai_market_snapshot": snapshot,
+        "last_ai_market_signature_at": now_ts - 5,
+        "last_ai_reviewed_at": now_ts - 5,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data=ws_data,
+        admin_id=1,
+        market_regime="BULL",
+        radar=object(),
+        ai_engine=DummyAI(),
+    )
+
+    shadow_logs = [fields for stage, fields in pipeline_logs if stage == "ai_holding_shadow_band"]
+
+    assert shadow_logs
+    assert shadow_logs[-1]["action"] == "review"
+    assert shadow_logs[-1]["near_safe_profit"] is True
+    assert shadow_logs[-1]["near_ai_exit"] is False

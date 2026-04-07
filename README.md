@@ -62,6 +62,9 @@ Flutter나 외부 서비스는 아래 API를 그대로 사용하면 됩니다.
 - Flutter는 위 API를 그대로 유지한 채 화면만 별도로 구성할 수 있습니다.
 - 운영 웹은 Flask에서 같은 집계 모듈을 렌더링하므로, 웹/앱/CLI 숫자가 일치하는 구조를 목표로 합니다.
 - `since`를 생략하면 오늘 날짜 화면은 자동으로 최근 2시간 오프셋을 사용합니다.
+- `entry-pipeline-flow`의 `recent_stocks`는 같은 종목의 재진입이 있어도 최신 시도 세그먼트만 보여주며, 각 row에 `record_id`, `attempt_started_at`, `pass_flow`, `confirmed_failure`가 포함됩니다.
+
+상세 응답 필드와 예시는 [docs/web_api_spec_guide.md](docs/web_api_spec_guide.md)를 참고하면 됩니다.
 
 ### 핵심 실행 파일
 
@@ -492,8 +495,9 @@ KORStockScan/
 확인 포인트:
 
 - 어떤 게이트에서 가장 많이 막히는지
-- 특정 종목이 `AI 확답`까지 갔는지
+- 특정 종목이 최신 진입 시도에서 `AI 확답`까지 갔는지
 - 마지막 확정 진입 실패 사유가 무엇인지
+- 재진입 종목이라도 직전 주문 제출 흐름과 현재 차단 사유가 섞이지 않는지
 
 ### 4. 실제 매매 복기 화면
 
@@ -596,6 +600,8 @@ KORStockScan/
   `python3 src/bot_main.py`
 - Gunicorn 상태:
   `sudo systemctl status korstockscan-gunicorn.service`
+- Gunicorn 코드 반영 재시작:
+  `sudo systemctl restart korstockscan-gunicorn.service`
 - Nginx 상태:
   `sudo systemctl status nginx`
 

@@ -93,6 +93,24 @@ class KiwoomWSManager:
     def _normalize_code(code):
         return str(code or '').strip()[:6]
 
+    def _parse_order_execution_notice(self, values):
+        status = str(values.get('913', '')).strip()
+        code = str(values.get('9001', '')).replace('A', '').strip()
+        order_no = str(values.get('9203', '')).strip()
+        order_type_str = str(values.get('905', '')).strip()
+        exec_price = self._safe_abs_int(values.get('910', '0'), 0)
+        exec_qty = self._safe_abs_int(values.get('911', '0'), 0)
+        exec_type = 'BUY' if '매수' in order_type_str else 'SELL'
+        return {
+            'status': status,
+            'code': code,
+            'order_no': order_no,
+            'order_type_str': order_type_str,
+            'exec_price': exec_price,
+            'exec_qty': exec_qty,
+            'exec_type': exec_type,
+        }
+
     def _normalize_subscribe_codes(self, codes):
         normalized = []
         invalid = []
@@ -640,20 +658,18 @@ class KiwoomWSManager:
                     # [트랙 A] 🚨 주문/체결 통보 가로채기 (ORDER_EXECUTED)
                     # ===================================================
                     if real_type == '00' or d.get('name') == '주문체결':
-                        status = str(values.get('913', '')).strip()      
-                        code = str(values.get('9001', '')).replace('A', '').strip()
-                        order_no = str(values.get('9203', '')).strip()   
-                        order_type_str = str(values.get('905', '')).strip() 
+                        notice = self._parse_order_execution_notice(values)
+                        status = notice['status']
+                        code = notice['code']
+                        order_no = notice['order_no']
+                        order_type_str = notice['order_type_str']
                         
                         print(f"📩 [WS 주문상태] {code} | 상태: '{status}' | 구분: '{order_type_str}'")
 
                         if status == '체결':
-                            raw_price = str(values.get('910', '0')).replace('+', '').replace('-', '').strip()
-                            raw_qty = str(values.get('911', '0')).replace('+', '').replace('-', '').strip()
-                            
-                            exec_price = int(raw_price) if raw_price.isdigit() and raw_price else 0
-                            exec_qty = int(raw_qty) if raw_qty.isdigit() and raw_qty else 0
-                            exec_type = 'BUY' if '매수' in order_type_str else 'SELL'
+                            exec_price = notice['exec_price']
+                            exec_qty = notice['exec_qty']
+                            exec_type = notice['exec_type']
                             
                             print(f"🔔 [WS 실제체결] {code} {exec_type} {exec_qty}주 @ {exec_price}원 (주문번호: {order_no})")
                             

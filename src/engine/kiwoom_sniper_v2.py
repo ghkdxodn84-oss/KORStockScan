@@ -42,6 +42,7 @@ from src.database.db_manager import DBManager
 from src.core.event_bus import EventBus
 from src.utils.google_sheets_utils import GoogleSheetsManager
 from src.database.models import RecommendationHistory
+from src.engine.trade_profit import calculate_net_profit_rate
 from src.engine.sniper_config import CONF
 from src.engine.sniper_time import (
     _rule_time,
@@ -126,7 +127,7 @@ from src.engine.ai_engine import GeminiSniperEngine
 from src.engine.ai_engine_openai_v2 import OpenAIDualPersonaShadowEngine
 
 # 💡 VIX, 유가지표 임포트
-from src.market_regime import MarketRegimeService
+from src.market_regime import MarketRegimeService, summarize_market_regime_snapshot
 
 # 스캐너 모듈 (장중 스캔 호출용)
 import src.scanners.final_ensemble_scanner as final_ensemble_scanner
@@ -719,7 +720,7 @@ def check_holding_conditions(stock, code, ws_data, admin_id, market_regime, rada
         if stock.get('buy_time'):
             stock['holding_started_at'] = stock.get('buy_time')
 
-    profit_rate = (curr_p - buy_p) / buy_p * 100
+    profit_rate = calculate_net_profit_rate(buy_p, curr_p)
     if code in highest_prices:
         if curr_p > highest_prices[code]:
             highest_prices[code] = curr_p
@@ -727,7 +728,7 @@ def check_holding_conditions(stock, code, ws_data, admin_id, market_regime, rada
     else:
         highest_prices[code] = curr_p
         stock['last_peak_update_at'] = datetime.now()
-    peak_profit = (highest_prices[code] - buy_p) / buy_p * 100
+    peak_profit = calculate_net_profit_rate(buy_p, highest_prices[code])
 
     if strategy == 'SCALPING':
         reason = evaluate_scalping_exit(stock, code, ws_data, curr_p, buy_p, profit_rate, peak_profit)
@@ -919,9 +920,13 @@ def run_sniper(is_test_mode=False):
     targets = ACTIVE_TARGETS
     last_db_poll_time = time.time()
 
-    current_market_regime = radar.get_market_regime(KIWOOM_TOKEN)
-    regime_kor = "상승장 🐂" if current_market_regime == 'BULL' else "조정장 🐻"
-    print(f"📊 [시장 판독] 현재 KOSPI는 '{regime_kor}' 상태입니다.")
+    market_snapshot = MARKET_REGIME.refresh_if_needed()
+    regime_summary = summarize_market_regime_snapshot(market_snapshot)
+    regime_kor = f"{regime_summary['status_text']} {regime_summary['emoji']}"
+    print(
+        f"📊 [시장 판독] 현재 KOSPI는 '{regime_kor}' 상태입니다. "
+        f"(risk={regime_summary['risk_state']}, score={regime_summary['swing_score']})"
+    )
     if is_buy_side_paused():
         log_info("[TRADING_PAUSED] engine booted with 신규 매수 및 추가매수 중단 상태 active")
 

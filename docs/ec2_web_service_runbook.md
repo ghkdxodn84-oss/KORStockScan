@@ -46,6 +46,15 @@ sudo systemctl enable --now korstockscan-gunicorn.service
 sudo systemctl status korstockscan-gunicorn.service
 ```
 
+코드 반영 후 재시작:
+
+```bash
+sudo systemctl restart korstockscan-gunicorn.service
+sudo systemctl status korstockscan-gunicorn.service
+```
+
+현재 서비스 파일에는 `ExecReload`가 없으므로 `reload` 대신 `restart`를 기준으로 운영합니다.
+
 직접 실행 확인:
 
 ```bash
@@ -154,6 +163,14 @@ sudo ss -tlnp | grep 5000
 - `/api/strength-momentum`
 
 Flutter나 외부 프론트는 위 API를 그대로 사용하는 것을 기준으로 합니다.
+
+상세 응답 필드 가이드는 [web_api_spec_guide.md](web_api_spec_guide.md)를 참고합니다.
+
+특히 `/api/entry-pipeline-flow`는 최신 버전에서 아래 기준을 따릅니다.
+
+- `recent_stocks`는 재진입 종목도 `최신 시도 세그먼트`만 반환
+- 각 row에 `record_id`, `attempt_started_at` 포함
+- `pass_flow`와 `confirmed_failure`는 최신 시도 기준으로 계산
 
 ## 트러블슈팅
 

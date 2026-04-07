@@ -162,3 +162,44 @@ def test_trade_review_builds_ai_review_summary(monkeypatch):
     assert summary["headline"] == "AI 하방 경고 누적"
     assert "최근 3회 기준 AI 60→28점" in summary["summary"]
     assert any(item["value"] == "3/3" for item in summary["chips"])
+
+
+def test_trade_review_hides_unrealistic_holding_age_sec(monkeypatch):
+    holding_lines = [
+        "[2026-04-06 09:00:01] [HOLDING_PIPELINE] 테스트(123456) stage=holding_started id=1 fill_price=10000 fill_qty=1 buy_price=10000 buy_qty=1 strategy=SCALPING position_tag=SCANNER",
+        "[2026-04-06 09:00:20] [HOLDING_PIPELINE] 테스트(123456) stage=ai_holding_reuse_bypass id=1 age_sec=1775526427.3 reason_codes=sig_changed,age_expired",
+        "[2026-04-06 09:00:42] [HOLDING_PIPELINE] 테스트(123456) stage=sell_completed id=1 sell_price=10100 profit_rate=+1.00",
+    ]
+
+    def _fake_iter(log_paths, *, target_date):
+        return holding_lines
+
+    def _fake_fetch(target_date, code=None):
+        return ([
+            {
+                "id": 1,
+                "rec_date": target_date,
+                "code": "123456",
+                "name": "테스트",
+                "status": "COMPLETED",
+                "strategy": "SCALPING",
+                "position_tag": "SCANNER",
+                "buy_price": 10000.0,
+                "buy_qty": 1,
+                "buy_time": "2026-04-06 09:00:01",
+                "sell_price": 10100,
+                "sell_time": "2026-04-06 09:00:42",
+                "profit_rate": 1.0,
+                "realized_pnl_krw": 100,
+            },
+        ], [])
+
+    monkeypatch.setattr(report_mod, "_iter_target_lines", _fake_iter)
+    monkeypatch.setattr(report_mod, "_fetch_trade_rows", _fake_fetch)
+    monkeypatch.setattr(report_mod, "find_gatekeeper_snapshot_for_trade", lambda *args, **kwargs: None)
+
+    report = report_mod.build_trade_review_report(target_date="2026-04-06")
+    timeline = report["sections"]["recent_trades"][0]["timeline"]
+    bypass_event = next(item for item in timeline if item["stage"] == "ai_holding_reuse_bypass")
+
+    assert all(detail["label"] != "재사용 나이" for detail in bypass_event["details"])

@@ -9,11 +9,15 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine.trade_profit import calculate_net_realized_pnl, get_trade_cost_rate
+from src.market_regime import summarize_market_regime
 from src.utils.constants import DATA_DIR, POSTGRES_URL, TRADING_RULES
 
 
 REPORT_DIR = DATA_DIR / "report"
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
+REPORT_SCHEMA_VERSION = 2
+DEFAULT_REALIZED_PNL_COST_RATE = 0.0023
 
 _MODEL_XGB_FEATURES = [
     "daily_return",
@@ -91,7 +95,11 @@ def load_saved_daily_report(target_date: str) -> dict | None:
     if not path.exists():
         return None
     with open(path, "r", encoding="utf-8") as handle:
-        return json.load(handle)
+        payload = json.load(handle)
+    schema_version = _safe_int((payload.get("meta") or {}).get("schema_version"))
+    if schema_version != REPORT_SCHEMA_VERSION:
+        return None
+    return payload
 
 
 def save_daily_report(report: dict) -> Path:
@@ -436,6 +444,8 @@ def _build_market_snapshot(target_date: str, ctx: _ReportContext) -> dict:
             snapshot["psychology"] = "모델 시그널이 엇갈리는 횡보장에 가깝고, 공격과 방어를 병행해야 하는 흐름입니다."
             snapshot["strategy"] = "비중을 줄인 스캘핑이나 짧은 스윙으로 대응하면서 확실한 추세 종목만 선별하는 편이 좋습니다."
 
+        _apply_cached_market_regime_label(snapshot, target_date)
+
     except Exception as exc:
         ctx.warnings.append(f"시장 진단 계산 실패: {exc}")
 
@@ -447,11 +457,61 @@ def _estimate_realized_pnl(row: dict[str, Any]) -> float:
     sell_price = _safe_float(row.get("sell_price"))
     qty = _safe_int(row.get("buy_qty"))
     profit_rate = _safe_float(row.get("profit_rate"))
+    cost_rate = get_trade_cost_rate(
+        _safe_float(
+            getattr(TRADING_RULES, "REPORT_REALIZED_PNL_COST_RATE", getattr(TRADING_RULES, "TRADE_COST_RATE", DEFAULT_REALIZED_PNL_COST_RATE)),
+            DEFAULT_REALIZED_PNL_COST_RATE,
+        )
+    )
+    cost_basis = sell_price if sell_price > 0 else buy_price
+    trading_cost = cost_basis * qty * cost_rate if cost_basis > 0 and qty > 0 else 0.0
     if buy_price > 0 and sell_price > 0 and qty > 0:
-        return (sell_price - buy_price) * qty
+        return float(calculate_net_realized_pnl(buy_price, sell_price, qty, cost_rate=cost_rate))
     if buy_price > 0 and qty > 0:
-        return buy_price * qty * profit_rate / 100.0
+        return (buy_price * qty * profit_rate / 100.0) - trading_cost
     return 0.0
+
+
+def _load_cached_market_regime_summary(target_date: str) -> dict[str, Any] | None:
+    cache_path = DATA_DIR / "cache" / "market_regime_snapshot.json"
+    if not cache_path.exists():
+        return None
+    try:
+        with open(cache_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception:
+        return None
+
+    cached_session_date = str(payload.get("cached_session_date") or payload.get("debug", {}).get("cached_session_date") or "")
+    if cached_session_date != str(target_date or ""):
+        return None
+
+    summary = summarize_market_regime(payload.get("risk_state"))
+    summary["allow_swing_entry"] = bool(payload.get("allow_swing_entry", False))
+    summary["swing_score"] = _safe_int(payload.get("swing_score"))
+    summary["cached_session_date"] = cached_session_date
+    return summary
+
+
+def _apply_cached_market_regime_label(snapshot: dict[str, Any], target_date: str) -> None:
+    summary = _load_cached_market_regime_summary(target_date)
+    if not summary:
+        return
+    snapshot["status_text"] = summary["status_text"]
+    snapshot["status_tone"] = summary["status_tone"]
+    snapshot["regime_code"] = summary["regime_code"]
+    snapshot["risk_state"] = summary["risk_state"]
+    snapshot["allow_swing_entry"] = bool(summary.get("allow_swing_entry", False))
+    snapshot["swing_score"] = int(summary.get("swing_score", 0) or 0)
+    snapshot["regime_source"] = "market_regime_cache"
+
+
+def _trade_status(row: dict[str, Any]) -> str:
+    return str(row.get("status") or "").upper()
+
+
+def _is_completed_trade(row: dict[str, Any]) -> bool:
+    return _trade_status(row) == "COMPLETED"
 
 
 def _resolve_previous_trade_date(target_date: str, ctx: _ReportContext) -> str | None:
@@ -532,13 +592,13 @@ def _build_previous_day_performance(target_date: str, ctx: _ReportContext) -> di
     total_records = len(items)
     filled = [
         row for row in items
-        if row.get("buy_time") is not None or str(row.get("status") or "") in {"BUY_ORDERED", "HOLDING", "SELL_ORDERED", "COMPLETED"}
+        if row.get("buy_time") is not None or _safe_int(row.get("buy_qty")) > 0 or _trade_status(row) in {"BUY_ORDERED", "HOLDING", "SELL_ORDERED", "COMPLETED"}
     ]
-    completed = [row for row in items if row.get("sell_time") is not None or str(row.get("status") or "") == "COMPLETED"]
-    open_records = [row for row in items if str(row.get("status") or "") in {"HOLDING", "SELL_ORDERED"}]
-    watching_records = [row for row in items if str(row.get("status") or "") == "WATCHING"]
-    expired_records = [row for row in items if str(row.get("status") or "") == "EXPIRED"]
-    pending_buy = [row for row in items if str(row.get("status") or "") == "BUY_ORDERED"]
+    completed = [row for row in items if _is_completed_trade(row)]
+    open_records = [row for row in items if _trade_status(row) in {"HOLDING", "SELL_ORDERED"}]
+    watching_records = [row for row in items if _trade_status(row) == "WATCHING"]
+    expired_records = [row for row in items if _trade_status(row) == "EXPIRED"]
+    pending_buy = [row for row in items if _trade_status(row) == "BUY_ORDERED"]
 
     completed_rates = [_safe_float(row.get("profit_rate")) for row in completed]
     win_count = sum(1 for value in completed_rates if value > 0)
@@ -672,6 +732,7 @@ def build_daily_report(target_date: str | None = None) -> dict:
             "strategy_breakdown": performance.get("strategy_breakdown", []),
         },
         "meta": {
+            "schema_version": REPORT_SCHEMA_VERSION,
             "report_generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "warnings": ctx.warnings,
             "model_ready": bool(market.get("model_ready")),

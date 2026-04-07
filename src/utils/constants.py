@@ -73,8 +73,8 @@ class TradingConfig:
     # [매매 비중 설정] 전략별 주문 가능 현금 대비 1회 매수 투입 비율
     INVEST_RATIO_KOSPI: float = 0.25  # DEPRECATED: MIN/MAX 비중으로 대체됨
     INVEST_RATIO_KOSDAQ: float = 0.15  # DEPRECATED: MIN/MAX 비중으로 대체됨
-    INVEST_RATIO_SCALPING_MIN: float = 0.05  # 초단타 스캘핑 AI 점수 0일 때 최소 투자 비율 (5%)
-    INVEST_RATIO_SCALPING_MAX: float = 0.15  # 초단타 스캘핑 AI 점수 100일 때 최대 투자 비율 (15%)
+    INVEST_RATIO_SCALPING_MIN: float = 0.10  # 초단타 스캘핑 AI 점수 0일 때 최소 투자 비율 (10%)
+    INVEST_RATIO_SCALPING_MAX: float = 0.30  # 초단타 스캘핑 AI 점수 100일 때 최대 투자 비율 (30%)
 
     # 💡 [신규 추가] 스윙 AI 동적 비중 조절용 (Min~Max)
     INVEST_RATIO_KOSDAQ_MIN: float = 0.05  # 코스닥 AI 점수 60점일 때 (5%)
@@ -99,6 +99,7 @@ class TradingConfig:
     # 💡 [신규] 초단타 스캐너 설정
     SCALP_TIME_LIMIT_MIN: int = 60  # DEPRECATED: 런타임 미사용 (과거 스캘핑 시간 제한)
     MIN_FEE_COVER: float = 0.3  # 세금(0.2%) + 수수료 보존용 최소 익절선 (0.3%)
+    TRADE_COST_RATE: float = 0.0023  # 실체결 수익률/손익 계산에 쓰는 보수적 거래비용 비율
     VPW_SCALP_LIMIT: int = 120  # 확신도가 낮을 때 매수를 강행하기 위한 체결강도 허들(%)
     SCALP_DYNAMIC_VPW_ENABLED: bool = True  # 동적 체결강도 게이트 관측/사용 여부
     SCALP_DYNAMIC_VPW_OBSERVE_ONLY: bool = False  # False면 동적 체결강도 게이트를 실전 진입에 적용

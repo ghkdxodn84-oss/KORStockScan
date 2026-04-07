@@ -2,6 +2,7 @@ from src.engine.sniper_state_handlers import (
     _build_holding_ai_fast_signature,
     _build_holding_ai_fast_snapshot,
     _describe_snapshot_deltas,
+    _resolve_reference_age_sec,
 )
 
 
@@ -117,3 +118,13 @@ def test_holding_fast_snapshot_reports_changed_axes():
 
     assert "v_pw:" in delta_text
     assert "ask_bid_balance:" in delta_text
+
+
+def test_resolve_reference_age_sec_uses_fallback_timestamp():
+    age_sec = _resolve_reference_age_sec(None, fallback_ts=100.0, now_ts=112.3)
+
+    assert round(age_sec or 0.0, 1) == 12.3
+
+
+def test_resolve_reference_age_sec_returns_none_without_reference():
+    assert _resolve_reference_age_sec(None, fallback_ts=None, now_ts=112.3) is None

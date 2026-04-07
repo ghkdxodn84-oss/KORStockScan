@@ -35,6 +35,7 @@ from src.engine.sniper_entry_metrics import (
     format_entry_metrics_summary,
     summarize_today_entry_metrics,
 )
+from src.market_regime import MarketRegimeService, summarize_market_regime_snapshot
 
 
 # ==========================================
@@ -440,14 +441,14 @@ def handle_start(message):
 
 @bot.message_handler(commands=['상태', 'status'])
 def handle_status(message):
-    from src.engine.signal_radar import SniperRadar
-
     now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    
-    # 💡 [교정 2] 더 이상 쓰지 않는 CONF 파라미터 삭제 (의존성 분리 완료)
-    token = kiwoom_utils.get_kiwoom_token() 
-    regime = SniperRadar.get_market_regime(token)
-    regime_icon = "🐂 (상승장)" if regime == 'BULL' else "🐻 (조정장)"
+
+    try:
+        snapshot = MarketRegimeService(refresh_minutes=15).refresh_if_needed()
+        regime_summary = summarize_market_regime_snapshot(snapshot)
+        regime_icon = f"{regime_summary['emoji']} ({regime_summary['status_text']})"
+    except Exception:
+        regime_icon = "❔ (데이터 부족)"
 
     msg = f"🟢 *[상태 보고]*\n⏱ `{now_str}`\n📊 시장판독: *{regime_icon}*\n"
     bot.send_message(message.chat.id, msg, parse_mode='Markdown')

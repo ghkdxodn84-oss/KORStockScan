@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import re
 from collections import Counter, defaultdict
@@ -11,7 +12,8 @@ from pathlib import Path
 
 from src.engine.log_archive_service import iter_target_log_lines
 from src.engine.sniper_trade_review_report import build_trade_review_report
-from src.utils.constants import LOGS_DIR, POSTGRES_URL, TRADING_RULES
+from src.market_regime import summarize_market_regime
+from src.utils.constants import DATA_DIR, LOGS_DIR, POSTGRES_URL, TRADING_RULES
 
 
 _ENTRY_RE = re.compile(
@@ -42,6 +44,7 @@ _STRATEGY_LABELS = {
     "other": "기타",
 }
 _STRATEGY_ORDER = ("scalping", "swing")
+PERFORMANCE_TUNING_SCHEMA_VERSION = 2
 _BLOCKER_LABELS = {
     "blocked_strength_momentum": "동적 체결강도",
     "blocked_liquidity": "유동성",
@@ -67,6 +70,13 @@ _REUSE_REASON_LABELS = {
     "score_boundary": "점수 경계",
     "missing_action": "이전 액션 없음",
     "missing_allow_flag": "이전 허용값 없음",
+}
+_SWING_DAILY_BLOCKER_LABELS = {
+    "market_regime_block": "시장 국면 제한",
+    "blocked_gatekeeper_reject": "Gatekeeper 거부",
+    "blocked_swing_gap": "스윙 갭상승",
+    "blocked_zero_qty": "주문 가능 수량",
+    "latency_block": "지연 리스크",
 }
 
 
@@ -251,6 +261,18 @@ def _friendly_reason_name(code: str) -> str:
     return _REUSE_REASON_LABELS.get(normalized, normalized)
 
 
+def _count_sig_delta_fields(counter: Counter, value) -> None:
+    raw = str(value or "").strip()
+    if not raw or raw == "-":
+        return
+    for delta_field in raw.split(","):
+        if ":" not in delta_field:
+            continue
+        field_name = delta_field.split(":", 1)[0].strip()
+        if field_name:
+            counter[field_name] += 1
+
+
 def _build_current_trade_rows(target_date: str) -> tuple[list[dict], list[str]]:
     report = build_trade_review_report(
         target_date=target_date,
@@ -290,6 +312,172 @@ def _summarize_top_counts(counter: Counter[str], limit: int = 3) -> list[dict]:
             "ratio": _ratio(count, total),
         })
     return rows
+
+
+def _load_cached_market_regime_summary(target_date: str) -> dict | None:
+    cache_path = DATA_DIR / "cache" / "market_regime_snapshot.json"
+    if not cache_path.exists():
+        return None
+    try:
+        with open(cache_path, "r", encoding="utf-8") as handle:
+            payload = json.load(handle)
+    except Exception:
+        return None
+
+    cached_session_date = str(payload.get("cached_session_date") or payload.get("debug", {}).get("cached_session_date") or "")
+    if cached_session_date != str(target_date or ""):
+        return None
+
+    summary = summarize_market_regime(payload.get("risk_state"))
+    summary["allow_swing_entry"] = bool(payload.get("allow_swing_entry", False))
+    summary["swing_score"] = _safe_int(payload.get("swing_score"), 0) or 0
+    summary["cached_session_date"] = cached_session_date
+    return summary
+
+
+def _summarize_counter_with_stock_counts(counter: Counter[str], stock_sets: dict[str, set[str]]) -> list[dict]:
+    total = sum(counter.values())
+    rows = []
+    for label, count in counter.most_common():
+        rows.append({
+            "label": label,
+            "count": count,
+            "stock_count": len(stock_sets.get(label) or set()),
+            "ratio": _ratio(count, total),
+        })
+    return rows
+
+
+def _build_swing_daily_summary(
+    *,
+    entry_events: list[PerfEvent],
+    trade_rows: list[dict],
+    strategy_rows: list[dict],
+    target_date: str,
+) -> dict:
+    strategy_by_code = {}
+    for row in trade_rows:
+        code = str(row.get("code") or "").strip()[:6]
+        if code and code not in strategy_by_code:
+            strategy_by_code[code] = str(row.get("strategy") or "")
+
+    swing_events = [
+        event
+        for event in entry_events
+        if _strategy_group(_infer_strategy_from_event(event, strategy_by_code)) == "swing"
+    ]
+    swing_row = next((row for row in strategy_rows if row.get("key") == "swing"), None)
+    swing_pipeline = dict((swing_row or {}).get("pipeline") or {})
+    swing_outcomes = dict((swing_row or {}).get("outcomes") or {})
+
+    blocker_counts: Counter[str] = Counter()
+    blocker_stock_sets: dict[str, set[str]] = defaultdict(set)
+    gatekeeper_actions: Counter[str] = Counter()
+
+    for event in swing_events:
+        label = _SWING_DAILY_BLOCKER_LABELS.get(event.stage)
+        if not label:
+            continue
+        blocker_counts[label] += 1
+        blocker_stock_sets[label].add(str(event.code or "").strip()[:6] or str(event.name or "").strip())
+        if event.stage == "blocked_gatekeeper_reject":
+            action = _extract_gatekeeper_action(event) or "UNKNOWN"
+            gatekeeper_actions[action] += 1
+
+    market_regime = _load_cached_market_regime_summary(target_date) or summarize_market_regime(None)
+    market_regime["allow_swing_entry"] = bool(market_regime.get("allow_swing_entry", False))
+    market_regime["swing_score"] = _safe_int(market_regime.get("swing_score"), 0) or 0
+
+    dominant_label = blocker_counts.most_common(1)[0][0] if blocker_counts else ""
+    candidates = int(swing_pipeline.get("candidates", 0) or 0)
+    entered_rows = int(swing_outcomes.get("entered_rows", 0) or 0)
+    total_blocker_events = sum(blocker_counts.values())
+    total_blocker_stocks = len({code for codes in blocker_stock_sets.values() for code in codes})
+    market_regime_block_count = blocker_counts.get("시장 국면 제한", 0)
+    gatekeeper_reject_count = blocker_counts.get("Gatekeeper 거부", 0)
+
+    if entered_rows > 0:
+        day_type = {
+            "label": "진입 발생일",
+            "tone": "good",
+            "comment": (
+                f"스윙 실제 진입이 {entered_rows}건 발생했습니다. "
+                "차단 사유보다 진입 후 성과와 missed case 비교가 더 중요해진 구간입니다."
+            ),
+        }
+    elif not market_regime.get("allow_swing_entry", False) and market_regime_block_count > 0 and gatekeeper_reject_count > 0:
+        day_type = {
+            "label": "Gatekeeper 거부 중심 (시장 제한 동반)",
+            "tone": "warn",
+            "comment": (
+                f"시장 국면은 {market_regime.get('status_text', '데이터 부족')}이어서 스윙 비허용 상태였고, "
+                f"실제 blocker 이벤트는 Gatekeeper 거부가 {gatekeeper_reject_count}건으로 가장 많았습니다."
+            ),
+        }
+    elif not market_regime.get("allow_swing_entry", False) and market_regime_block_count > 0:
+        day_type = {
+            "label": "시장 국면 제한 중심",
+            "tone": "warn",
+            "comment": (
+                f"시장 국면이 {market_regime.get('status_text', '데이터 부족')}으로 스윙 비허용 상태였습니다. "
+                "이런 날은 threshold 완화보다 시장 국면 차단이 맞았는지부터 보는 편이 안전합니다."
+            ),
+        }
+    elif dominant_label == "Gatekeeper 거부":
+        day_type = {
+            "label": "Gatekeeper 거부 중심",
+            "tone": "warn",
+            "comment": (
+                f"스윙 blocker 이벤트 중 Gatekeeper 거부가 {gatekeeper_reject_count}건으로 가장 많았습니다. "
+                "먼저 action_label과 cooldown_policy 분포를 보는 편이 좋습니다."
+            ),
+        }
+    elif dominant_label == "스윙 갭상승":
+        day_type = {
+            "label": "갭 차단 중심",
+            "tone": "warn",
+            "comment": "스윙 갭상승 차단이 우세한 날입니다. 실제 blocked_swing_gap 샘플을 본 뒤에만 완화 여부를 검토합니다.",
+        }
+    elif dominant_label == "지연 리스크":
+        day_type = {
+            "label": "지연 리스크 중심",
+            "tone": "warn",
+            "comment": "전략 자체보다 실행 지연이 차단에 큰 비중을 차지한 날입니다.",
+        }
+    elif dominant_label == "주문 가능 수량":
+        day_type = {
+            "label": "주문 가능 수량 제약",
+            "tone": "warn",
+            "comment": "신호보다 예산/수량 제약이 먼저 걸린 날입니다.",
+        }
+    elif candidates <= 0:
+        day_type = {
+            "label": "후보 부족",
+            "tone": "warn",
+            "comment": "스윙 후보 자체가 적어 차단 해석보다 스캐너 입력층을 먼저 봐야 하는 날입니다.",
+        }
+    else:
+        day_type = {
+            "label": "혼합 차단",
+            "tone": "warn",
+            "comment": "한 가지 blocker로 설명되지 않는 혼합형 차단일입니다. 시장 국면과 Gatekeeper를 함께 비교해야 합니다.",
+        }
+
+    return {
+        "market_regime": market_regime,
+        "day_type": day_type,
+        "metrics": {
+            "candidates": candidates,
+            "entered_rows": entered_rows,
+            "submitted": int(swing_pipeline.get("submitted", 0) or 0),
+            "blocked_latest": int(swing_pipeline.get("blocked_latest", 0) or 0),
+            "blocker_event_count": total_blocker_events,
+            "blocked_stock_count": total_blocker_stocks,
+        },
+        "blocker_families": _summarize_counter_with_stock_counts(blocker_counts, blocker_stock_sets),
+        "latest_blockers": list(swing_pipeline.get("latest_blockers") or []),
+        "gatekeeper_actions": _summarize_top_counts(gatekeeper_actions, limit=5),
+    }
 
 
 def _build_strategy_outcomes(
@@ -908,11 +1096,13 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
                 dual_persona_hard_flags[clean_flag] += 1
 
     holding_reuse_blockers = Counter()
+    holding_sig_deltas = Counter()
     for event in holding_events:
         if event.stage != "ai_holding_reuse_bypass":
             continue
         for reason_code in _split_reason_codes(event.fields.get("reason_codes")):
             holding_reuse_blockers[_friendly_reason_name(reason_code)] += 1
+        _count_sig_delta_fields(holding_sig_deltas, event.fields.get("sig_delta"))
 
     gatekeeper_reuse_blockers = Counter()
     gatekeeper_action_ages = []
@@ -943,12 +1133,7 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
                 pass
         
         # 신규: sig_delta 상위 필드 추출
-        sig_delta_str = event.fields.get("sig_delta")
-        if sig_delta_str and sig_delta_str != "-":
-            for delta_field in sig_delta_str.split(","):
-                if ":" in delta_field:
-                    field_name = delta_field.split(":")[0].strip()
-                    gatekeeper_sig_deltas[field_name] += 1
+        _count_sig_delta_fields(gatekeeper_sig_deltas, event.fields.get("sig_delta"))
 
     total_holding_samples = len(holding_reviews) + len(holding_skips)
     total_gatekeeper_samples = len(gatekeeper_decisions)
@@ -1014,6 +1199,12 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
         trade_rows=trade_rows,
         trend_by_group=trend_by_group,
     )
+    swing_daily_summary = _build_swing_daily_summary(
+        entry_events=entry_events,
+        trade_rows=trade_rows,
+        strategy_rows=strategy_rows,
+        target_date=target_date,
+    )
     auto_comments = _build_auto_comments(metrics, strategy_rows)
 
     top_holding_slow = sorted(
@@ -1073,6 +1264,7 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
         "strategy_rows": strategy_rows,
         "auto_comments": auto_comments,
         "meta": {
+            "schema_version": PERFORMANCE_TUNING_SCHEMA_VERSION,
             "warnings": trade_warnings + history_warnings,
             "outcome_basis": "기준일 누적 성과 (trade review 정규화)",
             "engine_basis": "조회 구간 엔진 지표",
@@ -1081,6 +1273,7 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
         "breakdowns": {
             "holding_ai_cache_modes": [{"label": key, "count": value} for key, value in holding_ai_cache_modes.most_common()],
             "holding_reuse_blockers": [{"label": key, "count": value} for key, value in holding_reuse_blockers.most_common()],
+            "holding_sig_deltas": [{"label": key, "count": value} for key, value in holding_sig_deltas.most_common()],
             "gatekeeper_cache_modes": [{"label": key, "count": value} for key, value in gatekeeper_cache_modes.most_common()],
             "gatekeeper_reuse_blockers": [{"label": key, "count": value} for key, value in gatekeeper_reuse_blockers.most_common()],
             "gatekeeper_sig_deltas": [{"label": key, "count": value} for key, value in gatekeeper_sig_deltas.most_common()],
@@ -1092,6 +1285,7 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
             "dual_persona_hard_flags": [{"label": key, "count": value} for key, value in dual_persona_hard_flags.most_common()],
         },
         "sections": {
+            "swing_daily_summary": swing_daily_summary,
             "top_holding_slow": top_holding_slow,
             "top_gatekeeper_slow": top_gatekeeper_slow,
             "top_dual_persona_slow": top_dual_persona_slow,

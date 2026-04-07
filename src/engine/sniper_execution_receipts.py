@@ -17,6 +17,7 @@ from src.engine.sniper_position_tags import (
     normalize_position_tag,
     normalize_strategy,
 )
+from src.engine.trade_profit import calculate_net_profit_rate
 from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
 from src.engine.sniper_time import TIME_15_30
@@ -354,7 +355,7 @@ def _update_db_for_sell(target_id, exec_price, now, target_stock, strategy, is_s
 
             safe_buy_price = float(record.buy_price) if record.buy_price is not None else 0.0
             if safe_buy_price > 0:
-                profit_rate = round(((exec_price - safe_buy_price) / safe_buy_price) * 100, 2)
+                profit_rate = calculate_net_profit_rate(safe_buy_price, exec_price)
             else:
                 profit_rate = 0.0
                 print(f"⚠️ [수익률 계산 불가] ID {target_id}의 매수가(buy_price)가 누락되어 수익률을 0%로 처리합니다.")
@@ -695,7 +696,7 @@ def handle_real_execution(exec_data):
                         return
                     safe_buy_price = float(record.buy_price) if record.buy_price is not None else 0.0
                     if safe_buy_price > 0:
-                        profit_rate = round(((exec_price - safe_buy_price) / safe_buy_price) * 100, 2)
+                        profit_rate = calculate_net_profit_rate(safe_buy_price, exec_price)
                     else:
                         profit_rate = 0.0
                         print(f"⚠️ [수익률 계산 불가] ID {target_id}의 매수가(buy_price)가 누락되어 수익률을 0%로 처리합니다.")

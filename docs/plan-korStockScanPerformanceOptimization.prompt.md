@@ -104,13 +104,15 @@
 
 ### 1단계 완료 보고 (2026-04-06)
 
-#### 완료 상태: ✅ 코드 구현 완료, 테스트 수정 필요
+#### 완료 상태: ✅ 코드/테스트/UI 반영 완료, 성능 목표는 미달
 
 **현황**:
 - 핵심 버그 수정: 4개 모두 코드에 적용됨 ✅
 - 코드 문법 검사: 통과 ✅  
-- 테스트 작성: 1건 수정 진행 중 (기대값 조정)
+- 테스트 검증: 완료 ✅
 - UI 렌더링: 연결 완료 ✅
+- 라이브 관측성: 확보 완료 ✅
+- 성능 목표: 아직 미달 ⚠️
 
 #### 구현 항목
 
@@ -274,11 +276,11 @@ else:
 
 #### 테스트 상태
 
-**진행 중**:
-- [test_performance_tuning_report.py](../src/tests/test_performance_tuning_report.py) `test_gatekeeper_age_sentinel_handling()`
-  - 수정 내용: 기대값을 `gatekeeper_decisions` → `gatekeeper_bypass_evaluation_samples`로 변경
-  - sentinel "-" 처리 로직: 정상 동작 ✅
-  - age p95 계산: 정상 동작 ✅
+**완료**:
+- [test_performance_tuning_report.py](../src/tests/test_performance_tuning_report.py)
+  - `test_gatekeeper_age_sentinel_handling()`: 통과 ✅
+  - `test_gatekeeper_sig_delta_parsing()`: 통과 ✅
+  - 기본 메트릭/집계 회귀 테스트: 통과 ✅
 
 **검증 내용**:
 - sentinel 처리: 유효값 수집 정확 ✅
@@ -287,21 +289,39 @@ else:
 
 #### 배포 준비 상태
 
-**배포 가능성**: 조건부 ✅
+**배포 가능성**: 완료 ✅
 
 1. ✅ 운영 로직 관점: 배포 안전
    - 대부분 로그/메트릭 강화와 timestamp 기준 보정
    - 기존 진입/보유 로직에 영향 없음
    
-2. ⚙️ 테스트 검증 필요:
-   - 현재 테스트 1건의 기대값 수정 진행 중
-   - 수정 완료 후 자동화된 회귀 테스트 가능
+2. ✅ 테스트 검증 완료:
+   - stage 1 관련 회귀 테스트 green 확인
+   - dashboard / API wiring 반영 확인
 
 **배포 전 체크리스트**:
 - [x] 코드 구현 완료
 - [x] 문법 검사 통과
-- [ ] 테스트 기대값 수정 (진행 중)
-- [ ] 테스트 재실행 및 green 상태 확인 필요
+- [x] 테스트 기대값 수정 완료
+- [x] 테스트 재실행 및 green 상태 확인
+
+#### 1단계 추가 검증 (2026-04-07 라이브 체크)
+
+`/api/performance-tuning?date=2026-04-07&since=09:00:00` 기준 확인 결과:
+
+- `gatekeeper_fast_reuse_ratio = 0.0%`
+- `gatekeeper_ai_cache_hit_ratio = 0.0%`
+- `gatekeeper_eval_ms_p95 = 12901ms`
+- `gatekeeper_bypass_evaluation_samples = 65`
+- `gatekeeper_sig_deltas` 상위: `curr_price`, `v_pw_now`, `prog_delta_qty`, `net_buy_exec_volume`, `buy_ratio_ws`, `score`, `spread_tick`
+- `holding_reviews = 98`, `holding_skips = 1`, `holding_skip_ratio = 1.0%`
+- `holding_ai_cache_hit_ratio = 0.0%`
+
+해석:
+
+1. 1단계의 목적이었던 lifecycle / sig_delta / age 관측성 확보는 달성됐다.
+2. 반면 1단계의 성능 목표(`fast reuse`, `AI cache hit`, `p95`)는 달성되지 못했다.
+3. 따라서 2단계는 "시작 가능 여부를 다시 논의"하는 단계가 아니라, 관측값을 바탕으로 바로 분석 착수 가능한 상태다.
 
 #### 향후 진행 (2026-04-07 이후)
 
@@ -310,10 +330,10 @@ else:
    - blocker 추세 변화 관찰
    - 기대값: `action_age_sec`, `allow_entry_age_sec` 분포 수집 시작
 
-2. **2단계 개시**: 2026-04-13 (1주 데이터 수집 완료 후)
-   - Holding AI sig_delta 분석
-   - near_ai_exit, near_safe_profit 임계값 검토
-   - 현재는 1단계 데이터 수집이 우선, 2단계는 데이터 기반 판단 필요
+2. **2단계 개시 기준 조정**:
+   - `분석/관측 착수`: 2026-04-08부터 즉시 가능
+   - `임계값 완화/정책 변경`: 최소 5거래일 shadow/log 수집 후 판단
+   - 즉, 2단계의 "분석"과 "튜닝 적용"을 분리해서 운영한다.
 
 3. **1단계 검증 체크포인트**
    - `gatekeeper_fast_reuse_ratio` 추이 (기준: > 10%)
@@ -384,6 +404,240 @@ else:
 2. `holding_ai_cache_hit_ratio > 10%`
 3. `holding_review_ms_p95 < 1500`
 
+#### 2단계 1차 작업 완료 보고 (2026-04-07)
+
+완료 상태:
+
+- ✅ 2단계 첫 작업 완료: 보유 AI `sig_delta` 필드 분해 집계 추가
+- ✅ 대시보드 UI 반영 완료
+- ✅ 테스트 및 로컬 API 검증 완료
+
+이번에 반영한 내용:
+
+1. [sniper_performance_tuning_report.py](../src/engine/sniper_performance_tuning_report.py)에 보유 AI `sig_delta` 필드 Counter 집계를 추가했다.
+2. `ai_holding_reuse_bypass` 로그의 `sig_delta=...`를 `breakdowns.holding_sig_deltas`로 노출하도록 확장했다.
+3. [app.py](../src/web/app.py)에 아래 2개 카드를 추가했다.
+   - `보유 AI 재사용 차단 사유`
+   - `보유 AI 시그니처 변경 필드`
+4. [test_performance_tuning_report.py](../src/tests/test_performance_tuning_report.py)에 보유 AI `sig_delta` 파싱 회귀 테스트를 추가했다.
+
+테스트 결과:
+
+1. `./.venv/bin/python -m pytest src/tests/test_performance_tuning_report.py`
+   - 결과: `4 passed in 0.70s`
+2. `./.venv/bin/python -m py_compile src/engine/sniper_performance_tuning_report.py src/web/app.py`
+   - 결과: 문법 오류 없음
+3. `sudo systemctl restart korstockscan-gunicorn.service`
+   - 결과: `2026-04-07 15:16:43 KST` 기준 재기동 완료
+4. `curl -sS 'http://127.0.0.1:5000/api/performance-tuning?date=2026-04-07&since=09:00:00'`
+   - 결과: `breakdowns.holding_sig_deltas` 응답 확인
+
+2026-04-07 라이브 확인 결과:
+
+1. `holding_reuse_blockers` 상위:
+   - `시그니처 변경 9`
+   - `안전수익 경계 5`
+   - `재사용 창 만료 4`
+   - `가격 변화 확대 1`
+2. `holding_sig_deltas` 상위:
+   - `curr 7`
+   - `spread 4`
+   - `ask_bid_balance 2`
+   - `depth_balance 2`
+   - `tick_trade_value 1`
+   - `fluctuation 1`
+   - `v_pw 1`
+
+해석:
+
+1. 보유 AI `sig_changed`의 주된 원인은 현재 기준으로 `curr`, `spread` 변화다.
+2. 즉, 2단계 2번 실행 항목인 "1틱 `curr` / 1틱 `spread` 변화 완화 검토"로 넘어갈 근거가 확보됐다.
+3. 다만 이 시점의 결과만으로 바로 임계값을 바꾸기보다는, `near_ai_exit` / `near_safe_profit` shadow 로그를 먼저 깔고 최소 5거래일을 더 보는 편이 안전하다.
+
+다음 작업 진행 시점:
+
+1. **다음 분석 작업 착수**:
+   - `2026-04-08`부터 바로 진행 가능
+   - 권장 범위:
+     - `curr`, `spread` 완화 후보 분석
+     - `ai_holding_shadow_band` 장중 수집값 검증
+2. **정책 변경 판단 시점**:
+   - `ai_holding_shadow_band`는 `2026-04-07` 코드 선반영 완료 상태다.
+   - 봇을 `2026-04-08` 장 시작 전 수동 재실행하면 최소 5거래일 수집 완료 시점은 `2026-04-14` 장마감이다.
+   - 따라서 fast signature 완화나 `near_ai_exit` / `near_safe_profit` band 조정 같은 실제 정책 변경은 가장 이르게는 `2026-04-15` 장 시작 전 검토가 적절하다.
+3. **예외 조건**:
+   - `holding_skip_ratio`가 즉시 `5% 이상`으로 회복되거나
+   - `holding_ai_cache_hit_ratio`가 `10% 이상`으로 올라오면
+   - 완화 강도는 더 보수적으로 잡는다.
+
+#### 2026-04-07 실적 리뷰 반영: 즉시 변경 vs 추가 근거 후 변경
+
+잔여 plan을 고려해 2026-04-07 스캘핑 실적 리뷰에서 나온 후보를 아래처럼 분리한다.
+
+지금 바로 변경이 필요한 사항:
+
+1. **보유 AI `age_sec` 비정상값 생성 차단**
+   - 원인 재확인:
+     - [sniper_state_handlers.py](../src/engine/sniper_state_handlers.py) 보유 AI fast reuse 경로에서
+       `last_ai_market_signature_at`가 없을 때 `0`으로 계산되어 epoch 크기의 `age_sec`가 찍혔다.
+     - 예시: `1775526427.3`
+   - 조치:
+     - `last_ai_market_signature_at` 우선 사용
+     - 값이 없으면 `last_ai_reviewed_at` fallback 사용
+     - 둘 다 없으면 `age_sec="-"` sentinel 처리
+   - 추가 fallback:
+     - [sniper_trade_review_report.py](../src/engine/sniper_trade_review_report.py)에서 비정상적으로 큰 `age_sec`는 복기 화면에서 숨김 처리
+   - 이유:
+     - 이 항목은 전략 변경이 아니라 관측값 오염 제거라서 지금 바로 고쳐도 리스크가 낮다.
+2. **`ai_holding_shadow_band` 로그 선반영**
+   - 목적:
+     - `near_ai_exit`, `near_safe_profit` 때문에 실제 fresh review가 얼마나 강제되는지 `2026-04-08` 장부터 바로 수집한다.
+   - 조치:
+     - [sniper_state_handlers.py](../src/engine/sniper_state_handlers.py)에 `stage=ai_holding_shadow_band` 추가
+     - `action=review|skip`, `near_ai_exit`, `near_safe_profit`, `distance_to_ai_exit`, `distance_to_safe_profit`를 함께 기록
+     - [sniper_trade_review_report.py](../src/engine/sniper_trade_review_report.py)에 새 stage/detail 라벨과 표시 포맷 추가
+   - 이유:
+     - 이 항목은 정책 변경이 아니라 shadow 관측 추가라서 오늘 넣어야 내일 데이터가 쌓인다.
+
+추가 근거가 쌓인 뒤 변경이 필요한 사항:
+
+1. **`near_safe_profit` / `near_ai_exit` band 조정**
+   - 현재 `holding_reuse_blockers` 상위에 `안전수익 경계 5`가 있지만, 단일 일자만으로는 조정 폭을 결정하기 이르다.
+   - 먼저 `ai_holding_shadow_band` 로그를 5거래일 이상 쌓고 결정한다.
+2. **`curr` / `spread` fast signature 완화**
+   - 현재 상위 변경 필드는 `curr 7`, `spread 4`로 확인됐지만, 장중 구간과 종목군 차이를 더 봐야 한다.
+   - shadow/log 수집 후 완화 강도를 정한다.
+3. **Fallback 진입 정책 강화**
+   - 오늘 데이터상 fallback 손실 1건은 확인됐지만 표본이 작다.
+   - 전면 차단보다 `fallback 전용 보유시간`, `fallback 전용 비중`, `fallback 전용 손실컷` 중 무엇이 맞는지 추가 비교가 필요하다.
+4. **공통 hard time stop**
+   - 매우 크리티컬하므로 단일 파라미터 추가로 바로 넣지 않는다.
+   - `entry_mode`, `position_tag`, `peak_profit`, `AI score 추이`, `time-of-day`를 함께 고려한 기준 설계가 선행되어야 한다.
+   - 참고: [constants.py](../src/utils/constants.py) `SCALP_TIME_LIMIT_MIN`은 현재 런타임 미사용(deprecated) 상태다.
+5. **Early Exit 조건 완화/재가중**
+   - 오늘 `scalp_ai_early_exit`는 2건 모두 손실로 끝났지만, 이것만으로 임계값을 즉시 바꾸기엔 근거가 부족하다.
+   - hard time stop 설계와 함께 묶어 다시 본다.
+
+#### 2026-04-07 즉시 변경 반영 완료 보고
+
+완료 상태:
+
+- ✅ 보유 AI `age_sec` 비정상값 원인 수정 완료
+- ✅ trade-review 화면 fallback 표시 적용 완료
+- ✅ 테스트 및 런타임 검증 완료
+
+코드 반영 내용:
+
+1. [sniper_state_handlers.py](../src/engine/sniper_state_handlers.py)
+   - `_resolve_reference_age_sec()` helper 추가
+   - 보유 AI fast reuse 경로에서 `last_ai_market_signature_at -> last_ai_reviewed_at -> "-"` 순서로 fallback 적용
+   - `fast_sig_fresh` 계산도 sentinel 안전 처리
+2. [sniper_trade_review_report.py](../src/engine/sniper_trade_review_report.py)
+   - `age_sec` 표시 라벨 추가
+   - `86,400초` 초과 비정상 `age_sec`는 detail chip에서 숨김 처리
+
+테스트 결과:
+
+1. `./.venv/bin/python -m pytest src/tests/test_holding_ai_fast_signature.py src/tests/test_trade_review_report_revival.py`
+   - 결과: `9 passed in 1.19s`
+2. `./.venv/bin/python -m py_compile src/engine/sniper_state_handlers.py src/engine/sniper_trade_review_report.py`
+   - 결과: 문법 오류 없음
+
+런타임 검증:
+
+1. `sudo systemctl restart korstockscan-gunicorn.service`
+   - 결과: `2026-04-07 16:09:57 KST` 기준 재기동 완료
+2. `curl -sS 'http://127.0.0.1:5000/api/trade-review?date=2026-04-07'`
+   - 결과:
+     - `id=1256`의 첫 `ai_holding_reuse_bypass` 이벤트에서 비정상 `age_sec` detail이 더 이상 노출되지 않음
+     - 이후 정상 이벤트는 `재사용 나이 17.3초`, `20.9초`처럼 정상 표시 확인
+
+#### 2026-04-07 추가 선반영 완료 보고: `ai_holding_shadow_band`
+
+완료 상태:
+
+- ✅ `ai_holding_shadow_band` 코드 반영 완료
+- ✅ 회귀 테스트 및 컴파일 검증 완료
+- ⏳ 라이브 로그 수집 확인 대기
+  - 봇은 사용자가 수동으로 재실행 예정
+
+코드 반영 내용:
+
+1. [sniper_state_handlers.py](../src/engine/sniper_state_handlers.py)
+   - 보유 AI fast reuse 판단 직전에 `ai_holding_shadow_band` stage 추가
+   - `skip` 경로와 `review` 경로 모두에서 shadow 판단값을 공통 포맷으로 기록
+2. [sniper_trade_review_report.py](../src/engine/sniper_trade_review_report.py)
+   - `AI band shadow` stage 라벨 추가
+   - `near_ai_exit`, `near_safe_profit`, `distance_to_ai_exit`, `distance_to_safe_profit`, `action` 표시 포맷 추가
+3. [test_sniper_scale_in.py](../src/tests/test_sniper_scale_in.py)
+   - `near_safe_profit` 근접 시 `action=review` shadow 로그가 남는 회귀 테스트 추가
+
+테스트 결과:
+
+1. `./.venv/bin/python -m pytest src/tests/test_sniper_scale_in.py src/tests/test_holding_ai_fast_signature.py src/tests/test_trade_review_report_revival.py`
+   - 결과: `48 passed in 2.60s`
+2. `./.venv/bin/python -m py_compile src/engine/sniper_state_handlers.py src/engine/sniper_trade_review_report.py`
+   - 결과: 문법 오류 없음
+
+운영 반영 메모:
+
+1. 이번 변경은 `bot_main.py` 재실행 이후부터 실제 장중 `HOLDING_PIPELINE` 로그에 반영된다.
+2. 봇 재실행은 사용자가 수동으로 진행한다.
+3. `2026-04-07 16:38 KST` 기준 `python bot_main.py` 신규 프로세스 재기동은 확인했다.
+4. 다만 `2026-04-07 16:39 KST` 현재는 장마감 후 `WATCHING` 로그만 확인돼 `ai_holding_shadow_band` 실제 발생 여부는 아직 pending 상태다.
+5. 따라서 `2026-04-08` 장중 첫 확인 항목은 `ai_holding_shadow_band` stage가 실제 로그에 찍히는지 검증하는 것이다.
+
+#### 2026-04-07 스윙 결과 검토 반영
+
+핵심 정정 사항:
+
+1. 오늘 스윙 0건을 `Swing AI 75점 문턱 과다`로 해석하는 것은 현재 런타임과 맞지 않는다.
+   - 실제 운영값은 [constants.py](../src/utils/constants.py) 기준 `AI_SCORE_THRESHOLD_KOSPI=60`, `AI_SCORE_THRESHOLD_KOSDAQ=60`이다.
+2. 오늘 스윙 직접 차단의 주된 형태는 `blocked_ai_score`보다 `blocked_gatekeeper_reject`였다.
+   - 로컬 회전 로그 기준 2026-04-07 스윙 `ENTRY_PIPELINE` stage 분포:
+     - `gatekeeper_fast_reuse_bypass 65`
+     - `blocked_gatekeeper_reject 63`
+     - `dual_persona_shadow 65`
+     - `market_regime_block 2`
+3. 시장 국면도 스윙 우호 환경이 아니었다.
+   - snapshot 기준 `risk_state=RISK_OFF`, `allow_swing_entry=false`, `swing_score=20/70`
+4. 오늘은 `blocked_swing_gap` 실표본이 직접 확인되지 않았다.
+   - 따라서 `과열 필터 완화가 곧 진입 회복`이라는 결론도 현재 근거가 부족하다.
+
+지금 바로 반영할 사항:
+
+1. 스윙 일일 리뷰 문서/체크리스트는 원인 분류 기준을 아래 순서로 바꾼다.
+   - `market_regime_block`
+   - `blocked_gatekeeper_reject`
+   - `blocked_swing_gap`
+   - `latency_entry_block`
+   - `blocked_zero_qty`
+2. 스윙 결과 해석에는 아래 운영값을 필수 포함한다.
+   - `risk_state`
+   - `allow_swing_entry`
+   - `swing_score`
+   - `gatekeeper action_label`
+   - `cooldown_policy`
+3. `allow_swing_entry=false`였던 날은 threshold / gate 완화 근거일로 바로 사용하지 않는다.
+
+추가 근거가 쌓인 뒤 변경할 사항:
+
+1. 스윙 Gatekeeper 완화
+   - `allow_swing_entry=true` 구간에서 missed case를 3~5거래일 더 모은 뒤 판단
+2. 스윙 gap 기준 완화
+   - 실제 `blocked_swing_gap` 샘플 누적 후 판단
+3. 시장 국면 스윙 허용 기준 조정
+   - `RISK_OFF`인데도 이후 성과가 좋았던 missed case가 반복될 때만 검토
+4. Dual Persona 실전 승급
+   - `dual_persona_conflict_ratio`, `fused override 품질`, `extra_ms`가 더 안정된 뒤 검토
+5. 절반 수량의 낮은 신뢰도 스윙 진입
+   - Gatekeeper false negative 표본 확보 후 검토
+
+운영 의견:
+
+1. 오늘 스윙 0건은 `RISK_OFF 장세 + Gatekeeper 반복 거부` day로 기록하는 것이 현재 코드/로그와 더 잘 맞는다.
+2. 따라서 내일 즉시 실전 파라미터를 바꾸기보다, 스윙 차단 원인 분류 체계를 먼저 바로잡는 것이 우선이다.
+
 ### 3단계: 중간 우선 - 성과 집계와 복기 기준 통일
 
 목표:
@@ -443,9 +697,11 @@ else:
 1. `Gatekeeper reuse blocker` 상위 reason code 일자별 집계 자동화
 2. `missing_action`, `missing_allow_flag`가 남는 저장 경로 추적
 3. 보유 AI `sig_delta` 상위 변경 필드 집계
-4. `near_ai_exit`, `near_safe_profit` 강제 재평가 구간 그림자 로그 추가
+4. `near_ai_exit`, `near_safe_profit` 강제 재평가 구간 장중 shadow 수집 확인
 5. `trade-review`, `performance-tuning`, `strategy-performance` 수치 일치 여부 일일 검증
 6. 장마감 snapshot/gzip 생성 여부 운영 점검
+7. 스윙 blocker 일일 분류 체계 정리
+8. `allow_swing_entry=true/false` 구간 분리 기준 고정
 
 ### 이미 진행되었거나 반영됨
 
@@ -455,6 +711,7 @@ else:
 4. `performance-tuning`의 정규화 성과 재사용
 5. 전략/포지션태그 성과 화면 추가
 6. 장마감 snapshot 및 gzip 아카이브 기반 마련
+7. `ai_holding_shadow_band` shadow 로그 선반영
 
 ---
 
@@ -467,6 +724,8 @@ else:
 3. 스윙 진입 수를 늘리기 위한 임계값 완화
 4. 스캘핑 진입 게이트의 공격적 완화
 5. 목표치 없이 TTL만 추가로 늘리는 조정
+6. `RISK_OFF` 상태에서의 스윙 허용 기준 완화
+7. `dual_persona_shadow`의 즉시 실전 승급
 
 ### 보류 이유
 
@@ -474,6 +733,8 @@ else:
 2. 관찰용 리플레이 최적화는 라이브 병목 해결보다 우선순위가 낮다.
 3. 차단을 풀기 전에 차단이 맞았는지부터 봐야 한다.
 4. 지표 일관성이 확보되지 않으면 전략 조정 효과를 정확히 판단할 수 없다.
+5. `allow_swing_entry=false` day의 0진입은 threshold 미스보다 시장 국면 영향일 수 있다.
+6. Dual Persona는 아직 충돌률/지연이 커서 실전 게이트 승급 근거가 부족하다.
 
 ---
 

@@ -25,6 +25,7 @@ _DISPLAY_STAGE_LABELS = {
     "holding_started": "보유 시작",
     "scale_in_executed": "추가매수 체결",
     "preset_exit_setup": "기본 익절망 설치",
+    "ai_holding_shadow_band": "AI band shadow",
     "ai_holding_review": "AI 보유감시",
     "ai_holding_reuse_bypass": "AI 재사용 우회",
     "ai_holding_skip_unchanged": "AI 재사용 생략",
@@ -38,10 +39,18 @@ _EVENT_DETAIL_LABELS = {
     "id": "ID",
     "profit_rate": "수익률",
     "ai_score": "AI 점수",
+    "action": "shadow 결정",
+    "ai_exit_min_loss_pct": "AI 손절 기준",
     "low_score_hits": "하방카운트",
+    "distance_to_ai_exit": "손절 기준 거리",
+    "distance_to_safe_profit": "안전수익 거리",
     "held_sec": "보유시간",
+    "near_ai_exit": "손절 경계 근접",
+    "near_safe_profit": "안전수익 근접",
+    "age_sec": "재사용 나이",
     "price_change": "가격변화",
     "review_cd_sec": "AI 주기",
+    "safe_profit_pct": "안전수익 기준",
     "sell_reason_type": "청산유형",
     "reason": "사유",
     "exit_rule": "청산 규칙",
@@ -227,6 +236,16 @@ def _value_chip(key: str, value: str) -> dict[str, str] | None:
         display = f"{_safe_int(value):,}"
     elif key == "price_change":
         display = f"{_safe_float(value):.2f}"
+    elif key == "age_sec":
+        age_sec = _safe_float(value, default=-1.0)
+        if age_sec < 0 or age_sec > 86_400:
+            return None
+        display = f"{age_sec:.1f}초"
+    elif key in {"ai_exit_min_loss_pct", "safe_profit_pct", "distance_to_ai_exit", "distance_to_safe_profit"}:
+        display = f"{_safe_float(value):+.2f}%"
+    elif key in {"near_ai_exit", "near_safe_profit"}:
+        normalized = str(value).strip().lower()
+        display = "예" if normalized in {"true", "1", "yes", "y"} else "아니오"
     elif key == "revive":
         normalized = str(value).strip().lower()
         display = "예" if normalized in {"true", "1", "yes", "y"} else "아니오"

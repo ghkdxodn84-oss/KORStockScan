@@ -12,7 +12,10 @@ if PROJECT_ROOT not in sys.path:
 from src.engine.sniper_strength_observation_report import build_strength_momentum_report
 from src.engine.sniper_entry_pipeline_report import build_entry_pipeline_flow_report
 from src.engine.sniper_trade_review_report import build_trade_review_report
-from src.engine.sniper_performance_tuning_report import build_performance_tuning_report
+from src.engine.sniper_performance_tuning_report import (
+    PERFORMANCE_TUNING_SCHEMA_VERSION,
+    build_performance_tuning_report,
+)
 from src.engine.strategy_position_performance_report import build_strategy_position_performance_report
 from src.engine.sniper_gatekeeper_replay import (
     find_gatekeeper_snapshot,
@@ -27,12 +30,68 @@ from src.engine.daily_report_service import (
 )
 
 _DEFAULT_DASHBOARD_LOOKBACK_MINUTES = 120
+_TRUTHY_QUERY_VALUES = {"1", "true", "yes", "y"}
+
+
+def _today_string() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def _request_target_date(*, fallback: str | None = None) -> str:
+    target_date = str(request.args.get("date") or "").strip()
+    if target_date:
+        return target_date
+    if fallback is not None:
+        return str(fallback)
+    return _today_string()
+
+
+def _request_flag(name: str) -> bool:
+    return str(request.args.get(name, "")).lower() in _TRUTHY_QUERY_VALUES
+
+
+def _request_stripped(name: str) -> str:
+    return str(request.args.get(name) or "").strip()
+
+
+def _request_since(target_date: str) -> str | None:
+    return _resolve_dashboard_since(target_date, request.args.get("since"))
+
+
+def _request_top(default: int) -> int:
+    return request.args.get("top", default=default, type=int)
+
+
+def _request_scope(default: str = "entered") -> str:
+    scope = _request_stripped("scope")
+    return scope or default
+
+
+def _report_value(report: dict | None, *path, default=None):
+    current = report or {}
+    for key in path:
+        if not isinstance(current, dict):
+            return default
+        current = current.get(key)
+        if current is None:
+            return default
+    return current
+
+
+def _report_dict(report: dict | None, *path) -> dict:
+    value = _report_value(report, *path, default={})
+    return value if isinstance(value, dict) else {}
+
+
+def _report_list(report: dict | None, *path) -> list:
+    value = _report_value(report, *path, default=[])
+    return value if isinstance(value, list) else []
 
 
 def _resolve_dashboard_since(target_date: str, since: str | None) -> str | None:
     if since:
         return since
-    today = datetime.now().strftime("%Y-%m-%d")
+    today = _today_string()
     if str(target_date).strip() != today:
         return None
     return (datetime.now() - timedelta(minutes=_DEFAULT_DASHBOARD_LOOKBACK_MINUTES)).strftime("%H:%M:%S")
@@ -41,7 +100,13 @@ def _resolve_dashboard_since(target_date: str, since: str | None) -> str | None:
 def _load_saved_performance_tuning_snapshot(target_date: str, since: str | None, refresh: bool) -> dict | None:
     if refresh or since:
         return None
-    return load_monitor_snapshot("performance_tuning", target_date)
+    snapshot = load_monitor_snapshot("performance_tuning", target_date)
+    if not snapshot:
+        return None
+    schema_version = int(((snapshot.get("meta") or {}).get("schema_version")) or 0)
+    if schema_version != PERFORMANCE_TUNING_SCHEMA_VERSION:
+        return None
+    return snapshot
 
 
 def _load_saved_trade_review_snapshot(
@@ -61,12 +126,50 @@ def _load_saved_trade_review_snapshot(
     snapshot["recent_trades"] = list(snapshot.get("recent_trades") or [])[: max(1, int(top or 10))]
     return snapshot
 
+
+def _load_or_build_performance_tuning_report(
+    *,
+    target_date: str,
+    since: str | None,
+    refresh: bool,
+) -> dict:
+    report = _load_saved_performance_tuning_snapshot(target_date, since, refresh)
+    if report is None:
+        report = build_performance_tuning_report(target_date=target_date, since_time=since)
+    return report
+
+
+def _load_or_build_trade_review_report(
+    *,
+    target_date: str,
+    since: str | None,
+    code: str | None,
+    scope: str,
+    top: int,
+    refresh: bool,
+) -> dict:
+    report = _load_saved_trade_review_snapshot(
+        target_date,
+        since=since,
+        code=code,
+        scope=scope,
+        top=top,
+        refresh=refresh,
+    )
+    if report is None:
+        report = build_trade_review_report(
+            target_date=target_date,
+            code=code,
+            since_time=since,
+            top_n=max(1, int(top or 10)),
+            scope=scope,
+        )
+    return report
+
 @app.route("/api/daily-report")
 def daily_report_api():
-    from datetime import datetime
-
-    target_date = request.args.get("date") or datetime.now().strftime("%Y-%m-%d")
-    refresh = str(request.args.get("refresh", "")).lower() in {"1", "true", "yes", "y"}
+    target_date = _request_target_date()
+    refresh = _request_flag("refresh")
     report = load_or_build_daily_report(target_date, refresh=refresh)
     report["available_dates"] = list_available_report_dates(limit=40)
     return jsonify(report)
@@ -76,10 +179,9 @@ def daily_report_api():
 @app.route("/dashboard")
 def dashboard_home():
     default_tab = request.args.get("tab") or "daily-report"
-    target_date = request.args.get("date") or datetime.now().strftime("%Y-%m-%d")
-    since = request.args.get("since")
-    resolved_since = _resolve_dashboard_since(target_date, since)
-    top = request.args.get("top", default=10, type=int)
+    target_date = _request_target_date()
+    resolved_since = _request_since(target_date)
+    top = _request_top(10)
     theme = (request.args.get("theme") or "light").strip().lower()
     if theme not in {"light", "dark"}:
         theme = "light"
@@ -608,11 +710,11 @@ def dashboard_home():
 
 @app.route("/daily-report")
 def index():
-    from datetime import datetime
-
     available_dates = list_available_report_dates(limit=40)
-    selected_date = request.args.get("date") or (available_dates[0] if available_dates else datetime.now().strftime("%Y-%m-%d"))
-    refresh = str(request.args.get("refresh", "")).lower() in {"1", "true", "yes", "y"}
+    selected_date = _request_target_date(
+        fallback=available_dates[0] if available_dates else _today_string()
+    )
+    refresh = _request_flag("refresh")
     if selected_date not in available_dates:
         available_dates = sorted(set([selected_date] + available_dates), reverse=True)
 
@@ -923,12 +1025,9 @@ def index():
 
 @app.route('/api/strength-momentum')
 def strength_momentum_api():
-    target_date = request.args.get('date')
-    since = request.args.get('since')
-    top = request.args.get('top', default=10, type=int)
-    if not target_date:
-        target_date = datetime.now().strftime('%Y-%m-%d')
-    since = _resolve_dashboard_since(target_date, since)
+    target_date = _request_target_date()
+    since = _request_since(target_date)
+    top = _request_top(10)
     report = build_strength_momentum_report(
         target_date=target_date,
         top_n=max(1, int(top or 10)),
@@ -939,23 +1038,20 @@ def strength_momentum_api():
 
 @app.route('/strength-momentum')
 def strength_momentum_preview():
-    target_date = request.args.get('date')
-    since = request.args.get('since')
-    top = request.args.get('top', default=5, type=int)
-    if not target_date:
-        target_date = datetime.now().strftime('%Y-%m-%d')
-    since = _resolve_dashboard_since(target_date, since)
+    target_date = _request_target_date()
+    since = _request_since(target_date)
+    top = _request_top(5)
 
     report = build_strength_momentum_report(
         target_date=target_date,
         top_n=max(1, int(top or 5)),
         since_time=since,
     )
-    metrics = report.get('metrics', {}) or {}
-    top_passes = report.get('sections', {}).get('top_passes', []) or []
-    near_misses = report.get('sections', {}).get('near_misses', []) or []
-    override_candidates = report.get('sections', {}).get('dynamic_override_candidates', []) or []
-    observed_reasons = report.get('reason_breakdown', {}).get('observed', []) or []
+    metrics = _report_dict(report, 'metrics')
+    top_passes = _report_list(report, 'sections', 'top_passes')
+    near_misses = _report_list(report, 'sections', 'near_misses')
+    override_candidates = _report_list(report, 'sections', 'dynamic_override_candidates')
+    observed_reasons = _report_list(report, 'reason_breakdown', 'observed')
 
     template = """
     <!doctype html>
@@ -1109,12 +1205,9 @@ def strength_momentum_preview():
 
 @app.route('/api/entry-pipeline-flow')
 def entry_pipeline_flow_api():
-    target_date = request.args.get('date')
-    since = request.args.get('since')
-    top = request.args.get('top', default=10, type=int)
-    if not target_date:
-        target_date = datetime.now().strftime('%Y-%m-%d')
-    since = _resolve_dashboard_since(target_date, since)
+    target_date = _request_target_date()
+    since = _request_since(target_date)
+    top = _request_top(10)
     report = build_entry_pipeline_flow_report(
         target_date=target_date,
         since_time=since,
@@ -1125,10 +1218,10 @@ def entry_pipeline_flow_api():
 
 @app.route('/api/gatekeeper-replay')
 def gatekeeper_replay_api():
-    target_date = request.args.get('date') or datetime.now().strftime('%Y-%m-%d')
-    code = (request.args.get('code') or '').strip()
-    target_time = request.args.get('time')
-    rerun = str(request.args.get('rerun', '')).lower() in {'1', 'true', 'yes', 'y'}
+    target_date = _request_target_date()
+    code = _request_stripped("code")
+    target_time = _request_stripped("time") or None
+    rerun = _request_flag("rerun")
 
     if not code:
         rows = load_gatekeeper_snapshots(target_date)
@@ -1161,46 +1254,40 @@ def gatekeeper_replay_api():
 
 @app.route('/api/performance-tuning')
 def performance_tuning_api():
-    target_date = request.args.get('date')
-    since = request.args.get('since')
-    refresh = str(request.args.get("refresh", "")).lower() in {"1", "true", "yes", "y"}
-    if not target_date:
-        target_date = datetime.now().strftime('%Y-%m-%d')
-    since = _resolve_dashboard_since(target_date, since)
-    report = _load_saved_performance_tuning_snapshot(target_date, since, refresh)
-    if report is None:
-        report = build_performance_tuning_report(target_date=target_date, since_time=since)
+    target_date = _request_target_date()
+    since = _request_since(target_date)
+    refresh = _request_flag("refresh")
+    report = _load_or_build_performance_tuning_report(
+        target_date=target_date,
+        since=since,
+        refresh=refresh,
+    )
     return jsonify(report)
 
 
 @app.route('/api/strategy-performance')
 def strategy_performance_api():
-    target_date = request.args.get('date')
-    refresh = str(request.args.get("refresh", "")).lower() in {"1", "true", "yes", "y"}
-    if not target_date:
-        target_date = datetime.now().strftime('%Y-%m-%d')
+    target_date = _request_target_date()
+    refresh = _request_flag("refresh")
     report = build_strategy_position_performance_report(target_date=target_date, refresh=refresh)
     return jsonify(report)
 
 
 @app.route('/entry-pipeline-flow')
 def entry_pipeline_flow_preview():
-    target_date = request.args.get('date')
-    since = request.args.get('since')
-    top = request.args.get('top', default=10, type=int)
-    if not target_date:
-        target_date = datetime.now().strftime('%Y-%m-%d')
-    since = _resolve_dashboard_since(target_date, since)
+    target_date = _request_target_date()
+    since = _request_since(target_date)
+    top = _request_top(10)
 
     report = build_entry_pipeline_flow_report(
         target_date=target_date,
         since_time=since,
         top_n=max(1, int(top or 10)),
     )
-    metrics = report.get('metrics', {}) or {}
-    blockers = report.get('blocker_breakdown', []) or []
-    blocker_guide = report.get('blocker_guide', []) or []
-    recent_stocks = report.get('sections', {}).get('recent_stocks', []) or []
+    metrics = _report_dict(report, 'metrics')
+    blockers = _report_list(report, 'blocker_breakdown')
+    blocker_guide = _report_list(report, 'blocker_guide')
+    recent_stocks = _report_list(report, 'sections', 'recent_stocks')
 
     template = """
     <!doctype html>
@@ -1427,10 +1514,10 @@ def entry_pipeline_flow_preview():
 
 @app.route('/gatekeeper-replay')
 def gatekeeper_replay_preview():
-    target_date = request.args.get('date') or datetime.now().strftime('%Y-%m-%d')
-    code = (request.args.get('code') or '').strip()
-    target_time = request.args.get('time')
-    rerun = str(request.args.get('rerun', '')).lower() in {'1', 'true', 'yes', 'y'}
+    target_date = _request_target_date()
+    code = _request_stripped("code")
+    target_time = _request_stripped("time") or None
+    rerun = _request_flag("rerun")
     rows = load_gatekeeper_snapshots(target_date) if not code else []
     recent_rows = list(reversed(rows[-20:])) if rows else []
     snapshot = find_gatekeeper_snapshot(target_date, code, target_time) if code else None
@@ -1605,26 +1692,26 @@ def gatekeeper_replay_preview():
 
 @app.route('/performance-tuning')
 def performance_tuning_preview():
-    target_date = request.args.get('date')
-    since = request.args.get('since')
-    refresh = str(request.args.get("refresh", "")).lower() in {"1", "true", "yes", "y"}
-    if not target_date:
-        target_date = datetime.now().strftime('%Y-%m-%d')
-    since = _resolve_dashboard_since(target_date, since)
+    target_date = _request_target_date()
+    since = _request_since(target_date)
+    refresh = _request_flag("refresh")
 
-    report = _load_saved_performance_tuning_snapshot(target_date, since, refresh)
-    if report is None:
-        report = build_performance_tuning_report(target_date=target_date, since_time=since)
-    metrics = report.get('metrics', {}) or {}
-    cards = report.get('cards', []) or []
-    watch_items = report.get('watch_items', []) or []
-    strategy_rows = report.get('strategy_rows', []) or []
-    auto_comments = report.get('auto_comments', []) or []
-    meta_info = report.get('meta', {}) or {}
-    breakdowns = report.get('breakdowns', {}) or {}
-    top_holding_slow = report.get('sections', {}).get('top_holding_slow', []) or []
-    top_gatekeeper_slow = report.get('sections', {}).get('top_gatekeeper_slow', []) or []
-    top_dual_persona_slow = report.get('sections', {}).get('top_dual_persona_slow', []) or []
+    report = _load_or_build_performance_tuning_report(
+        target_date=target_date,
+        since=since,
+        refresh=refresh,
+    )
+    metrics = _report_dict(report, 'metrics')
+    cards = _report_list(report, 'cards')
+    watch_items = _report_list(report, 'watch_items')
+    strategy_rows = _report_list(report, 'strategy_rows')
+    auto_comments = _report_list(report, 'auto_comments')
+    meta_info = _report_dict(report, 'meta')
+    breakdowns = _report_dict(report, 'breakdowns')
+    swing_daily_summary = _report_dict(report, 'sections', 'swing_daily_summary')
+    top_holding_slow = _report_list(report, 'sections', 'top_holding_slow')
+    top_gatekeeper_slow = _report_list(report, 'sections', 'top_gatekeeper_slow')
+    top_dual_persona_slow = _report_list(report, 'sections', 'top_dual_persona_slow')
 
     template = """
     <!doctype html>
@@ -1917,6 +2004,94 @@ def performance_tuning_preview():
           {% endfor %}
         </div>
 
+        {% if swing_daily_summary %}
+        <div class="section two-col">
+          <div class="card">
+            <h2>스윙 blocker 일일 요약</h2>
+            <div class="comment-head">
+              <span class="pill {{ 'tone-' + (swing_daily_summary.day_type.tone or 'warn') }}">{{ swing_daily_summary.day_type.label or '데이터 부족' }}</span>
+              <span class="pill {{ 'tone-' + (swing_daily_summary.market_regime.status_tone or 'warn') }}">{{ swing_daily_summary.market_regime.status_text or '데이터 부족' }}</span>
+              <span class="pill">
+                swing {{ '허용' if swing_daily_summary.market_regime.allow_swing_entry else '보류' }}
+                / score {{ swing_daily_summary.market_regime.swing_score or 0 }}
+              </span>
+            </div>
+            <div class="meta" style="margin-top: 10px;">{{ swing_daily_summary.day_type.comment or '스윙 요약 코멘트가 없습니다.' }}</div>
+
+            <div class="mini-grid">
+              <div class="mini-card">
+                <div class="mini-label">스윙 감시 종목</div>
+                <div class="mini-value">{{ swing_daily_summary.metrics.candidates or 0 }}</div>
+              </div>
+              <div class="mini-card">
+                <div class="mini-label">실제 진입</div>
+                <div class="mini-value">{{ swing_daily_summary.metrics.entered_rows or 0 }}</div>
+              </div>
+              <div class="mini-card">
+                <div class="mini-label">주문 제출</div>
+                <div class="mini-value">{{ swing_daily_summary.metrics.submitted or 0 }}</div>
+              </div>
+              <div class="mini-card">
+                <div class="mini-label">최신 차단 종목</div>
+                <div class="mini-value">{{ swing_daily_summary.metrics.blocked_latest or 0 }}</div>
+              </div>
+              <div class="mini-card">
+                <div class="mini-label">blocker 이벤트</div>
+                <div class="mini-value">{{ swing_daily_summary.metrics.blocker_event_count or 0 }}</div>
+              </div>
+              <div class="mini-card">
+                <div class="mini-label">차단 종목 수</div>
+                <div class="mini-value">{{ swing_daily_summary.metrics.blocked_stock_count or 0 }}</div>
+              </div>
+            </div>
+
+            <div class="subsection-title">하루 blocker 분포</div>
+            <div class="list">
+              {% for item in swing_daily_summary.blocker_families %}
+                <div class="row">
+                  <div class="title">{{ item.label }}</div>
+                  <div class="meta">{{ item.count }}건 / {{ item.stock_count }}종목 / {{ item.ratio }}%</div>
+                </div>
+              {% else %}
+                <div class="meta">스윙 blocker 이벤트가 없습니다.</div>
+              {% endfor %}
+            </div>
+
+            <div class="subsection-title">최신 blocker 분포</div>
+            <div class="pill-row">
+              {% for item in swing_daily_summary.latest_blockers %}
+                <span class="pill">{{ item.label }} {{ item.count }}건 / {{ item.ratio }}%</span>
+              {% else %}
+                <span class="meta">최신 blocker 데이터가 없습니다.</span>
+              {% endfor %}
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>스윙 Gatekeeper 액션 요약</h2>
+            <div class="list">
+              {% for item in swing_daily_summary.gatekeeper_actions %}
+                <div class="row">
+                  <div class="title">{{ item.label }}</div>
+                  <div class="meta">{{ item.count }}건 / {{ item.ratio }}%</div>
+                </div>
+              {% else %}
+                <div class="meta">아직 스윙 Gatekeeper 거부 액션 표본이 없습니다.</div>
+              {% endfor %}
+            </div>
+            <div class="subsection-title">시장 국면 메모</div>
+            <div class="meta">
+              risk {{ swing_daily_summary.market_regime.risk_state or 'UNKNOWN' }}
+              / regime {{ swing_daily_summary.market_regime.regime_code or 'UNKNOWN' }}
+              / swing {{ '허용' if swing_daily_summary.market_regime.allow_swing_entry else '보류' }}
+            </div>
+            <div class="meta" style="margin-top: 10px;">
+              `allow_swing_entry=false`인 날은 threshold 완화 근거일과 분리해서 해석하는 것이 plan 기준과 맞습니다.
+            </div>
+          </div>
+        </div>
+        {% endif %}
+
         <div class="section card">
           <h2>조정 관찰 포인트</h2>
           <table>
@@ -1976,6 +2151,36 @@ def performance_tuning_preview():
             </div>
             <div class="meta" style="margin-top: 8px; font-size: 0.85em; color: #999;">
               action_age p95 {{ metrics.gatekeeper_action_age_p95 }}s / allow_entry_age p95 {{ metrics.gatekeeper_allow_entry_age_p95 }}s
+            </div>
+          </div>
+        </div>
+
+        <div class="section two-col">
+          <div class="card">
+            <h2>보유 AI 재사용 차단 사유</h2>
+            <div class="list">
+              {% for item in breakdowns.holding_reuse_blockers %}
+                <div class="row">
+                  <div class="title">{{ item.label }}</div>
+                  <div class="meta">{{ item.count }}건</div>
+                </div>
+              {% else %}
+                <div class="meta">데이터 없음</div>
+              {% endfor %}
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>보유 AI 시그니처 변경 필드</h2>
+            <div class="list">
+              {% for item in breakdowns.holding_sig_deltas %}
+                <div class="row">
+                  <div class="title">{{ item.label }}</div>
+                  <div class="meta">{{ item.count }}회</div>
+                </div>
+              {% else %}
+                <div class="meta">데이터 없음</div>
+              {% endfor %}
             </div>
           </div>
         </div>
@@ -2163,6 +2368,7 @@ def performance_tuning_preview():
         auto_comments=auto_comments,
         meta_info=meta_info,
         breakdowns=breakdowns,
+        swing_daily_summary=swing_daily_summary,
         top_holding_slow=top_holding_slow,
         top_gatekeeper_slow=top_gatekeeper_slow,
         top_dual_persona_slow=top_dual_persona_slow,
@@ -2171,18 +2377,16 @@ def performance_tuning_preview():
 
 @app.route('/strategy-performance')
 def strategy_performance_preview():
-    target_date = request.args.get('date')
-    refresh = str(request.args.get("refresh", "")).lower() in {"1", "true", "yes", "y"}
-    if not target_date:
-        target_date = datetime.now().strftime('%Y-%m-%d')
+    target_date = _request_target_date()
+    refresh = _request_flag("refresh")
 
     report = build_strategy_position_performance_report(target_date=target_date, refresh=refresh)
-    summary = report.get('summary', {}) or {}
-    kpis = report.get('kpis', []) or []
-    strategy_totals = report.get('strategy_totals', []) or []
-    rows = report.get('rows', []) or []
-    top_winners = report.get('sections', {}).get('top_winners', []) or []
-    top_losers = report.get('sections', {}).get('top_losers', []) or []
+    summary = _report_dict(report, 'summary')
+    kpis = _report_list(report, 'kpis')
+    strategy_totals = _report_list(report, 'strategy_totals')
+    rows = _report_list(report, 'rows')
+    top_winners = _report_list(report, 'sections', 'top_winners')
+    top_losers = _report_list(report, 'sections', 'top_losers')
 
     template = """
     <!doctype html>
@@ -2417,67 +2621,45 @@ def strategy_performance_preview():
 
 @app.route('/api/trade-review')
 def trade_review_api():
-    target_date = request.args.get('date')
-    since = request.args.get('since')
-    code = request.args.get('code')
-    scope = request.args.get('scope') or 'entered'
-    top = request.args.get('top', default=10, type=int)
-    refresh = str(request.args.get("refresh", "")).lower() in {"1", "true", "yes", "y"}
-    if not target_date:
-        target_date = datetime.now().strftime('%Y-%m-%d')
-    since = _resolve_dashboard_since(target_date, since)
-    report = _load_saved_trade_review_snapshot(
-        target_date,
+    target_date = _request_target_date()
+    since = _request_since(target_date)
+    code = _request_stripped("code") or None
+    scope = _request_scope("entered")
+    top = _request_top(10)
+    refresh = _request_flag("refresh")
+    report = _load_or_build_trade_review_report(
+        target_date=target_date,
         since=since,
         code=code,
         scope=scope,
         top=top,
         refresh=refresh,
     )
-    if report is None:
-        report = build_trade_review_report(
-            target_date=target_date,
-            code=code,
-            since_time=since,
-            top_n=max(1, int(top or 10)),
-            scope=scope,
-        )
     return jsonify(report)
 
 
 @app.route('/trade-review')
 def trade_review_preview():
-    target_date = request.args.get('date')
-    since = request.args.get('since')
-    code = request.args.get('code')
-    scope = request.args.get('scope') or 'entered'
-    top = request.args.get('top', default=10, type=int)
-    refresh = str(request.args.get("refresh", "")).lower() in {"1", "true", "yes", "y"}
-    if not target_date:
-        target_date = datetime.now().strftime('%Y-%m-%d')
-    since = _resolve_dashboard_since(target_date, since)
+    target_date = _request_target_date()
+    since = _request_since(target_date)
+    code = _request_stripped("code") or None
+    scope = _request_scope("entered")
+    top = _request_top(10)
+    refresh = _request_flag("refresh")
 
-    report = _load_saved_trade_review_snapshot(
-        target_date,
+    report = _load_or_build_trade_review_report(
+        target_date=target_date,
         since=since,
         code=code,
         scope=scope,
         top=top,
         refresh=refresh,
     )
-    if report is None:
-        report = build_trade_review_report(
-            target_date=target_date,
-            code=code,
-            since_time=since,
-            top_n=max(1, int(top or 10)),
-            scope=scope,
-        )
-    metrics = report.get('metrics', {}) or {}
-    recent_trades = report.get('sections', {}).get('recent_trades', []) or []
-    event_breakdown = report.get('event_breakdown', []) or []
-    warnings = report.get('meta', {}).get('warnings', []) or []
-    available_stocks = report.get('meta', {}).get('available_stocks', []) or []
+    metrics = _report_dict(report, 'metrics')
+    recent_trades = _report_list(report, 'sections', 'recent_trades')
+    event_breakdown = _report_list(report, 'event_breakdown')
+    warnings = _report_list(report, 'meta', 'warnings')
+    available_stocks = _report_list(report, 'meta', 'available_stocks')
 
     template = """
     <!doctype html>

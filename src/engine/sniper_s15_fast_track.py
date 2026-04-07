@@ -6,6 +6,7 @@ from datetime import datetime
 
 from src.engine import kiwoom_orders
 from src.engine.sniper_entry_latency import evaluate_live_buy_entry
+from src.engine.trade_profit import calculate_net_profit_rate
 from src.database.models import RecommendationHistory
 from src.utils.runtime_flags import is_trading_paused
 from src.utils import kiwoom_utils
@@ -118,7 +119,8 @@ def _save_armed_candidate_to_db(code, name, cnd_name, armed_at, expires_at):
             record.stock_name = name
             record.position_tag = 'S15_CANDID:' + cnd_name
             record.nxt = armed_at
-            record.profit_rate = expires_at
+            record.hard_stop_price = expires_at
+            record.profit_rate = 0.0
         else:
             record = RecommendationHistory(
                 rec_date=today,
@@ -130,7 +132,8 @@ def _save_armed_candidate_to_db(code, name, cnd_name, armed_at, expires_at):
                 position_tag='S15_CANDID:' + cnd_name,
                 prob=0.0,
                 nxt=armed_at,
-                profit_rate=expires_at,
+                hard_stop_price=expires_at,
+                profit_rate=0.0,
                 buy_price=0,
                 buy_qty=0
             )
@@ -166,7 +169,7 @@ def _restore_armed_candidates_from_db():
             name = rec.stock_name
             cnd_name = rec.position_tag.replace('S15_CANDID:', '') if rec.position_tag else ''
             armed_at = rec.nxt if rec.nxt else 0.0
-            expires_at = rec.profit_rate if rec.profit_rate else 0.0
+            expires_at = rec.hard_stop_price if rec.hard_stop_price else (rec.profit_rate if rec.profit_rate else 0.0)
             if expires_at < now:
                 session.query(RecommendationHistory).filter_by(
                     rec_date=today,
@@ -523,7 +526,7 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
             if curr_p <= 0 or avg_buy_price <= 0:
                 continue
 
-            profit_rate = ((curr_p - avg_buy_price) / avg_buy_price) * 100
+            profit_rate = calculate_net_profit_rate(avg_buy_price, curr_p)
             if profit_rate <= -0.7:
                 with state['lock']:
                     sell_ord_no = state.get('sell_ord_no', '')
@@ -552,7 +555,7 @@ def execute_fast_track_scalp_v2(code, name, trigger_price, ratio=0.10):
 
         final_profit_rate = 0.0
         if final_buy > 0 and final_sell > 0:
-            final_profit_rate = round(((final_sell - final_buy) / final_buy) * 100, 2)
+            final_profit_rate = calculate_net_profit_rate(final_buy, final_sell)
 
         update_s15_shadow_record(
             state.get('shadow_id'),

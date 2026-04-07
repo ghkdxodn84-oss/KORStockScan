@@ -1,3 +1,5 @@
+import json
+
 from src.engine import sniper_performance_tuning_report as report_mod
 
 
@@ -12,7 +14,7 @@ def test_performance_tuning_report_builds_metrics(monkeypatch):
     holding_lines = [
         "[2026-04-03 10:01:00] [HOLDING_PIPELINE] 테스트A(000001) stage=ai_holding_review review_ms=510 ai_cache=miss profit_rate=+0.50",
         "[2026-04-03 10:01:08] [HOLDING_PIPELINE] 테스트A(000001) stage=ai_holding_skip_unchanged ws_age_sec=0.40 reuse_sec=5.0 age_sec=3.1",
-        "[2026-04-03 10:01:09] [HOLDING_PIPELINE] 테스트A(000001) stage=ai_holding_reuse_bypass ws_age_sec=0.90 reuse_sec=5.0 age_sec=3.8 reason_codes=price_move,near_low_score",
+        "[2026-04-03 10:01:09] [HOLDING_PIPELINE] 테스트A(000001) stage=ai_holding_reuse_bypass ws_age_sec=0.90 reuse_sec=5.0 age_sec=3.8 sig_delta=curr_price:10100->10080,spread_tick:1->2 reason_codes=price_move,near_low_score",
         "[2026-04-03 10:02:00] [HOLDING_PIPELINE] 테스트A(000001) stage=exit_signal exit_rule=scalp_ai_early_exit profit_rate=-0.90",
         "[2026-04-03 15:15:00] [HOLDING_PIPELINE] 테스트A(000001) stage=dual_persona_shadow strategy=SCALPING decision_type=overnight dual_mode=shadow gemini_action=SELL_TODAY gemini_score=25 aggr_action=HOLD_OVERNIGHT aggr_score=72 cons_action=SELL_TODAY cons_score=38 cons_veto=false fused_action=SELL_TODAY fused_score=42 winner=gemini_hold agreement_bucket=aggr_vs_pair_conflict hard_flags=- shadow_extra_ms=980",
     ]
@@ -137,6 +139,9 @@ def test_performance_tuning_report_builds_metrics(monkeypatch):
     assert report["metrics"]["gatekeeper_fast_reuse_ratio"] == 50.0
     assert report["breakdowns"]["exit_rules"][0]["label"] == "scalp_ai_early_exit"
     assert report["breakdowns"]["holding_reuse_blockers"][0]["label"] == "가격 변화 확대"
+    holding_sig_deltas = {item["label"]: item["count"] for item in report["breakdowns"]["holding_sig_deltas"]}
+    assert holding_sig_deltas["curr_price"] == 1
+    assert holding_sig_deltas["spread_tick"] == 1
     assert report["breakdowns"]["gatekeeper_reuse_blockers"][0]["label"] == "시그니처 변경"
     assert any(item["label"] == "Gatekeeper fast reuse 비율" for item in report["watch_items"])
     assert any(item["label"] == "듀얼 페르소나 충돌률" for item in report["watch_items"])
@@ -145,6 +150,7 @@ def test_performance_tuning_report_builds_metrics(monkeypatch):
     assert any(item["label"] == "스윙" for item in report["strategy_rows"])
     assert report["meta"]["outcome_basis"] == "기준일 누적 성과 (trade review 정규화)"
     assert report["meta"]["trend_basis"] == "최근 2개 거래일 rolling 성과"
+    assert report["meta"]["schema_version"] == report_mod.PERFORMANCE_TUNING_SCHEMA_VERSION
     assert report["strategy_rows"][0]["trends"]["summary_5d"]["date_count"] >= 1
     assert report["strategy_rows"][0]["outcomes"]["completed_rows"] == 2
     assert report["strategy_rows"][0]["outcomes"]["realized_pnl_krw"] == -8000
@@ -223,3 +229,108 @@ def test_gatekeeper_sig_delta_parsing(monkeypatch):
     assert sig_deltas_dict["v_pw_now"] == 1
     # age 검증
     assert report["metrics"]["gatekeeper_action_age_p95"] == 11.0
+
+
+def test_holding_sig_delta_parsing(monkeypatch):
+    """보유 AI sig_delta 파싱 및 필드 추출 검증"""
+    entry_lines = []
+    holding_lines = [
+        "[2026-04-03 10:01:00] [HOLDING_PIPELINE] 테스트A(000001) stage=ai_holding_reuse_bypass ws_age_sec=0.40 reuse_sec=5.0 age_sec=3.1 sig_delta=curr_price:10100->10120,spread_tick:1->2 reason_codes=sig_changed",
+        "[2026-04-03 10:01:05] [HOLDING_PIPELINE] 테스트A(000001) stage=ai_holding_reuse_bypass ws_age_sec=0.45 reuse_sec=5.0 age_sec=3.6 sig_delta=curr_price:10120->10150,buy_ratio:52->61 reason_codes=sig_changed,near_low_score",
+    ]
+
+    def _fake_iter(log_path, *, target_date, marker):
+        return entry_lines if marker == "[ENTRY_PIPELINE]" else holding_lines
+
+    monkeypatch.setattr(report_mod, "_iter_target_lines", _fake_iter)
+    monkeypatch.setattr(
+        report_mod,
+        "build_trade_review_report",
+        lambda target_date, since_time=None, top_n=10000, scope="all": {
+            "meta": {"warnings": []},
+            "sections": {"recent_trades": [], "open_trades": []},
+            "history": [],
+        },
+    )
+
+    report = report_mod.build_performance_tuning_report(target_date="2026-04-03", since_time=None)
+
+    sig_deltas = report["breakdowns"]["holding_sig_deltas"]
+    sig_deltas_dict = {item["label"]: item["count"] for item in sig_deltas}
+    assert sig_deltas_dict["curr_price"] == 2
+    assert sig_deltas_dict["spread_tick"] == 1
+    assert sig_deltas_dict["buy_ratio"] == 1
+
+
+def test_swing_daily_summary_includes_market_regime_and_blockers(monkeypatch, tmp_path):
+    entry_lines = [
+        "[2026-04-03 10:00:00] [ENTRY_PIPELINE] 테스트A(000001) stage=market_regime_block strategy=KOSPI_ML",
+        "[2026-04-03 10:00:05] [ENTRY_PIPELINE] 테스트B(000002) stage=blocked_gatekeeper_reject strategy=KOSPI_ML action=눌림|대기 gatekeeper_eval_ms=8200 gatekeeper_cache=miss cooldown_sec=1200 cooldown_policy=pullback_wait",
+        "[2026-04-03 10:00:10] [ENTRY_PIPELINE] 테스트C(000003) stage=blocked_gatekeeper_reject strategy=KOSPI_ML action=눌림|대기 gatekeeper_eval_ms=9100 gatekeeper_cache=miss cooldown_sec=1200 cooldown_policy=pullback_wait",
+        "[2026-04-03 10:00:15] [ENTRY_PIPELINE] 테스트D(000004) stage=blocked_swing_gap strategy=KOSPI_ML fluctuation=4.2 threshold=3.5",
+    ]
+    holding_lines = []
+
+    def _fake_iter(log_path, *, target_date, marker):
+        return entry_lines if marker == "[ENTRY_PIPELINE]" else holding_lines
+
+    monkeypatch.setattr(report_mod, "_iter_target_lines", _fake_iter)
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    with open(cache_dir / "market_regime_snapshot.json", "w", encoding="utf-8") as handle:
+        json.dump(
+            {
+                "cached_session_date": "2026-04-03",
+                "risk_state": "RISK_OFF",
+                "allow_swing_entry": False,
+                "swing_score": 20,
+            },
+            handle,
+            ensure_ascii=False,
+        )
+
+    monkeypatch.setattr(
+        report_mod,
+        "build_trade_review_report",
+        lambda target_date, since_time=None, top_n=10000, scope="all": {
+            "meta": {"warnings": []},
+            "sections": {
+                "recent_trades": [
+                    {
+                        "id": 2,
+                        "rec_date": target_date,
+                        "code": "000002",
+                        "name": "테스트B",
+                        "status": "WATCHING",
+                        "strategy": "KOSPI_ML",
+                        "position_tag": "SCANNER",
+                        "buy_price": 0.0,
+                        "buy_qty": 0,
+                        "buy_time": "",
+                        "sell_price": 0,
+                        "sell_time": "",
+                        "profit_rate": 0.0,
+                        "realized_pnl_krw": 0,
+                    },
+                ],
+            },
+        },
+    )
+    monkeypatch.setattr(report_mod, "_fetch_trade_history_rows", lambda target_date: ([], [], []))
+
+    report = report_mod.build_performance_tuning_report(target_date="2026-04-03", since_time=None)
+
+    swing_summary = report["sections"]["swing_daily_summary"]
+    blocker_rows = {item["label"]: item for item in swing_summary["blocker_families"]}
+    gatekeeper_actions = {item["label"]: item["count"] for item in swing_summary["gatekeeper_actions"]}
+
+    assert swing_summary["market_regime"]["risk_state"] == "RISK_OFF"
+    assert swing_summary["market_regime"]["allow_swing_entry"] is False
+    assert swing_summary["day_type"]["label"] == "Gatekeeper 거부 중심 (시장 제한 동반)"
+    assert blocker_rows["Gatekeeper 거부"]["count"] == 2
+    assert blocker_rows["Gatekeeper 거부"]["stock_count"] == 2
+    assert blocker_rows["시장 국면 제한"]["count"] == 1
+    assert blocker_rows["스윙 갭상승"]["count"] == 1
+    assert gatekeeper_actions["눌림 대기"] == 2

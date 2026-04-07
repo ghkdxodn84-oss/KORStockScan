@@ -1,85 +1,84 @@
 {
-  "bundle_as_of": "2026-04-05T22:00:10Z",
+  "bundle_as_of": "2026-04-06T22:00:13Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 6582.69,
-    "prev_value": 6575.32,
-    "change": 7.37,
-    "change_pct": 0.11,
-    "as_of": "2026-04-02T20:00:00Z",
-    "source": "Associated Press"
+    "value": 6611.83,
+    "prev_value": 6582.69,
+    "change": 29.14,
+    "change_pct": 0.44,
+    "as_of": "2026-04-06T20:00:00Z",
+    "source": "Associated Press / WDRB"
   },
   "nasdaq": {
     "name": "NASDAQ Composite",
-    "value": 21879.18,
-    "prev_value": 21840.95,
-    "change": 38.23,
-    "change_pct": 0.18,
-    "as_of": "2026-04-02T20:00:00Z",
-    "source": "Associated Press"
+    "value": 21996.34,
+    "prev_value": 21879.18,
+    "change": 117.16,
+    "change_pct": 0.54,
+    "as_of": "2026-04-06T20:00:00Z",
+    "source": "Associated Press / WDRB"
   },
   "vix": {
     "name": "VIX",
-    "value": 23.87,
-    "prev_value": 24.54,
-    "change": -0.67,
-    "change_pct": -2.73,
-    "as_of": "2026-04-02T20:15:00Z",
-    "source": "Cboe"
+    "value": 24.54,
+    "prev_value": 23.87,
+    "change": 0.67,
+    "change_pct": 2.81,
+    "as_of": "2026-04-06T20:15:00Z",
+    "source": "CBOE / Chicago Today"
   },
   "us10y": {
     "name": "US 10-Year Treasury Yield",
-    "value": 4.32,
-    "prev_value": 4.31,
-    "change": 0.01,
-    "change_pct": 0.23,
-    "as_of": "2026-04-03T16:00:00Z",
+    "value": 4.34,
+    "prev_value": 4.32,
+    "change": 0.02,
+    "change_pct": 0.46,
+    "as_of": "2026-04-06T20:00:00Z",
     "source": "Trading Economics"
   },
   "brent": {
-    "name": "Brent Crude",
-    "value": 109.03,
-    "prev_value": 101.16,
-    "change": 7.87,
-    "change_pct": 7.78,
-    "as_of": "2026-04-02T20:00:00Z",
+    "name": "Brent Crude Oil",
+    "value": 109.41,
+    "prev_value": 109.04,
+    "change": 0.37,
+    "change_pct": 0.34,
+    "as_of": "2026-04-06T20:00:00Z",
     "source": "Trading Economics"
   },
   "headlines": [
     {
-      "title": "Oil prices surge as Trump threatens to bring Iran 'back to the stone ages'",
-      "source": "TheStreet",
-      "published_at": "2026-04-02T21:48:00Z",
-      "url": "https://www.thestreet.com"
+      "title": "U.S. stocks drift higher ahead of Trump's deadline to bomb Iranian power plants",
+      "source": "Los Angeles Times / AP",
+      "published_at": "2026-04-06T20:57:00Z",
+      "url": "https://www.latimes.com/"
     },
     {
-      "title": "Strait of Hormuz remains shut down by US-Israel strikes, 20% of global oil shipments blocked",
-      "source": "The Economic Times",
-      "published_at": "2026-04-02T12:00:00Z",
-      "url": "https://economictimes.indiatimes.com"
+      "title": "Oil edges up in choppy trade; US, Iran receive ceasefire proposal framework",
+      "source": "Reuters",
+      "published_at": "2026-04-06T13:26:00Z",
+      "url": "https://www.reuters.com/"
     },
     {
-      "title": "Trump Administration places 100% tariff on foreign drugs unless prices are cut",
-      "source": "TheStreet",
-      "published_at": "2026-04-02T19:24:00Z",
-      "url": "https://www.thestreet.com"
+      "title": "Oil Prices Fluctuate as Trump's Deadline on Hormuz Looms",
+      "source": "Transport Topics",
+      "published_at": "2026-04-06T17:10:00Z",
+      "url": "https://www.ttnews.com/"
     },
     {
-      "title": "US 10-year Treasury yield edges up to 4.32% in shortened Good Friday session",
-      "source": "Trading Economics",
-      "published_at": "2026-04-03T16:00:00Z",
-      "url": "https://tradingeconomics.com"
+      "title": "Wall Street 'Fear Gauge' Retreats as Geopolitical Tensions Ease",
+      "source": "Chicago Today",
+      "published_at": "2026-04-06T14:00:00Z",
+      "url": "https://nationaltoday.com/"
     },
     {
-      "title": "Tesla deliveries fall short of Q1 estimates, shares drop over 5%",
-      "source": "Associated Press",
-      "published_at": "2026-04-02T20:43:00Z",
-      "url": "https://apnews.com"
+      "title": "Crude prices jump sharply: WTI at $114, Brent at $111 on renewed geopolitical risk, supply concerns",
+      "source": "Gulf News",
+      "published_at": "2026-04-05T22:38:00Z",
+      "url": "https://gulfnews.com/"
     }
   ],
   "notes": [
-    "US Stock markets were closed on Friday, April 3, 2026, in observance of Good Friday. Equities prices reflect the Thursday, April 2 close.",
-    "US Bond markets had an abbreviated session on April 3, 2026, closing at noon ET.",
-    "All timestamps reflect requested ISO 8601 UTC format."
+    "U.S. equities closed slightly higher on April 6, 2026, as the market balanced a potential 45-day ceasefire proposal against an impending deadline set by President Trump to bomb Iranian infrastructure if the Strait of Hormuz is not reopened.",
+    "Oil markets exhibited elevated volatility, with Brent crude briefly soaring above $111 before paring gains, as shipping traffic through the Strait of Hormuz remains drastically reduced."
   ]
 }

@@ -6,6 +6,7 @@ from math import isclose
 
 from src.database.models import RecommendationHistory
 from src.engine.sniper_scale_in_utils import record_add_history_event, find_latest_open_add_order_no
+from src.engine.trade_profit import calculate_net_profit_rate
 from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
 from src.engine import kiwoom_orders
@@ -375,7 +376,7 @@ def periodic_account_sync():
                                 record.sell_price = estimated_sell_price if estimated_sell_price > 0 else fallback_price
 
                             if record.buy_price and record.buy_price > 0 and record.sell_price and record.sell_price > 0:
-                                record.profit_rate = round(((record.sell_price - record.buy_price) / record.buy_price) * 100, 2)
+                                record.profit_rate = calculate_net_profit_rate(record.buy_price, record.sell_price)
 
                             if target_stock:
                                 target_stock['status'] = 'COMPLETED'

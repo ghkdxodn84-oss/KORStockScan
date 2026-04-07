@@ -16,7 +16,6 @@ if str(PROJECT_ROOT) not in sys.path:
     
 import os
 import multiprocessing
-import sys
 import time
 import signal
 import threading
@@ -47,6 +46,17 @@ from src.engine.daily_report_service import save_daily_report, build_daily_repor
 from src.engine.log_archive_service import archive_target_date_logs, save_monitor_snapshots_for_date
 from src.engine.strategy_position_performance_report import sync_trade_performance_for_date
 from src.utils.constants import TRADING_RULES
+
+# ==========================================
+# 📅 호출 상단 공용 날짜 helper
+# ==========================================
+def _today_string() -> str:
+    return datetime.now().strftime("%Y-%m-%d")
+
+
+def _resolve_target_date(target_date: str | None = None) -> str:
+    return str(target_date or _today_string())
+
 
 # ==========================================
 # 📝 모든 print()를 가로채서 파일로 저장하는 로거
@@ -92,7 +102,7 @@ def broadcast_today_picks_job():
         from src.database.models import RecommendationHistory
         db_manager = DBManager()
         event_bus = EventBus()
-        today = datetime.now().strftime('%Y-%m-%d')
+        today = _today_string()
         
         with db_manager.get_session() as session:
             picks = session.query(RecommendationHistory).filter_by(rec_date=today).all()
@@ -174,7 +184,7 @@ def broadcast_entry_metrics_job():
     try:
         event_bus = EventBus()
         summary = summarize_today_entry_metrics()
-        today = datetime.now().strftime('%Y-%m-%d')
+        today = _today_string()
         shadow_summary = evaluate_shadow_candidates(today)
         msg = (
             f"{format_entry_metrics_summary(summary)}\n\n"
@@ -212,7 +222,7 @@ def generate_daily_report_job(target_date: str | None = None):
 
 def generate_monitor_archive_job(target_date: str | None = None):
     """장마감 핵심 모니터 요약과 날짜별 gzip 로그 아카이브를 생성합니다."""
-    resolved_date = str(target_date or datetime.now().strftime("%Y-%m-%d"))
+    resolved_date = _resolve_target_date(target_date)
     try:
         perf_sync = sync_trade_performance_for_date(resolved_date)
         snapshot_paths = save_monitor_snapshots_for_date(resolved_date)

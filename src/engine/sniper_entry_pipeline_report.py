@@ -92,6 +92,11 @@ _CONFIRMED_FLOW_ANCHOR_STAGES = {
     "order_bundle_submitted",
 }
 
+_ATTEMPT_AUXILIARY_STAGES = {
+    "dual_persona_shadow",
+    "dual_persona_shadow_error",
+}
+
 
 @dataclass
 class PipelineEvent:
@@ -164,6 +169,10 @@ def _should_ignore_event(event: PipelineEvent) -> bool:
     if key[0] in {"TEST", "DUMMY", "MOCK"}:
         return True
     return False
+
+
+def _event_record_id(event: PipelineEvent) -> str:
+    return str(event.fields.get("id") or "").strip()
 
 
 def _classify_stage(stage: str) -> str:
@@ -491,6 +500,50 @@ def _build_precheck_passes(item_events: list[PipelineEvent]) -> list[dict]:
     return precheck_stages
 
 
+def _is_attempt_terminal(event: PipelineEvent) -> bool:
+    stage_class = _classify_stage(event.stage)
+    return stage_class in {"blocked", "waiting", "submitted"}
+
+
+def _latest_attempt_events(item_events: list[PipelineEvent]) -> list[PipelineEvent]:
+    if not item_events:
+        return []
+
+    segments: list[list[PipelineEvent]] = []
+    current: list[PipelineEvent] = []
+    current_record_id = ""
+    segment_terminated = False
+
+    for event in item_events:
+        record_id = _event_record_id(event)
+        record_changed = bool(current and record_id and current_record_id and record_id != current_record_id)
+        should_rollover = record_changed or (
+            segment_terminated and event.stage not in _ATTEMPT_AUXILIARY_STAGES
+        )
+
+        if should_rollover and current:
+            segments.append(current)
+            current = []
+            current_record_id = ""
+            segment_terminated = False
+
+        if not current:
+            current = [event]
+        else:
+            current.append(event)
+
+        if record_id and not current_record_id:
+            current_record_id = record_id
+
+        if _is_attempt_terminal(event):
+            segment_terminated = True
+
+    if current:
+        segments.append(current)
+
+    return segments[-1] if segments else item_events
+
+
 def _find_latest_gatekeeper_event(item_events: list[PipelineEvent]) -> PipelineEvent | None:
     for event in reversed(item_events):
         if event.stage == "blocked_gatekeeper_reject":
@@ -531,20 +584,21 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
     for key, item_events in stock_events.items():
         if not item_events:
             continue
-        latest = item_events[-1]
+        latest_events = _latest_attempt_events(item_events)
+        latest = latest_events[-1]
         latest_stage_counts[latest.stage] += 1
         stage_class = _classify_stage(latest.stage)
         if stage_class in {"blocked", "waiting"}:
             blocker_counts[_friendly_blocker_name(latest)] += 1
 
         compact_flow = []
-        for event in item_events:
+        for event in latest_events:
             if not compact_flow or event.stage != compact_flow[-1]:
                 compact_flow.append(event.stage)
 
-        pass_flow = _build_pass_flow(item_events)
+        pass_flow = _build_pass_flow(latest_events)
         latest_status = _build_latest_status(latest)
-        latest_gatekeeper_event = _find_latest_gatekeeper_event(item_events)
+        latest_gatekeeper_event = _find_latest_gatekeeper_event(latest_events)
         gatekeeper_replay = None
         if latest_gatekeeper_event is not None:
             replay_time = ""
@@ -572,6 +626,8 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
         per_stock_rows.append({
             "name": latest.name,
             "code": latest.code,
+            "record_id": _event_record_id(latest) or None,
+            "attempt_started_at": latest_events[0].timestamp if latest_events else latest.timestamp,
             "latest_timestamp": latest.timestamp,
             "latest_stage": latest.stage,
             "latest_stage_label": _display_stage_label(latest.stage),
@@ -579,12 +635,12 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
             "latest_reason": latest_status["reason"],
             "flow": compact_flow,
             "pass_flow": pass_flow,
-            "precheck_passes": _build_precheck_passes(item_events),
+            "precheck_passes": _build_precheck_passes(latest_events),
             "latest_status": latest_status,
-            "confirmed_failure": _build_confirmed_failure(item_events),
+            "confirmed_failure": _build_confirmed_failure(latest_events),
             "gatekeeper_replay": gatekeeper_replay,
-            "summary_flow": _build_summary_flow(item_events, latest),
-            "events": [_event_to_row(event) for event in item_events[-min(len(item_events), 20):]],
+            "summary_flow": _build_summary_flow(latest_events, latest),
+            "events": [_event_to_row(event) for event in latest_events[-min(len(latest_events), 20):]],
         })
 
     per_stock_rows.sort(key=lambda row: row["latest_timestamp"], reverse=True)
