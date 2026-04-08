@@ -79,6 +79,19 @@ Flutter나 외부 서비스는 아래 API를 그대로 사용하면 됩니다.
 - 예시:
   `/home/ubuntu/KORStockScan/.venv/bin/python -m pytest -q src/tests/test_condition_open_reclaim.py`
 
+### 최근 변경사항 (2026-04-08 장중 즉시 적용)
+
+- 스캘핑 신규 진입에 절대 예산 상한을 적용했습니다.
+  - `SCALPING_MAX_BUY_BUDGET_KRW=2_000_000`
+- 동적 체결강도(`strength_momentum`)는 태그 한정 완화 프로필을 추가했습니다.
+  - 대상 태그: `VWAP_RECLAIM`, `OPEN_RECLAIM`
+  - 완화값: `min_base 95→93`, `min_buy_value 20,000→16,000`, `min_buy_ratio 0.75→0.72`, `min_exec_buy_ratio 0.56→0.53`
+- 스캘핑 청산 과민 완화를 위해 `OPEN_RECLAIM` 조기손절 연속 확인 횟수를 상향했습니다.
+  - `SCALP_AI_EARLY_EXIT_CONSECUTIVE_HITS_OPEN_RECLAIM=4` (기본 3회 대비 완화)
+- `scalp_ai_momentum_decay`는 즉시 반응 대신 최소 확인 유예를 둡니다.
+  - 발동 조건: `score < 45` 이고 `hold >= 90초`
+- 관련 상수는 `src/utils/constants.py`에서 즉시 롤백 가능하도록 분리되어 있습니다.
+
 ---
 
 ## 시스템 라이프사이클
@@ -156,6 +169,44 @@ Flutter나 외부 서비스는 아래 API를 그대로 사용하면 됩니다.
 - `pause.flag`가 있으면 신규 매수와 추가매수는 막고, 청산은 계속 수행합니다.
 - 스캘핑은 `entry_armed` 상태를 두어 자격 게이트를 통과한 직후 다시 되감기지 않도록 보강되어 있습니다.
 
+#### 전략별 투자 비중 로직
+
+공통 주문 수량 계산:
+
+- `target_budget = 주문가능금액 x 전략비중`
+- `safe_budget = target_budget x BUY_BUDGET_SAFETY_RATIO`
+- `qty = floor(safe_budget / 현재가)`
+- 안전계수 절삭 때문에 `qty=0`이 되더라도, 원래 `target_budget`으로는 1주 매수가 가능한 경우에만 `BUY_BUDGET_RELAXED_SAFETY_RATIO`로 1회 재계산합니다.
+
+스캘핑(`SCALPING`) 신규 진입:
+
+- 사용 상수: `INVEST_RATIO_SCALPING_MIN=0.10`, `INVEST_RATIO_SCALPING_MAX=0.50`
+- 절대 예산 상한: `SCALPING_MAX_BUY_BUDGET_KRW=2,000,000`
+- 사용 점수: 실시간 AI 점수 `rt_ai_prob x 100`
+- 산식: `ratio = min_ratio + (ai_score / 100) x (max_ratio - min_ratio)`
+- 즉, AI 점수가 높을수록 같은 주문가능금액 안에서 더 큰 비중을 배정합니다.
+- 최종 주문 예산은 `min(target_budget, SCALPING_MAX_BUY_BUDGET_KRW)`로 한 번 더 제한됩니다.
+- 스캘핑은 `entry_armed` 상태에 들어가면 당시 계산된 `ratio`를 저장해, 짧은 TTL 안에서는 재평가 없이 같은 비중을 이어서 주문 단계까지 전달할 수 있습니다.
+- `VWAP_RECLAIM`, `OPEN_RECLAIM`은 동적 체결강도 게이트를 태그 한정 완화 프로필로 평가합니다.
+  - `SCALP_VPW_RELAX_MIN_BASE=93.0`
+  - `SCALP_VPW_RELAX_MIN_BUY_VALUE=16,000`
+  - `SCALP_VPW_RELAX_MIN_BUY_RATIO=0.72`
+  - `SCALP_VPW_RELAX_MIN_EXEC_BUY_RATIO=0.53`
+
+스윙(`KOSDAQ_ML`, `KOSPI_ML`) 신규 진입:
+
+- 코스닥 스윙 범위: `INVEST_RATIO_KOSDAQ_MIN=0.05` ~ `INVEST_RATIO_KOSDAQ_MAX=0.15`
+- 코스피 스윙 범위: `INVEST_RATIO_KOSPI_MIN=0.10` ~ `INVEST_RATIO_KOSPI_MAX=0.40`
+- 스윙은 먼저 `radar.analyze_signal_integrated(...)`의 종합 점수, VPW 조건, 갭상승 필터, Gatekeeper, 시장환경 필터를 통과해야 합니다.
+- 비중은 Gatekeeper 직전 신호 점수를 기준으로 `score_weight = clamp((score - buy_threshold) / (100 - buy_threshold), 0, 1)`를 만든 뒤, `ratio = ratio_min + score_weight x (ratio_max - ratio_min)`로 계산합니다.
+- 즉, 문턱을 겨우 넘긴 스윙은 최소 비중에 가깝고, 점수가 100에 가까울수록 최대 비중에 가까워집니다.
+- `is_shooting` 예외가 걸린 스윙은 계산 비중이 너무 낮으면 최소한 `(ratio_min + ratio_max) / 2`까지는 끌어올려 진입 강도를 보정합니다.
+
+추가매수(`scale-in`) 상한:
+
+- 신규 진입 비중과 별도로, 추가매수는 `MAX_POSITION_PCT=0.20` 한도 안에서만 허용됩니다.
+- 따라서 초기 진입 비중이 높더라도, 전체 포지션은 계좌 주문가능금액 대비 별도 리스크 상한을 넘지 않도록 막아둡니다.
+
 ### 3. 홀딩
 
 홀딩 단계에서는 “보유 중인 종목이 여전히 들고 갈 가치가 있는지”를 계속 재평가합니다.
@@ -204,6 +255,8 @@ Flutter나 외부 서비스는 아래 API를 그대로 사용하면 됩니다.
 - SELL은 pause 상태에서도 막지 않습니다.
 - entry BUY 미체결이 남아 있으면 취소 후 청산으로 넘어가도록 처리합니다.
 - 시장가, 지정가, IOC 성격은 주문 계층에서 일관되게 관리합니다.
+- `OPEN_RECLAIM`의 `scalp_ai_early_exit`는 기본 3회가 아니라 4회 연속 저점수 확인 시에만 발동하도록 완화되어 있습니다.
+- `scalp_ai_momentum_decay`는 `score < 45` + `보유 90초 이상` 조건을 만족할 때만 발동합니다.
 
 ### 5. 복기
 
