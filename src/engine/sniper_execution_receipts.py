@@ -47,6 +47,8 @@ def bind_execution_dependencies(
     get_fast_state=None,
     weighted_avg=None,
     now_ts=None,
+    state_machine=None,
+    **_unused_kwargs,
 ):
     global KIWOOM_TOKEN, DB, event_bus, ACTIVE_TARGETS, highest_prices
     global _get_fast_state, _weighted_avg, _now_ts
@@ -165,6 +167,84 @@ def _find_execution_target(code, exec_type, order_no):
     return None
 
 
+def _find_order_notice_target(code, exec_type, order_no):
+    target = _find_execution_target(code, exec_type, order_no)
+    if target:
+        return target
+
+    status_key = 'BUY_ORDERED' if exec_type == 'BUY' else 'SELL_ORDERED'
+    status_candidates = [
+        stock for stock in ACTIVE_TARGETS
+        if str(stock.get('code', '')).strip()[:6] == code and stock.get('status') == status_key
+    ]
+    if len(status_candidates) == 1:
+        return status_candidates[0]
+    return None
+
+
+def _apply_order_notice_to_target(target_stock, *, code, exec_type, order_no, status):
+    changed = False
+
+    if exec_type == 'BUY':
+        pending_orders = target_stock.get('pending_entry_orders') or []
+        exact_match = None
+        blank_match = None
+
+        for order in pending_orders:
+            existing_ord_no = str(order.get('ord_no', '') or '').strip()
+            if existing_ord_no == order_no:
+                exact_match = order
+                break
+            if not existing_ord_no and blank_match is None:
+                blank_match = order
+
+        target_order = exact_match or blank_match
+        if target_order:
+            if not str(target_order.get('ord_no', '') or '').strip():
+                target_order['ord_no'] = order_no
+                changed = True
+            target_order['notice_status'] = status
+            target_order['notice_at'] = time.time()
+            changed = True
+
+        if order_no and not str(target_stock.get('odno', '') or '').strip():
+            target_stock['odno'] = order_no
+            changed = True
+
+    elif exec_type == 'SELL':
+        if order_no and not str(target_stock.get('sell_odno', '') or '').strip():
+            target_stock['sell_odno'] = order_no
+            changed = True
+
+    if changed:
+        log_info(
+            f"[ORDER_NOTICE_BOUND] {target_stock.get('name')}({code}) "
+            f"type={exec_type} status={status} order_no={order_no}"
+        )
+
+
+def handle_order_notice(notice_data):
+    code = str(notice_data.get('code', '') or '').strip()[:6]
+    exec_type = str(notice_data.get('type', '') or '').upper()
+    order_no = str(notice_data.get('order_no', '') or '').strip()
+    status = str(notice_data.get('status', '') or '').strip()
+
+    if not code or not exec_type or not order_no:
+        return
+
+    with RECEIPT_LOCK:
+        target_stock = _find_order_notice_target(code, exec_type, order_no)
+        if not target_stock:
+            return
+        _apply_order_notice_to_target(
+            target_stock,
+            code=code,
+            exec_type=exec_type,
+            order_no=order_no,
+            status=status,
+        )
+
+
 def weighted_avg_price(old_price, old_qty, exec_price, exec_qty):
     total_qty = old_qty + exec_qty
     if total_qty <= 0:
@@ -238,6 +318,8 @@ def _refresh_scalp_preset_exit_order(target_stock, code, total_qty):
             return False
 
     if preset_tp_price <= 0 or total_qty <= 0:
+        if total_qty <= 0:
+            target_stock['preset_tp_qty'] = 0
         return True
 
     sell_res = kiwoom_orders.send_sell_order_market(
@@ -249,6 +331,7 @@ def _refresh_scalp_preset_exit_order(target_stock, code, total_qty):
     )
     new_ord_no = sell_res.get('ord_no') if isinstance(sell_res, dict) else ''
     target_stock['preset_tp_ord_no'] = new_ord_no
+    target_stock['preset_tp_qty'] = int(total_qty or 0)
     if not new_ord_no:
         log_error(
             f"⚠️ [ADD_PROTECT] {target_stock.get('name')}({code}) refreshed preset TP order number missing."
@@ -593,6 +676,7 @@ def handle_real_execution(exec_data):
                 old_price = float(target_stock.get('buy_price') or 0)
                 new_qty = old_qty + exec_qty
                 new_avg = weighted_avg_price(old_price, old_qty, exec_price, exec_qty) if old_qty > 0 else exec_price
+                entry_mode = str(target_stock.get('entry_mode', 'normal') or 'normal')
 
                 pending_entry_orders = target_stock.get('pending_entry_orders') or []
                 if pending_entry_orders and order_no:
@@ -626,6 +710,20 @@ def handle_real_execution(exec_data):
                 highest_prices[code] = max(highest_prices.get(code, 0), exec_price)
 
                 requested_entry_qty = int(target_stock.get('entry_requested_qty', target_stock.get('requested_buy_qty', 0)) or 0)
+                cum_filled_qty = int(target_stock.get('entry_filled_qty', 0) or 0)
+                remaining_qty = max(0, requested_entry_qty - cum_filled_qty) if requested_entry_qty > 0 else 0
+                fill_quality = (
+                    "FULL_FILL"
+                    if requested_entry_qty > 0 and cum_filled_qty >= requested_entry_qty
+                    else ("PARTIAL_FILL" if requested_entry_qty > 0 else "UNKNOWN")
+                )
+                target_stock['entry_fill_quality'] = fill_quality
+
+                preset_tp_price = int(target_stock.get('preset_tp_price') or 0)
+                preset_tp_ord_no_before = str(target_stock.get('preset_tp_ord_no', '') or '').strip()
+                preset_tp_ord_no_after = preset_tp_ord_no_before
+                preset_sync_status = "NOT_APPLICABLE"
+                preset_sync_reason = "non_scalping_or_non_default_tag"
                 if requested_entry_qty > 0 and new_qty >= requested_entry_qty:
                     log_info(
                         f"[ENTRY_BUNDLE_FILLED] {target_stock.get('name')}({code}) "
@@ -654,6 +752,7 @@ def handle_real_execution(exec_data):
 
                     preset_tp_price = kiwoom_utils.get_target_price_up(base_buy_price, 1.5)
                     target_stock['preset_tp_price'] = preset_tp_price
+                    preset_tp_ord_no_before = str(target_stock.get('preset_tp_ord_no', '') or '').strip()
                     preset_hard_stop_pct = float(getattr(TRADING_RULES, 'SCALP_PRESET_HARD_STOP_PCT', -0.7) or -0.7)
                     preset_hard_stop_grace_sec = int(getattr(TRADING_RULES, 'SCALP_PRESET_HARD_STOP_GRACE_SEC', 0) or 0)
                     preset_hard_stop_emergency_pct = float(
@@ -704,6 +803,21 @@ def handle_real_execution(exec_data):
 
                     sell_qty = int(target_stock.get('buy_qty') or exec_qty or 0)
                     refreshed = _refresh_scalp_preset_exit_order(target_stock, code, sell_qty)
+                    preset_tp_ord_no_after = str(target_stock.get('preset_tp_ord_no', '') or '').strip()
+                    preset_tp_qty = int(target_stock.get('preset_tp_qty', 0) or 0)
+
+                    if not refreshed:
+                        preset_sync_status = "REFRESH_FAILED"
+                        preset_sync_reason = "refresh_failed"
+                    elif not preset_tp_ord_no_after:
+                        preset_sync_status = "MISSING_ORD_NO"
+                        preset_sync_reason = "missing_ord_no"
+                    elif preset_tp_qty != sell_qty:
+                        preset_sync_status = "QTY_MISMATCH"
+                        preset_sync_reason = f"preset_tp_qty={preset_tp_qty},sell_qty={sell_qty}"
+                    else:
+                        preset_sync_status = "OK"
+                        preset_sync_reason = "-"
 
                     # 지정가 주문 실패 시에도 출구 엔진 자체는 유지
                     if not refreshed or not target_stock.get('preset_tp_ord_no'):
@@ -722,6 +836,41 @@ def handle_real_execution(exec_data):
                             qty=int(sell_qty or 0),
                             ord_no=str(target_stock.get('preset_tp_ord_no', '') or '-'),
                         )
+                _log_holding_pipeline(
+                    target_stock.get('name'),
+                    code,
+                    target_id,
+                    'position_rebased_after_fill',
+                    fill_qty=int(exec_qty or 0),
+                    cum_filled_qty=int(cum_filled_qty or 0),
+                    requested_qty=int(requested_entry_qty or 0),
+                    remaining_qty=int(remaining_qty or 0),
+                    avg_buy_price=f"{float(new_avg or 0):.2f}",
+                    entry_mode=entry_mode,
+                    fill_quality=fill_quality,
+                    preset_tp_price=int(preset_tp_price or 0),
+                    preset_tp_ord_no_before=preset_tp_ord_no_before or "-",
+                    preset_tp_ord_no_after=preset_tp_ord_no_after or "-",
+                    sync_status=preset_sync_status,
+                )
+                if strategy == 'SCALPING' and is_default_position_tag(strategy, pos_tag):
+                    sync_stage = 'preset_exit_sync_ok' if preset_sync_status == "OK" else 'preset_exit_sync_mismatch'
+                    _log_holding_pipeline(
+                        target_stock.get('name'),
+                        code,
+                        target_id,
+                        sync_stage,
+                        entry_mode=entry_mode,
+                        fill_quality=fill_quality,
+                        requested_qty=int(requested_entry_qty or 0),
+                        buy_qty=int(new_qty or 0),
+                        preset_tp_qty=int(target_stock.get('preset_tp_qty', 0) or 0),
+                        preset_tp_price=int(preset_tp_price or 0),
+                        preset_tp_ord_no_before=preset_tp_ord_no_before or "-",
+                        preset_tp_ord_no_after=preset_tp_ord_no_after or "-",
+                        sync_status=preset_sync_status,
+                        sync_reason=preset_sync_reason,
+                    )
 
                 _log_holding_pipeline(
                     target_stock.get('name'),
@@ -734,7 +883,7 @@ def handle_real_execution(exec_data):
                     buy_qty=int(new_qty or 0),
                     fill_price=int(exec_price or 0),
                     fill_qty=int(exec_qty or 0),
-                    entry_mode=target_stock.get('entry_mode', 'normal'),
+                    entry_mode=entry_mode,
                 )
 
                 # 백그라운드 DB 업데이트 실행

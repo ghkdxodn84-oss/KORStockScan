@@ -68,6 +68,45 @@ def test_trade_review_restores_completed_trade_from_holding_events(monkeypatch):
     assert trade["result_tone"] == "bad"
 
 
+def test_trade_review_restores_entry_mode_from_holding_events(monkeypatch):
+    holding_lines = [
+        "[2026-04-09 09:08:57] [HOLDING_PIPELINE] 테스트(123456) stage=holding_started id=77 fill_price=10000 fill_qty=1 buy_price=10000 buy_qty=1 strategy=SCALPING position_tag=SCANNER entry_mode=fallback",
+        "[2026-04-09 09:09:45] [HOLDING_PIPELINE] 테스트(123456) stage=sell_completed id=77 sell_price=9900 profit_rate=-1.00 exit_rule=scalp_scanner_fallback_never_green",
+    ]
+
+    def _fake_iter(log_paths, *, target_date):
+        return holding_lines
+
+    def _fake_fetch(target_date, code=None):
+        return ([
+            {
+                "id": 77,
+                "rec_date": target_date,
+                "code": "123456",
+                "name": "테스트",
+                "status": "COMPLETED",
+                "strategy": "SCALPING",
+                "position_tag": "SCANNER",
+                "buy_price": 10000.0,
+                "buy_qty": 1,
+                "buy_time": "2026-04-09 09:08:57",
+                "sell_price": 9900,
+                "sell_time": "2026-04-09 09:09:45",
+                "profit_rate": -1.0,
+                "realized_pnl_krw": -100,
+            },
+        ], [])
+
+    monkeypatch.setattr(report_mod, "_iter_target_lines", _fake_iter)
+    monkeypatch.setattr(report_mod, "_fetch_trade_rows", _fake_fetch)
+    monkeypatch.setattr(report_mod, "find_gatekeeper_snapshot_for_trade", lambda *args, **kwargs: None)
+
+    report = report_mod.build_trade_review_report(target_date="2026-04-09")
+    trade = report["sections"]["completed_trades"][0]
+
+    assert trade["entry_mode"] == "fallback"
+
+
 def test_trade_review_compacts_long_timeline(monkeypatch):
     holding_lines = [
         "[2026-04-06 09:00:01] [HOLDING_PIPELINE] 테스트(123456) stage=holding_started id=1 fill_price=10000 fill_qty=1 buy_price=10000 buy_qty=1 strategy=SCALPING position_tag=SCANNER",
@@ -242,8 +281,52 @@ def test_trade_review_infers_scalp_preset_hard_stop_from_sell_completed(monkeypa
     report = report_mod.build_trade_review_report(target_date="2026-04-08", code="062040", scope="all")
     trade = report["sections"]["recent_trades"][0]
     timeline_stages = [item["stage"] for item in trade["compact_timeline"]]
+    taxonomy_rows = {item["key"]: item for item in report["sections"]["hard_stop_taxonomy"]["rows"]}
 
     assert trade["exit_signal"]["exit_rule"] == "scalp_preset_hard_stop_pct"
     assert trade["exit_signal"]["sell_reason_type"] == "LOSS"
     assert trade["exit_signal"]["inferred"] is True
     assert timeline_stages == ["holding_started", "preset_exit_setup", "exit_signal", "sell_completed"]
+    assert taxonomy_rows["scalp_preset_hard_stop_pct"]["count"] == 1
+    assert report["sections"]["hard_stop_taxonomy"]["metrics"]["shadow_hard_stop_events"] == 0
+
+
+def test_trade_review_restores_exit_rule_from_sell_order_sent(monkeypatch):
+    holding_lines = [
+        "[2026-04-09 09:45:10] [HOLDING_PIPELINE] 현대건설(000720) stage=holding_started id=1501 fill_price=34400 fill_qty=10 buy_price=34400.00 buy_qty=10 strategy=SCALPING position_tag=SCANNER",
+        "[2026-04-09 09:52:33] [HOLDING_PIPELINE] 현대건설(000720) stage=sell_order_sent id=1501 sell_reason_type=LOSS reason=🧯|SCANNER|fallback|지연손절|보정 exit_rule=scalp_scanner_fallback_never_green qty=10 ord_no=0099911",
+        "[2026-04-09 09:52:34] [HOLDING_PIPELINE] 현대건설(000720) stage=sell_completed id=1501 sell_price=34120 profit_rate=-0.81 exit_rule=- revive=False",
+    ]
+
+    def _fake_iter(log_paths, *, target_date):
+        return holding_lines
+
+    def _fake_fetch(target_date, code=None):
+        return ([
+            {
+                "id": 1501,
+                "rec_date": target_date,
+                "code": "000720",
+                "name": "현대건설",
+                "status": "COMPLETED",
+                "strategy": "SCALPING",
+                "position_tag": "SCANNER",
+                "buy_price": 34400.0,
+                "buy_qty": 10,
+                "buy_time": "2026-04-09 09:45:10",
+                "sell_price": 34120,
+                "sell_time": "2026-04-09 09:52:34",
+                "profit_rate": -0.81,
+                "realized_pnl_krw": -2800,
+            },
+        ], [])
+
+    monkeypatch.setattr(report_mod, "_iter_target_lines", _fake_iter)
+    monkeypatch.setattr(report_mod, "_fetch_trade_rows", _fake_fetch)
+    monkeypatch.setattr(report_mod, "find_gatekeeper_snapshot_for_trade", lambda *args, **kwargs: None)
+
+    report = report_mod.build_trade_review_report(target_date="2026-04-09", code="000720", scope="all")
+    trade = report["sections"]["recent_trades"][0]
+
+    assert trade["exit_signal"]["exit_rule"] == "scalp_scanner_fallback_never_green"
+    assert trade["exit_signal"]["inferred"] is True

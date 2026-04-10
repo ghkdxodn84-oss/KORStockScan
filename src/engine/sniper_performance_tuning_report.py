@@ -35,6 +35,7 @@ _GATEKEEPER_DECISION_STAGES = {
 }
 _CONFIRMED_ENTRY_STAGES = {"order_bundle_submitted"}
 _ENTRY_ARMED_STAGES = {"entry_armed", "entry_armed_resume"}
+_ENTRY_ARMED_EXPIRED_STAGES = {"entry_armed_expired", "entry_armed_expired_after_wait", "entry_arm_expired"}
 _GATEKEEPER_ACTION_RE = re.compile(
     r"\saction=(?P<action>.+?)(?:\s+cooldown_sec=|\s+cooldown_policy=|\s+gatekeeper_eval_ms=|$)"
 )
@@ -44,7 +45,7 @@ _STRATEGY_LABELS = {
     "other": "기타",
 }
 _STRATEGY_ORDER = ("scalping", "swing")
-PERFORMANCE_TUNING_SCHEMA_VERSION = 2
+PERFORMANCE_TUNING_SCHEMA_VERSION = 3
 _BLOCKER_LABELS = {
     "blocked_strength_momentum": "동적 체결강도",
     "blocked_liquidity": "유동성",
@@ -106,6 +107,94 @@ def _parse_since_datetime(target_date: str, since_time: str | None) -> datetime 
 
 def _iter_target_lines(log_path: Path, *, target_date: str, marker: str) -> list[str]:
     return iter_target_log_lines([log_path], target_date=target_date, marker=marker)
+
+
+def _jsonl_path(target_date: str) -> Path:
+    return DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+
+
+def _stringify_field_value(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return ",".join(str(item) for item in value)
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False, sort_keys=True)
+    return str(value)
+
+
+def _load_pipeline_events_from_jsonl(*, target_date: str) -> tuple[list[PerfEvent], list[PerfEvent]]:
+    path = _jsonl_path(target_date)
+    if not path.exists():
+        return [], []
+
+    entry_events: list[PerfEvent] = []
+    holding_events: list[PerfEvent] = []
+
+    with open(path, "r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except Exception:
+                continue
+
+            pipeline = str(payload.get("pipeline") or "").strip()
+            if pipeline not in {"ENTRY_PIPELINE", "HOLDING_PIPELINE"}:
+                continue
+            if payload.get("event_type") not in (None, "", "pipeline_event"):
+                continue
+
+            stock_name = str(payload.get("stock_name") or "").strip()
+            stock_code = str(payload.get("stock_code") or "").strip()
+            stage = str(payload.get("stage") or "").strip()
+            emitted_at = str(payload.get("emitted_at") or "").strip()
+            if not stock_name or not stock_code or not stage or not emitted_at:
+                continue
+
+            try:
+                emitted_dt = datetime.fromisoformat(emitted_at)
+            except Exception:
+                continue
+            if emitted_dt.strftime("%Y-%m-%d") != target_date:
+                continue
+
+            fields_payload = payload.get("fields") or {}
+            if not isinstance(fields_payload, dict):
+                fields_payload = {}
+            fields = {
+                str(key): _stringify_field_value(value).replace("|", " ")
+                for key, value in fields_payload.items()
+            }
+            record_id = payload.get("record_id")
+            if record_id not in (None, "", 0):
+                fields.setdefault("id", str(record_id))
+
+            event = PerfEvent(
+                timestamp=emitted_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                name=stock_name,
+                code=stock_code,
+                stage=stage,
+                fields=fields,
+                raw_line=str(payload.get("text_payload") or ""),
+            )
+            if pipeline == "ENTRY_PIPELINE":
+                entry_events.append(event)
+            else:
+                holding_events.append(event)
+
+    def _sort_key(event: PerfEvent) -> tuple[datetime, str, str]:
+        try:
+            parsed = datetime.strptime(event.timestamp, "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            parsed = datetime.min
+        return parsed, event.code, event.stage
+
+    entry_events.sort(key=_sort_key)
+    holding_events.sort(key=_sort_key)
+    return entry_events, holding_events
 
 
 def _parse_event(line: str, pattern: re.Pattern[str]) -> PerfEvent | None:
@@ -229,6 +318,22 @@ def _is_entered_trade(row: dict) -> bool:
     if (_safe_int(row.get("buy_qty"), 0) or 0) > 0:
         return True
     return status in {"BUY_ORDERED", "HOLDING", "SELL_ORDERED", "COMPLETED"}
+
+
+def _is_completed_trade(row: dict) -> bool:
+    return str(row.get("status") or "").upper() == "COMPLETED"
+
+
+def _valid_completed_profit_values(rows: list[dict]) -> list[float]:
+    values: list[float] = []
+    for row in rows:
+        if not _is_completed_trade(row):
+            continue
+        profit_rate = _safe_float(row.get("profit_rate"), None)
+        if profit_rate is None:
+            continue
+        values.append(float(profit_rate))
+    return values
 
 
 def _extract_gatekeeper_action(event: PerfEvent) -> str:
@@ -540,10 +645,11 @@ def _build_strategy_outcomes(
     for group in _STRATEGY_ORDER:
         group_rows = [row for row in trade_rows if _strategy_group(row.get("strategy")) == group]
         entered_rows = [row for row in group_rows if _is_entered_trade(row)]
-        completed_rows = [row for row in entered_rows if str(row.get("status") or "").upper() == "COMPLETED"]
-        open_rows = [row for row in entered_rows if str(row.get("status") or "").upper() != "COMPLETED"]
-        win_count = sum(1 for row in completed_rows if _safe_float(row.get("profit_rate")) > 0)
-        loss_count = sum(1 for row in completed_rows if _safe_float(row.get("profit_rate")) < 0)
+        completed_rows = [row for row in entered_rows if _is_completed_trade(row)]
+        open_rows = [row for row in entered_rows if not _is_completed_trade(row)]
+        completed_profit_values = _valid_completed_profit_values(completed_rows)
+        win_count = sum(1 for value in completed_profit_values if value > 0)
+        loss_count = sum(1 for value in completed_profit_values if value < 0)
         outcome_by_group[group] = {
             "rows": group_rows,
             "entered_rows": entered_rows,
@@ -560,10 +666,7 @@ def _build_strategy_outcomes(
             "win_count": win_count,
             "loss_count": loss_count,
             "win_rate": _ratio(win_count, len(completed_rows)),
-            "avg_profit_rate": round(
-                sum(_safe_float(row.get("profit_rate")) for row in completed_rows) / len(completed_rows),
-                2,
-            ) if completed_rows else 0.0,
+            "avg_profit_rate": round(sum(completed_profit_values) / len(completed_profit_values), 2) if completed_profit_values else 0.0,
             "realized_pnl_krw": int(sum((_safe_int(row.get("realized_pnl_krw"), 0) or 0) for row in completed_rows)),
         }
 
@@ -687,22 +790,29 @@ def _fetch_trade_history_rows(target_date: str, max_dates: int = 20) -> tuple[li
 
     rows: list[dict] = []
     for row in result:
+        status = str(row.get("status") or "")
         buy_price = _safe_float(row.get("buy_price"))
         sell_price = _safe_float(row.get("sell_price"))
         buy_qty = _safe_int(row.get("buy_qty"), 0) or 0
-        pnl_krw = int(round((sell_price - buy_price) * buy_qty)) if sell_price and buy_price and buy_qty else 0
+        raw_profit_rate = _safe_float(row.get("profit_rate"), None)
+        profit_rate = round(raw_profit_rate, 2) if raw_profit_rate is not None and status.upper() == "COMPLETED" else None
+        pnl_krw = (
+            int(round((sell_price - buy_price) * buy_qty))
+            if status.upper() == "COMPLETED" and sell_price is not None and buy_price is not None and buy_qty
+            else 0
+        )
         rows.append({
             "rec_date": _safe_date_string(row.get("rec_date")),
             "code": str(row.get("stock_code") or "").strip()[:6],
             "name": str(row.get("stock_name") or ""),
-            "status": str(row.get("status") or ""),
+            "status": status,
             "strategy": str(row.get("strategy") or ""),
             "buy_price": buy_price,
             "buy_qty": buy_qty,
             "buy_time": str(row.get("buy_time") or ""),
             "sell_price": _safe_int(sell_price, 0) or 0,
             "sell_time": str(row.get("sell_time") or ""),
-            "profit_rate": round(_safe_float(row.get("profit_rate")), 2),
+            "profit_rate": profit_rate,
             "realized_pnl_krw": pnl_krw,
         })
     return rows, warnings, recent_dates
@@ -710,9 +820,10 @@ def _fetch_trade_history_rows(target_date: str, max_dates: int = 20) -> tuple[li
 
 def _summarize_trade_rows(rows: list[dict], date_count: int) -> dict:
     entered_rows = [row for row in rows if _is_entered_trade(row)]
-    completed_rows = [row for row in entered_rows if str(row.get("status") or "").upper() == "COMPLETED"]
-    win_count = sum(1 for row in completed_rows if _safe_float(row.get("profit_rate")) > 0)
-    loss_count = sum(1 for row in completed_rows if _safe_float(row.get("profit_rate")) < 0)
+    completed_rows = [row for row in entered_rows if _is_completed_trade(row)]
+    completed_profit_values = _valid_completed_profit_values(completed_rows)
+    win_count = sum(1 for value in completed_profit_values if value > 0)
+    loss_count = sum(1 for value in completed_profit_values if value < 0)
     return {
         "date_count": date_count,
         "entered_rows": len(entered_rows),
@@ -720,10 +831,7 @@ def _summarize_trade_rows(rows: list[dict], date_count: int) -> dict:
         "win_count": win_count,
         "loss_count": loss_count,
         "win_rate": _ratio(win_count, len(completed_rows)),
-        "avg_profit_rate": round(
-            sum(_safe_float(row.get("profit_rate")) for row in completed_rows) / len(completed_rows),
-            2,
-        ) if completed_rows else 0.0,
+        "avg_profit_rate": round(sum(completed_profit_values) / len(completed_profit_values), 2) if completed_profit_values else 0.0,
         "realized_pnl_krw": int(sum(_safe_int(row.get("realized_pnl_krw"), 0) or 0 for row in completed_rows)),
     }
 
@@ -964,6 +1072,14 @@ def _build_watch_items(metrics: dict) -> list[dict]:
 
     hold_ws_warn = float(getattr(TRADING_RULES, "AI_HOLDING_FAST_REUSE_MAX_WS_AGE_SEC", 1.5) or 1.5)
     gate_ws_warn = float(getattr(TRADING_RULES, "AI_GATEKEEPER_FAST_REUSE_MAX_WS_AGE_SEC", 2.0) or 2.0)
+    dual_min_samples = int(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_GATEKEEPER_MIN_SAMPLES", 30) or 30)
+    dual_min_override_ratio = float(
+        getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_GATEKEEPER_MIN_OVERRIDE_RATIO", 3.0) or 3.0
+    )
+    dual_max_extra_ms = float(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_MAX_EXTRA_MS", 2500) or 2500)
+    dual_max_gate_eval_p95 = float(
+        getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_GATEKEEPER_MAX_EVAL_MS_P95", 5000) or 5000
+    )
 
     items: list[dict] = []
 
@@ -984,9 +1100,9 @@ def _build_watch_items(metrics: dict) -> list[dict]:
     items.append({
         "label": "Gatekeeper 평가 p95",
         "value": f"{gate_eval_p95:.0f}ms",
-        "target": "< 1200ms",
-        "tone": "warn" if gate_eval_p95 > 1200 else "good",
-        "comment": "높을수록 컨텍스트 생성 또는 AI 응답이 무거운 상태입니다.",
+        "target": f"re-enable <= {int(dual_max_gate_eval_p95)}ms / preferred < 1200ms",
+        "tone": "bad" if gate_eval_p95 > dual_max_gate_eval_p95 else ("warn" if gate_eval_p95 > 1200 else "good"),
+        "comment": "오늘 재활성화 최소 조건과 이상적 성능 목표를 함께 표시합니다.",
     })
     items.append({
         "label": "Gatekeeper fast reuse 비율",
@@ -1012,9 +1128,9 @@ def _build_watch_items(metrics: dict) -> list[dict]:
     items.append({
         "label": "듀얼 페르소나 shadow 표본",
         "value": f"{dual_shadow_samples}건",
-        "target": "20건 이상",
-        "tone": "warn" if dual_shadow_samples < 20 else "good",
-        "comment": "표본이 너무 적으면 충돌률과 veto 비율 해석이 쉽게 흔들립니다.",
+        "target": f"re-enable >= {dual_min_samples}건",
+        "tone": "warn" if dual_shadow_samples < dual_min_samples else "good",
+        "comment": "표본이 너무 적으면 재활성화 판단과 충돌률 해석이 쉽게 흔들립니다.",
     })
     items.append({
         "label": "듀얼 페르소나 충돌률",
@@ -1033,27 +1149,51 @@ def _build_watch_items(metrics: dict) -> list[dict]:
     items.append({
         "label": "가상 fused override 비율",
         "value": f"{dual_override_ratio:.1f}%",
-        "target": "5% ~ 15%",
-        "tone": "warn" if dual_shadow_samples >= 10 and (dual_override_ratio < 5.0 or dual_override_ratio > 15.0) else "good",
-        "comment": "shadow 기준으로 Gemini 결과와 다른 결론이 얼마나 나오는지 확인합니다.",
+        "target": f"re-enable >= {dual_min_override_ratio:.1f}% / preferred 5% ~ 15%",
+        "tone": (
+            "bad"
+            if dual_shadow_samples >= dual_min_samples and dual_override_ratio < dual_min_override_ratio
+            else ("warn" if dual_shadow_samples >= 10 and (dual_override_ratio < 5.0 or dual_override_ratio > 15.0) else "good")
+        ),
+        "comment": "재활성화 최소 기준과 이상적 override 분포를 함께 봅니다.",
     })
     items.append({
         "label": "듀얼 페르소나 extra latency p95",
         "value": f"{dual_extra_ms_p95:.0f}ms",
-        "target": f"<= {int(getattr(TRADING_RULES, 'OPENAI_DUAL_PERSONA_MAX_EXTRA_MS', 2500) or 2500)}ms",
-        "tone": "warn" if dual_shadow_samples >= 1 and dual_extra_ms_p95 > float(getattr(TRADING_RULES, 'OPENAI_DUAL_PERSONA_MAX_EXTRA_MS', 2500) or 2500) else "good",
+        "target": f"<= {int(dual_max_extra_ms)}ms",
+        "tone": "warn" if dual_shadow_samples >= 1 and dual_extra_ms_p95 > dual_max_extra_ms else "good",
         "comment": "shadow는 비동기지만, 실제 live 전환 전에 응답시간 분포는 미리 관찰해두는 편이 좋습니다.",
+    })
+    dual_gatekeeper_ready = bool(
+        dual_shadow_samples >= dual_min_samples
+        and dual_override_ratio >= dual_min_override_ratio
+        and dual_extra_ms_p95 <= dual_max_extra_ms
+        and gate_eval_p95 <= dual_max_gate_eval_p95
+    )
+    items.append({
+        "label": "Gatekeeper 듀얼 재활성화 조건",
+        "value": "충족" if dual_gatekeeper_ready else "미충족",
+        "target": (
+            f"samples>={dual_min_samples}, override>={dual_min_override_ratio:.1f}%, "
+            f"extra_p95<={int(dual_max_extra_ms)}ms, gate_p95<={int(dual_max_gate_eval_p95)}ms"
+        ),
+        "tone": "good" if dual_gatekeeper_ready else "warn",
+        "comment": (
+            f"현재 samples={dual_shadow_samples}, override={dual_override_ratio:.1f}%, "
+            f"extra_p95={dual_extra_ms_p95:.0f}ms, gate_p95={gate_eval_p95:.0f}ms"
+        ),
     })
     return items
 
 
 def build_performance_tuning_report(*, target_date: str, since_time: str | None = None) -> dict:
-    log_path = LOGS_DIR / "sniper_state_handlers_info.log"
-    entry_lines = _iter_target_lines(log_path, target_date=target_date, marker="[ENTRY_PIPELINE]")
-    holding_lines = _iter_target_lines(log_path, target_date=target_date, marker="[HOLDING_PIPELINE]")
-
-    entry_events = [event for line in entry_lines if (event := _parse_event(line, _ENTRY_RE))]
-    holding_events = [event for line in holding_lines if (event := _parse_event(line, _HOLDING_RE))]
+    entry_events, holding_events = _load_pipeline_events_from_jsonl(target_date=target_date)
+    if not entry_events and not holding_events:
+        log_path = LOGS_DIR / "sniper_state_handlers_info.log"
+        entry_lines = _iter_target_lines(log_path, target_date=target_date, marker="[ENTRY_PIPELINE]")
+        holding_lines = _iter_target_lines(log_path, target_date=target_date, marker="[HOLDING_PIPELINE]")
+        entry_events = [event for line in entry_lines if (event := _parse_event(line, _ENTRY_RE))]
+        holding_events = [event for line in holding_lines if (event := _parse_event(line, _HOLDING_RE))]
 
     since_dt = _parse_since_datetime(target_date, since_time)
     if since_dt is not None:
@@ -1068,6 +1208,27 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
     dual_persona_events = [e for e in (entry_events + holding_events) if e.stage == "dual_persona_shadow"]
     dual_gatekeeper_events = [e for e in dual_persona_events if str(e.fields.get("decision_type") or "") == "gatekeeper"]
     dual_overnight_events = [e for e in dual_persona_events if str(e.fields.get("decision_type") or "") == "overnight"]
+    budget_pass_events = [e for e in entry_events if e.stage == "budget_pass"]
+    submitted_events = [e for e in entry_events if e.stage == "order_bundle_submitted"]
+    latency_block_events = [e for e in entry_events if e.stage == "latency_block"]
+    latency_pass_events = [e for e in entry_events if e.stage == "latency_pass"]
+    expired_armed_events = [e for e in entry_events if e.stage in _ENTRY_ARMED_EXPIRED_STAGES]
+    fill_rebased_events = [e for e in holding_events if e.stage == "position_rebased_after_fill"]
+    preset_sync_ok_events = [e for e in holding_events if e.stage == "preset_exit_sync_ok"]
+    preset_sync_mismatch_events = [e for e in holding_events if e.stage == "preset_exit_sync_mismatch"]
+    ai_overlap_events = [
+        e
+        for e in entry_events
+        if e.stage in {
+            "ai_confirmed",
+            "blocked_ai_score",
+            "blocked_overbought",
+            "blocked_strength_momentum",
+            "blocked_vpw",
+            "latency_block",
+            "latency_pass",
+        }
+    ]
 
     holding_review_ms = [float(v) for e in holding_reviews if (v := _safe_float(e.fields.get("review_ms"))) is not None]
     holding_skip_ws_ages = [float(v) for e in holding_skips if (v := _safe_float(e.fields.get("ws_age_sec"))) is not None]
@@ -1085,6 +1246,30 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
     trade_rows, trade_warnings = _build_current_trade_rows(target_date)
     history_rows, history_warnings, recent_history_dates = _fetch_trade_history_rows(target_date)
     trend_by_group = _build_strategy_trends(history_rows, recent_history_dates)
+    fill_quality_by_trade_id: dict[str, str] = {}
+    for event in fill_rebased_events:
+        trade_id = str(event.fields.get("id") or "").strip()
+        if not trade_id:
+            continue
+        quality = str(event.fields.get("fill_quality") or "UNKNOWN").strip().upper() or "UNKNOWN"
+        prev = fill_quality_by_trade_id.get(trade_id)
+        if prev == "PARTIAL_FILL":
+            continue
+        if quality == "PARTIAL_FILL":
+            fill_quality_by_trade_id[trade_id] = quality
+        elif prev is None:
+            fill_quality_by_trade_id[trade_id] = quality
+
+    fill_quality_profit_map: dict[str, list[float]] = defaultdict(list)
+    for row in trade_rows:
+        if not _is_completed_trade(row):
+            continue
+        profit_rate = _safe_float(row.get("profit_rate"), None)
+        if profit_rate is None:
+            continue
+        trade_id = str(row.get("id") or "").strip()
+        quality = fill_quality_by_trade_id.get(trade_id, "UNKNOWN")
+        fill_quality_profit_map[quality].append(float(profit_rate))
     dual_persona_hard_flags = Counter()
     for event in dual_persona_events:
         raw_flags = str(event.fields.get("hard_flags", "") or "")
@@ -1094,6 +1279,28 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
             clean_flag = str(flag or "").strip()
             if clean_flag:
                 dual_persona_hard_flags[clean_flag] += 1
+
+    latency_reason_counts = Counter(str(e.fields.get("reason") or "-") for e in latency_block_events)
+    quote_fresh_latency_blocks = sum(
+        1
+        for e in latency_block_events
+        if str(e.fields.get("quote_stale") or "").strip().lower() in {"false", "0", "no"}
+    )
+    quote_fresh_latency_passes = sum(
+        1
+        for e in latency_pass_events
+        if str(e.fields.get("quote_stale") or "").strip().lower() in {"false", "0", "no"}
+    )
+    fill_quality_counts = Counter(str(e.fields.get("fill_quality") or "UNKNOWN") for e in fill_rebased_events)
+    preset_sync_status_counts = Counter(str(e.fields.get("sync_status") or "-") for e in preset_sync_mismatch_events + preset_sync_ok_events)
+    ai_overlap_blocked_stage_counts = Counter()
+    ai_overlap_overbought_blocks = 0
+    for event in ai_overlap_events:
+        blocked_stage = str(event.fields.get("blocked_stage") or "").strip()
+        if blocked_stage and blocked_stage != "-":
+            ai_overlap_blocked_stage_counts[blocked_stage] += 1
+        if _safe_bool(event.fields.get("overbought_blocked"), False):
+            ai_overlap_overbought_blocks += 1
 
     holding_reuse_blockers = Counter()
     holding_sig_deltas = Counter()
@@ -1170,6 +1377,30 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
         "gatekeeper_action_age_p95": round(_percentile(gatekeeper_action_ages, 95), 2) if gatekeeper_action_ages else 0,
         "gatekeeper_allow_entry_age_p95": round(_percentile(gatekeeper_allow_ages, 95), 2) if gatekeeper_allow_ages else 0,
         "gatekeeper_bypass_evaluation_samples": gatekeeper_bypass_evaluation_samples,
+        "budget_pass_events": int(len(budget_pass_events)),
+        "order_bundle_submitted_events": int(len(submitted_events)),
+        "budget_pass_to_submitted_rate": _ratio(len(submitted_events), len(budget_pass_events)),
+        "latency_block_events": int(len(latency_block_events)),
+        "latency_pass_events": int(len(latency_pass_events)),
+        "quote_fresh_latency_blocks": int(quote_fresh_latency_blocks),
+        "quote_fresh_latency_passes": int(quote_fresh_latency_passes),
+        "quote_fresh_latency_pass_rate": _ratio(
+            quote_fresh_latency_passes,
+            quote_fresh_latency_passes + quote_fresh_latency_blocks,
+        ),
+        "expired_armed_events": int(len(expired_armed_events)),
+        "position_rebased_after_fill_events": int(len(fill_rebased_events)),
+        "full_fill_events": int(fill_quality_counts.get("FULL_FILL", 0)),
+        "partial_fill_events": int(fill_quality_counts.get("PARTIAL_FILL", 0)),
+        "preset_exit_sync_ok_events": int(len(preset_sync_ok_events)),
+        "preset_exit_sync_mismatch_events": int(len(preset_sync_mismatch_events)),
+        "preset_exit_sync_mismatch_rate": _ratio(
+            len(preset_sync_mismatch_events),
+            len(preset_sync_mismatch_events) + len(preset_sync_ok_events),
+        ),
+        "ai_overlap_events": int(len(ai_overlap_events)),
+        "ai_overlap_blocked_events": int(sum(ai_overlap_blocked_stage_counts.values())),
+        "ai_overlap_overbought_blocked_events": int(ai_overlap_overbought_blocks),
         "exit_signals": len(exit_signals),
         "dual_persona_shadow_samples": len(dual_persona_events),
         "dual_persona_gatekeeper_samples": len(dual_gatekeeper_events),
@@ -1178,6 +1409,14 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
         "dual_persona_conservative_veto_ratio": _ratio(dual_persona_conservative_veto, len(dual_persona_events)),
         "dual_persona_fused_override_ratio": _ratio(dual_persona_fused_override, len(dual_persona_events)),
         "dual_persona_extra_ms_p95": round(_percentile(dual_shadow_extra_ms, 95), 2),
+        "full_fill_completed_avg_profit_rate": round(
+            sum(fill_quality_profit_map.get("FULL_FILL", [])) / len(fill_quality_profit_map.get("FULL_FILL", [])),
+            3,
+        ) if fill_quality_profit_map.get("FULL_FILL") else 0.0,
+        "partial_fill_completed_avg_profit_rate": round(
+            sum(fill_quality_profit_map.get("PARTIAL_FILL", [])) / len(fill_quality_profit_map.get("PARTIAL_FILL", [])),
+            3,
+        ) if fill_quality_profit_map.get("PARTIAL_FILL") else 0.0,
     }
 
     cards = [
@@ -1271,6 +1510,7 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
             "trend_basis": f"최근 {len(recent_history_dates)}개 거래일 rolling 성과" if recent_history_dates else "최근 거래일 rolling 성과",
         },
         "breakdowns": {
+            "latency_reason_breakdown": [{"label": key, "count": value} for key, value in latency_reason_counts.most_common()],
             "holding_ai_cache_modes": [{"label": key, "count": value} for key, value in holding_ai_cache_modes.most_common()],
             "holding_reuse_blockers": [{"label": key, "count": value} for key, value in holding_reuse_blockers.most_common()],
             "holding_sig_deltas": [{"label": key, "count": value} for key, value in holding_sig_deltas.most_common()],
@@ -1279,6 +1519,16 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
             "gatekeeper_sig_deltas": [{"label": key, "count": value} for key, value in gatekeeper_sig_deltas.most_common()],
             "gatekeeper_actions": [{"label": key, "count": value} for key, value in gatekeeper_actions.most_common()],
             "exit_rules": [{"label": key, "count": value} for key, value in exit_rule_counts.most_common()],
+            "fill_quality_cohorts": [
+                {
+                    "label": quality,
+                    "count": len(profits),
+                    "avg_profit_rate": round(sum(profits) / len(profits), 3) if profits else 0.0,
+                }
+                for quality, profits in sorted(fill_quality_profit_map.items(), key=lambda pair: len(pair[1]), reverse=True)
+            ],
+            "preset_exit_sync_status": [{"label": key, "count": value} for key, value in preset_sync_status_counts.most_common()],
+            "ai_overlap_blocked_stages": [{"label": key, "count": value} for key, value in ai_overlap_blocked_stage_counts.most_common()],
             "dual_persona_agreement": [{"label": key, "count": value} for key, value in dual_persona_agreement.most_common()],
             "dual_persona_winners": [{"label": key, "count": value} for key, value in dual_persona_winners.most_common()],
             "dual_persona_decision_types": [{"label": key, "count": value} for key, value in dual_persona_decision_types.most_common()],

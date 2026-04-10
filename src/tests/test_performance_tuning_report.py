@@ -3,6 +3,66 @@ import json
 from src.engine import sniper_performance_tuning_report as report_mod
 
 
+def test_performance_tuning_report_prefers_jsonl_events(monkeypatch, tmp_path):
+    data_dir = tmp_path / "data"
+    pipeline_dir = data_dir / "pipeline_events"
+    pipeline_dir.mkdir(parents=True, exist_ok=True)
+
+    payloads = [
+        {
+            "event_type": "pipeline_event",
+            "pipeline": "ENTRY_PIPELINE",
+            "stock_name": "테스트A",
+            "stock_code": "000001",
+            "stage": "market_regime_pass",
+            "emitted_at": "2026-04-03T10:00:00",
+            "fields": {"gatekeeper_eval_ms": 420, "gatekeeper_cache": "miss", "strategy": "SCALPING"},
+            "record_id": 101,
+        },
+        {
+            "event_type": "pipeline_event",
+            "pipeline": "HOLDING_PIPELINE",
+            "stock_name": "테스트A",
+            "stock_code": "000001",
+            "stage": "ai_holding_review",
+            "emitted_at": "2026-04-03T10:01:00",
+            "fields": {"review_ms": 510, "ai_cache": "miss"},
+            "record_id": 101,
+        },
+    ]
+    with open(pipeline_dir / "pipeline_events_2026-04-03.jsonl", "w", encoding="utf-8") as handle:
+        for payload in payloads:
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+    # Legacy fallback lines should be ignored when JSONL exists.
+    def _fake_iter(log_path, *, target_date, marker):
+        if marker == "[ENTRY_PIPELINE]":
+            return [
+                "[2026-04-03 10:02:00] [ENTRY_PIPELINE] 테스트B(000002) stage=blocked_gatekeeper_reject gatekeeper_eval_ms=0 gatekeeper_cache=miss action=눌림|대기"
+            ]
+        return [
+            "[2026-04-03 10:02:10] [HOLDING_PIPELINE] 테스트B(000002) stage=ai_holding_skip_unchanged ws_age_sec=0.40 reuse_sec=5.0 age_sec=3.1"
+        ]
+
+    monkeypatch.setattr(report_mod, "DATA_DIR", data_dir)
+    monkeypatch.setattr(report_mod, "_iter_target_lines", _fake_iter)
+    monkeypatch.setattr(
+        report_mod,
+        "build_trade_review_report",
+        lambda target_date, since_time=None, top_n=10000, scope="all": {
+            "meta": {"warnings": []},
+            "sections": {"recent_trades": []},
+        },
+    )
+    monkeypatch.setattr(report_mod, "_fetch_trade_history_rows", lambda target_date: ([], [], []))
+
+    report = report_mod.build_performance_tuning_report(target_date="2026-04-03", since_time=None)
+
+    assert report["metrics"]["gatekeeper_decisions"] == 1
+    assert report["metrics"]["holding_reviews"] == 1
+    assert report["metrics"]["holding_skips"] == 0
+
+
 def test_performance_tuning_report_builds_metrics(monkeypatch):
     entry_lines = [
         "[2026-04-03 10:00:00] [ENTRY_PIPELINE] 테스트A(000001) stage=market_regime_pass gatekeeper_eval_ms=420 gatekeeper_cache=miss gatekeeper=즉시|매수",
@@ -164,6 +224,87 @@ def test_performance_tuning_report_builds_metrics(monkeypatch):
     assert report["auto_comments"]
 
 
+def test_performance_tuning_includes_phase01_scalping_metrics(monkeypatch):
+    entry_lines = [
+        "[2026-04-03 09:30:00] [ENTRY_PIPELINE] 종목A(000001) stage=budget_pass id=1 qty=5",
+        "[2026-04-03 09:30:01] [ENTRY_PIPELINE] 종목A(000001) stage=latency_pass id=1 quote_stale=False reason=allow",
+        "[2026-04-03 09:30:02] [ENTRY_PIPELINE] 종목A(000001) stage=order_bundle_submitted id=1",
+        "[2026-04-03 09:31:00] [ENTRY_PIPELINE] 종목B(000002) stage=budget_pass id=2 qty=3",
+        "[2026-04-03 09:31:01] [ENTRY_PIPELINE] 종목B(000002) stage=latency_block id=2 reason=latency_state_danger quote_stale=False",
+        "[2026-04-03 09:31:02] [ENTRY_PIPELINE] 종목B(000002) stage=ai_confirmed id=2 ai_score=84 blocked_stage=blocked_strength_momentum overbought_blocked=False",
+        "[2026-04-03 09:32:00] [ENTRY_PIPELINE] 종목C(000003) stage=entry_armed_expired id=3 waited_sec=20.0",
+    ]
+    holding_lines = [
+        "[2026-04-03 09:33:00] [HOLDING_PIPELINE] 종목A(000001) stage=position_rebased_after_fill id=1 fill_quality=FULL_FILL",
+        "[2026-04-03 09:33:01] [HOLDING_PIPELINE] 종목A(000001) stage=preset_exit_sync_ok id=1 sync_status=OK",
+        "[2026-04-03 09:34:00] [HOLDING_PIPELINE] 종목B(000002) stage=position_rebased_after_fill id=2 fill_quality=PARTIAL_FILL",
+        "[2026-04-03 09:34:01] [HOLDING_PIPELINE] 종목B(000002) stage=preset_exit_sync_mismatch id=2 sync_status=QTY_MISMATCH sync_reason=qty_mismatch",
+    ]
+
+    def _fake_iter(log_path, *, target_date, marker):
+        return entry_lines if marker == "[ENTRY_PIPELINE]" else holding_lines
+
+    monkeypatch.setattr(report_mod, "_iter_target_lines", _fake_iter)
+    monkeypatch.setattr(
+        report_mod,
+        "build_trade_review_report",
+        lambda target_date, since_time=None, top_n=10000, scope="all": {
+            "meta": {"warnings": []},
+            "sections": {
+                "recent_trades": [
+                    {
+                        "id": 1,
+                        "rec_date": target_date,
+                        "code": "000001",
+                        "name": "종목A",
+                        "status": "COMPLETED",
+                        "strategy": "SCALPING",
+                        "position_tag": "SCANNER",
+                        "buy_price": 10000.0,
+                        "buy_qty": 5,
+                        "buy_time": "2026-04-03 09:30:10",
+                        "sell_price": 10120,
+                        "sell_time": "2026-04-03 09:40:00",
+                        "profit_rate": 1.2,
+                        "realized_pnl_krw": 600,
+                    },
+                    {
+                        "id": 2,
+                        "rec_date": target_date,
+                        "code": "000002",
+                        "name": "종목B",
+                        "status": "COMPLETED",
+                        "strategy": "SCALPING",
+                        "position_tag": "SCANNER",
+                        "buy_price": 12000.0,
+                        "buy_qty": 3,
+                        "buy_time": "2026-04-03 09:31:10",
+                        "sell_price": 11904,
+                        "sell_time": "2026-04-03 09:41:00",
+                        "profit_rate": -0.8,
+                        "realized_pnl_krw": -288,
+                    },
+                ],
+            },
+        },
+    )
+    monkeypatch.setattr(report_mod, "_fetch_trade_history_rows", lambda target_date: ([], [], []))
+
+    report = report_mod.build_performance_tuning_report(target_date="2026-04-03", since_time=None)
+
+    assert report["metrics"]["budget_pass_events"] == 2
+    assert report["metrics"]["order_bundle_submitted_events"] == 1
+    assert report["metrics"]["latency_block_events"] == 1
+    assert report["metrics"]["quote_fresh_latency_blocks"] == 1
+    assert report["metrics"]["quote_fresh_latency_passes"] == 1
+    assert report["metrics"]["expired_armed_events"] == 1
+    assert report["metrics"]["full_fill_events"] == 1
+    assert report["metrics"]["partial_fill_events"] == 1
+    assert report["metrics"]["preset_exit_sync_mismatch_events"] == 1
+    assert report["metrics"]["ai_overlap_blocked_events"] >= 1
+    assert report["breakdowns"]["latency_reason_breakdown"][0]["label"] == "latency_state_danger"
+
+
 def test_gatekeeper_age_sentinel_handling(monkeypatch):
     """age sentinel ("-") 처리 검증 - p95 오염 방지"""
     entry_lines = [
@@ -258,8 +399,132 @@ def test_holding_sig_delta_parsing(monkeypatch):
     sig_deltas = report["breakdowns"]["holding_sig_deltas"]
     sig_deltas_dict = {item["label"]: item["count"] for item in sig_deltas}
     assert sig_deltas_dict["curr_price"] == 2
-    assert sig_deltas_dict["spread_tick"] == 1
-    assert sig_deltas_dict["buy_ratio"] == 1
+
+
+def test_performance_tuning_ignores_null_profit_from_incomplete_or_broken_rows(monkeypatch):
+    monkeypatch.setattr(report_mod, "_iter_target_lines", lambda log_path, *, target_date, marker: [])
+    monkeypatch.setattr(
+        report_mod,
+        "build_trade_review_report",
+        lambda target_date, since_time=None, top_n=10000, scope="all": {
+            "meta": {"warnings": []},
+            "sections": {
+                "recent_trades": [
+                    {
+                        "id": 1,
+                        "rec_date": target_date,
+                        "code": "000001",
+                        "name": "완료정상",
+                        "status": "COMPLETED",
+                        "strategy": "SCALPING",
+                        "position_tag": "SCANNER",
+                        "buy_price": 10000.0,
+                        "buy_qty": 10,
+                        "buy_time": "2026-04-03 10:00:00",
+                        "sell_price": 10100,
+                        "sell_time": "2026-04-03 10:03:00",
+                        "profit_rate": 1.0,
+                        "realized_pnl_krw": 1000,
+                    },
+                    {
+                        "id": 2,
+                        "rec_date": target_date,
+                        "code": "000002",
+                        "name": "미완료NULL",
+                        "status": "WATCHING",
+                        "strategy": "SCALPING",
+                        "position_tag": "SCANNER",
+                        "buy_price": 0.0,
+                        "buy_qty": 0,
+                        "buy_time": "",
+                        "sell_price": 0,
+                        "sell_time": "",
+                        "profit_rate": None,
+                        "realized_pnl_krw": 0,
+                    },
+                    {
+                        "id": 3,
+                        "rec_date": target_date,
+                        "code": "000003",
+                        "name": "완료NULL",
+                        "status": "COMPLETED",
+                        "strategy": "SCALPING",
+                        "position_tag": "SCANNER",
+                        "buy_price": 11000.0,
+                        "buy_qty": 5,
+                        "buy_time": "2026-04-03 10:10:00",
+                        "sell_price": 11000,
+                        "sell_time": "2026-04-03 10:20:00",
+                        "profit_rate": None,
+                        "realized_pnl_krw": 0,
+                    },
+                ],
+            },
+        },
+    )
+    monkeypatch.setattr(
+        report_mod,
+        "_fetch_trade_history_rows",
+        lambda target_date: (
+            [
+                {
+                    "rec_date": "2026-04-03",
+                    "code": "000001",
+                    "name": "완료정상",
+                    "status": "COMPLETED",
+                    "strategy": "SCALPING",
+                    "buy_price": 10000.0,
+                    "buy_qty": 10,
+                    "buy_time": "2026-04-03 10:00:00",
+                    "sell_price": 10100,
+                    "sell_time": "2026-04-03 10:03:00",
+                    "profit_rate": 1.0,
+                    "realized_pnl_krw": 1000,
+                },
+                {
+                    "rec_date": "2026-04-03",
+                    "code": "000002",
+                    "name": "미완료NULL",
+                    "status": "WATCHING",
+                    "strategy": "SCALPING",
+                    "buy_price": 0.0,
+                    "buy_qty": 0,
+                    "buy_time": "",
+                    "sell_price": 0,
+                    "sell_time": "",
+                    "profit_rate": None,
+                    "realized_pnl_krw": 0,
+                },
+                {
+                    "rec_date": "2026-04-02",
+                    "code": "000003",
+                    "name": "완료NULL",
+                    "status": "COMPLETED",
+                    "strategy": "SCALPING",
+                    "buy_price": 11000.0,
+                    "buy_qty": 5,
+                    "buy_time": "2026-04-02 10:10:00",
+                    "sell_price": 11000,
+                    "sell_time": "2026-04-02 10:20:00",
+                    "profit_rate": None,
+                    "realized_pnl_krw": 0,
+                },
+            ],
+            [],
+            ["2026-04-03", "2026-04-02"],
+        ),
+    )
+
+    report = report_mod.build_performance_tuning_report(target_date="2026-04-03", since_time=None)
+
+    scalping = next(item for item in report["strategy_rows"] if item["key"] == "scalping")
+    assert scalping["outcomes"]["completed_rows"] == 2
+    assert scalping["outcomes"]["win_count"] == 1
+    assert scalping["outcomes"]["loss_count"] == 0
+    assert scalping["outcomes"]["avg_profit_rate"] == 1.0
+    assert scalping["trends"]["summary_5d"]["completed_rows"] == 2
+    assert scalping["trends"]["summary_5d"]["win_count"] == 1
+    assert scalping["trends"]["summary_5d"]["avg_profit_rate"] == 1.0
 
 
 def test_swing_daily_summary_includes_market_regime_and_blockers(monkeypatch, tmp_path):

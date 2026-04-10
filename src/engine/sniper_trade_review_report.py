@@ -30,6 +30,10 @@ _DISPLAY_STAGE_LABELS = {
     "ai_holding_review": "AI 보유감시",
     "ai_holding_reuse_bypass": "AI 재사용 우회",
     "ai_holding_skip_unchanged": "AI 재사용 생략",
+    "hard_time_stop_shadow": "Hard Time Stop shadow",
+    "position_rebased_after_fill": "체결 후 포지션 재산정",
+    "preset_exit_sync_ok": "Preset 청산동기화 정상",
+    "preset_exit_sync_mismatch": "Preset 청산동기화 불일치",
     "exit_signal": "청산 시그널",
     "sell_order_sent": "매도 주문 전송",
     "sell_order_failed": "매도 주문 실패",
@@ -46,6 +50,8 @@ _EVENT_DETAIL_LABELS = {
     "distance_to_ai_exit": "손절 기준 거리",
     "distance_to_safe_profit": "안전수익 거리",
     "held_sec": "보유시간",
+    "candidate": "shadow 후보",
+    "threshold_sec": "shadow 기준시간",
     "near_ai_exit": "손절 경계 근접",
     "near_safe_profit": "안전수익 근접",
     "age_sec": "재사용 나이",
@@ -70,9 +76,18 @@ _EVENT_DETAIL_LABELS = {
     "preset_tp_price": "기본 익절가",
     "fill_price": "체결가",
     "fill_qty": "체결수량",
+    "fill_quality": "체결품질",
+    "cum_filled_qty": "누적체결수량",
+    "requested_qty": "요청수량",
+    "remaining_qty": "미체결수량",
     "new_avg_price": "새 평단",
     "new_buy_qty": "새 보유수량",
     "add_count": "추가매수 횟수",
+    "preset_tp_ord_no_before": "기존 preset 주문번호",
+    "preset_tp_ord_no_after": "신규 preset 주문번호",
+    "preset_tp_qty": "preset 주문수량",
+    "sync_status": "동기화 상태",
+    "sync_reason": "동기화 사유",
     "new_status": "후속상태",
     "error": "오류",
     "revive": "부활여부",
@@ -93,6 +108,10 @@ _DETAIL_KEY_ORDER = [
     "peak_profit",
     "sell_reason_type",
     "qty",
+    "requested_qty",
+    "cum_filled_qty",
+    "remaining_qty",
+    "fill_quality",
     "sell_price",
     "buy_price",
     "buy_qty",
@@ -231,7 +250,7 @@ def _value_chip(key: str, value: str) -> dict[str, str] | None:
         return None
     label = _EVENT_DETAIL_LABELS.get(key, key)
     display = str(value)
-    if key in {"held_sec", "review_cd_sec"}:
+    if key in {"held_sec", "review_cd_sec", "threshold_sec"}:
         display = _format_duration_seconds(_safe_int(value))
     elif key in {"profit_rate", "peak_profit"}:
         display = f"{_safe_float(value):+.2f}%"
@@ -465,28 +484,86 @@ def _build_exit_signal_payload(
     return payload
 
 
+def _normalize_exit_rule(value: Any) -> str:
+    candidate = str(value or "").strip()
+    if candidate in {"", "-", "None"}:
+        return ""
+    return candidate
+
+
+def _infer_exit_rule_from_reason(reason: Any) -> str:
+    text = str(reason or "").strip()
+    if not text:
+        return ""
+
+    rules_by_keyword = (
+        ("SCALP 출구엔진 손절선 도달", "scalp_preset_hard_stop_pct"),
+        ("SCALP 출구엔진 AI 모멘텀 둔화", "scalp_preset_ai_review_exit"),
+        ("SCALP 출구엔진 보호선 이탈", "scalp_preset_protect_profit"),
+        ("OPEN_RECLAIM never-green", "scalp_open_reclaim_never_green"),
+        ("OPEN_RECLAIM 양전환 후 재약세", "scalp_open_reclaim_retrace_exit"),
+        ("SCANNER fallback 지연손절 보정", "scalp_scanner_fallback_never_green"),
+        ("SCANNER fallback 양전환 후 재약세", "scalp_scanner_fallback_retrace_exit"),
+        ("AI 하방 리스크 연속 확인", "scalp_ai_early_exit"),
+        ("AI 틱 가속도 둔화", "scalp_ai_momentum_decay"),
+        ("고점 대비 밀림", "scalp_trailing_take_profit"),
+        ("소프트 손절", "scalp_soft_stop_pct"),
+        ("하드스탑 도달", "scalp_hard_stop_pct"),
+        ("보호 하드스탑", "protect_hard_stop"),
+        ("보호 트레일링", "protect_trailing_stop"),
+        ("코스닥 스윙 기한 만료 청산", "kosdaq_timeout"),
+        ("KOSDAQ 트레일링 익절", "kosdaq_trailing_take_profit"),
+        ("KOSDAQ 전용 방어선 이탈", "kosdaq_stop_loss"),
+        ("스윙 보유 만료", "kospi_timeout"),
+        ("트레일링 시작 수익률 도달", "kospi_trailing_start_take_profit"),
+    )
+    for keyword, exit_rule in rules_by_keyword:
+        if keyword in text:
+            return exit_rule
+    return ""
+
+
 def _build_exit_signal(events: list[HoldingEvent]) -> dict | None:
+    sell_completed = None
+    fallback_exit_event = None
     for event in reversed(events):
-        if event.stage != "exit_signal":
+        if event.stage not in {"exit_signal", "sell_order_sent", "sell_completed"}:
             continue
-        return _build_exit_signal_payload(event)
+        if event.stage == "sell_completed" and sell_completed is None:
+            sell_completed = event
 
-    sell_completed = next((event for event in reversed(events) if event.stage == "sell_completed"), None)
-    if not sell_completed:
-        return None
+        normalized_exit_rule = _normalize_exit_rule(event.fields.get("exit_rule"))
+        if normalized_exit_rule:
+            return _build_exit_signal_payload(
+                event,
+                exit_rule=normalized_exit_rule,
+                inferred=(event.stage != "exit_signal"),
+            )
 
-    completed_exit_rule = str(sell_completed.fields.get("exit_rule") or "").strip()
-    if completed_exit_rule and completed_exit_rule not in {"-", "None"}:
-        return _build_exit_signal_payload(sell_completed)
+        inferred_exit_rule = _infer_exit_rule_from_reason(event.fields.get("reason"))
+        if inferred_exit_rule:
+            return _build_exit_signal_payload(
+                event,
+                exit_rule=inferred_exit_rule,
+                inferred=True,
+            )
+        if fallback_exit_event is None:
+            fallback_exit_event = event
 
-    has_preset_exit = any(event.stage == "preset_exit_setup" for event in events)
-    if has_preset_exit and _safe_float(sell_completed.fields.get("profit_rate")) < 0:
+    if sell_completed:
+        has_preset_exit = any(event.stage == "preset_exit_setup" for event in events)
+        if has_preset_exit and _safe_float(sell_completed.fields.get("profit_rate")) < 0:
+            return _build_exit_signal_payload(
+                sell_completed,
+                reason="추정: SCALP 출구엔진 손절선 도달",
+                exit_rule="scalp_preset_hard_stop_pct",
+                sell_reason_type="LOSS",
+                inferred=True,
+            )
+    if fallback_exit_event:
         return _build_exit_signal_payload(
-            sell_completed,
-            reason="추정: SCALP 출구엔진 손절선 도달",
-            exit_rule="scalp_preset_hard_stop_pct",
-            sell_reason_type="LOSS",
-            inferred=True,
+            fallback_exit_event,
+            inferred=(fallback_exit_event.stage != "exit_signal"),
         )
     return None
 
@@ -588,6 +665,14 @@ def _normalize_trade_with_events(trade: dict, events: list[HoldingEvent]) -> dic
             profit_rate = round(restored_profit_rate, 2)
 
     pnl_krw = _calculate_realized_pnl_krw(buy_price, sell_price, buy_qty)
+    entry_mode = str(normalized.get("entry_mode") or "").strip().lower()
+    if not entry_mode:
+        restored_entry_mode = _first_non_empty_event_field(
+            events,
+            stages={"holding_started", "order_bundle_submitted", "latency_pass"},
+            keys=("entry_mode", "mode"),
+        )
+        entry_mode = str(restored_entry_mode or "").strip().lower()
 
     normalized.update({
         "status": status,
@@ -597,6 +682,7 @@ def _normalize_trade_with_events(trade: dict, events: list[HoldingEvent]) -> dic
         "sell_time": sell_time,
         "profit_rate": round(profit_rate, 2),
         "realized_pnl_krw": pnl_krw,
+        "entry_mode": entry_mode,
     })
     return normalized
 
@@ -784,6 +870,125 @@ def _is_entered_trade(row: dict) -> bool:
     return status in {"BUY_ORDERED", "HOLDING", "SELL_ORDERED", "COMPLETED"}
 
 
+def _build_fill_quality_summary(events: list[HoldingEvent]) -> dict:
+    rebased_events = [event for event in events if event.stage == "position_rebased_after_fill"]
+    fill_quality_counts = Counter(str(event.fields.get("fill_quality") or "UNKNOWN") for event in rebased_events)
+    sync_ok_events = [event for event in events if event.stage == "preset_exit_sync_ok"]
+    sync_mismatch_events = [event for event in events if event.stage == "preset_exit_sync_mismatch"]
+
+    mismatch_rows = []
+    for event in sync_mismatch_events[-10:]:
+        mismatch_rows.append({
+            "timestamp": event.timestamp,
+            "name": event.name,
+            "code": event.code,
+            "entry_mode": str(event.fields.get("entry_mode") or ""),
+            "sync_status": str(event.fields.get("sync_status") or ""),
+            "sync_reason": str(event.fields.get("sync_reason") or ""),
+            "preset_tp_ord_no_before": str(event.fields.get("preset_tp_ord_no_before") or ""),
+            "preset_tp_ord_no_after": str(event.fields.get("preset_tp_ord_no_after") or ""),
+        })
+
+    return {
+        "fill_quality_breakdown": [
+            {"label": label, "count": count}
+            for label, count in fill_quality_counts.most_common()
+        ],
+        "metrics": {
+            "position_rebased_after_fill_events": int(len(rebased_events)),
+            "full_fill_events": int(fill_quality_counts.get("FULL_FILL", 0)),
+            "partial_fill_events": int(fill_quality_counts.get("PARTIAL_FILL", 0)),
+            "unknown_fill_events": int(fill_quality_counts.get("UNKNOWN", 0)),
+            "preset_exit_sync_ok_events": int(len(sync_ok_events)),
+            "preset_exit_sync_mismatch_events": int(len(sync_mismatch_events)),
+            "preset_exit_sync_mismatch_rate": round(
+                (len(sync_mismatch_events) / max(1, (len(sync_ok_events) + len(sync_mismatch_events)))) * 100.0,
+                1,
+            ),
+        },
+        "recent_mismatches": mismatch_rows,
+    }
+
+
+def _build_hard_stop_taxonomy(rows: list[dict], events: list[HoldingEvent]) -> dict:
+    taxonomy_defs = [
+        {
+            "key": "scalp_preset_hard_stop_pct",
+            "label": "Preset Hard Stop",
+            "mode": "live",
+            "stage": "exit_signal",
+        },
+        {
+            "key": "protect_hard_stop",
+            "label": "Protect Hard Stop",
+            "mode": "live",
+            "stage": "exit_signal",
+        },
+        {
+            "key": "scalp_hard_stop_pct",
+            "label": "Scalp Hard Stop",
+            "mode": "live",
+            "stage": "exit_signal",
+        },
+        {
+            "key": "hard_time_stop_shadow",
+            "label": "Common Hard Time Stop Shadow",
+            "mode": "shadow",
+            "stage": "hard_time_stop_shadow",
+        },
+    ]
+    counts = Counter()
+    entry_mode_tag_pairs: dict[str, Counter[str]] = defaultdict(Counter)
+    sample_codes: dict[str, set[str]] = defaultdict(set)
+
+    for row in rows:
+        exit_signal = row.get("exit_signal") or {}
+        exit_rule = str(exit_signal.get("exit_rule") or "").strip()
+        if not exit_rule:
+            continue
+        counts[exit_rule] += 1
+        pair_label = f"{str(row.get('entry_mode') or '-')}|{str(row.get('position_tag') or '-')}"
+        entry_mode_tag_pairs[exit_rule][pair_label] += 1
+        sample_codes[exit_rule].add(str(row.get("code") or ""))
+
+    shadow_count = sum(1 for event in events if event.stage == "hard_time_stop_shadow")
+    if shadow_count > 0:
+        counts["hard_time_stop_shadow"] += shadow_count
+        for event in events:
+            if event.stage != "hard_time_stop_shadow":
+                continue
+            sample_codes["hard_time_stop_shadow"].add(str(event.code or ""))
+            pair_label = f"{str(event.fields.get('entry_mode') or '-')}|{str(event.fields.get('position_tag') or '-')}"
+            entry_mode_tag_pairs["hard_time_stop_shadow"][pair_label] += 1
+
+    rows_out = []
+    for item in taxonomy_defs:
+        key = item["key"]
+        pair_counter = entry_mode_tag_pairs.get(key) or Counter()
+        rows_out.append({
+            "key": key,
+            "label": item["label"],
+            "mode": item["mode"],
+            "stage": item["stage"],
+            "count": int(counts.get(key, 0)),
+            "entry_mode_position_tag_top": [
+                {"label": label, "count": count}
+                for label, count in pair_counter.most_common(3)
+            ],
+            "sample_codes": sorted(code for code in (sample_codes.get(key) or set()) if code)[:5],
+        })
+
+    return {
+        "metrics": {
+            "total_hard_stop_related_events": int(sum(item["count"] for item in rows_out)),
+            "live_hard_stop_events": int(sum(item["count"] for item in rows_out if item["mode"] == "live")),
+            "shadow_hard_stop_events": int(sum(item["count"] for item in rows_out if item["mode"] == "shadow")),
+            "hard_time_stop_shadow_events": int(counts.get("hard_time_stop_shadow", 0)),
+        },
+        "rows": rows_out,
+    }
+
+
 def build_trade_review_report(
     target_date: str,
     code: str | None = None,
@@ -833,6 +1038,8 @@ def build_trade_review_report(
     realized = [row for row in visible_rows if str(row.get("status") or "").upper() == "COMPLETED"]
     win_count = sum(1 for row in realized if _safe_float(row.get("profit_rate")) > 0)
     loss_count = sum(1 for row in realized if _safe_float(row.get("profit_rate")) < 0)
+    fill_quality_summary = _build_fill_quality_summary(events)
+    hard_stop_taxonomy = _build_hard_stop_taxonomy(visible_rows, events)
     available_stocks = []
     seen_codes = set()
     for row in entered_rows:
@@ -869,6 +1076,11 @@ def build_trade_review_report(
             "all_rows": len(all_rows),
             "entered_rows": len(entered_rows),
             "expired_rows": len(expired_rows),
+            "full_fill_events": int((fill_quality_summary.get("metrics") or {}).get("full_fill_events", 0)),
+            "partial_fill_events": int((fill_quality_summary.get("metrics") or {}).get("partial_fill_events", 0)),
+            "preset_exit_sync_ok_events": int((fill_quality_summary.get("metrics") or {}).get("preset_exit_sync_ok_events", 0)),
+            "preset_exit_sync_mismatch_events": int((fill_quality_summary.get("metrics") or {}).get("preset_exit_sync_mismatch_events", 0)),
+            "hard_time_stop_shadow_events": int((hard_stop_taxonomy.get("metrics") or {}).get("hard_time_stop_shadow_events", 0)),
         },
         "event_breakdown": [
             {"stage": stage, "label": _friendly_stage(stage), "count": count}
@@ -879,6 +1091,8 @@ def build_trade_review_report(
             "completed_trades": [row for row in visible_rows if str(row.get("status") or "").upper() == "COMPLETED"][:top_n],
             "open_trades": [row for row in visible_rows if str(row.get("status") or "").upper() != "COMPLETED"][:top_n],
             "expired_candidates": expired_rows[:top_n],
+            "fill_quality_summary": fill_quality_summary,
+            "hard_stop_taxonomy": hard_stop_taxonomy,
         },
     }
 

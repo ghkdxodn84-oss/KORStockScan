@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 import re
+import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 from src.engine.log_archive_service import iter_target_log_lines
-from src.utils.constants import LOGS_DIR
+from src.utils.constants import LOGS_DIR, DATA_DIR
 
 
 _ENTRY_RE = re.compile(
@@ -33,6 +34,9 @@ _EXECUTION_BLOCK_STAGES = {
     "order_leg_fail",
     "order_leg_no_response",
     "order_bundle_failed",
+    "entry_armed_expired",
+    "entry_armed_expired_after_wait",
+    "entry_arm_expired",
 }
 
 _DISPLAY_STAGE_LABELS = {
@@ -43,6 +47,9 @@ _DISPLAY_STAGE_LABELS = {
     "dynamic_vpw_override_pass": "정적 120 우회",
     "entry_armed": "진입 자격 확보",
     "entry_armed_resume": "진입 자격 유지",
+    "entry_armed_expired": "진입 자격 만료",
+    "entry_armed_expired_after_wait": "진입 대기 후 자격 만료",
+    "entry_arm_expired": "진입 자격 만료(legacy)",
     "budget_pass": "수량 계산 통과",
     "latency_pass": "지연 리스크 통과",
     "order_leg_sent": "주문 전송",
@@ -126,6 +133,62 @@ def _iter_target_lines(log_path: Path, *, target_date: str) -> list[str]:
     return iter_target_log_lines([log_path], target_date=target_date, marker="[ENTRY_PIPELINE]")
 
 
+def _jsonl_path(target_date: str) -> Path:
+    return DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+
+
+def _load_entry_events_from_jsonl(*, target_date: str) -> list[PipelineEvent]:
+    path = _jsonl_path(target_date)
+    if not path.exists():
+        return []
+
+    events: list[PipelineEvent] = []
+    with open(path, "r", encoding="utf-8") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except Exception:
+                continue
+            if str(payload.get("event_type") or "") != "pipeline_event":
+                continue
+            if str(payload.get("pipeline") or "") != "ENTRY_PIPELINE":
+                continue
+
+            stock_name = str(payload.get("stock_name") or "").strip()
+            stock_code = str(payload.get("stock_code") or "").strip()
+            stage = str(payload.get("stage") or "").strip()
+            emitted_at = str(payload.get("emitted_at") or "").strip()
+            if not stock_name or not stock_code or not stage or not emitted_at:
+                continue
+
+            try:
+                timestamp = datetime.fromisoformat(emitted_at).strftime("%Y-%m-%d %H:%M:%S")
+            except Exception:
+                continue
+
+            raw_fields = payload.get("fields") or {}
+            fields = {str(k): str(v) for k, v in raw_fields.items()}
+            record_id = payload.get("record_id")
+            if record_id not in (None, "", 0):
+                fields.setdefault("id", str(record_id))
+
+            raw_line = str(payload.get("text_payload") or "")
+            events.append(
+                PipelineEvent(
+                    timestamp=timestamp,
+                    name=stock_name,
+                    code=stock_code,
+                    stage=stage,
+                    fields=fields,
+                    raw_line=raw_line,
+                )
+            )
+    return events
+
+
 def _parse_event(line: str) -> PipelineEvent | None:
     match = _ENTRY_RE.match(line.strip())
     if not match:
@@ -175,12 +238,16 @@ def _event_record_id(event: PipelineEvent) -> str:
     return str(event.fields.get("id") or "").strip()
 
 
+def _ratio(numerator: int, denominator: int) -> float:
+    return round((numerator / denominator) * 100.0, 1) if denominator > 0 else 0.0
+
+
 def _classify_stage(stage: str) -> str:
     if stage in {"order_leg_sent", "order_bundle_submitted"}:
         return "submitted"
     if stage.startswith("blocked_") or stage.endswith("_block") or stage.endswith("_failed"):
         return "blocked"
-    if stage in {"first_ai_wait"}:
+    if stage in {"first_ai_wait", "entry_armed_expired", "entry_armed_expired_after_wait", "entry_arm_expired"}:
         return "waiting"
     return "progress"
 
@@ -199,6 +266,9 @@ def _friendly_gate_name(stage: str) -> str:
         "blocked_gatekeeper_reject": "게이트키퍼 보류",
         "blocked_swing_gap": "스윙 갭상승",
         "first_ai_wait": "첫 AI 대기",
+        "entry_armed_expired": "진입 자격 만료",
+        "entry_armed_expired_after_wait": "진입 대기 후 만료",
+        "entry_arm_expired": "진입 자격 만료(legacy)",
     }
     return mapping.get(stage, stage)
 
@@ -251,6 +321,18 @@ _BLOCKER_GUIDE = {
     "첫 AI 대기": {
         "description": "첫 AI 분석 턴으로 즉시 진입하지 않고 다음 확인을 기다리는 상태",
         "check": "first_ai_wait path",
+    },
+    "진입 자격 만료": {
+        "description": "entry_armed TTL이 만료되어 주문 단계로 가지 못한 경우",
+        "check": "entry_armed ttl, resume_count, waited_sec",
+    },
+    "진입 대기 후 만료": {
+        "description": "entry_armed 상태로 대기하다 TTL 만료로 시도가 종료된 경우",
+        "check": "entry_armed_expired_after_wait, remaining_sec 흐름",
+    },
+    "진입 자격 만료(legacy)": {
+        "description": "과거 entry_arm_expired legacy stage로 기록된 만료 이벤트",
+        "check": "legacy stage",
     },
 }
 
@@ -553,12 +635,18 @@ def _find_latest_gatekeeper_event(item_events: list[PipelineEvent]) -> PipelineE
 
 def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = None, top_n: int = 20) -> dict:
     log_path = LOGS_DIR / "sniper_state_handlers_info.log"
-    lines = _iter_target_lines(log_path, target_date=target_date)
-    events = [
-        event
-        for line in lines
-        if (event := _parse_event(line)) and not _should_ignore_event(event)
-    ]
+    # ENTRY_PIPELINE는 구조화 JSONL을 우선 사용한다.
+    # 텍스트 로그는 배포/운영 환경에 따라 marker가 빠질 수 있어 fallback으로만 유지한다.
+    events = _load_entry_events_from_jsonl(target_date=target_date)
+    if not events:
+        lines = _iter_target_lines(log_path, target_date=target_date)
+        events = [
+            event
+            for line in lines
+            if (event := _parse_event(line)) and not _should_ignore_event(event)
+        ]
+    else:
+        events = [event for event in events if not _should_ignore_event(event)]
     since_dt = _parse_since_datetime(target_date, since_time)
     if since_dt is not None:
         filtered_events: list[PipelineEvent] = []
@@ -580,6 +668,21 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
     per_stock_rows = []
     blocker_counts: Counter[str] = Counter()
     latest_stage_counts: Counter[str] = Counter()
+    latency_reason_counts: Counter[str] = Counter()
+    expired_armed_counts: Counter[str] = Counter()
+    quote_fresh_latency_blocks = 0
+    quote_fresh_latency_passes = 0
+
+    for event in events:
+        if event.stage == "latency_block":
+            latency_reason_counts[str(event.fields.get("reason") or "-")] += 1
+            if str(event.fields.get("quote_stale") or "").strip().lower() in {"false", "0", "no"}:
+                quote_fresh_latency_blocks += 1
+        elif event.stage == "latency_pass":
+            if str(event.fields.get("quote_stale") or "").strip().lower() in {"false", "0", "no"}:
+                quote_fresh_latency_passes += 1
+        elif event.stage in {"entry_armed_expired", "entry_armed_expired_after_wait", "entry_arm_expired"}:
+            expired_armed_counts[event.stage] += 1
 
     for key, item_events in stock_events.items():
         if not item_events:
@@ -644,6 +747,11 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
         })
 
     per_stock_rows.sort(key=lambda row: row["latest_timestamp"], reverse=True)
+    budget_pass_stocks = sum(1 for row in per_stock_rows if "budget_pass" in row["flow"])
+    budget_pass_to_submitted_stocks = sum(
+        1 for row in per_stock_rows if ("budget_pass" in row["flow"] and row["stage_class"] == "submitted")
+    )
+    fresh_quote_total = quote_fresh_latency_passes + quote_fresh_latency_blocks
 
     report = {
         "date": target_date,
@@ -656,7 +764,23 @@ def build_entry_pipeline_flow_report(target_date: str, since_time: str | None = 
             "submitted_stocks": sum(1 for row in per_stock_rows if row["stage_class"] == "submitted"),
             "blocked_stocks": sum(1 for row in per_stock_rows if row["stage_class"] == "blocked"),
             "waiting_stocks": sum(1 for row in per_stock_rows if row["stage_class"] == "waiting"),
+            "budget_pass_stocks": int(budget_pass_stocks),
+            "budget_pass_to_submitted_stocks": int(budget_pass_to_submitted_stocks),
+            "budget_pass_to_submitted_rate": _ratio(budget_pass_to_submitted_stocks, budget_pass_stocks),
+            "latency_block_events": int(sum(latency_reason_counts.values())),
+            "quote_fresh_latency_blocks": int(quote_fresh_latency_blocks),
+            "quote_fresh_latency_passes": int(quote_fresh_latency_passes),
+            "quote_fresh_latency_pass_rate": _ratio(quote_fresh_latency_passes, fresh_quote_total),
+            "expired_armed_total": int(sum(expired_armed_counts.values())),
         },
+        "latency_reason_breakdown": [
+            {"reason": reason, "count": count}
+            for reason, count in latency_reason_counts.most_common(12)
+        ],
+        "expired_armed_breakdown": [
+            {"stage": stage, "label": _display_stage_label(stage), "count": count}
+            for stage, count in expired_armed_counts.most_common()
+        ],
         "latest_stage_breakdown": [
             {"stage": stage, "count": count}
             for stage, count in latest_stage_counts.most_common(12)
