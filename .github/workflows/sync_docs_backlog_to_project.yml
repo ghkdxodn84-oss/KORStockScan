@@ -8,8 +8,8 @@ on:
     paths:
       - "docs/plan-korStockScanPerformanceOptimization.prompt.md"
       - "docs/2026-04-13-stage2-todo-checklist.md"
-      - "docs/2026-04-10-scalping-ai-coding-instructions.md"
-      - "docs/2026-04-11-scalping-ai-prompt-coding-instructions.md"
+      - "docs/*-scalping-ai-coding-instructions.md"
+      - "docs/*-scalping-ai-prompt-coding-instructions.md"
       - "src/engine/sync_docs_backlog_to_project.py"
       - ".github/workflows/sync_docs_backlog_to_project.yml"
   schedule:

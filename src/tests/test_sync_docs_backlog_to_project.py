@@ -1,4 +1,6 @@
 from src.engine.sync_docs_backlog_to_project import (
+    DOC_SCALPING,
+    DOC_PLAN,
     collect_backlog_tasks,
     parse_checklist_tasks,
     parse_plan_tasks,
@@ -38,3 +40,21 @@ def test_collect_backlog_tasks_deduped():
     tasks = collect_backlog_tasks()
     normalized = [" ".join(t.title.split()).lower() for t in tasks]
     assert len(normalized) == len(set(normalized))
+
+
+def test_parse_scalping_logic_fallback_when_primary_missing(monkeypatch):
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project.DOC_SCALPING",
+        DOC_SCALPING.parent / "__missing-primary__.md",
+    )
+    monkeypatch.setenv("DOC_SCALPING_PATH", str(DOC_SCALPING))
+    tasks = parse_scalping_logic_tasks()
+    assert len(tasks) > 0
+    assert all(str(DOC_SCALPING) in t.source for t in tasks)
+
+
+def test_parse_plan_tasks_empty_when_source_missing(monkeypatch):
+    missing = DOC_PLAN.parent / "__missing-plan__.md"
+    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project.DOC_PLAN", missing)
+    tasks = parse_plan_tasks()
+    assert tasks == []

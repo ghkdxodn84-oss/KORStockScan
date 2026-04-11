@@ -34,6 +34,40 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _read_optional(path: Path) -> str | None:
+    if not path.exists():
+        print(f"[DOC_BACKLOG_SYNC_WARN] missing source doc: {path}", file=sys.stderr)
+        return None
+    return _read(path)
+
+
+def _read_candidates(paths: list[Path]) -> tuple[Path, str] | None:
+    for path in paths:
+        text = _read_optional(path)
+        if text is not None:
+            return path, text
+    return None
+
+
+def _scalping_doc_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    env_path = os.getenv("DOC_SCALPING_PATH", "").strip()
+    if env_path:
+        candidates.append(Path(env_path))
+    candidates.append(DOC_SCALPING)
+    candidates.extend(sorted(Path("docs").glob("*-scalping-ai-coding-instructions.md"), reverse=True))
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for p in candidates:
+        key = str(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(p)
+    return deduped
+
+
 def _extract_section_lines(text: str, heading_prefix: str) -> list[str]:
     lines = text.splitlines()
     start = -1
@@ -66,7 +100,10 @@ def _parse_numbered_items(lines: list[str]) -> list[str]:
 
 
 def parse_plan_tasks() -> list[BacklogTask]:
-    text = _read(DOC_PLAN)
+    loaded = _read_candidates([DOC_PLAN])
+    if not loaded:
+        return []
+    source_path, text = loaded
     remaining = _parse_numbered_items(_extract_section_lines(text, "### 아직 남아있는 일"))
     immediate = _parse_numbered_items(_extract_section_lines(text, "## 즉시 착수 체크리스트"))
     tasks: list[BacklogTask] = []
@@ -74,7 +111,7 @@ def parse_plan_tasks() -> list[BacklogTask]:
         tasks.append(
             BacklogTask(
                 title=item,
-                source=str(DOC_PLAN),
+                source=str(source_path),
                 section="아직 남아있는 일",
                 track="Plan",
             )
@@ -83,7 +120,7 @@ def parse_plan_tasks() -> list[BacklogTask]:
         tasks.append(
             BacklogTask(
                 title=item,
-                source=str(DOC_PLAN),
+                source=str(source_path),
                 section="즉시 착수 체크리스트",
                 track="Plan",
             )
@@ -92,7 +129,10 @@ def parse_plan_tasks() -> list[BacklogTask]:
 
 
 def parse_checklist_tasks() -> list[BacklogTask]:
-    text = _read(DOC_CHECKLIST)
+    loaded = _read_candidates([DOC_CHECKLIST])
+    if not loaded:
+        return []
+    source_path, text = loaded
     tasks: list[BacklogTask] = []
     for line in text.splitlines():
         m = re.match(r"^\s*-\s*\[ \]\s+(.+?)\s*$", line)
@@ -105,7 +145,7 @@ def parse_checklist_tasks() -> list[BacklogTask]:
         tasks.append(
             BacklogTask(
                 title=item,
-                source=str(DOC_CHECKLIST),
+                source=str(source_path),
                 section="체크박스 미완료",
                 track="Checklist0413",
                 due_date="2026-04-13",
@@ -115,7 +155,10 @@ def parse_checklist_tasks() -> list[BacklogTask]:
 
 
 def parse_scalping_logic_tasks() -> list[BacklogTask]:
-    text = _read(DOC_SCALPING)
+    loaded = _read_candidates(_scalping_doc_candidates())
+    if not loaded:
+        return []
+    source_path, text = loaded
     tasks: list[BacklogTask] = []
 
     # Remaining tasks in status memo
@@ -135,7 +178,7 @@ def parse_scalping_logic_tasks() -> list[BacklogTask]:
         tasks.append(
             BacklogTask(
                 title=m.group(1).strip(),
-                source=str(DOC_SCALPING),
+                source=str(source_path),
                 section="상태 메모 잔여",
                 track="ScalpingLogic",
             )
@@ -149,7 +192,7 @@ def parse_scalping_logic_tasks() -> list[BacklogTask]:
         tasks.append(
             BacklogTask(
                 title=f"{m.group(1)} {m.group(2).strip()}",
-                source=str(DOC_SCALPING),
+                source=str(source_path),
                 section="단계별 구현 순서",
                 track="ScalpingLogic",
             )
@@ -158,7 +201,10 @@ def parse_scalping_logic_tasks() -> list[BacklogTask]:
 
 
 def parse_prompt_tasks() -> list[BacklogTask]:
-    text = _read(DOC_PROMPT)
+    loaded = _read_candidates([DOC_PROMPT])
+    if not loaded:
+        return []
+    source_path, text = loaded
     tasks: list[BacklogTask] = []
 
     # Priority table
@@ -180,14 +226,14 @@ def parse_prompt_tasks() -> list[BacklogTask]:
             continue
         task_name = re.sub(r"`([^`]+)`", r"\1", parts[1]).strip()
         if task_name:
-            tasks.append(
-                BacklogTask(
-                    title=task_name,
-                    source=str(DOC_PROMPT),
-                    section="작업 우선순위 요약",
-                    track="AIPrompt",
+                tasks.append(
+                    BacklogTask(
+                        title=task_name,
+                        source=str(source_path),
+                        section="작업 우선순위 요약",
+                        track="AIPrompt",
+                    )
                 )
-            )
 
     # Explicit task headings (작업 1~12)
     for line in text.splitlines():
@@ -197,7 +243,7 @@ def parse_prompt_tasks() -> list[BacklogTask]:
         tasks.append(
             BacklogTask(
                 title=f"작업 {m.group(1)} {m.group(2).strip()}",
-                source=str(DOC_PROMPT),
+                source=str(source_path),
                 section="작업 상세",
                 track="AIPrompt",
             )
