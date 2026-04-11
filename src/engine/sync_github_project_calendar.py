@@ -163,8 +163,19 @@ def _graphql_request(token: str, query: str, variables: dict[str, Any]) -> dict[
     with request.urlopen(req, timeout=30) as resp:
         body = resp.read().decode("utf-8")
     parsed = json.loads(body)
-    if parsed.get("errors"):
-        raise RuntimeError(f"github graphql errors: {parsed['errors']}")
+    errors = parsed.get("errors") or []
+    fatal_errors: list[dict[str, Any]] = []
+    for err in errors:
+        err_type = str(err.get("type") or "")
+        err_path = err.get("path") or []
+        # This query asks both organization and user project nodes to support
+        # either owner type. One side may return NOT_FOUND and should not fail.
+        if err_type == "NOT_FOUND" and err_path in (["organization"], ["user"]):
+            continue
+        fatal_errors.append(err)
+
+    if fatal_errors:
+        raise RuntimeError(f"github graphql errors: {fatal_errors}")
     return parsed["data"]
 
 
