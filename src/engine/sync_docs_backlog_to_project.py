@@ -41,7 +41,7 @@ class ProjectItem:
 MANAGED_TRACKS = ("Plan", "Checklist0413", "ScalpingLogic", "AIPrompt")
 
 TRACK_DEFAULT_SLOT = {
-    "Plan": "PREOPEN",
+    "Plan": "POSTCLOSE",
     "Checklist0413": "PREOPEN",
     "ScalpingLogic": "INTRADAY",
     "AIPrompt": "POSTCLOSE",
@@ -62,6 +62,13 @@ SLOT_INTRADAY_KEYWORDS = (
     "체결",
     "canary",
     "모니터링",
+    "운영",
+    "동기화",
+    "실전",
+    "관측",
+    "갱신",
+    "관찰",
+    "추적",
 )
 
 SLOT_POSTCLOSE_KEYWORDS = (
@@ -74,6 +81,18 @@ SLOT_POSTCLOSE_KEYWORDS = (
     "분석",
     "검증",
     "리뷰",
+    "평가",
+    "비교",
+    "판정",
+    "정리",
+    "후속",
+    "결과 정리",
+    "다음 세션",
+    "15:",
+    "15시",
+    "문서화",
+    "재작업지시",
+    "후보안",
 )
 
 
@@ -559,6 +578,10 @@ def _find_option_id_by_name(options: list[dict[str, Any]], option_name: str) -> 
     return ""
 
 
+def _slot_equals(left: str, right: str) -> bool:
+    return _slot_key(left) == _slot_key(right)
+
+
 def _desired_status_option_id(
     *,
     title: str,
@@ -598,6 +621,7 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
     slot_intraday_option_name = _env("GH_PROJECT_SLOT_INTRADAY_OPTION_NAME", "INTRADAY")
     slot_postclose_option_name = _env("GH_PROJECT_SLOT_POSTCLOSE_OPTION_NAME", "POSTCLOSE")
     auto_fill_slot = _env_bool("GH_PROJECT_AUTO_FILL_SLOT", True)
+    reclassify_slot = _env_bool("GH_PROJECT_RECLASSIFY_SLOT", True)
 
     project_id, fields, existing_titles, existing_items = _fetch_project_metadata(
         token,
@@ -746,13 +770,12 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
                 synced_status_done += 1
 
     synced_slot_filled = 0
+    synced_slot_reclassified = 0
     if auto_fill_slot and slot_field:
         for item in existing_items:
             if not _is_managed_project_title(item.title):
                 continue
             if item.title not in desired_open_titles:
-                continue
-            if item.slot.strip():
                 continue
             task = tasks_by_title.get(item.title)
             if not task:
@@ -760,13 +783,21 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
             inferred_slot = _infer_slot_label(task)
             if not inferred_slot:
                 continue
+            existing_slot = item.slot.strip()
+            if existing_slot and not reclassify_slot:
+                continue
+            if existing_slot and _slot_equals(existing_slot, inferred_slot):
+                continue
 
             if slot_field_type == "ProjectV2SingleSelectField":
                 slot_option_id = slot_option_ids.get(inferred_slot, "")
                 if not slot_option_id:
                     continue
                 if dry_run:
-                    synced_slot_filled += 1
+                    if existing_slot:
+                        synced_slot_reclassified += 1
+                    else:
+                        synced_slot_filled += 1
                     continue
                 _graphql_request(
                     token,
@@ -778,10 +809,16 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
                         "value": {"singleSelectOptionId": slot_option_id},
                     },
                 )
-                synced_slot_filled += 1
+                if existing_slot:
+                    synced_slot_reclassified += 1
+                else:
+                    synced_slot_filled += 1
             elif slot_field_type == "ProjectV2Field" and str(slot_field.get("dataType") or "") == "TEXT":
                 if dry_run:
-                    synced_slot_filled += 1
+                    if existing_slot:
+                        synced_slot_reclassified += 1
+                    else:
+                        synced_slot_filled += 1
                     continue
                 _graphql_request(
                     token,
@@ -793,7 +830,10 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
                         "value": {"text": inferred_slot},
                     },
                 )
-                synced_slot_filled += 1
+                if existing_slot:
+                    synced_slot_reclassified += 1
+                else:
+                    synced_slot_filled += 1
 
     by_track: dict[str, int] = {}
     for t in tasks:
@@ -809,6 +849,7 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
         "status_synced_todo": synced_status_todo,
         "status_synced_done": synced_status_done,
         "slot_filled": synced_slot_filled,
+        "slot_reclassified": synced_slot_reclassified,
         "track_breakdown": by_track,
     }
 

@@ -90,6 +90,10 @@ Settings -> Secrets and variables -> Actions
 - `GH_PROJECT_AUTO_FILL_SLOT`
   - 기본: `true`
   - `sync_docs_backlog_to_project`에서 Slot 자동 채움 활성/비활성
+- `GH_PROJECT_RECLASSIFY_SLOT`
+  - 기본: `true`
+  - `true`면 기존 Slot이 있어도 문서 기준 규칙으로 재분류
+  - `false`면 빈 Slot만 채움
 - `GH_SYNC_ONLY_STATUSES`  
   - 예: `Todo,In Progress,Blocked`  
   - 비우면 Due Date 있는 항목 전체 동기화
@@ -210,6 +214,11 @@ Codex 일일 작업지시서 자동 생성:
 - `Slot` 값이 비어있지 않은지 확인
 - `GH_PROJECT_SLOT_FIELD_NAME`이 실제 Project 필드명과 일치하는지 확인
 - `GCAL_USE_SLOT_TIME=true`인지 확인
+
+### Slot 분류가 기대와 다름
+
+- `Sync Docs Backlog To GitHub Project` 실행 로그에서 `slot_filled`, `slot_reclassified` 확인
+- `GH_PROJECT_RECLASSIFY_SLOT=true`로 재실행하여 전체 재분류 적용
 
 ---
 

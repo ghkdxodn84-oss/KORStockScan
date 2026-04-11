@@ -8,6 +8,7 @@ from src.engine.sync_docs_backlog_to_project import (
     _find_option_id_by_name,
     _infer_slot_label,
     _is_managed_project_title,
+    _slot_equals,
     _slot_key,
     collect_backlog_tasks,
     parse_checklist_tasks,
@@ -127,10 +128,17 @@ def test_infer_slot_label_uses_keyword_then_track_default():
     intraday = BacklogTask(title="장중 canary 모니터링", source="x", section="체크", track="Plan")
     postclose = BacklogTask(title="장후 리포트 검증", source="x", section="체크", track="Plan")
     fallback = BacklogTask(title="키워드 없음", source="x", section="체크", track="ScalpingLogic")
+    plan_fallback = BacklogTask(title="키워드 없음", source="x", section="체크", track="Plan")
     assert _infer_slot_label(preopen) == "PREOPEN"
     assert _infer_slot_label(intraday) == "INTRADAY"
     assert _infer_slot_label(postclose) == "POSTCLOSE"
     assert _infer_slot_label(fallback) == "INTRADAY"
+    assert _infer_slot_label(plan_fallback) == "POSTCLOSE"
+
+
+def test_slot_equals_normalized():
+    assert _slot_equals("POST_CLOSE", "postclose")
+    assert not _slot_equals("PREOPEN", "INTRADAY")
 
 
 def test_env_bool_uses_default_when_blank(monkeypatch):
