@@ -21,9 +21,11 @@
 1. 30분마다(또는 수동 실행) GitHub Project 항목 조회
 2. Due Date가 있는 항목만 Google Calendar 이벤트로 upsert
 3. `Slot(PREOPEN/INTRADAY/POSTCLOSE)`이 있으면 시간 지정 이벤트 + 시작 알림으로 생성
-4. `Slot`이 없으면 종일(all-day) 이벤트로 생성
-5. 항목 식별은 `extendedProperties.private.gh_project_item_id` 사용
-6. 소스는 항상 GitHub, 캘린더는 표시/알림 레이어
+4. `TimeWindow` 필드가 있으면 캘린더 시간은 `TimeWindow`를 최우선 적용
+5. 제목에 시간 범위(`13:20~13:35`)가 있으면 Slot 기본시간보다 우선 적용
+6. `Slot`이 없고 제목/TimeWindow 시간도 없으면 종일(all-day) 이벤트로 생성
+7. 항목 식별은 `extendedProperties.private.gh_project_item_id` 사용
+8. 소스는 항상 GitHub, 캘린더는 표시/알림 레이어
 
 문서 backlog 반영 동작:
 
@@ -81,6 +83,9 @@ Settings -> Secrets and variables -> Actions
 - `GH_PROJECT_SLOT_FIELD_NAME`
   - 기본: `Slot`
   - 권장 옵션: `PREOPEN`, `INTRADAY`, `POSTCLOSE`
+- `GH_PROJECT_TIME_WINDOW_FIELD_NAME`
+  - 기본: `TimeWindow`
+  - 권장 입력: `HH:MM~HH:MM`, `ALLDAY`, `UNSCHEDULED`
 - `GH_PROJECT_SLOT_PREOPEN_OPTION_NAME`
   - 기본: `PREOPEN`
 - `GH_PROJECT_SLOT_INTRADAY_OPTION_NAME`
@@ -94,6 +99,13 @@ Settings -> Secrets and variables -> Actions
   - 기본: `true`
   - `true`면 기존 Slot이 있어도 문서 기준 규칙으로 재분류
   - `false`면 빈 Slot만 채움
+- `GH_PROJECT_AUTO_FILL_TIME_WINDOW`
+  - 기본: `true`
+  - 문서 동기화에서 TimeWindow 자동 채움 활성/비활성
+- `GH_PROJECT_RECLASSIFY_TIME_WINDOW`
+  - 기본: `true`
+  - `true`면 기존 TimeWindow도 재산정 후 반영
+  - `false`면 빈 TimeWindow만 채움
 - `GH_SYNC_ONLY_STATUSES`  
   - 예: `Todo,In Progress,Blocked`  
   - 비우면 Due Date 있는 항목 전체 동기화
@@ -214,6 +226,7 @@ Codex 일일 작업지시서 자동 생성:
 - `Slot` 값이 비어있지 않은지 확인
 - `GH_PROJECT_SLOT_FIELD_NAME`이 실제 Project 필드명과 일치하는지 확인
 - `GCAL_USE_SLOT_TIME=true`인지 확인
+- `TimeWindow` 값이 `ALLDAY`/`UNSCHEDULED`로 들어가 있지 않은지 확인
 
 ### Slot 분류가 기대와 다름
 

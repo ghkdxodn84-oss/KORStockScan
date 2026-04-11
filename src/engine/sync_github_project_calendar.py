@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -30,6 +31,7 @@ class ProjectItem:
     status: str
     track: str
     slot: str
+    time_window: str
     assignees: str
     state: str
 
@@ -56,6 +58,55 @@ def _env_int(name: str, default: int) -> int:
 
 def _norm_key(value: str) -> str:
     return "".join(ch for ch in value.strip().lower() if ch.isalnum())
+
+
+def _extract_time_range_from_text(text: str) -> tuple[str, str]:
+    # Examples:
+    # - "(13:20~13:35)"
+    # - "10:20 - 10:35"
+    # - "13:20"
+    m = re.search(
+        r"(?P<start>\d{1,2}:\d{2})\s*(?:~|〜|∼|-|–|—|to)\s*(?P<end>\d{1,2}:\d{2})",
+        text,
+        re.IGNORECASE,
+    )
+    if m:
+        return (m.group("start"), m.group("end"))
+    m2 = re.search(r"(?<!\d)(?P<single>\d{1,2}:\d{2})(?!\d)", text)
+    if m2:
+        return (m2.group("single"), "")
+    return ("", "")
+
+
+def _normalize_hhmm(raw: str) -> str:
+    m = re.match(r"^\s*(\d{1,2}):(\d{2})\s*$", raw)
+    if not m:
+        return ""
+    hh = int(m.group(1))
+    mm = int(m.group(2))
+    if not (0 <= hh <= 23 and 0 <= mm <= 59):
+        return ""
+    return f"{hh:02d}:{mm:02d}"
+
+
+def _parse_time_window(value: str) -> tuple[str, str, str]:
+    """Return (mode, start_hhmm, end_hhmm). mode: timed|all_day|unscheduled|none."""
+    raw = (value or "").strip()
+    if not raw:
+        return ("none", "", "")
+    key = _norm_key(raw)
+    if key in {"allday", "alldayevent", "wholeday"} or "종일" in raw:
+        return ("all_day", "", "")
+    if key in {"tbd", "unscheduled", "notscheduled"} or "미정" in raw:
+        return ("unscheduled", "", "")
+    start, end = _extract_time_range_from_text(raw)
+    start = _normalize_hhmm(start)
+    end = _normalize_hhmm(end)
+    if start and end:
+        return ("timed", start, end)
+    if start:
+        return ("timed", start, "")
+    return ("none", "", "")
 
 
 def _graphql_query() -> str:
@@ -208,6 +259,7 @@ def _parse_project_item(
     status_field_name: str,
     track_field_name: str,
     slot_field_name: str,
+    time_window_field_name: str,
 ) -> ProjectItem | None:
     if bool(node.get("isArchived")):
         return None
@@ -228,6 +280,7 @@ def _parse_project_item(
     status = ""
     track = ""
     slot = ""
+    time_window = ""
 
     for fv in (node.get("fieldValues") or {}).get("nodes") or []:
         field_name = str(((fv.get("field") or {}).get("name")) or "").strip()
@@ -242,10 +295,14 @@ def _parse_project_item(
                 track = str(fv.get("name") or "").strip()
             elif field_name == slot_field_name:
                 slot = str(fv.get("name") or "").strip()
+            elif field_name == time_window_field_name:
+                time_window = str(fv.get("name") or "").strip()
         elif kind == "ProjectV2ItemFieldTextValue" and field_name == track_field_name and not track:
             track = str(fv.get("text") or "").strip()
         elif kind == "ProjectV2ItemFieldTextValue" and field_name == slot_field_name and not slot:
             slot = str(fv.get("text") or "").strip()
+        elif kind == "ProjectV2ItemFieldTextValue" and field_name == time_window_field_name and not time_window:
+            time_window = str(fv.get("text") or "").strip()
 
     if not due_date:
         return None
@@ -259,6 +316,7 @@ def _parse_project_item(
         status=status,
         track=track,
         slot=slot,
+        time_window=time_window,
         assignees=assignees,
         state=state,
     )
@@ -273,6 +331,7 @@ def fetch_project_items(
     status_field_name: str,
     track_field_name: str,
     slot_field_name: str,
+    time_window_field_name: str,
     sync_only_statuses: set[str],
 ) -> list[ProjectItem]:
     items: list[ProjectItem] = []
@@ -298,6 +357,7 @@ def fetch_project_items(
                 status_field_name=status_field_name,
                 track_field_name=track_field_name,
                 slot_field_name=slot_field_name,
+                time_window_field_name=time_window_field_name,
             )
             if not parsed:
                 continue
@@ -349,12 +409,31 @@ def _event_body(
         _norm_key("POSTCLOSE"): slot_postclose_time,
     }
     start_hhmm = slot_to_time.get(slot_key, "")
+    end_hhmm = ""
     is_timed_event = bool(use_slot_time and start_hhmm)
+    force_all_day = False
+
+    mode, tw_start, tw_end = _parse_time_window(item.time_window)
+    if mode == "timed":
+        start_hhmm = tw_start
+        end_hhmm = tw_end
+        is_timed_event = True
+    elif mode in {"all_day", "unscheduled"}:
+        force_all_day = True
+        is_timed_event = False
+
+    explicit_start_hhmm, explicit_end_hhmm = _extract_time_range_from_text(item.title)
+    has_explicit_time = bool(explicit_start_hhmm)
+    if has_explicit_time and not force_all_day and mode != "timed":
+        start_hhmm = explicit_start_hhmm
+        end_hhmm = explicit_end_hhmm
+        is_timed_event = True
     description_lines = [
         f"Project: {owner}#{project_number}",
         f"Type: {item.content_type}",
         f"Status: {item.status or '-'}",
         f"Slot: {item.slot or '-'}",
+        f"TimeWindow: {item.time_window or '-'}",
         f"Track: {item.track or '-'}",
         f"State: {item.state or '-'}",
         f"Assignees: {item.assignees or '-'}",
@@ -371,12 +450,20 @@ def _event_body(
             }
         },
     }
-    if is_timed_event:
+    if is_timed_event and not force_all_day:
         try:
             start_dt = datetime.fromisoformat(f"{due.isoformat()}T{start_hhmm}:00")
         except ValueError:
             start_dt = datetime.fromisoformat(f"{due.isoformat()}T09:00:00")
-        end_dt = start_dt + timedelta(minutes=max(5, slot_duration_minutes))
+        if end_hhmm:
+            try:
+                end_dt = datetime.fromisoformat(f"{due.isoformat()}T{end_hhmm}:00")
+            except ValueError:
+                end_dt = start_dt + timedelta(minutes=max(5, slot_duration_minutes))
+        else:
+            end_dt = start_dt + timedelta(minutes=max(5, slot_duration_minutes))
+        if end_dt <= start_dt:
+            end_dt = start_dt + timedelta(minutes=max(5, slot_duration_minutes))
         body["start"] = {"dateTime": start_dt.isoformat(), "timeZone": event_timezone}
         body["end"] = {"dateTime": end_dt.isoformat(), "timeZone": event_timezone}
         body["reminders"] = {
@@ -466,6 +553,7 @@ def main() -> int:
     status_field_name = _env("GH_PROJECT_STATUS_FIELD_NAME", "Status")
     track_field_name = _env("GH_PROJECT_TRACK_FIELD_NAME", "Track")
     slot_field_name = _env("GH_PROJECT_SLOT_FIELD_NAME", "Slot")
+    time_window_field_name = _env("GH_PROJECT_TIME_WINDOW_FIELD_NAME", "TimeWindow")
     event_prefix = _env("GCAL_EVENT_PREFIX", "[KORStockScan]")
     event_timezone = _env("GCAL_EVENT_TIMEZONE", "Asia/Seoul")
     use_slot_time = _env_bool("GCAL_USE_SLOT_TIME", True)
@@ -489,6 +577,7 @@ def main() -> int:
         status_field_name=status_field_name,
         track_field_name=track_field_name,
         slot_field_name=slot_field_name,
+        time_window_field_name=time_window_field_name,
         sync_only_statuses=sync_only_statuses,
     )
 

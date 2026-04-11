@@ -36,6 +36,7 @@ class ProjectItem:
     title: str
     content_type: str
     slot: str = ""
+    time_window: str = ""
 
 
 MANAGED_TRACKS = ("Plan", "Checklist0413", "ScalpingLogic", "AIPrompt")
@@ -94,6 +95,9 @@ SLOT_POSTCLOSE_KEYWORDS = (
     "재작업지시",
     "후보안",
 )
+
+TIME_ALLDAY_KEYWORDS = ("하루종일", "종일", "all day", "allday")
+TIME_UNSCHEDULED_KEYWORDS = ("미정", "tbd", "unscheduled", "예약작업", "추후")
 
 
 def _read(path: Path) -> str:
@@ -380,6 +384,16 @@ def _env_bool(name: str, default: bool) -> bool:
     return raw in {"1", "true", "yes", "y", "on"}
 
 
+def _env_int(name: str, default: int) -> int:
+    raw_env = os.getenv(name)
+    if raw_env is None or not str(raw_env).strip():
+        return default
+    try:
+        return int(str(raw_env).strip())
+    except ValueError:
+        return default
+
+
 def _graphql_request(token: str, query: str, variables: dict[str, Any]) -> dict[str, Any]:
     payload = json.dumps({"query": query, "variables": variables}).encode("utf-8")
     req = request.Request(
@@ -503,6 +517,7 @@ def _fetch_project_metadata(
     owner: str,
     project_number: int,
     slot_field_name: str,
+    time_window_field_name: str,
 ) -> tuple[str, dict[str, Any], set[str], list[ProjectItem]]:
     query = _project_query()
     cursor: str | None = None
@@ -526,20 +541,31 @@ def _fetch_project_metadata(
             content_type = str(content.get("__typename") or "").strip()
             item_id = str(node.get("id") or "").strip()
             slot_value = ""
+            time_window_value = ""
             for fv in (node.get("fieldValues") or {}).get("nodes") or []:
                 field_name = str(((fv.get("field") or {}).get("name")) or "").strip()
                 kind = str(fv.get("__typename") or "")
-                if field_name != slot_field_name:
-                    continue
-                if kind == "ProjectV2ItemFieldSingleSelectValue":
-                    slot_value = str(fv.get("name") or "").strip()
-                elif kind == "ProjectV2ItemFieldTextValue" and not slot_value:
-                    slot_value = str(fv.get("text") or "").strip()
+                if field_name == slot_field_name:
+                    if kind == "ProjectV2ItemFieldSingleSelectValue":
+                        slot_value = str(fv.get("name") or "").strip()
+                    elif kind == "ProjectV2ItemFieldTextValue" and not slot_value:
+                        slot_value = str(fv.get("text") or "").strip()
+                elif field_name == time_window_field_name:
+                    if kind == "ProjectV2ItemFieldSingleSelectValue":
+                        time_window_value = str(fv.get("name") or "").strip()
+                    elif kind == "ProjectV2ItemFieldTextValue" and not time_window_value:
+                        time_window_value = str(fv.get("text") or "").strip()
             if title:
                 existing_titles.add(title)
                 if item_id:
                     existing_items.append(
-                        ProjectItem(item_id=item_id, title=title, content_type=content_type, slot=slot_value),
+                        ProjectItem(
+                            item_id=item_id,
+                            title=title,
+                            content_type=content_type,
+                            slot=slot_value,
+                            time_window=time_window_value,
+                        ),
                     )
         page = (project.get("items") or {}).get("pageInfo") or {}
         if not page.get("hasNextPage"):
@@ -607,6 +633,80 @@ def _slot_equals(left: str, right: str) -> bool:
     return _slot_key(left) == _slot_key(right)
 
 
+def _extract_time_range_from_text(text: str) -> tuple[str, str]:
+    m = re.search(
+        r"(?P<start>\d{1,2}:\d{2})\s*(?:~|〜|∼|-|–|—|to)\s*(?P<end>\d{1,2}:\d{2})",
+        text,
+        re.IGNORECASE,
+    )
+    if m:
+        return m.group("start"), m.group("end")
+    m2 = re.search(r"(?<!\d)(?P<single>\d{1,2}:\d{2})(?!\d)", text)
+    if m2:
+        return m2.group("single"), ""
+    return "", ""
+
+
+def _normalize_hhmm(raw: str) -> str:
+    m = re.match(r"^\s*(\d{1,2}):(\d{2})\s*$", raw)
+    if not m:
+        return ""
+    h = int(m.group(1))
+    mm = int(m.group(2))
+    if not (0 <= h <= 23 and 0 <= mm <= 59):
+        return ""
+    return f"{h:02d}:{mm:02d}"
+
+
+def _add_minutes(hhmm: str, minutes: int) -> str:
+    normalized = _normalize_hhmm(hhmm)
+    if not normalized:
+        return ""
+    h = int(normalized[:2])
+    m = int(normalized[3:])
+    total = h * 60 + m + minutes
+    total = max(0, min(total, 23 * 60 + 59))
+    return f"{total // 60:02d}:{total % 60:02d}"
+
+
+def _is_all_day_or_unscheduled(text: str) -> str:
+    lowered = text.lower()
+    if any(k.lower() in lowered for k in TIME_ALLDAY_KEYWORDS):
+        return "ALLDAY"
+    if any(k.lower() in lowered for k in TIME_UNSCHEDULED_KEYWORDS):
+        return "UNSCHEDULED"
+    return ""
+
+
+def _time_window_equals(left: str, right: str) -> bool:
+    return re.sub(r"\s+", "", left.strip().lower()) == re.sub(r"\s+", "", right.strip().lower())
+
+
+def _infer_time_window(task: BacklogTask, *, slot_label: str, default_duration_min: int) -> str:
+    text = f"{task.title} {task.section}"
+    mode = _is_all_day_or_unscheduled(text)
+    if mode:
+        return mode
+
+    start, end = _extract_time_range_from_text(text)
+    start = _normalize_hhmm(start)
+    end = _normalize_hhmm(end)
+    if start and end:
+        return f"{start}~{end}"
+    if start:
+        end_auto = _add_minutes(start, max(5, default_duration_min))
+        return f"{start}~{end_auto}" if end_auto else start
+
+    slot_default_start = {
+        "PREOPEN": "08:20",
+        "INTRADAY": "10:00",
+        "POSTCLOSE": "15:40",
+    }.get(slot_label, "15:40")
+    slot_default_start = _normalize_hhmm(slot_default_start) or "15:40"
+    slot_default_end = _add_minutes(slot_default_start, max(5, default_duration_min)) or slot_default_start
+    return f"{slot_default_start}~{slot_default_end}"
+
+
 def _desired_status_option_id(
     *,
     title: str,
@@ -640,6 +740,7 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
     status_field_name = _env("GH_PROJECT_STATUS_FIELD_NAME", "Status")
     due_field_name = _env("GH_PROJECT_DUE_FIELD_NAME", "Due")
     slot_field_name = _env("GH_PROJECT_SLOT_FIELD_NAME", "Slot")
+    time_window_field_name = _env("GH_PROJECT_TIME_WINDOW_FIELD_NAME", "TimeWindow")
     todo_option_name = _env("GH_PROJECT_TODO_OPTION_NAME", "Todo")
     done_option_name = _env("GH_PROJECT_DONE_OPTION_NAME", "Done")
     slot_preopen_option_name = _env("GH_PROJECT_SLOT_PREOPEN_OPTION_NAME", "PREOPEN")
@@ -647,17 +748,22 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
     slot_postclose_option_name = _env("GH_PROJECT_SLOT_POSTCLOSE_OPTION_NAME", "POSTCLOSE")
     auto_fill_slot = _env_bool("GH_PROJECT_AUTO_FILL_SLOT", True)
     reclassify_slot = _env_bool("GH_PROJECT_RECLASSIFY_SLOT", True)
+    auto_fill_time_window = _env_bool("GH_PROJECT_AUTO_FILL_TIME_WINDOW", True)
+    reclassify_time_window = _env_bool("GH_PROJECT_RECLASSIFY_TIME_WINDOW", True)
+    default_duration_min = _env_int("GCAL_SLOT_DURATION_MINUTES", 30)
 
     project_id, fields, existing_titles, existing_items = _fetch_project_metadata(
         token,
         owner,
         number,
         slot_field_name,
+        time_window_field_name,
     )
 
     status_field = fields.get(status_field_name)
     due_field = fields.get(due_field_name)
     slot_field = fields.get(slot_field_name)
+    time_window_field = fields.get(time_window_field_name)
     status_option_id = ""
     done_status_option_id = ""
     if status_field and str(status_field.get("__typename")) == "ProjectV2SingleSelectField":
@@ -689,14 +795,35 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
             file=sys.stderr,
         )
 
+    time_window_field_type = str(time_window_field.get("__typename") or "") if time_window_field else ""
+    time_window_field_data_type = str(time_window_field.get("dataType") or "") if time_window_field else ""
+    if auto_fill_time_window and not time_window_field:
+        print(
+            f"[DOC_BACKLOG_SYNC_WARN] time window field not found: {time_window_field_name}",
+            file=sys.stderr,
+        )
+
     add_mut = _mutation_add_draft()
     upd_mut = _mutation_update_field()
     tasks_by_title = {_title_for_project(task): task for task in tasks}
+    slot_by_title = {
+        _title_for_project(task): _infer_slot_label(task)
+        for task in tasks
+    }
+    time_window_by_title = {
+        _title_for_project(task): _infer_time_window(
+            task,
+            slot_label=slot_by_title[_title_for_project(task)],
+            default_duration_min=default_duration_min,
+        )
+        for task in tasks
+    }
     desired_open_titles = set(tasks_by_title.keys())
     managed_open_items = [
         item for item in existing_items if _is_managed_project_title(item.title) and item.title in desired_open_titles
     ]
     managed_open_blank_slot = sum(1 for item in managed_open_items if not item.slot.strip())
+    managed_open_blank_time_window = sum(1 for item in managed_open_items if not item.time_window.strip())
 
     created = 0
     skipped_existing = 0
@@ -750,7 +877,7 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
                 )
 
         if auto_fill_slot and slot_field:
-            inferred_slot = _infer_slot_label(task)
+            inferred_slot = slot_by_title.get(title, _infer_slot_label(task))
             if slot_field_type == "ProjectV2SingleSelectField":
                 slot_option_id = slot_option_ids.get(inferred_slot, "")
                 if slot_option_id:
@@ -773,6 +900,27 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
                         "itemId": item_id,
                         "fieldId": slot_field["id"],
                         "value": {"text": inferred_slot},
+                    },
+                )
+
+        if auto_fill_time_window and time_window_field:
+            inferred_time_window = time_window_by_title.get(
+                title,
+                _infer_time_window(
+                    task,
+                    slot_label=slot_by_title.get(title, _infer_slot_label(task)),
+                    default_duration_min=default_duration_min,
+                ),
+            )
+            if time_window_field_type == "ProjectV2Field" and time_window_field_data_type == "TEXT":
+                _graphql_request(
+                    token,
+                    upd_mut,
+                    {
+                        "projectId": project_id,
+                        "itemId": item_id,
+                        "fieldId": time_window_field["id"],
+                        "value": {"text": inferred_time_window},
                     },
                 )
         created += 1
@@ -821,7 +969,7 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
             task = tasks_by_title.get(item.title)
             if not task:
                 continue
-            inferred_slot = _infer_slot_label(task)
+            inferred_slot = slot_by_title.get(item.title, _infer_slot_label(task))
             if not inferred_slot:
                 continue
             existing_slot = item.slot.strip()
@@ -876,6 +1024,49 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
                 else:
                     synced_slot_filled += 1
 
+    synced_time_window_filled = 0
+    synced_time_window_reclassified = 0
+    if auto_fill_time_window and time_window_field:
+        for item in existing_items:
+            if not _is_managed_project_title(item.title):
+                continue
+            if item.title not in desired_open_titles:
+                continue
+            task = tasks_by_title.get(item.title)
+            if not task:
+                continue
+            inferred_slot = slot_by_title.get(item.title, _infer_slot_label(task))
+            inferred_time_window = time_window_by_title.get(
+                item.title,
+                _infer_time_window(task, slot_label=inferred_slot, default_duration_min=default_duration_min),
+            )
+            existing_time_window = item.time_window.strip()
+            if existing_time_window and not reclassify_time_window:
+                continue
+            if existing_time_window and _time_window_equals(existing_time_window, inferred_time_window):
+                continue
+            if time_window_field_type == "ProjectV2Field" and time_window_field_data_type == "TEXT":
+                if dry_run:
+                    if existing_time_window:
+                        synced_time_window_reclassified += 1
+                    else:
+                        synced_time_window_filled += 1
+                    continue
+                _graphql_request(
+                    token,
+                    upd_mut,
+                    {
+                        "projectId": project_id,
+                        "itemId": item.item_id,
+                        "fieldId": time_window_field["id"],
+                        "value": {"text": inferred_time_window},
+                    },
+                )
+                if existing_time_window:
+                    synced_time_window_reclassified += 1
+                else:
+                    synced_time_window_filled += 1
+
     by_track: dict[str, int] = {}
     for t in tasks:
         by_track[t.track] = by_track.get(t.track, 0) + 1
@@ -897,6 +1088,8 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
         "status_synced_done": synced_status_done,
         "slot_filled": synced_slot_filled,
         "slot_reclassified": synced_slot_reclassified,
+        "time_window_filled": synced_time_window_filled,
+        "time_window_reclassified": synced_time_window_reclassified,
         "slot_debug": {
             "slot_field_name": slot_field_name,
             "slot_field_detected": bool(slot_field),
@@ -913,6 +1106,15 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
             "slot_option_id_map": slot_option_ids,
             "managed_open_items": len(managed_open_items),
             "managed_open_items_blank_slot": managed_open_blank_slot,
+        },
+        "time_window_debug": {
+            "time_window_field_name": time_window_field_name,
+            "time_window_field_detected": bool(time_window_field),
+            "time_window_field_type": time_window_field_type or "-",
+            "time_window_field_data_type": time_window_field_data_type or "-",
+            "auto_fill_time_window": auto_fill_time_window,
+            "reclassify_time_window": reclassify_time_window,
+            "managed_open_items_blank_time_window": managed_open_blank_time_window,
         },
         "track_breakdown": by_track,
     }

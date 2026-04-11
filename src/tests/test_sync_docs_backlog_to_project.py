@@ -8,6 +8,7 @@ from src.engine.sync_docs_backlog_to_project import (
     _env_bool,
     _find_option_id_by_name,
     _infer_slot_label,
+    _infer_time_window,
     _is_managed_project_title,
     _slot_equals,
     _slot_key,
@@ -151,6 +152,21 @@ def test_infer_slot_label_uses_keyword_then_track_default():
 def test_slot_equals_normalized():
     assert _slot_equals("POST_CLOSE", "postclose")
     assert not _slot_equals("PREOPEN", "INTRADAY")
+
+
+def test_infer_time_window_uses_explicit_range():
+    task = BacklogTask(title="장중 2차 수집 (13:20~13:35)", source="x", section="체크", track="Checklist0413")
+    assert _infer_time_window(task, slot_label="INTRADAY", default_duration_min=30) == "13:20~13:35"
+
+
+def test_infer_time_window_uses_slot_default_when_missing():
+    task = BacklogTask(title="일반 작업", source="x", section="체크", track="AIPrompt")
+    assert _infer_time_window(task, slot_label="POSTCLOSE", default_duration_min=30) == "15:40~16:10"
+
+
+def test_infer_time_window_unscheduled_keyword():
+    task = BacklogTask(title="예약 작업(미정)", source="x", section="체크", track="Plan")
+    assert _infer_time_window(task, slot_label="POSTCLOSE", default_duration_min=30) == "UNSCHEDULED"
 
 
 def test_env_bool_uses_default_when_blank(monkeypatch):
