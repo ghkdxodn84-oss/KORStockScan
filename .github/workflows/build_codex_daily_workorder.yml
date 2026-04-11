@@ -1,0 +1,71 @@
+name: Build Codex Daily Workorder
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 23 * * *"
+
+permissions:
+  contents: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  build-workorder:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+
+      - name: Validate required config
+        env:
+          GH_PROJECT_TOKEN: ${{ secrets.GH_PROJECT_TOKEN }}
+          GH_PROJECT_OWNER: ${{ vars.GH_PROJECT_OWNER }}
+          GH_PROJECT_NUMBER: ${{ vars.GH_PROJECT_NUMBER }}
+        run: |
+          set -euo pipefail
+          missing=0
+          for key in GH_PROJECT_TOKEN GH_PROJECT_OWNER GH_PROJECT_NUMBER; do
+            if [ -z "${!key:-}" ]; then
+              echo "::error::Missing required secret/variable: $key"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Build markdown
+        env:
+          GH_PROJECT_TOKEN: ${{ secrets.GH_PROJECT_TOKEN }}
+          GH_PROJECT_OWNER: ${{ vars.GH_PROJECT_OWNER }}
+          GH_PROJECT_NUMBER: ${{ vars.GH_PROJECT_NUMBER }}
+          GH_PROJECT_DUE_FIELD_NAME: ${{ vars.GH_PROJECT_DUE_FIELD_NAME }}
+          GH_PROJECT_STATUS_FIELD_NAME: ${{ vars.GH_PROJECT_STATUS_FIELD_NAME }}
+          GH_PROJECT_TRACK_FIELD_NAME: ${{ vars.GH_PROJECT_TRACK_FIELD_NAME }}
+          GH_CODEX_WORKORDER_STATUSES: ${{ vars.GH_CODEX_WORKORDER_STATUSES }}
+          CODEX_WORKORDER_MAX_ITEMS: ${{ vars.CODEX_WORKORDER_MAX_ITEMS }}
+        run: |
+          PYTHONPATH=. python -m src.engine.build_codex_daily_workorder \
+            --output tmp/codex_daily_workorder.md \
+            --max-items "${CODEX_WORKORDER_MAX_ITEMS:-20}" | tee tmp/codex_daily_workorder_summary.json
+
+      - name: Publish summary
+        run: |
+          {
+            echo "## Codex Daily Workorder"
+            echo ""
+            cat tmp/codex_daily_workorder.md
+            echo ""
+            echo "### Build Summary"
+            echo ""
+            echo '```json'
+            cat tmp/codex_daily_workorder_summary.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

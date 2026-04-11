@@ -13,6 +13,8 @@
 - 동기화 스크립트: `src/engine/sync_github_project_calendar.py`
 - 워크플로우(문서 backlog -> Project): `.github/workflows/sync_docs_backlog_to_project.yml`
 - 파싱/반영 스크립트: `src/engine/sync_docs_backlog_to_project.py`
+- 워크플로우(Codex 일일 작업지시서): `.github/workflows/build_codex_daily_workorder.yml`
+- 작업지시서 생성 스크립트: `src/engine/build_codex_daily_workorder.py`
 
 동작 방식:
 
@@ -87,6 +89,12 @@ Settings -> Secrets and variables -> Actions
 - `DOC_BACKLOG_SYNC_DRY_RUN`
   - `true`면 문서 파싱 후 생성 예정 수량만 출력
   - `false`면 실제 Project Draft Item 생성
+- `GH_CODEX_WORKORDER_STATUSES`
+  - 기본: `Todo,In Progress`
+  - Codex 일일 작업지시서에 포함할 Status 목록
+- `CODEX_WORKORDER_MAX_ITEMS`
+  - 기본: `20`
+  - 일일 작업지시서 최대 항목 수
 
 ---
 
@@ -118,6 +126,13 @@ Settings -> Secrets and variables -> Actions
 1. `Sync Docs Backlog To GitHub Project` 워크플로우는 `6시간 주기`(`15 */6 * * *`)로 자동 실행
 2. 운영 초기에는 `DOC_BACKLOG_SYNC_DRY_RUN=true`로 1~2회 로그 검증
 3. 검증 후 `DOC_BACKLOG_SYNC_DRY_RUN=false`로 전환
+
+Codex 일일 작업지시서 자동 생성:
+
+1. 워크플로우 `Build Codex Daily Workorder`를 수동 실행(`workflow_dispatch`)하거나
+   스케줄(`0 23 * * *`, KST 08:00) 자동 실행 사용
+2. 실행 완료 후 `Actions run summary`의 `Codex Daily Workorder` 섹션에서 본문을 복사
+3. 복사한 본문을 Codex 대화에 붙여 실행 지시
 
 ---
 

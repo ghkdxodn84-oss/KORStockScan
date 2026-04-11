@@ -331,8 +331,10 @@
 운영 파일:
 - `.github/workflows/sync_project_to_google_calendar.yml`
 - `.github/workflows/sync_docs_backlog_to_project.yml`
+- `.github/workflows/build_codex_daily_workorder.yml`
 - `src/engine/sync_github_project_calendar.py`
 - `src/engine/sync_docs_backlog_to_project.py`
+- `src/engine/build_codex_daily_workorder.py`
 
 ## 관련 문서
 
