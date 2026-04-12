@@ -16,6 +16,8 @@ from datetime import date, datetime, timedelta
 from typing import Any
 from urllib import request
 
+from src.utils.market_day import get_krx_trading_day_status
+
 
 GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
 CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar"
@@ -402,6 +404,7 @@ def _event_body(
     slot_reminder_minutes: int,
 ) -> dict[str, Any]:
     due = date.fromisoformat(item.due_date)
+    is_trading_day, trading_day_reason = get_krx_trading_day_status(due)
     slot_key = _norm_key(item.slot)
     slot_to_time = {
         _norm_key("PREOPEN"): slot_preopen_time,
@@ -428,9 +431,15 @@ def _event_body(
         start_hhmm = explicit_start_hhmm
         end_hhmm = explicit_end_hhmm
         is_timed_event = True
+
+    if not is_trading_day and is_timed_event and not force_all_day and mode != "timed" and not has_explicit_time:
+        start_hhmm = slot_intraday_time
+        end_hhmm = ""
+
     description_lines = [
         f"Project: {owner}#{project_number}",
         f"Type: {item.content_type}",
+        f"TradingDay: {'true' if is_trading_day else 'false'} ({trading_day_reason})",
         f"Status: {item.status or '-'}",
         f"Slot: {item.slot or '-'}",
         f"TimeWindow: {item.time_window or '-'}",
@@ -541,6 +550,55 @@ def upsert_events(
     }
 
 
+def prune_stale_events(
+    *,
+    service,
+    calendar_id: str,
+    owner: str,
+    project_number: int,
+    live_item_ids: set[str],
+    dry_run: bool,
+) -> dict[str, int]:
+    page_token = None
+    deleted = 0
+    dry_run_deleted = 0
+    owner_prop = f"gh_project_owner={owner}"
+    number_prop = f"gh_project_number={project_number}"
+
+    while True:
+        resp = (
+            service.events()
+            .list(
+                calendarId=calendar_id,
+                privateExtendedProperty=[owner_prop, number_prop],
+                singleEvents=True,
+                maxResults=250,
+                pageToken=page_token,
+            )
+            .execute()
+        )
+        for event in resp.get("items", []):
+            private = ((event.get("extendedProperties") or {}).get("private") or {})
+            item_id = str(private.get("gh_project_item_id") or "").strip()
+            event_id = str(event.get("id") or "").strip()
+            if not event_id or not item_id or item_id in live_item_ids:
+                continue
+            if dry_run:
+                dry_run_deleted += 1
+                continue
+            service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+            deleted += 1
+
+        page_token = resp.get("nextPageToken")
+        if not page_token:
+            break
+
+    return {
+        "deleted": deleted,
+        "dry_run_deleted": dry_run_deleted,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Sync GitHub Project to Google Calendar.")
     parser.add_argument("--dry-run", action="store_true", help="Do not write to Google Calendar.")
@@ -598,6 +656,14 @@ def main() -> int:
         slot_reminder_minutes=slot_reminder_minutes,
         dry_run=dry_run,
     )
+    prune_counts = prune_stale_events(
+        service=service,
+        calendar_id=calendar_id,
+        owner=owner,
+        project_number=project_number,
+        live_item_ids={item.item_id for item in items},
+        dry_run=dry_run,
+    )
 
     summary = {
         "project_owner": owner,
@@ -606,6 +672,7 @@ def main() -> int:
         "status_filter_applied": sorted(sync_only_statuses),
         "dry_run": dry_run,
         **counts,
+        **prune_counts,
     }
     print(json.dumps(summary, ensure_ascii=False))
     return 0

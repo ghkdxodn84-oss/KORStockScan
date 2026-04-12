@@ -1,4 +1,9 @@
-from src.engine.sync_github_project_calendar import _event_body, _parse_project_item, ProjectItem
+from src.engine.sync_github_project_calendar import (
+    _event_body,
+    _parse_project_item,
+    ProjectItem,
+    prune_stale_events,
+)
 
 
 def _sample_node():
@@ -155,6 +160,37 @@ def test_event_body_timed_when_slot_exists():
     assert body["reminders"]["overrides"][0]["minutes"] == 0
 
 
+def test_event_body_holiday_reclassifies_slot_time_to_intraday():
+    item = ProjectItem(
+        item_id="PVTI_2b",
+        content_type="Issue",
+        title="Task Holiday",
+        url="https://github.com/org/repo/issues/22",
+        due_date="2026-04-12",
+        status="Todo",
+        track="Prompt",
+        slot="PREOPEN",
+        time_window="",
+        assignees="alice",
+        state="OPEN",
+    )
+    body = _event_body(
+        item,
+        event_prefix="[KORStockScan]",
+        owner="org",
+        project_number=3,
+        event_timezone="Asia/Seoul",
+        use_slot_time=True,
+        slot_preopen_time="08:20",
+        slot_intraday_time="10:00",
+        slot_postclose_time="15:40",
+        slot_duration_minutes=30,
+        slot_reminder_minutes=0,
+    )
+    assert body["start"]["dateTime"] == "2026-04-12T10:00:00"
+    assert body["end"]["dateTime"] == "2026-04-12T10:30:00"
+
+
 def test_event_body_uses_explicit_time_range_from_title_over_slot_default():
     item = ProjectItem(
         item_id="PVTI_3",
@@ -184,6 +220,37 @@ def test_event_body_uses_explicit_time_range_from_title_over_slot_default():
     )
     assert body["start"]["dateTime"] == "2026-04-14T13:20:00"
     assert body["end"]["dateTime"] == "2026-04-14T13:35:00"
+
+
+def test_event_body_holiday_keeps_explicit_time_range():
+    item = ProjectItem(
+        item_id="PVTI_3b",
+        content_type="Issue",
+        title="휴장일 수동점검 (13:20~13:35)",
+        url="https://github.com/org/repo/issues/33",
+        due_date="2026-04-12",
+        status="Todo",
+        track="ScalpingLogic",
+        slot="PREOPEN",
+        time_window="",
+        assignees="alice",
+        state="OPEN",
+    )
+    body = _event_body(
+        item,
+        event_prefix="[KORStockScan]",
+        owner="org",
+        project_number=3,
+        event_timezone="Asia/Seoul",
+        use_slot_time=True,
+        slot_preopen_time="08:20",
+        slot_intraday_time="10:00",
+        slot_postclose_time="15:40",
+        slot_duration_minutes=30,
+        slot_reminder_minutes=0,
+    )
+    assert body["start"]["dateTime"] == "2026-04-12T13:20:00"
+    assert body["end"]["dateTime"] == "2026-04-12T13:35:00"
 
 
 def test_event_body_prefers_time_window_field_over_title_and_slot():
@@ -246,3 +313,89 @@ def test_event_body_all_day_when_unscheduled_time_window():
     )
     assert body["start"]["date"] == "2026-04-14"
     assert "dateTime" not in body["start"]
+
+
+class _FakeEventsApi:
+    def __init__(self, list_payloads):
+        self._list_payloads = list(list_payloads)
+        self.deleted = []
+        self._current_op = None
+
+    def list(self, **kwargs):
+        self._current_op = ("list", kwargs)
+        return self
+
+    def delete(self, **kwargs):
+        self._current_op = ("delete", kwargs)
+        return self
+
+    def execute(self):
+        op, kwargs = self._current_op
+        if op == "list":
+            return self._list_payloads.pop(0)
+        if op == "delete":
+            self.deleted.append(kwargs["eventId"])
+            return {}
+        raise AssertionError(f"unexpected op: {op}")
+
+
+class _FakeCalendarService:
+    def __init__(self, list_payloads):
+        self._events = _FakeEventsApi(list_payloads)
+
+    def events(self):
+        return self._events
+
+
+def test_prune_stale_events_dry_run_counts_candidates():
+    service = _FakeCalendarService(
+        [
+            {
+                "items": [
+                    {
+                        "id": "evt_keep",
+                        "extendedProperties": {"private": {"gh_project_item_id": "PVTI_keep"}},
+                    },
+                    {
+                        "id": "evt_drop",
+                        "extendedProperties": {"private": {"gh_project_item_id": "PVTI_drop"}},
+                    },
+                ]
+            }
+        ]
+    )
+    summary = prune_stale_events(
+        service=service,
+        calendar_id="primary",
+        owner="JaehwanPark",
+        project_number=1,
+        live_item_ids={"PVTI_keep"},
+        dry_run=True,
+    )
+    assert summary == {"deleted": 0, "dry_run_deleted": 1}
+    assert service._events.deleted == []
+
+
+def test_prune_stale_events_deletes_removed_items():
+    service = _FakeCalendarService(
+        [
+            {
+                "items": [
+                    {
+                        "id": "evt_drop",
+                        "extendedProperties": {"private": {"gh_project_item_id": "PVTI_drop"}},
+                    }
+                ]
+            }
+        ]
+    )
+    summary = prune_stale_events(
+        service=service,
+        calendar_id="primary",
+        owner="JaehwanPark",
+        project_number=1,
+        live_item_ids={"PVTI_keep"},
+        dry_run=False,
+    )
+    assert summary == {"deleted": 1, "dry_run_deleted": 0}
+    assert service._events.deleted == ["evt_drop"]

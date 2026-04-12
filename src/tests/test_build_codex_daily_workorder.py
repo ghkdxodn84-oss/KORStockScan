@@ -1,4 +1,11 @@
-from src.engine.build_codex_daily_workorder import ProjectTask, _matches_slot, _split_csv, render_markdown, sort_tasks
+from src.engine.build_codex_daily_workorder import (
+    ProjectTask,
+    _matches_slot,
+    _resolve_slot_filters_for_target_date,
+    _split_csv,
+    render_markdown,
+    sort_tasks,
+)
 
 
 def test_split_csv_trims_and_drops_empty():
@@ -16,8 +23,11 @@ def test_sort_tasks_by_status_due_track_title():
             status="Todo",
             track="Plan",
             slot="PREOPEN",
+            time_window="08:20~08:50",
             assignees="",
             state="",
+            source="docs/plan.md",
+            section="아직 남아있는 일",
         ),
         ProjectTask(
             item_id="2",
@@ -28,8 +38,11 @@ def test_sort_tasks_by_status_due_track_title():
             status="In Progress",
             track="AIPrompt",
             slot="INTRADAY",
+            time_window="10:00~10:30",
             assignees="",
             state="",
+            source="docs/prompt.md",
+            section="P0. 즉시 착수 가능한 확인/계측",
         ),
         ProjectTask(
             item_id="1",
@@ -40,8 +53,11 @@ def test_sort_tasks_by_status_due_track_title():
             status="Todo",
             track="Checklist0413",
             slot="POSTCLOSE",
+            time_window="15:40~16:10",
             assignees="",
             state="",
+            source="docs/checklist.md",
+            section="체크박스 미완료",
         ),
     ]
     sorted_tasks = sort_tasks(tasks, ["In Progress", "Todo"])
@@ -59,8 +75,11 @@ def test_render_markdown_includes_template_and_ids():
             status="Todo",
             track="Plan",
             slot="PREOPEN",
+            time_window="08:20~08:50",
             assignees="jaehwan",
             state="OPEN",
+            source="docs/example.md",
+            section="P0. 즉시 착수 가능한 확인/계측",
         )
     ]
     md = render_markdown(
@@ -68,6 +87,10 @@ def test_render_markdown_includes_template_and_ids():
         project_number=1,
         project_title="KORStockScan Ops",
         generated_at="2026-04-11T23:00:00+09:00",
+        target_date="2026-04-12",
+        include_overdue=True,
+        holiday_override=True,
+        holiday_reason="weekend",
         statuses=["Todo", "In Progress"],
         slots=["PREOPEN"],
         tasks=tasks,
@@ -77,9 +100,32 @@ def test_render_markdown_includes_template_and_ids():
     assert "ITEM_123" in md
     assert "Codex 전달 템플릿" in md
     assert "슬롯필터" in md
+    assert "docs/example.md" in md
+    assert "기준일자" in md
+    assert "휴장일 재분류" in md
 
 
 def test_matches_slot_case_insensitive():
     assert _matches_slot("PREOPEN", {"preopen"})
     assert not _matches_slot("INTRADAY", {"preopen"})
     assert _matches_slot("", set())
+
+
+def test_resolve_slot_filters_promotes_intraday_on_holiday():
+    slots, holiday_override, reason = _resolve_slot_filters_for_target_date(
+        selected_slots=["INTRADAY"],
+        target_date="2026-04-12",
+    )
+    assert slots == []
+    assert holiday_override is True
+    assert reason == "weekend"
+
+
+def test_resolve_slot_filters_skips_preopen_on_holiday():
+    slots, holiday_override, reason = _resolve_slot_filters_for_target_date(
+        selected_slots=["PREOPEN"],
+        target_date="2026-04-12",
+    )
+    assert slots == ["__holiday_skip__"]
+    assert holiday_override is True
+    assert reason == "weekend"

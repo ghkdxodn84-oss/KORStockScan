@@ -7,10 +7,13 @@ import json
 import os
 import sys
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 from urllib import request
+from zoneinfo import ZoneInfo
+
+from src.utils.market_day import get_krx_trading_day_status
 
 
 GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
@@ -26,8 +29,11 @@ class ProjectTask:
     status: str
     track: str
     slot: str
+    time_window: str
     assignees: str
     state: str
+    source: str
+    section: str
 
 
 def _env(name: str, default: str | None = None) -> str:
@@ -37,6 +43,23 @@ def _env(name: str, default: str | None = None) -> str:
     if value is None or not str(value).strip():
         raise RuntimeError(f"missing required env: {name}")
     return str(value)
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = str(os.getenv(name, "true" if default else "false")).strip().lower()
+    return raw in {"1", "true", "yes", "y", "on"}
+
+
+def _local_today_iso() -> str:
+    raw = os.getenv("CODEX_WORKORDER_TARGET_DATE", "").strip()
+    if raw:
+        return raw
+    tz_name = os.getenv("CODEX_WORKORDER_TIMEZONE", "Asia/Seoul").strip() or "Asia/Seoul"
+    try:
+        tz = ZoneInfo(tz_name)
+    except Exception:
+        tz = ZoneInfo("Asia/Seoul")
+    return datetime.now(tz).date().isoformat()
 
 
 def _graphql_query() -> str:
@@ -55,17 +78,20 @@ query($owner: String!, $number: Int!, $cursor: String) {
             ... on Issue {
               title
               url
+              body
               state
               assignees(first: 5) { nodes { login } }
             }
             ... on PullRequest {
               title
               url
+              body
               state
               assignees(first: 5) { nodes { login } }
             }
             ... on DraftIssue {
               title
+              body
             }
           }
           fieldValues(first: 30) {
@@ -102,17 +128,20 @@ query($owner: String!, $number: Int!, $cursor: String) {
             ... on Issue {
               title
               url
+              body
               state
               assignees(first: 5) { nodes { login } }
             }
             ... on PullRequest {
               title
               url
+              body
               state
               assignees(first: 5) { nodes { login } }
             }
             ... on DraftIssue {
               title
+              body
             }
           }
           fieldValues(first: 30) {
@@ -183,6 +212,18 @@ def _norm(value: str) -> str:
     return value.strip().lower()
 
 
+def _parse_body_metadata(body: str) -> tuple[str, str]:
+    source = ""
+    section = ""
+    for raw_line in body.splitlines():
+        line = raw_line.strip()
+        if line.startswith("Source:"):
+            source = line.split(":", 1)[1].strip().strip("`")
+        elif line.startswith("Section:"):
+            section = line.split(":", 1)[1].strip().strip("`")
+    return source, section
+
+
 def _parse_project_item(
     node: dict[str, Any],
     *,
@@ -190,6 +231,7 @@ def _parse_project_item(
     status_field_name: str,
     track_field_name: str,
     slot_field_name: str,
+    time_window_field_name: str,
 ) -> ProjectTask | None:
     if bool(node.get("isArchived")):
         return None
@@ -198,14 +240,17 @@ def _parse_project_item(
     content_type = str(content.get("__typename") or "Unknown")
     title = str(content.get("title") or "").strip() or "(untitled)"
     url = str(content.get("url") or "").strip()
+    body = str(content.get("body") or "")
     state = str(content.get("state") or "").strip()
     assignees_nodes = ((content.get("assignees") or {}).get("nodes") or []) if content else []
     assignees = ", ".join(str(n.get("login") or "").strip() for n in assignees_nodes if n.get("login"))
+    source, section = _parse_body_metadata(body)
 
     due_date = ""
     status = ""
     track = ""
     slot = ""
+    time_window = ""
     for fv in (node.get("fieldValues") or {}).get("nodes") or []:
         field_name = str(((fv.get("field") or {}).get("name")) or "").strip()
         kind = str(fv.get("__typename") or "")
@@ -218,10 +263,14 @@ def _parse_project_item(
                 track = str(fv.get("name") or "").strip()
             elif field_name == slot_field_name:
                 slot = str(fv.get("name") or "").strip()
+            elif field_name == time_window_field_name:
+                time_window = str(fv.get("name") or "").strip()
         elif kind == "ProjectV2ItemFieldTextValue" and field_name == track_field_name and not track:
             track = str(fv.get("text") or "").strip()
         elif kind == "ProjectV2ItemFieldTextValue" and field_name == slot_field_name and not slot:
             slot = str(fv.get("text") or "").strip()
+        elif kind == "ProjectV2ItemFieldTextValue" and field_name == time_window_field_name and not time_window:
+            time_window = str(fv.get("text") or "").strip()
 
     return ProjectTask(
         item_id=str(node.get("id") or "").strip(),
@@ -232,8 +281,11 @@ def _parse_project_item(
         status=status,
         track=track,
         slot=slot,
+        time_window=time_window,
         assignees=assignees,
         state=state,
+        source=source,
+        section=section,
     )
 
 
@@ -241,6 +293,26 @@ def _matches_slot(item_slot: str, target_slots: set[str]) -> bool:
     if not target_slots:
         return True
     return _norm(item_slot) in target_slots
+
+
+def _resolve_slot_filters_for_target_date(
+    *,
+    selected_slots: list[str],
+    target_date: str,
+) -> tuple[list[str], bool, str]:
+    if not target_date:
+        return selected_slots, False, ""
+
+    is_trading_day, reason = get_krx_trading_day_status(date.fromisoformat(target_date))
+    if is_trading_day:
+        return selected_slots, False, reason
+
+    normalized = {_norm(slot) for slot in selected_slots if slot.strip()}
+    if normalized == {"intraday"}:
+        return [], True, reason
+    if normalized and "intraday" not in normalized:
+        return ["__holiday_skip__"], True, reason
+    return selected_slots, True, reason
 
 
 def fetch_project_tasks(
@@ -252,8 +324,11 @@ def fetch_project_tasks(
     status_field_name: str,
     track_field_name: str,
     slot_field_name: str,
+    time_window_field_name: str,
     include_statuses: list[str],
     include_slots: list[str],
+    target_date: str | None,
+    include_overdue: bool,
 ) -> tuple[str, list[ProjectTask]]:
     query = _graphql_query()
     cursor: str | None = None
@@ -276,6 +351,7 @@ def fetch_project_tasks(
                 status_field_name=status_field_name,
                 track_field_name=track_field_name,
                 slot_field_name=slot_field_name,
+                time_window_field_name=time_window_field_name,
             )
             if not item:
                 continue
@@ -283,6 +359,14 @@ def fetch_project_tasks(
                 continue
             if not _matches_slot(item.slot, slot_set):
                 continue
+            if target_date:
+                if not item.due_date:
+                    continue
+                if include_overdue:
+                    if item.due_date > target_date:
+                        continue
+                elif item.due_date != target_date:
+                    continue
             out.append(item)
         page_info = page.get("pageInfo") or {}
         if not page_info.get("hasNextPage"):
@@ -316,6 +400,10 @@ def render_markdown(
     project_number: int,
     project_title: str,
     generated_at: str,
+    target_date: str | None,
+    include_overdue: bool,
+    holiday_override: bool,
+    holiday_reason: str,
     statuses: list[str],
     slots: list[str],
     tasks: list[ProjectTask],
@@ -332,6 +420,9 @@ def render_markdown(
     lines.append("")
     lines.append(f"- 생성시각: `{generated_at}`")
     lines.append(f"- 프로젝트: `{owner}` / `#{project_number}` / `{project_title or '-'}`")
+    lines.append(f"- 기준일자: `{target_date or '-'}` / overdue 포함: `{include_overdue}`")
+    if holiday_override:
+        lines.append(f"- 휴장일 재분류: `true` / 사유: `{holiday_reason or '-'}` / 슬롯정책: `all -> INTRADAY`")
     lines.append(f"- 상태필터: `{', '.join(statuses) if statuses else '전체'}`")
     lines.append(f"- 슬롯필터: `{', '.join(slots) if slots else '전체'}`")
     lines.append(f"- 후보건수: `{len(tasks)}` / 지시반영건수: `{len(top)}`")
@@ -347,8 +438,12 @@ def render_markdown(
         for idx, item in enumerate(top, start=1):
             lines.append(f"{idx}. `{item.title}`")
             lines.append(
-                f"   - 상태: `{item.status or '-'}` / 슬롯: `{item.slot or '-'}` / 트랙: `{item.track or '-'}` / Due: `{item.due_date or '-'}`"
+                f"   - 상태: `{item.status or '-'}` / 슬롯: `{item.slot or '-'}` / 트랙: `{item.track or '-'}` / Due: `{item.due_date or '-'}` / TimeWindow: `{item.time_window or '-'}`"
             )
+            if item.section:
+                lines.append(f"   - 섹션: `{item.section}`")
+            if item.source:
+                lines.append(f"   - 소스: `{item.source}`")
             if item.assignees:
                 lines.append(f"   - 담당자: `{item.assignees}`")
             if item.url:
@@ -363,12 +458,13 @@ def render_markdown(
     lines.append("- 판정, 근거, 다음 액션 순서로 보고")
     lines.append("- 관련 문서/체크리스트 동시 업데이트")
     lines.append("- 테스트/검증 결과 포함")
+    lines.append("- workorder에 적힌 Source/Section을 기준으로 우선 문맥을 맞출 것")
     lines.append("")
     lines.append("[대상 항목]")
     if top:
         for item in top:
             lines.append(
-                f"- {item.title} | 상태={item.status or '-'} | 슬롯={item.slot or '-'} | Due={item.due_date or '-'} | ID={item.item_id}"
+                f"- {item.title} | 상태={item.status or '-'} | 슬롯={item.slot or '-'} | Due={item.due_date or '-'} | Source={item.source or '-'} | Section={item.section or '-'} | ID={item.item_id}"
             )
     else:
         lines.append("- 없음")
@@ -382,7 +478,14 @@ def write_markdown(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def build_daily_workorder(*, output: Path, max_items: int, slots: list[str] | None = None) -> dict[str, Any]:
+def build_daily_workorder(
+    *,
+    output: Path,
+    max_items: int,
+    slots: list[str] | None = None,
+    target_date: str | None = None,
+    include_overdue: bool | None = None,
+) -> dict[str, Any]:
     token = _env("GH_PROJECT_TOKEN", os.getenv("GITHUB_TOKEN"))
     owner = _env("GH_PROJECT_OWNER")
     number = int(_env("GH_PROJECT_NUMBER"))
@@ -390,9 +493,18 @@ def build_daily_workorder(*, output: Path, max_items: int, slots: list[str] | No
     status_field_name = _env("GH_PROJECT_STATUS_FIELD_NAME", "Status")
     track_field_name = _env("GH_PROJECT_TRACK_FIELD_NAME", "Track")
     slot_field_name = _env("GH_PROJECT_SLOT_FIELD_NAME", "Slot")
+    time_window_field_name = _env("GH_PROJECT_TIME_WINDOW_FIELD_NAME", "TimeWindow")
     statuses = _split_csv(os.getenv("GH_CODEX_WORKORDER_STATUSES", "Todo,In Progress"))
     configured_slots = _split_csv(os.getenv("GH_CODEX_WORKORDER_SLOTS", ""))
     selected_slots = slots if slots is not None else configured_slots
+    resolved_target_date = target_date or _local_today_iso()
+    resolved_include_overdue = (
+        include_overdue if include_overdue is not None else _env_bool("CODEX_WORKORDER_INCLUDE_OVERDUE", True)
+    )
+    effective_slots, holiday_override, holiday_reason = _resolve_slot_filters_for_target_date(
+        selected_slots=selected_slots,
+        target_date=resolved_target_date,
+    )
 
     project_title, tasks = fetch_project_tasks(
         token=token,
@@ -402,8 +514,11 @@ def build_daily_workorder(*, output: Path, max_items: int, slots: list[str] | No
         status_field_name=status_field_name,
         track_field_name=track_field_name,
         slot_field_name=slot_field_name,
+        time_window_field_name=time_window_field_name,
         include_statuses=statuses,
-        include_slots=selected_slots,
+        include_slots=effective_slots,
+        target_date=resolved_target_date,
+        include_overdue=resolved_include_overdue,
     )
     generated_at = datetime.now().astimezone().isoformat(timespec="seconds")
     markdown = render_markdown(
@@ -411,8 +526,12 @@ def build_daily_workorder(*, output: Path, max_items: int, slots: list[str] | No
         project_number=number,
         project_title=project_title,
         generated_at=generated_at,
+        target_date=resolved_target_date,
+        include_overdue=resolved_include_overdue,
+        holiday_override=holiday_override,
+        holiday_reason=holiday_reason,
         statuses=statuses,
-        slots=selected_slots,
+        slots=effective_slots,
         tasks=tasks,
         max_items=max_items,
     )
@@ -422,8 +541,12 @@ def build_daily_workorder(*, output: Path, max_items: int, slots: list[str] | No
         "project_owner": owner,
         "project_number": number,
         "project_title": project_title,
+        "target_date": resolved_target_date,
+        "include_overdue": resolved_include_overdue,
         "status_filter": statuses,
-        "slot_filter": selected_slots,
+        "slot_filter": effective_slots,
+        "holiday_override": holiday_override,
+        "holiday_reason": holiday_reason,
         "candidate_tasks": len(tasks),
         "output": str(output),
         "max_items": max_items,
@@ -435,10 +558,18 @@ def main() -> int:
     parser.add_argument("--output", default="tmp/codex_daily_workorder.md", help="Output markdown path")
     parser.add_argument("--max-items", type=int, default=20, help="Max items in workorder")
     parser.add_argument("--slot", action="append", default=[], help="Target slot filter (repeatable)")
+    parser.add_argument("--target-date", default="", help="Target due date in YYYY-MM-DD. Defaults to local today.")
+    parser.add_argument("--no-overdue", action="store_true", help="Exclude overdue items and keep only target date.")
     args = parser.parse_args()
 
     slot_filter = [s.strip() for s in args.slot if s.strip()] or None
-    summary = build_daily_workorder(output=Path(args.output), max_items=max(1, args.max_items), slots=slot_filter)
+    summary = build_daily_workorder(
+        output=Path(args.output),
+        max_items=max(1, args.max_items),
+        slots=slot_filter,
+        target_date=args.target_date.strip() or None,
+        include_overdue=not args.no_overdue,
+    )
     print(json.dumps(summary, ensure_ascii=False))
     return 0
 

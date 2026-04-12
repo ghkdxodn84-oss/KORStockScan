@@ -25,7 +25,10 @@
 5. 제목에 시간 범위(`13:20~13:35`)가 있으면 Slot 기본시간보다 우선 적용
 6. `Slot`이 없고 제목/TimeWindow 시간도 없으면 종일(all-day) 이벤트로 생성
 7. 항목 식별은 `extendedProperties.private.gh_project_item_id` 사용
-8. 소스는 항상 GitHub, 캘린더는 표시/알림 레이어
+8. 현재 Project 집합에 없는 기존 관리 이벤트는 다음 sync에서 삭제한다
+9. 소스는 항상 GitHub, 캘린더는 표시/알림 레이어
+10. 휴장일에는 슬롯 기본시간을 `INTRADAY` 기준으로 재매핑한다
+11. 단, 제목 시간범위나 `TimeWindow`가 있으면 그 시간을 우선한다
 
 문서 backlog 반영 동작:
 
@@ -40,6 +43,21 @@
 6. `Slot`이 비어있는 관리 항목은 문서 sync 시 자동 추론하여 채움
    - 기본 규칙: `Plan/Checklist0413 -> PREOPEN`, `ScalpingLogic -> INTRADAY`, `AIPrompt -> POSTCLOSE`
    - 키워드 우선 규칙: `장전/PREOPEN`, `장중/INTRADAY`, `장후/EOD/리포트/검증` 매칭 시 트랙 기본값보다 우선
+
+문서별 canonical 파싱 섹션:
+
+1. `plan-korStockScanPerformanceOptimization.prompt.md`
+   - `### 아직 남아있는 일`만 사용
+   - `즉시 착수 체크리스트`는 요약/운영 메모로 보고 Project 항목 소스로는 쓰지 않는다
+2. `2026-04-13-stage2-todo-checklist.md`
+   - 미완료 체크박스(`- [ ]`)만 사용
+3. `2026-04-10-scalping-ai-coding-instructions.md`
+   - `#### 0-1b/2-1/2-2/3-1/3-2` 상세 단계만 사용
+   - 상태 메모의 `잔여:` 요약은 중복 소스로 쓰지 않는다
+4. `2026-04-11-scalping-ai-prompt-coding-instructions.md`
+   - `## 작업 N.` 상세 작업만 사용
+   - 우선순위 요약 표는 중복 소스로 쓰지 않는다
+   - `P0` 작업은 `DOC_BACKLOG_TODAY` 또는 `Asia/Seoul` 오늘 날짜를 Due로 부여한다
 
 ---
 
@@ -139,9 +157,24 @@ Settings -> Secrets and variables -> Actions
 - `DOC_BACKLOG_SYNC_DRY_RUN`
   - `true`면 문서 파싱 후 생성 예정 수량만 출력
   - `false`면 실제 Project Draft Item 생성
+- `DOC_BACKLOG_TODAY`
+  - 선택값
+  - 지정 시 문서 sync의 `오늘 Due` 기준일을 고정
+- `DOC_BACKLOG_TIMEZONE`
+  - 기본: `Asia/Seoul`
+  - `DOC_BACKLOG_TODAY` 미지정 시 오늘 날짜 계산에 사용
 - `GH_CODEX_WORKORDER_STATUSES`
   - 기본: `Todo,In Progress`
   - Codex 일일 작업지시서에 포함할 Status 목록
+- `CODEX_WORKORDER_TARGET_DATE`
+  - 기본: 로컬 오늘(`Asia/Seoul`)
+  - Codex 일일 작업지시서의 Due 기준일
+- `CODEX_WORKORDER_TIMEZONE`
+  - 기본: `Asia/Seoul`
+  - `CODEX_WORKORDER_TARGET_DATE` 미지정 시 오늘 날짜 계산에 사용
+- `CODEX_WORKORDER_INCLUDE_OVERDUE`
+  - 기본: `true`
+  - `true`면 오늘 Due 이전 미완료 항목도 함께 포함
 - `CODEX_WORKORDER_MAX_ITEMS`
   - 기본: `20`
   - 일일 작업지시서 최대 항목 수
@@ -184,14 +217,20 @@ Codex 일일 작업지시서 자동 생성:
    - `PREOPEN`: `20 23 * * *` (KST 08:20)
    - `INTRADAY`: `0 1,4 * * *` (KST 10:00, 13:00)
    - `POSTCLOSE`: `40 6 * * *` (KST 15:40)
-2. 실행 완료 후 `Actions run summary`의 `Codex Daily Workorder` 섹션에서 본문을 복사
-3. 복사한 본문을 Codex 대화에 붙여 실행 지시
-4. 수동 실행 시 `slot` 입력에서 `ALL` 또는 단일 슬롯을 선택할 수 있다.
+2. 수동 실행 시 `target_date`를 비우면 KST 오늘 기준으로 생성하고, 필요하면 `YYYY-MM-DD`로 날짜를 직접 고정한다
+3. `include_overdue=true`가 기본이며, target date 이전 미완료 항목까지 함께 포함한다
+4. 휴장일에는 `PREOPEN/POSTCLOSE` 슬롯 실행을 건너뛰고 `INTRADAY` workorder 하나로 통합한다
+5. 작업지시서는 기본적으로 `오늘 Due(+선택적으로 overdue)` 항목만 포함한다
+6. 실행 완료 후 `Actions run summary`의 `Codex Daily Workorder` 섹션에서 본문을 복사
+   - 본문에는 `Source`, `Section`, `Project Item ID`가 함께 포함돼 바로 Codex 지시문으로 사용할 수 있다
+7. 복사한 본문을 Codex 대화에 붙여 실행 지시
+8. 수동 실행 시 `slot`, `target_date`, `include_overdue` 입력을 함께 사용할 수 있다.
 
 슬롯 운영 원칙:
 
 1. Project 항목 생성 시 `Slot`을 반드시 지정한다.
 2. 슬롯이 비어있는 항목은 슬롯 자동 작업지시서에 포함되지 않는다.
+3. 휴장일에는 문서상 원래 슬롯과 무관하게 실행 큐는 `INTRADAY`로 본다.
 
 ---
 
@@ -242,3 +281,11 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar --dry-r
 ```
 
 필요 환경변수는 위 Step B와 동일하다.
+
+로컬 workorder 생성:
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.engine.build_codex_daily_workorder \
+  --target-date 2026-04-12 \
+  --output tmp/codex_daily_workorder_2026-04-12.md
+```
