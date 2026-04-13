@@ -3,7 +3,9 @@ from src.engine.sync_docs_backlog_to_project import (
     DOC_PROMPT,
     DOC_SCALPING,
     DOC_PLAN,
+    DOC_CHECKLIST,
     ProjectItem,
+    _due_date_from_checklist_path,
     _desired_status_option_id,
     _env,
     _env_bool,
@@ -32,8 +34,34 @@ def test_parse_plan_tasks_has_remaining_items():
 def test_parse_checklist_excludes_done_checkboxes():
     tasks = parse_checklist_tasks()
     titles = [t.title for t in tasks]
-    assert any("원격 `latency remote_v2` 설정 유지 상태 확인".replace("`", "") in title for title in titles)
+    assert any("RELAX-LATENCY 반복 재현성 관찰" in title for title in titles)
+    assert all(t.due_date == "2026-04-14" for t in tasks)
+
+
+def test_parse_checklist_uses_env_override(monkeypatch):
+    monkeypatch.setenv(
+        "DOC_CHECKLIST_PATH",
+        str(DOC_CHECKLIST.parent / "2026-04-14-stage2-todo-checklist.md"),
+    )
+    tasks = parse_checklist_tasks()
+    titles = [t.title for t in tasks]
+    assert any("RELAX-LATENCY 운영서버 승격 가능/불가 1차 결론" in title for title in titles)
     assert all("선반영 범위 확정" not in title for title in titles)
+
+
+def test_parse_checklist_fallback_when_primary_missing(monkeypatch):
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project.DOC_CHECKLIST",
+        DOC_CHECKLIST.parent / "__missing-checklist__.md",
+    )
+    tasks = parse_checklist_tasks()
+    assert len(tasks) > 0
+    assert all("2026-04-14-stage2-todo-checklist.md" in t.source for t in tasks)
+
+
+def test_due_date_from_checklist_path():
+    assert _due_date_from_checklist_path(DOC_CHECKLIST) == "2026-04-13"
+    assert _due_date_from_checklist_path(DOC_CHECKLIST.parent / "misc.md") == ""
 
 
 def test_parse_scalping_logic_has_phase2_and_phase3():
@@ -49,11 +77,19 @@ def test_parse_prompt_has_detail_tasks_with_due_for_p0(monkeypatch):
     tasks = parse_prompt_tasks()
     titles = [t.title for t in tasks]
     task_map = {t.title: t for t in tasks}
-    assert "작업 1 SCALP_PRESET_TP SELL 의도 확인" in task_map
     assert any(title.startswith("작업 10 ") for title in titles)
-    assert task_map["작업 1 SCALP_PRESET_TP SELL 의도 확인"].due_date == "2026-04-12"
-    assert task_map["작업 1 SCALP_PRESET_TP SELL 의도 확인"].section.startswith("P0.")
+    assert "작업 1 SCALP_PRESET_TP SELL 의도 확인" not in task_map
+    assert "작업 2 AI 운영계측 추가" not in task_map
+    assert "작업 3 HOLDING hybrid override 조건 명세" not in task_map
     assert task_map["작업 10 HOLDING hybrid 적용"].due_date == ""
+
+
+def test_parse_prompt_excludes_done_marker_and_keeps_open_tasks():
+    tasks = parse_prompt_tasks()
+    titles = [t.title for t in tasks]
+    assert "작업 1 SCALP_PRESET_TP SELL 의도 확인" not in titles
+    assert "작업 3 HOLDING hybrid override 조건 명세" not in titles
+    assert any(title.startswith("작업 4 ") for title in titles)
 
 
 def test_parse_prompt_fallback_when_primary_missing(monkeypatch):

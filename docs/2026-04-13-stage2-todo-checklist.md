@@ -232,23 +232,23 @@ PYTHONPATH=. .venv/bin/python -m src.engine.watching_prompt_75_shadow_report \
   - `원격 경량 프로파일링 장중 1차/2차 수집`처럼 1회성 완료 작업만 즉시 `- [x]`로 닫는다.
   - `RELAX-LATENCY / RELAX-DYNSTR / RELAX-OVERBOUGHT / 체결 품질 / 미결 이월건 추적`은 장후 종합판정 전까지 관찰형 작업으로 보고 `- [ ]`를 유지한다.
 
-- [ ] `RELAX-LATENCY` 관찰
+- [x] `RELAX-LATENCY` 관찰
   - `AI BUY -> entry_armed -> budget_pass -> submitted` 전환율 추적
   - `quote_stale=False latency_block` 표본 우선 기록
   - `expired_armed`와 `latency_block`을 분리 기록
   - `remote_v2 vs local` 퍼널/체결 품질 차이를 함께 기록
   - 원격 우선, 본서버는 결과 확인 전 전역 완화 금지
-- [ ] `RELAX-DYNSTR` 관찰
+- [x] `RELAX-DYNSTR` 관찰
   - `below_window_buy_value` / `below_buy_ratio` / `below_strength_base`를 분리 기록
   - `momentum_tag`, `threshold_profile`, `canary_applied`를 같이 묶어 본다
   - `AI 입력 피처와 중복되는 차단인지` 감사 메모를 남긴다
-- [ ] `RELAX-OVERBOUGHT` 관찰
+- [x] `RELAX-OVERBOUGHT` 관찰
   - `blocked_overbought` 표본만 누적
   - missed-winner 여부를 장후까지 분리 보존
-- [ ] 체결 품질 관찰
+- [x] 체결 품질 관찰
   - `full fill / partial fill`을 분리 기록
   - `preset_exit_sync_mismatch` 여부를 같이 본다
-- [ ] 미결 이월건 추적
+- [x] 미결 이월건 추적
   - `스윙 Gatekeeper missed case` 표본 `N>=5` 계속 누적
   - `hard time stop shadow` 영향 메모
   - `live hard stop` 계열(`preset/protect/scalp_hard_stop`) 분기 확인 메모
@@ -391,16 +391,86 @@ PYTHONPATH=. .venv/bin/python -m src.engine.watching_prompt_75_shadow_report \
 
 ## 장후 체크리스트 (15:30~)
 
-- [ ] `RELAX-LATENCY` 원격 결과 기준 `유지/강화/축소/롤백` 재판정
-- [ ] `RELAX-DYNSTR` 재설계 후보안 문서화
-- [ ] `RELAX-OVERBOUGHT` 표본 누적 여부 재판정
-- [ ] 원격 수집 안정화 패치 필요 시 `partial_snapshot_only` fallback까지 포함해 재작업지시
-- [ ] 원격 경량 프로파일링 결과 정리 (`15:35~15:50`, hot path 후보 1~3개 확정)
-- [ ] `post-sell` 지표 기준 `원격 1축 매도시점 canary` 후보안 작성 (`15:35~15:50`)
+- [x] `RELAX-LATENCY` 원격 결과 기준 `유지/강화/축소/롤백` 재판정
+- [x] `RELAX-DYNSTR` 재설계 후보안 문서화
+- [x] `RELAX-OVERBOUGHT` 표본 누적 여부 재판정
+- [x] 원격 수집 안정화 패치 필요 시 `partial_snapshot_only` fallback까지 포함해 재작업지시
+- [x] 원격 경량 프로파일링 결과 정리 (`15:35~15:50`, hot path 후보 1~3개 확정)
+- [x] `post-sell` 지표 기준 `원격 1축 매도시점 canary` 후보안 작성 (`15:35~15:50`)
   - `estimated_extra_upside_10m_krw_sum`, `timing_tuning_pressure_score`, `exit_rule_tuning`, `tag_tuning`, `priority_actions`를 함께 검토한다.
   - 전면 청산 규칙 교체는 금지하고 `exit_rule` 또는 `position_tag` 기준 국소 미세조정안만 다음 세션 원격 canary 후보로 정리한다.
-- [ ] `live hard stop taxonomy audit` 결과 정리
-- [ ] `2026-04-13` 결과를 다음 세션 플랜/체크리스트에 승격
+- [x] `live hard stop taxonomy audit` 결과 정리
+- [x] `2026-04-13` 결과를 다음 세션 플랜/체크리스트에 승격
+
+### 2026-04-13 15:44 KST 장후 확정 메모
+
+- 시간 조건:
+  - 현재 시각 `15:44 KST`
+  - workorder 기준 `POSTCLOSE 15:40~16:10` 구간이 시작돼 장후 확정 작업을 수행했다.
+- `RELAX-LATENCY` 재판정:
+  - 판정: `강화 유지`
+  - 근거:
+    - `server_comparison_2026-04-13.md` 기준 local/remote 모두 `submitted_stocks=0`, `holding_started` 신규 전환 없음.
+    - `gatekeeper_eval_ms_p95`는 local `24171ms`, remote `23826ms`로 여전히 재진입 가능 구간까지 내려오지 못했다.
+    - 다만 `quote_stale=False`를 포함한 `latency_danger_reasons` 분해와 원격 `remote_v2` 관찰 자체는 유효하므로 즉시 롤백보다 반복 재현성 확인이 우선이다.
+  - 다음 액션:
+    - `2026-04-14`에도 `quote_stale=False latency_block`, `expired_armed`, `budget_pass -> submitted`를 같은 포맷으로 반복 관찰한다.
+- `RELAX-DYNSTR` 재설계 후보안:
+  - 판정: `실전 유지`, `재설계 1축만 다음 세션 후보화`
+  - 근거:
+    - 장중 전 구간에서 `blocked_strength_momentum`이 계속 2순위 blocker였고, 세부 사유 `below_window_buy_value / below_buy_ratio / below_strength_base`가 이미 로그에 분리되어 있다.
+    - `momentum_tag=SCANNER`, `threshold_profile=default` 묶음이 유지돼 다음 세션에는 `below_window_buy_value` 축만 별도 canary 후보로 좁히는 것이 맞다.
+  - 다음 액션:
+    - `threshold_profile=default` 한정 `below_window_buy_value` 완화 여부만 shadow 또는 원격 단일축 후보로 문서화한다.
+- `RELAX-OVERBOUGHT` 재판정:
+  - 판정: `유지`
+  - 근거:
+    - latest stage 기준 `blocked_overbought=20`이 유지됐고, `WAIT 65` missed-winner 묶음도 `overbought`보다 `latency/strength` 축과 더 강하게 연결됐다.
+    - 오늘 `shadow_samples=0`이라 과열 완화를 재오픈할 신규 정합성 근거가 없다.
+  - 다음 액션:
+    - `blocked_overbought`가 직접 `MISSED_WINNER`와 붙는 표본이 생길 때까지 실전 완화 금지를 유지한다.
+- 체결 품질 / 미결 이월:
+  - 판정: `추가 표본 필요`
+  - 근거:
+    - `entered_rows=1`, `completed_trades=1`, `holding_events=0`이라 `full fill / partial fill / preset_exit_sync_mismatch` 일반화는 불가.
+    - `entry_armed_expired_after_wait`는 `세미파이브 26`, `태광 18`, `레이크머티리얼즈 5`, `코세스 4`로 누적돼 `태광` 중심 이월 추적은 계속 유효하다.
+  - 다음 액션:
+    - `2026-04-14` 장중에는 신규 `submitted/holding_started` 발생 시 `full fill / partial fill`과 `preset_exit_sync_mismatch`를 즉시 분리 기록한다.
+- 원격 경량 프로파일링 결과 정리:
+  - 판정: `hot path 후보는 latency 평가 경로 3축`
+  - 근거:
+    - `afternoon` 산출물 기준 `pipeline_line_count=419629`, `latency_block_rows=509`, `latest_event_at=13:42:11`.
+    - thread/top snapshot에서 `bot_main.py` 일부 워커가 `33.3%`, `13.3%`, `15.9%` CPU를 지속 사용했고, `gatekeeper_eval_ms_avg/p95`가 높게 유지됐다.
+  - hot path 후보 1~3개:
+    - `Gatekeeper evaluation path` 자체의 장시간 평가 (`gatekeeper_eval_ms_avg/p95` 고정 고지연)
+    - `ws_jitter_too_high / ws_age_too_high` 판정 직전의 quote freshness 갱신 경로
+    - `other_danger`로 묶여 남는 비정형 danger reason 정규화 경로
+  - 다음 액션:
+    - 다음 세션에는 `other_danger`를 더 잘게 쪼갤지, `quote_stale=False` cohort만 별도 표본화할지 둘 중 한 축만 선택한다.
+- `post-sell` 기준 원격 1축 매도시점 canary 후보안:
+  - 판정: `오늘은 후보안만 작성`, `실전 적용 보류`
+  - 근거:
+    - `post-sell` safe 비교는 local/remote 모두 `total_candidates=1`, `evaluated_candidates=1`로 표본이 너무 적다.
+    - 오늘은 `estimated_extra_upside_10m_krw_sum`, `timing_tuning_pressure_score`, `exit_rule_tuning`, `tag_tuning`, `priority_actions`를 방향 결정용으로 읽기엔 표본력이 부족하다.
+  - 후보안:
+    - 전면 청산 규칙 교체는 금지하고 `SCALP_PRESET_TP` 또는 특정 `position_tag` 한정 `DROP` 민감도만 보는 원격 shadow canary 후보로 남긴다.
+    - `SELL` action 실집행은 계속 금지하고, `FORCE_EXIT/DROP` 표본 누적 후에만 재검토한다.
+- 원격 수집 안정화 재작업지시:
+  - 판정: `즉시 코드 재작업 불필요`
+  - 근거:
+    - 현재 `fetch_remote_scalping_logs`는 `live snapshot copy -> tar` + `snapshot_only_on_live_failure` fallback을 이미 사용 중이고, 오늘 장전 smoke도 성공했다.
+    - 오늘 기준 추가 실패 근거가 없으므로 `partial_snapshot_only`까지 새로 넓히기보다 기존 fallback 재실행 조건을 유지하는 편이 맞다.
+  - 다음 액션:
+    - 다음 실패가 실제 재현될 때만 `partial_snapshot_only` fallback을 별도 축으로 추가한다.
+- live hard stop taxonomy audit:
+  - 판정: `live/shadow 구분 가능 상태`
+  - 근거:
+    - 기준 문서와 코드상 분류는 `scalp_preset_hard_stop_pct`, `protect_hard_stop`, `scalp_hard_stop_pct`가 live exit이고, `hard_time_stop_shadow`는 shadow-only다.
+    - 오늘 관찰에서는 `hard stop / protect / preset` 계열 신규 표본이 없어 구조 설명은 가능하지만 성과 판정은 아직 불가하다.
+  - 다음 액션:
+    - `2026-04-14`에는 해당 exit_rule 표본이 생기면 `entry_mode/position_tag`와 함께 바로 묶어 기록한다.
+- 다음 세션 승격:
+  - `docs/2026-04-14-stage2-todo-checklist.md`를 신규 생성해 오늘 결론을 `2026-04-14` 장전/장중/장후 체크리스트로 승격했다.
 
 ## 이월 메모
 
@@ -418,16 +488,16 @@ PYTHONPATH=. .venv/bin/python -m src.engine.watching_prompt_75_shadow_report \
 - [2026-04-10-scalping-expert-proposals-not-fit.md](./2026-04-10-scalping-expert-proposals-not-fit.md)
 
 <!-- AUTO_SERVER_COMPARISON_START -->
-### 본서버 vs songstockscan 자동 비교 (`2026-04-13 12:00:56`)
+### 본서버 vs songstockscan 자동 비교 (`2026-04-13 15:46:39`)
 
 - 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
 - 상세 리포트: `data/report/server_comparison/server_comparison_2026-04-13.md`
-- `Trade Review`: status=`ok`, differing_safe_metrics=`2`
-  - all_rows local=106 remote=109 delta=3.0; expired_rows local=63 remote=65 delta=2.0
-- `Performance Tuning`: status=`ok`, differing_safe_metrics=`10`
-  - gatekeeper_eval_ms_avg local=12114.81 remote=13082.27 delta=967.46; gatekeeper_eval_ms_p95 local=24171.0 remote=23826.0 delta=-345.0; holding_review_ms_avg local=2315.06 remote=2080.6 delta=-234.46
-- `Post Sell Feedback`: status=`ok`, differing_safe_metrics=`0`
+- `Trade Review`: status=`ok`, differing_safe_metrics=`5`
+  - all_rows local=129 remote=131 delta=2.0; total_trades local=2 remote=1 delta=-1.0; completed_trades local=2 remote=1 delta=-1.0
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
   - safe 기준 차이 없음
-- `Entry Pipeline Flow`: status=`ok`, differing_safe_metrics=`3`
-  - total_events local=258443 remote=260079 delta=1636.0; tracked_stocks local=101 remote=99 delta=-2.0; blocked_stocks local=28 remote=30 delta=2.0
+- `Post Sell Feedback`: status=`ok`, differing_safe_metrics=`2`
+  - total_candidates local=2 remote=1 delta=-1.0; evaluated_candidates local=2 remote=1 delta=-1.0
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
 <!-- AUTO_SERVER_COMPARISON_END -->

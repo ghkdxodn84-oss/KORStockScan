@@ -180,6 +180,32 @@ def _prompt_doc_candidates() -> list[Path]:
     return deduped
 
 
+def _checklist_doc_candidates() -> list[Path]:
+    candidates: list[Path] = []
+    env_path = os.getenv("DOC_CHECKLIST_PATH", "").strip()
+    if env_path:
+        candidates.append(Path(env_path))
+    candidates.extend(sorted(Path("docs").glob("*-stage2-todo-checklist.md"), reverse=True))
+    candidates.append(DOC_CHECKLIST)
+
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for p in candidates:
+        key = str(p)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(p)
+    return deduped
+
+
+def _due_date_from_checklist_path(path: Path) -> str:
+    m = re.match(r"(\d{4}-\d{2}-\d{2})-stage2-todo-checklist\.md$", path.name)
+    if not m:
+        return ""
+    return m.group(1)
+
+
 def _extract_section_lines(text: str, heading_prefix: str) -> list[str]:
     lines = text.splitlines()
     start = -1
@@ -231,10 +257,11 @@ def parse_plan_tasks() -> list[BacklogTask]:
 
 
 def parse_checklist_tasks() -> list[BacklogTask]:
-    loaded = _read_candidates([DOC_CHECKLIST])
+    loaded = _read_candidates(_checklist_doc_candidates())
     if not loaded:
         return []
     source_path, text = loaded
+    due_date = _due_date_from_checklist_path(source_path)
     tasks: list[BacklogTask] = []
     for line in text.splitlines():
         m = re.match(r"^\s*-\s*\[ \]\s+(.+?)\s*$", line)
@@ -250,7 +277,7 @@ def parse_checklist_tasks() -> list[BacklogTask]:
                 source=str(source_path),
                 section="체크박스 미완료",
                 track="Checklist0413",
-                due_date="2026-04-13",
+                due_date=due_date,
             )
         )
     return tasks
@@ -287,25 +314,45 @@ def parse_prompt_tasks() -> list[BacklogTask]:
     tasks: list[BacklogTask] = []
     today_iso = _local_today_iso()
     current_phase = "작업 상세"
-    for line in text.splitlines():
-        phase = re.match(r"^\s*##\s+(P[0-9][A-Z0-9\-]*\.\s+.+?)\s*$", line)
-        if phase:
-            current_phase = phase.group(1).strip()
-            continue
-        m = re.match(r"^\s*##\s+작업\s+(\d+)\.\s+(.+?)\s*$", line)
-        if not m:
-            continue
+    lines = text.splitlines()
+    current_task_name = ""
+    current_task_done = False
+
+    def _flush_current_task() -> None:
+        nonlocal current_task_name, current_task_done
+        if not current_task_name or current_task_done:
+            current_task_name = ""
+            current_task_done = False
+            return
         due_date = today_iso if current_phase.startswith("P0.") else ""
-        task_name = re.sub(r"`([^`]+)`", r"\1", m.group(2).strip())
         tasks.append(
             BacklogTask(
-                title=f"작업 {m.group(1)} {task_name}",
+                title=current_task_name,
                 source=str(source_path),
                 section=current_phase,
                 track="AIPrompt",
                 due_date=due_date,
             )
         )
+        current_task_name = ""
+        current_task_done = False
+
+    for line in lines:
+        phase = re.match(r"^\s*##\s+(P[0-9][A-Z0-9\-]*\.\s+.+?)\s*$", line)
+        if phase:
+            _flush_current_task()
+            current_phase = phase.group(1).strip()
+            continue
+        m = re.match(r"^\s*##\s+작업\s+(\d+)\.\s+(.+?)\s*$", line)
+        if m:
+            _flush_current_task()
+            task_name = re.sub(r"`([^`]+)`", r"\1", m.group(2).strip())
+            current_task_name = f"작업 {m.group(1)} {task_name}"
+            current_task_done = False
+            continue
+        if current_task_name and re.match(r"^\s*-\s*자동동기화 상태:\s*Done\s*$", line):
+            current_task_done = True
+    _flush_current_task()
     return tasks
 
 

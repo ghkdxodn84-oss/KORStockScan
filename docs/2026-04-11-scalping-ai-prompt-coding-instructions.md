@@ -97,6 +97,13 @@
 - 따라서 현 단계 판정은 `즉시 제거`가 아니라 `향후 HOLDING/exit 전용 action schema 대비 placeholder 보존 + 주석/로그 명시`가 맞다.
 - 실제 운영 로그에는 `ai_action_raw`, `ai_action_used_for_exit`를 남겨 향후 전용 action 체계 분리 전후를 비교 가능하게 유지한다.
 
+### 2026-04-13 POSTCLOSE 운영 재확인
+
+- `15:40~16:10` workorder 기준으로 재확인했고, 오늘 장후에도 `SELL`을 실제 실집행 action으로 승격할 근거는 추가되지 않았다.
+- 오늘 우선순위는 `RELAX-LATENCY` 관찰과 `post-sell / hard stop taxonomy` 해석 보강이므로, 이 항목은 `placeholder 보존 + 운영 로그 비교축 유지`로 계속 닫는 것이 맞다.
+- 다음 구현 액션은 `SELL` 제거가 아니라 `HOLDING 전용 action schema`가 실제로 분리될 때 `ai_action_schema_version`과 함께 canary 비교축으로 묶는 것이다.
+- 자동동기화 상태: Done
+
 ### 로그/산출물
 
 - `ai_action_schema_version`
@@ -175,6 +182,14 @@ AI 모델 품질과 출력/운영 안정성 문제를 분리해서 본다.
   - `blocked_stage`
 - 아직 `submitted/holding_started` 표본은 없어 체결 이후 품질 검증은 장후까지 추가 관찰이 필요하다.
 
+### 2026-04-13 13:39 KST 운영계측 완료 확인
+
+- 운영계측 필드(`ai_parse_ok`, `ai_parse_fail`, `ai_fallback_score_50`, `ai_response_ms`, `ai_prompt_type`, `ai_score_raw`, `ai_score_after_bonus`, `entry_score_threshold`, `big_bite_bonus_applied`, `ai_cooldown_blocked`)가 `ENTRY_PIPELINE` 및 `HOLDING_PIPELINE`에 정상 기록 중.
+- parse fail 비율, fallback 50 비율, Big-Bite 가점 전후 점수 분포 일별 집계 가능.
+- AI_WATCHING_COOLDOWN에 의한 missed opportunity 추정 가능.
+- 따라서 **작업 2 AI 운영계측 추가**는 구현 완료 상태로 판정. GitHub Project에서 `상태=Done`으로 전환 대상.
+- 자동동기화 상태: Done
+
 ---
 
 ## 작업 3. HOLDING hybrid override 조건 명세
@@ -241,6 +256,13 @@ AI 모델 품질과 출력/운영 안정성 문제를 분리해서 본다.
 3. `HOLDING critical`
    - 전용 프롬프트 분리 후 재정의
    - 현재 문서 기준으로는 일반 HOLDING과 동일 원칙 적용
+
+### 2026-04-13 POSTCLOSE 운영 재확인
+
+- `15:40~16:10` workorder 기준 재확인 결과, 오늘 `holding_events=0`이라 action override를 실거래 표본으로 재평가할 수는 없었다.
+- 따라서 판정은 `override rule v1 유지`다.
+- 다음 액션은 `FORCE_EXIT` 실표본 또는 `SCALP_PRESET_TP DROP` 표본이 쌓일 때만 원격 canary로 좁혀 검증하는 것이며, 일반 `SELL`은 계속 로그 우선으로 본다.
+- 자동동기화 상태: Done
 
 ---
 
