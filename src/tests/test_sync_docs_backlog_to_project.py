@@ -96,8 +96,7 @@ def test_parse_prompt_has_detail_tasks_with_due_for_p0(monkeypatch):
     assert any(title.startswith("작업 10 ") for title in titles)
     assert "작업 1 SCALP_PRESET_TP SELL 의도 확인" not in task_map
     assert "작업 2 AI 운영계측 추가" not in task_map
-    assert "작업 3 HOLDING hybrid override 조건 명세" in task_map
-    assert task_map["작업 3 HOLDING hybrid override 조건 명세"].due_date == "2026-04-12"
+    assert "작업 3 HOLDING hybrid override 조건 명세" not in task_map
     assert task_map["작업 10 HOLDING hybrid 적용"].due_date == ""
 
 
@@ -105,8 +104,15 @@ def test_parse_prompt_excludes_done_marker_and_keeps_open_tasks():
     tasks = parse_prompt_tasks()
     titles = [t.title for t in tasks]
     assert "작업 1 SCALP_PRESET_TP SELL 의도 확인" not in titles
-    assert "작업 3 HOLDING hybrid override 조건 명세" in titles
-    assert any(title.startswith("작업 4 ") for title in titles)
+    assert "작업 3 HOLDING hybrid override 조건 명세" not in titles
+    assert not any(title.startswith("작업 4 ") for title in titles)
+    assert any(title.startswith("작업 5 ") for title in titles)
+
+
+def test_parse_prompt_excludes_deferred_marker():
+    tasks = parse_prompt_tasks()
+    titles = [t.title for t in tasks]
+    assert "작업 4 WATCHING 75 정합화 원격 canary" not in titles
 
 
 def test_parse_prompt_fallback_when_primary_missing(monkeypatch):

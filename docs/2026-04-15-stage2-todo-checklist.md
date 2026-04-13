@@ -8,7 +8,7 @@
 - `partial fill min_fill_ratio`는 원격 canary를 시작한다.
 - `Phase 2`는 오늘 시작한다. `RELAX-LATENCY`가 승격되면 `Phase 2-1`을 병행 착수하고, 승격이 보류되면 `Phase 2-2`를 단독 착수한다.
 - `expired_armed` 처리 로직은 오늘 장후까지 설계 문서 완료를 목표로 한다.
-- 전일 장후에 착수한 `AIPrompt 작업 4/5`는 오늘 구현 진행과 원격 ready 확인까지 이어간다.
+- 전일 장후에 착수한 `AIPrompt 작업 5/8/10`은 오늘 구현 진행과 검증 입력 고정까지 이어간다.
 
 ## 전일 장후에서 받아야 할 확정값
 
@@ -17,7 +17,7 @@
 - `partial fill min_fill_ratio` 기본값과 rollback 가드
 - `expired_armed` 처리 로직 설계 범위와 문서 위치
 - `AI overlap audit -> selective override` 착수 입력과 일정
-- `AIPrompt 작업 4/5` write scope / rollback 가드 / 비교지표
+- `AIPrompt 작업 5/8/10` write scope / rollback 가드 / 비교지표
 
 ## 장전 체크리스트 (08:00~08:30)
 
@@ -33,9 +33,9 @@
 - [ ] `partial fill min_fill_ratio` canary의 `partial fill 억제 / 체결 기회 감소`를 함께 기록
 - [ ] `RELAX-LATENCY`는 전일 결론대로 적용된 축만 지속 점검하고, 신규 완화는 추가하지 않는다
 - [ ] 기존 관찰축은 `변경 후 검증`에 필요한 범위로만 유지한다
-- [ ] `AIPrompt 작업 4 WATCHING 75 정합화` 구현 진행 / 원격 ready 확인
 - [ ] `AIPrompt 작업 5 WATCHING/HOLDING 프롬프트 물리 분리` 구현 진행 / 로그 비교축 확인
 - [ ] `AIPrompt 작업 8 감사용 핵심값 3종 투입` 전일 착수분 구현/검증 지속
+- [ ] `AIPrompt 작업 10 HOLDING hybrid 적용` `FORCE_EXIT` 제한형 MVP 구현 지속 / canary-ready 입력 정리
 - [ ] `AIPrompt 작업 9 정량형 수급 피처 이식 1차` helper scope 초안 정리
 
 ## 장후 체크리스트 (15:30~)
@@ -44,10 +44,11 @@
 - [ ] `RELAX-DYNSTR` 1일차 canary 결과 1차 정리
 - [ ] `partial fill min_fill_ratio` 1일차 canary 결과 1차 정리
 - [ ] `2026-04-16` `AI overlap audit -> selective override` 설계 착수 입력값을 고정
-- [ ] `AIPrompt P1` 구현 진행 결과 정리
-  - `작업 4/5`의 원격 canary ready 상태와 `2026-04-16` 평가 포인트를 고정한다
+- [ ] `AIPrompt 즉시 코드축` 구현 진행 결과 정리
+  - `작업 5/8/10`의 `2026-04-16` 평가 포인트를 고정한다
 - [ ] `AIPrompt 작업 8 감사용 핵심값 3종 투입` 전일 착수분 결과 정리
 - [ ] `AIPrompt 작업 9 정량형 수급 피처 이식 1차` helper scope 초안을 `2026-04-17` 확정형으로 정리
+- [ ] `AIPrompt 작업 10 HOLDING hybrid 적용` `FORCE_EXIT` 제한형 MVP 착수 상태와 `2026-04-16` 입력값 정리
 - [ ] 오늘 보류된 항목이 있으면 `사유 + 다음 실행시각`을 문서에 명시
 
 ## 참고 문서

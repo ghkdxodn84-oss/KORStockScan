@@ -471,6 +471,13 @@ PYTHONPATH=. .venv/bin/python -m src.engine.watching_prompt_75_shadow_report \
     - `2026-04-14`에는 해당 exit_rule 표본이 생기면 `entry_mode/position_tag`와 함께 바로 묶어 기록한다.
 - 다음 세션 승격:
   - `docs/2026-04-14-stage2-todo-checklist.md`를 신규 생성해 오늘 결론을 `2026-04-14` 장전/장중/장후 체크리스트로 승격했다.
+- `AIPrompt 작업 3 HOLDING hybrid override 조건 명세`:
+  - 판정: `오늘 명세 작업 완료`
+  - 근거:
+    - `override rule v1`, `SCALP_PRESET_TP / 일반 HOLDING / HOLDING critical` 차등 규칙, `FORCE_EXIT/SELL/DROP/reason` 처리 기준이 모두 source 문서에 고정돼 있다.
+    - 오늘 `holding_events=0`이어서 구현 효과를 재평가할 표본은 없었지만, 이 항목의 범위는 `조건 명세`이므로 오늘 문서 기준 완료로 닫는 것이 맞다.
+  - 다음 액션:
+    - 실제 구현은 `작업 10 HOLDING hybrid 적용`으로 넘기고, `2026-04-16` 준비 마감 -> `2026-04-21` 착수/보류 사유 기록으로 추적한다.
 
 ## 이월 메모
 
@@ -486,6 +493,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.watching_prompt_75_shadow_report \
 - [2026-04-10-scalping-ai-coding-instructions.md](./2026-04-10-scalping-ai-coding-instructions.md)
 - [2026-04-11-remote-profiling-fetch-ai-coding-instructions.md](./2026-04-11-remote-profiling-fetch-ai-coding-instructions.md)
 - [2026-04-10-scalping-expert-proposals-not-fit.md](./2026-04-10-scalping-expert-proposals-not-fit.md)
+- [2026-04-13-observation-canary-effect-report.md](./2026-04-13-observation-canary-effect-report.md)
 
 <!-- AUTO_SERVER_COMPARISON_START -->
 ### 본서버 vs songstockscan 자동 비교 (`2026-04-13 15:46:39`)

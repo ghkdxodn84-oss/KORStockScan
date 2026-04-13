@@ -333,13 +333,14 @@ def parse_prompt_tasks() -> list[BacklogTask]:
     current_phase = "작업 상세"
     lines = text.splitlines()
     current_task_name = ""
-    current_task_done = False
+    current_task_closed = False
+    closed_statuses = {"done", "deferred", "parked", "dropped"}
 
     def _flush_current_task() -> None:
-        nonlocal current_task_name, current_task_done
-        if not current_task_name or current_task_done:
+        nonlocal current_task_name, current_task_closed
+        if not current_task_name or current_task_closed:
             current_task_name = ""
-            current_task_done = False
+            current_task_closed = False
             return
         due_date = today_iso if current_phase.startswith("P0.") else ""
         tasks.append(
@@ -352,7 +353,7 @@ def parse_prompt_tasks() -> list[BacklogTask]:
             )
         )
         current_task_name = ""
-        current_task_done = False
+        current_task_closed = False
 
     for line in lines:
         phase = re.match(r"^\s*##\s+(P[0-9][A-Z0-9\-]*\.\s+.+?)\s*$", line)
@@ -365,10 +366,14 @@ def parse_prompt_tasks() -> list[BacklogTask]:
             _flush_current_task()
             task_name = re.sub(r"`([^`]+)`", r"\1", m.group(2).strip())
             current_task_name = f"작업 {m.group(1)} {task_name}"
-            current_task_done = False
+            current_task_closed = False
             continue
-        if current_task_name and re.match(r"^\s*-\s*자동동기화 상태:\s*Done\s*$", line):
-            current_task_done = True
+        if current_task_name:
+            status_match = re.match(r"^\s*-\s*자동동기화 상태:\s*(.+?)\s*$", line)
+            if status_match:
+                status_value = str(status_match.group(1) or "").strip().lower()
+                if status_value in closed_statuses:
+                    current_task_closed = True
     _flush_current_task()
     return tasks
 

@@ -10,6 +10,7 @@
 - `기존 관찰축`은 더 많은 분석을 위한 입력이 아니라, `2026-04-14 장후 개선 결론`과 `2026-04-15 장중 지속 점검`을 위한 검증축으로만 사용한다.
 - `계측 완료 + 실전반영 확신도 50% 이상`인 축은 같은 주 canary 착수를 기본값으로 한다. 착수하지 않으면 장후 문서에 보류 사유를 명시한다.
 - 장후 결론은 `상태 요약`이 아니라 `날짜 + 액션 + 실행시각` 형식으로 남긴다.
+- `WATCHING 75 shadow`, `post-sell canary`, `remote_error snapshot 재점검`은 현재 잔여 작업축에서 제외한다.
 
 ## 2026-04-13 장후 승격 요약
 
@@ -25,20 +26,22 @@
 - live hard stop taxonomy:
   - `hard_time_stop_shadow`는 여전히 shadow-only로 유지한다.
   - live exit는 `scalp_preset_hard_stop_pct`, `protect_hard_stop`, `scalp_hard_stop_pct`를 분리해서 본다.
-- 원격 비교검증:
-  - `2026-04-13 15:46:39` 자동 비교에서 `Performance Tuning`, `Entry Pipeline Flow`가 `remote_error`였다.
-  - 따라서 `2026-04-14`에는 API 비교만으로 닫지 말고 snapshot 기준 재점검이 필요하다.
+- 잔여 작업축 제외:
+  - `WATCHING 75 shadow`: `shadow_samples=0` 반복으로 현재 잔여 작업축 제외
+  - `post-sell canary`: entry/holding 직접 코드축보다 후순위라 현재 잔여 작업축 제외
+  - `remote_error snapshot 재점검`: 오늘 critical path에서 제외, 재발 시 별도 원인 수정으로 대응
 
 ## 장전 체크리스트 (08:00~09:00)
 
 - [ ] `2026-04-13` 장후 판정이 원격/본서버 설정에 의도치 않게 번진 축이 없는지 확인
 - [ ] `RELAX-LATENCY` 관찰 기준을 `quote_stale=False`, `latency_danger_reasons`, `expired_armed` 중심으로 재고정
 - [ ] `GitHub Project -> Google Calendar` / `Sync Docs Backlog To GitHub Project` 마지막 실행 상태 확인
-- [ ] 전일 `remote_error` 난 `Performance Tuning` / `Entry Pipeline Flow`를 snapshot 기준 재점검할 경로 확인
 - [ ] `신규 관찰축 추가 금지`, `개선 먼저`, `기존 축은 개선 후 점검용` 원칙을 오늘 작업지시로 재고정
 - [ ] `계측 완료 + 확신도 50% 이상 = 같은 주 canary 착수` 원칙을 오늘 작업지시로 재고정
 - [ ] `RELAX-DYNSTR` `2026-04-15 08:30` 원격 canary에 쓸 `momentum_tag` 선정 경로와 환경 설정 경로 확인
 - [ ] `partial fill min_fill_ratio` 원격 canary 설정 경로와 rollback 가드 확인
+제외 메모:
+`WATCHING 75 shadow`, `post-sell canary`, `remote_error snapshot 재점검`은 오늘 잔여 작업축에서 다시 열지 않는다.
 
 ## 장중 체크리스트 (09:00~15:30)
 
@@ -61,9 +64,6 @@
   - `scalp_preset_hard_stop_pct / protect_hard_stop / scalp_hard_stop_pct / hard_time_stop_shadow` 표본 여부를 계속 기록
 - [ ] `AI overlap audit`를 `selective override` 착수 입력으로 정리
   - `blocked_stage / momentum_tag / threshold_profile` 교차표가 `2026-04-16` 설계 착수에 바로 쓰일 수준인지 확인한다
-- [ ] 원격서버 비교검증
-  - API 비교가 `remote_error`이면 `trade_review / performance_tuning / post_sell_feedback / entry_pipeline_flow`를 snapshot 기준으로 다시 대조한다
-  - 비교 결과는 `safe metric`, `fetch 재현성`, `원인 설명 가능 여부` 기준으로 짧게 메모한다
 - [ ] 장후 개선 결론 준비
   - 신규 가설 발굴이 아니라 `RELAX-LATENCY 반영/보류`, `RELAX-DYNSTR 1축 착수`, `partial fill min_fill_ratio canary`, `expired_armed 설계`를 결정할 만큼만 기존 관찰축을 점검한다
 
@@ -76,17 +76,16 @@
 - [ ] `partial fill min_fill_ratio` 원격 canary 설정값 확정 (`기본값/예외/롤백가드` 포함)
 - [ ] `expired_armed` 처리 로직 설계 범위와 `2026-04-15 장후` 완료 기준 확정
 - [ ] `AI overlap audit` 기반 `selective override` 설계 착수일을 `2026-04-16`로 고정
-- [ ] `AIPrompt P1` 착수 범위 확정
-  - `작업 4 WATCHING 75 정합화 원격 canary`, `작업 5 WATCHING/HOLDING 프롬프트 물리 분리`의 write scope / rollback 가드 / 비교지표를 오늘 확정한다
+- [ ] `AIPrompt 작업 5 WATCHING/HOLDING 프롬프트 물리 분리` write scope / rollback 가드 / 비교지표를 오늘 확정하고 같은 날 착수
 - [ ] `AIPrompt 작업 8 감사용 핵심값 3종 투입`은 오늘 같은 날 착수
   - 미착수 시 `사유 + 다음 실행시각`을 장후 결론에 남긴다
-- [ ] 오늘 가능한 `AIPrompt 작업 4/5`는 같은 날 구현 착수
+- [ ] `AIPrompt 작업 10 HOLDING hybrid 적용`의 `FORCE_EXIT` 제한형 MVP 범위와 rollback 가드를 오늘 확정하고 같은 날 착수
   - 미착수 시 `사유 + 다음 실행시각`을 장후 결론에 남긴다
-- [ ] `post-sell` 지표 기준 `원격 1축 매도시점 canary` 재후보화
 - [ ] `2026-04-15` 장전 반영/착수 항목과 `2026-04-16` 후속 설계 착수 항목을 별도 체크리스트로 승격
-- [ ] 원격 비교검증을 snapshot 기준으로 닫고 `remote_error` 원인을 설명 가능하게 정리
 - [ ] 장후 결론을 `날짜 + 액션 + 실행시각` 형식으로 기록
 - [ ] `2026-04-15 장중 지속 점검용 관찰축`만 남기고, `신규 관찰축 추가`는 명시적으로 중단
+제외 유지 메모:
+현재 잔여 작업축에서 제외한 `WATCHING 75 shadow`, `post-sell canary`, `remote_error snapshot 재점검`은 재오픈 조건 없이는 다시 올리지 않는다.
 
 ## 참고 문서
 
