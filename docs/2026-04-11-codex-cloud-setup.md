@@ -39,9 +39,17 @@
 5. 작업 시작
    - Codex는 시작 시 `AGENTS.md`를 자동으로 읽는다.
    - 문서/체크리스트 수정 시 기존 원칙대로 `문서 -> GitHub Project -> Calendar` 체인을 유지한다.
+6. 브랜치 역할 고정
+   - `main`: 본서버 기준 브랜치
+   - `develop`: 원격 실험서버(`songstockscan`) 기준 브랜치
+   - 실험서버 기준 코드베이스를 빠르게 맞출 때는 아래 명령을 사용한다.
+     ```bash
+     bash deploy/fast_forward_experiment_branch.sh
+     ```
 
 ## 운영 메모
 
 - Cloud setup 단계는 인터넷 사용이 가능하므로 의존성 설치는 위 setup script로 고정한다.
 - Agent 단계 인터넷은 기본 비활성일 수 있으니, 외부 조회가 필요한 작업만 워크스페이스 정책에 맞춰 허용한다.
 - 환경 변경(패키지 추가/업그레이드)이 필요하면 기존 운영 원칙대로 사전 승인 후 반영한다.
+- `develop`은 오래된 기능 브랜치가 아니라 실험서버 live 기준선으로 유지한다. 따라서 `main` 대비 뒤처지면 fast-forward로 먼저 맞춘 뒤 실험축을 얹는다.

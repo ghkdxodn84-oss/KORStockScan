@@ -2,6 +2,20 @@ name: Sync GitHub Project To Google Calendar
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - main
+      - develop
+    paths:
+      - "docs/plan-korStockScanPerformanceOptimization.prompt.md"
+      - "docs/*-stage2-todo-checklist.md"
+      - "docs/*-scalping-ai-coding-instructions.md"
+      - "docs/*-scalping-ai-prompt-coding-instructions.md"
+      - "docs/*-ai-prompt-track-audit.md"
+      - "docs/*-observation-*-report.md"
+      - "src/engine/sync_github_project_calendar.py"
+      - "src/engine/sync_docs_backlog_to_project.py"
+      - ".github/workflows/sync_project_to_google_calendar.yml"
   schedule:
     - cron: "*/30 * * * *"
 

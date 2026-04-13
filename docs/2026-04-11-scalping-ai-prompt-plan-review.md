@@ -198,6 +198,17 @@
 - 입력 패킷 확장 canary
 - HOLDING action 혼합형 실험
 - 필요 시 `position_tag` 또는 `exit_mode` 제한 canary
+- 코드베이스 기준 브랜치는 `develop`으로 고정
+
+### 브랜치 역할
+
+- `main`
+  - 본서버 기준 브랜치
+  - 승격 완료된 변경만 유지
+- `develop`
+  - 원격 실험서버(`songstockscan`) 기준 브랜치
+  - `main`을 빠르게 따라잡은 뒤 실험축 한 개씩 먼저 태운다
+  - 분기 기준점이 아니라 `실험서버 라이브 기준선`이다
 
 ### 공통 원칙
 
