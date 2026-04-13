@@ -357,6 +357,17 @@ PYTHONPATH=. .venv/bin/python -m src.engine.watching_prompt_75_shadow_report \
   - `shadow 하한 60/55` 조정 선행
   - `overbought` 우선 완화
 
+### `2026-04-13 12:51 KST` 운영계측 확인 메모
+
+- `ENTRY_PIPELINE` 기준 오늘 현재 운영계측 필드가 실제로 누적되고 있다.
+- 확인된 항목:
+  - `ai_parse_ok / ai_parse_fail / ai_fallback_score_50 / ai_response_ms / ai_prompt_type / ai_result_source`
+  - `momentum_tag / threshold_profile / blocked_stage / overbought_blocked`
+  - `latency_danger_reasons`
+- 해석:
+  - `작업 2 AI 운영계측 추가`는 장중 운영 로그 기준으로 유효하다.
+  - 특히 `latency_danger_reasons`가 `ws_jitter_too_high / other_danger / ws_age_too_high / spread_too_wide / quote_stale`로 실제 누적돼 `WAIT 65 + latency_block` 하위 분해에 바로 사용할 수 있다.
+
 ---
 
 ## 작업 5. WATCHING/HOLDING 프롬프트 물리 분리

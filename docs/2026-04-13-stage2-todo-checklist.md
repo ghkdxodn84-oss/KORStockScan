@@ -228,6 +228,10 @@ PYTHONPATH=. .venv/bin/python -m src.engine.watching_prompt_75_shadow_report \
 
 ## 장중 체크리스트 (09:00~15:30)
 
+- 운영 원칙:
+  - `원격 경량 프로파일링 장중 1차/2차 수집`처럼 1회성 완료 작업만 즉시 `- [x]`로 닫는다.
+  - `RELAX-LATENCY / RELAX-DYNSTR / RELAX-OVERBOUGHT / 체결 품질 / 미결 이월건 추적`은 장후 종합판정 전까지 관찰형 작업으로 보고 `- [ ]`를 유지한다.
+
 - [ ] `RELAX-LATENCY` 관찰
   - `AI BUY -> entry_armed -> budget_pass -> submitted` 전환율 추적
   - `quote_stale=False latency_block` 표본 우선 기록
@@ -341,6 +345,31 @@ PYTHONPATH=. .venv/bin/python -m src.engine.watching_prompt_75_shadow_report \
   - `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_entry_latency.py src/tests/test_constants.py`
   - 결과 `11 passed`
 
+### 2026-04-13 12:51 KST 장중 재판정 메모
+
+- 시간 조건:
+  - 현재 시각 `12:51 KST`
+  - `원격 경량 프로파일링 장중 2차 수집 (13:20~13:35)`은 아직 시작 전이므로 미착수 유지
+- `RELAX-LATENCY` 관찰:
+  - `server_comparison_2026-04-13.md` 기준 local/remote 모두 `submitted_stocks=0`
+  - raw `ENTRY_PIPELINE`에서는 `latency_danger_reasons`가 실제로 누적 중이다.
+  - 현재 분포는 `ws_jitter_too_high=181`, `other_danger=151`, `ws_age_too_high=126`, `spread_too_wide=93`, `quote_stale=88`
+  - 따라서 현 시점 판정은 `전면 완화 금지`, `quote_stale=False latency canary 해석 강화 계속`이 맞다.
+- `RELAX-DYNSTR` 관찰:
+  - 오전과 동일하게 `blocked_strength_momentum`은 주요 2순위 blocker로 유지된다.
+  - 다음 재분해 축은 `below_window_buy_value / below_buy_ratio / below_strength_base` 3개로 고정한다.
+- `RELAX-OVERBOUGHT` 관찰:
+  - `server_comparison_2026-04-13.md` latest stage 기준 `blocked_overbought=20`
+  - raw 이벤트는 장중 내내 반복 누적되며, 현재도 과열 차단이 강하게 유지된다.
+  - 따라서 장중 재오픈 근거는 없다.
+- 체결 품질 관찰:
+  - `server_comparison_2026-04-13.md` 기준 `entered_rows=1`, `completed_trades=1`, `holding_events=0`
+  - `submitted/holding_started` 신규 전환은 없어 `full fill / partial fill` 평가는 계속 유보다.
+- 미결 이월건 추적:
+  - `entry_armed_expired_after_wait` 상위 종목은 `세미파이브 26`, `태광 18`, `레이크머티리얼즈 5`, `코세스 4`다.
+  - `태광`은 계속 핵심 추적 대상으로 유지한다.
+  - `hard stop / protect / preset` 계열 관련 표본은 현재 시점에도 검색되지 않았다.
+
 ## 장후 체크리스트 (15:30~)
 
 - [ ] `RELAX-LATENCY` 원격 결과 기준 `유지/강화/축소/롤백` 재판정
@@ -367,16 +396,16 @@ PYTHONPATH=. .venv/bin/python -m src.engine.watching_prompt_75_shadow_report \
 - [2026-04-10-scalping-expert-proposals-not-fit.md](./2026-04-10-scalping-expert-proposals-not-fit.md)
 
 <!-- AUTO_SERVER_COMPARISON_START -->
-### 본서버 vs songstockscan 자동 비교 (`2026-04-13 10:00:33`)
+### 본서버 vs songstockscan 자동 비교 (`2026-04-13 12:00:56`)
 
 - 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
 - 상세 리포트: `data/report/server_comparison/server_comparison_2026-04-13.md`
-- `Trade Review`: status=`ok`, differing_safe_metrics=`5`
-  - all_rows local=44 remote=47 delta=3.0; expired_rows local=0 remote=3 delta=3.0; total_trades local=1 remote=0 delta=-1.0
+- `Trade Review`: status=`ok`, differing_safe_metrics=`2`
+  - all_rows local=106 remote=109 delta=3.0; expired_rows local=63 remote=65 delta=2.0
 - `Performance Tuning`: status=`ok`, differing_safe_metrics=`10`
-  - gatekeeper_eval_ms_p95 local=40197.0 remote=35544.0 delta=-4653.0; holding_review_ms_p95 local=2690.0 remote=0.0 delta=-2690.0; holding_review_ms_avg local=2315.06 remote=0.0 delta=-2315.06
-- `Post Sell Feedback`: status=`ok`, differing_safe_metrics=`2`
-  - total_candidates local=1 remote=0 delta=-1.0; evaluated_candidates local=1 remote=0 delta=-1.0
+  - gatekeeper_eval_ms_avg local=12114.81 remote=13082.27 delta=967.46; gatekeeper_eval_ms_p95 local=24171.0 remote=23826.0 delta=-345.0; holding_review_ms_avg local=2315.06 remote=2080.6 delta=-234.46
+- `Post Sell Feedback`: status=`ok`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
 - `Entry Pipeline Flow`: status=`ok`, differing_safe_metrics=`3`
-  - total_events local=48516 remote=46688 delta=-1828.0; tracked_stocks local=42 remote=41 delta=-1.0; blocked_stocks local=29 remote=30 delta=1.0
+  - total_events local=258443 remote=260079 delta=1636.0; tracked_stocks local=101 remote=99 delta=-2.0; blocked_stocks local=28 remote=30 delta=2.0
 <!-- AUTO_SERVER_COMPARISON_END -->
