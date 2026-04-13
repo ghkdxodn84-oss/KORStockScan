@@ -626,6 +626,8 @@ def main() -> int:
     dry_run = args.dry_run or _env_bool("SYNC_DRY_RUN", False)
 
     only_status_raw = str(os.getenv("GH_SYNC_ONLY_STATUSES", "") or "").strip()
+    if not only_status_raw:
+        only_status_raw = "Todo,In Progress"
     sync_only_statuses = {x.strip() for x in only_status_raw.split(",") if x.strip()}
 
     items = fetch_project_items(

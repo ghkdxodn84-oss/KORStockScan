@@ -430,26 +430,71 @@ def render_markdown(
         compact = ", ".join(f"{k}:{v}" for k, v in sorted(track_counts.items(), key=lambda kv: kv[0]))
         lines.append(f"- Track 분포: `{compact}`")
     lines.append("")
+
+    # 슬롯별 그룹화
+    slot_order = ["PREOPEN", "INTRADAY", "POSTCLOSE"]
+    slot_groups: dict[str, list[ProjectTask]] = {slot: [] for slot in slot_order}
+    for item in top:
+        slot = item.slot or "-"
+        if slot in slot_groups:
+            slot_groups[slot].append(item)
+        else:
+            slot_groups["-"] = slot_groups.get("-", [])
+            slot_groups["-"].append(item)
+
     lines.append("## 오늘 Codex 실행 큐")
     lines.append("")
     if not top:
         lines.append("1. 현재 상태필터에 해당하는 항목이 없습니다.")
     else:
-        for idx, item in enumerate(top, start=1):
-            lines.append(f"{idx}. `{item.title}`")
-            lines.append(
-                f"   - 상태: `{item.status or '-'}` / 슬롯: `{item.slot or '-'}` / 트랙: `{item.track or '-'}` / Due: `{item.due_date or '-'}` / TimeWindow: `{item.time_window or '-'}`"
-            )
-            if item.section:
-                lines.append(f"   - 섹션: `{item.section}`")
-            if item.source:
-                lines.append(f"   - 소스: `{item.source}`")
-            if item.assignees:
-                lines.append(f"   - 담당자: `{item.assignees}`")
-            if item.url:
-                lines.append(f"   - 링크: {item.url}")
-            lines.append(f"   - Project Item ID: `{item.item_id}`")
-    lines.append("")
+        idx = 1
+        for slot in slot_order:
+            group = slot_groups[slot]
+            if not group:
+                lines.append(f"### {slot} (없음)")
+                lines.append("해당 슬롯에 작업이 없습니다.")
+                lines.append("")
+                continue
+            lines.append(f"### {slot}")
+            lines.append("")
+            for item in group:
+                lines.append(f"{idx}. `{item.title}`")
+                lines.append(
+                    f"   - 상태: `{item.status or '-'}` / 슬롯: `{item.slot or '-'}` / 트랙: `{item.track or '-'}` / Due: `{item.due_date or '-'}` / TimeWindow: `{item.time_window or '-'}`"
+                )
+                if item.section:
+                    lines.append(f"   - 섹션: `{item.section}`")
+                if item.source:
+                    lines.append(f"   - 소스: `{item.source}`")
+                if item.assignees:
+                    lines.append(f"   - 담당자: `{item.assignees}`")
+                if item.url:
+                    lines.append(f"   - 링크: {item.url}")
+                lines.append(f"   - Project Item ID: `{item.item_id}`")
+                lines.append("")
+                idx += 1
+        # 알 수 없는 슬롯 처리
+        unknown = slot_groups.get("-", [])
+        if unknown:
+            lines.append("### 기타 슬롯")
+            lines.append("")
+            for item in unknown:
+                lines.append(f"{idx}. `{item.title}`")
+                lines.append(
+                    f"   - 상태: `{item.status or '-'}` / 슬롯: `{item.slot or '-'}` / 트랙: `{item.track or '-'}` / Due: `{item.due_date or '-'}` / TimeWindow: `{item.time_window or '-'}`"
+                )
+                if item.section:
+                    lines.append(f"   - 섹션: `{item.section}`")
+                if item.source:
+                    lines.append(f"   - 소스: `{item.source}`")
+                if item.assignees:
+                    lines.append(f"   - 담당자: `{item.assignees}`")
+                if item.url:
+                    lines.append(f"   - 링크: {item.url}")
+                lines.append(f"   - Project Item ID: `{item.item_id}`")
+                lines.append("")
+                idx += 1
+
     lines.append("## Codex 전달 템플릿")
     lines.append("")
     lines.append("```text")
@@ -464,10 +509,24 @@ def render_markdown(
     lines.append("")
     lines.append("[대상 항목]")
     if top:
-        for item in top:
-            lines.append(
-                f"- {item.title} | 상태={item.status or '-'} | 슬롯={item.slot or '-'} | Due={item.due_date or '-'} | Source={item.source or '-'} | Section={item.section or '-'} | ID={item.item_id}"
-            )
+        # 슬롯별로 대상 항목도 그룹화
+        for slot in slot_order:
+            group = slot_groups[slot]
+            lines.append(f"### {slot}")
+            if group:
+                for item in group:
+                    lines.append(
+                        f"- {item.title} | 상태={item.status or '-'} | 슬롯={item.slot or '-'} | Due={item.due_date or '-'} | Source={item.source or '-'} | Section={item.section or '-'} | ID={item.item_id}"
+                    )
+            else:
+                lines.append("- 없음")
+        unknown = slot_groups.get("-", [])
+        if unknown:
+            lines.append("### 기타 슬롯")
+            for item in unknown:
+                lines.append(
+                    f"- {item.title} | 상태={item.status or '-'} | 슬롯={item.slot or '-'} | Due={item.due_date or '-'} | Source={item.source or '-'} | Section={item.section or '-'} | ID={item.item_id}"
+                )
     else:
         lines.append("- 없음")
     lines.append("```")
