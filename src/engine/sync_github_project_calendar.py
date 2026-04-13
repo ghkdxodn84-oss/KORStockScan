@@ -62,6 +62,15 @@ def _norm_key(value: str) -> str:
     return "".join(ch for ch in value.strip().lower() if ch.isalnum())
 
 
+def _status_allowed(status: str, allowed_statuses: set[str]) -> bool:
+    if not allowed_statuses:
+        return True
+    current = _norm_key(status)
+    if not current:
+        return False
+    return current in {_norm_key(item) for item in allowed_statuses if item.strip()}
+
+
 def _extract_time_range_from_text(text: str) -> tuple[str, str]:
     # Examples:
     # - "(13:20~13:35)"
@@ -299,12 +308,15 @@ def _parse_project_item(
                 slot = str(fv.get("name") or "").strip()
             elif field_name == time_window_field_name:
                 time_window = str(fv.get("name") or "").strip()
-        elif kind == "ProjectV2ItemFieldTextValue" and field_name == track_field_name and not track:
-            track = str(fv.get("text") or "").strip()
-        elif kind == "ProjectV2ItemFieldTextValue" and field_name == slot_field_name and not slot:
-            slot = str(fv.get("text") or "").strip()
-        elif kind == "ProjectV2ItemFieldTextValue" and field_name == time_window_field_name and not time_window:
-            time_window = str(fv.get("text") or "").strip()
+        elif kind == "ProjectV2ItemFieldTextValue":
+            if field_name == status_field_name and not status:
+                status = str(fv.get("text") or "").strip()
+            elif field_name == track_field_name and not track:
+                track = str(fv.get("text") or "").strip()
+            elif field_name == slot_field_name and not slot:
+                slot = str(fv.get("text") or "").strip()
+            elif field_name == time_window_field_name and not time_window:
+                time_window = str(fv.get("text") or "").strip()
 
     if not due_date:
         return None
@@ -363,7 +375,7 @@ def fetch_project_items(
             )
             if not parsed:
                 continue
-            if sync_only_statuses and parsed.status and parsed.status not in sync_only_statuses:
+            if not _status_allowed(parsed.status, sync_only_statuses):
                 continue
             items.append(parsed)
 

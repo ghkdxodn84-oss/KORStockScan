@@ -1,6 +1,8 @@
 from src.engine.sync_github_project_calendar import (
     _event_body,
     _parse_project_item,
+    _status_allowed,
+    fetch_project_items,
     ProjectItem,
     prune_stale_events,
 )
@@ -92,6 +94,84 @@ def test_parse_project_item_reads_slot_single_select():
     )
     assert parsed is not None
     assert parsed.slot == "POSTCLOSE"
+
+
+def test_parse_project_item_reads_status_from_text_fallback():
+    node = _sample_node()
+    node["fieldValues"]["nodes"] = [
+        fv for fv in node["fieldValues"]["nodes"] if fv.get("field", {}).get("name") != "Status"
+    ]
+    node["fieldValues"]["nodes"].append(
+        {
+            "__typename": "ProjectV2ItemFieldTextValue",
+            "text": "In Progress",
+            "field": {"name": "Status"},
+        }
+    )
+    parsed = _parse_project_item(
+        node,
+        due_field_name="Due",
+        status_field_name="Status",
+        track_field_name="Track",
+        slot_field_name="Slot",
+        time_window_field_name="TimeWindow",
+    )
+    assert parsed is not None
+    assert parsed.status == "In Progress"
+
+
+def test_status_allowed_requires_explicit_match_when_filter_present():
+    assert _status_allowed("Todo", {"Todo", "In Progress"}) is True
+    assert _status_allowed("in progress", {"Todo", "In Progress"}) is True
+    assert _status_allowed("Done", {"Todo", "In Progress"}) is False
+    assert _status_allowed("", {"Todo", "In Progress"}) is False
+    assert _status_allowed("", set()) is True
+
+
+def test_fetch_project_items_excludes_blank_status_when_filter_present(monkeypatch):
+    data = {
+        "organization": {
+            "projectV2": {
+                "items": {
+                    "nodes": [
+                        {
+                            **_sample_node(),
+                            "id": "PVTI_blank",
+                            "fieldValues": {
+                                "nodes": [
+                                    fv
+                                    for fv in _sample_node()["fieldValues"]["nodes"]
+                                    if fv.get("field", {}).get("name") != "Status"
+                                ]
+                            },
+                        },
+                        _sample_node(),
+                    ],
+                    "pageInfo": {"hasNextPage": False, "endCursor": None},
+                }
+            }
+        },
+        "user": {"projectV2": None},
+    }
+
+    monkeypatch.setattr(
+        "src.engine.sync_github_project_calendar._graphql_request",
+        lambda token, query, variables: data,
+    )
+
+    items = fetch_project_items(
+        token="token",
+        owner="JaehwanPark",
+        number=1,
+        due_field_name="Due",
+        status_field_name="Status",
+        track_field_name="Track",
+        slot_field_name="Slot",
+        time_window_field_name="TimeWindow",
+        sync_only_statuses={"Todo", "In Progress"},
+    )
+
+    assert [item.item_id for item in items] == ["PVTI_xxx"]
 
 
 def test_event_body_contains_private_extended_properties():

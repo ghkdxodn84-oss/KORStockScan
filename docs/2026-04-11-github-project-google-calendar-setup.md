@@ -133,6 +133,7 @@ Settings -> Secrets and variables -> Actions
 - `GH_SYNC_ONLY_STATUSES`  
   - 예: `Todo,In Progress,Blocked`  
   - 비우면 Due Date 있는 항목 전체 동기화
+  - 값이 설정돼 있으면 `Status`가 비어 있거나 파싱되지 않은 항목은 캘린더에서 제외
 - `GCAL_EVENT_PREFIX`  
   - 예: `[KORStockScan]`
 - `GCAL_EVENT_TIMEZONE`
@@ -264,7 +265,15 @@ Codex 일일 작업지시서 자동 생성:
 
 - 항목에 Due Date가 있는지 확인
 - `GH_SYNC_ONLY_STATUSES` 필터가 과하게 좁지 않은지 확인
+- `Status` 값이 비어 있지 않은지 확인 (`GH_SYNC_ONLY_STATUSES` 사용 시 blank status는 제외됨)
 - `SYNC_DRY_RUN`이 `false`인지 확인
+
+### 완료된 항목이 다시 캘린더에 생김
+
+- Project `Status`가 실제로 `Done`으로 반영됐는지 확인
+- `sync_docs_backlog_to_project` 실행 결과에서 `status_synced_done`이 기대대로 올라갔는지 확인
+- `GH_SYNC_ONLY_STATUSES`를 쓰는 경우 `Todo,In Progress`처럼 open 상태만 포함했는지 확인
+- 수동 항목이라도 `Status`가 비어 있으면 최신 스크립트 기준 캘린더 sync 대상에서 제외된다
 
 ### 시간이 아니라 종일 이벤트로 생김
 
