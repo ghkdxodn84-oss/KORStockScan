@@ -271,7 +271,7 @@ LIVE_CASES = [
         "name": "overnight_decision",
         "model": TRADING_RULES.AI_MODEL_TIER2,
         "prompt": SCALPING_OVERNIGHT_DECISION_PROMPT,
-        "user_input": """🚨 [15:15 SCALPING 오버나이트 판정 요청]
+        "user_input": """🚨 [15:30 SCALPING 오버나이트 판정 요청]
 종목명: 테스트반도체
 종목코드: 005930
 

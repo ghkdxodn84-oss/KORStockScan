@@ -36,14 +36,14 @@
 2. `Done/[x]` 항목 제외
 3. 남은 항목만 GitHub Project Draft Item으로 upsert
 4. 기존 같은 제목이 있으면 중복 생성하지 않고 skip
-5. `sync_docs_backlog_to_project`가 생성한 관리 항목(` [Plan]/[Checklist0413]/[ScalpingLogic]/[AIPrompt] `)은
+5. `sync_docs_backlog_to_project`가 생성한 관리 항목(` [Plan]/[ChecklistNNNN]/[ScalpingLogic]/[AIPrompt] `)은
    문서 기준으로 `Status` 자동 동기화
    - 문서에 남아있음: `Todo`
    - 문서에서 제거됨(완료 처리): `Done`
    - 문서에 열린 관리 항목이 `0개`면 캘린더에서도 해당 관리 이벤트를 stale 대상으로 본다
    - 단 문서 파싱 자체가 실패한 실행에서는 오삭제를 막기 위해 managed 이벤트 삭제를 보류한다
 6. `Slot`이 비어있는 관리 항목은 문서 sync 시 자동 추론하여 채움
-   - 기본 규칙: `Plan/Checklist0413 -> PREOPEN`, `ScalpingLogic -> INTRADAY`, `AIPrompt -> POSTCLOSE`
+   - 기본 규칙: `Plan/ChecklistNNNN -> PREOPEN`, `ScalpingLogic -> INTRADAY`, `AIPrompt -> POSTCLOSE`
    - 키워드 우선 규칙: `장전/PREOPEN`, `장중/INTRADAY`, `장후/EOD/리포트/검증` 매칭 시 트랙 기본값보다 우선
 
 문서별 canonical 파싱 섹션:
@@ -136,11 +136,11 @@ Settings -> Secrets and variables -> Actions
   - 예: `Todo,In Progress,Blocked`  
   - 비우면 Due Date 있는 항목 전체 동기화
   - 값이 설정돼 있으면 `Status`가 비어 있거나 파싱되지 않은 항목은 캘린더에서 제외
-  - 자동관리 대상(`[Plan]`, `[Checklist0413]`, `[ScalpingLogic]`, `[AIPrompt]`)은 현재 문서 backlog에 남아 있는 제목만 캘린더에 유지
+  - 자동관리 대상(`[Plan]`, `[ChecklistNNNN]`, `[ScalpingLogic]`, `[AIPrompt]`)은 현재 문서 backlog에 남아 있는 제목만 캘린더에 유지
 - `GCAL_EVENT_PREFIX`  
   - 기본: 빈 문자열
   - 현재 운영 권장: prefix 없이 제목 그대로 사용
-  - 관리 항목 제목은 캘린더 표시 시 `[Checklist0413] -> [CL]`, `[AIPrompt] -> [AIP]`로 축약
+  - 관리 항목 제목은 캘린더 표시 시 `[ChecklistNNNN] -> [CL]`, `[AIPrompt] -> [AIP]`로 축약
 - `GCAL_EVENT_TIMEZONE`
   - 기본: `Asia/Seoul`
 - `GCAL_USE_SLOT_TIME`

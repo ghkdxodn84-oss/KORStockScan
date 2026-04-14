@@ -1,8 +1,8 @@
-# SCALPING 15:15 오버나이트 판정 설계 + 패치 가이드
+# SCALPING 15:30 오버나이트 판정 설계 + 패치 가이드
 
 ## 목표
 
-`kiwoom_sniper_v2.py`에서 **15:15에 DB 기준으로 무조건 작동하는 독립 로직**을 추가한다.
+`kiwoom_sniper_v2.py`에서 **15:30에 DB 기준으로 무조건 작동하는 독립 로직**을 추가한다.
 대상은 다음 조건을 만족하는 종목이다.
 
 - `strategy in ('SCALPING', 'SCALP')`
@@ -10,7 +10,7 @@
 - `rec_date = today`
 
 이 로직은 기존 `handle_holding_state()`의 시간초과/장마감 청산과 **완전히 분리**되어야 하며,
-15:15 시점에 AI가 아래 둘 중 하나를 결정한다.
+15:30 시점에 AI가 아래 둘 중 하나를 결정한다.
 
 - `SELL_TODAY`: 당일 시장가 매도
 - `HOLD_OVERNIGHT`: 오버나이트 유지
@@ -33,11 +33,11 @@
 
 ### 2) 시간 변수는 `constants.py` -> `TRADING_RULES`로 이동
 
-하드코딩된 `15:00`, `15:15`, `15:30`, `20:00`을 `TradingConfig`로 이동한다.
+하드코딩된 `15:00`, `15:30`, `15:30`, `20:00`을 `TradingConfig`로 이동한다.
 
 추가 필드:
 - `SCALPING_NEW_BUY_CUTOFF = "15:00:00"`
-- `SCALPING_OVERNIGHT_DECISION_TIME = "15:15:00"`
+- `SCALPING_OVERNIGHT_DECISION_TIME = "15:30:00"`
 - `MARKET_CLOSE_TIME = "15:30:00"`
 - `SYSTEM_SHUTDOWN_TIME = "20:00:00"`
 
@@ -65,7 +65,7 @@
 - `SCALP_TIME_LIMIT_MIN` 타임아웃 청산
 - `now_t >= TIME_15_30` 장마감 현금화
 
-이제 SCALPING의 종가 판단은 오직 **15:15 독립 AI 판정**이 담당한다.
+이제 SCALPING의 종가 판단은 오직 **15:30 독립 AI 판정**이 담당한다.
 
 `check_holding_conditions()`의 관련 안내 문구도 함께 제거한다.
 
@@ -78,7 +78,7 @@
 
 이 메서드는:
 - `realtime_ctx` dict를 입력받고
-- 15:15 전용 프롬프트로
+- 15:30 전용 프롬프트로
 - `SELL_TODAY` / `HOLD_OVERNIGHT` JSON을 반환한다.
 
 기본 원칙:
@@ -103,7 +103,7 @@
 - `strat_label = 'SCALPING_EOD_REVIEW'`
 
 즉 데이터 수집 파이프라인은 그대로 두고,
-`15:15용 판단 컨텍스트`만 `kiwoom_sniper_v2.py`에서 완성한다.
+`15:30용 판단 컨텍스트`만 `kiwoom_sniper_v2.py`에서 완성한다.
 
 ---
 
@@ -125,7 +125,7 @@
 - `run_scalping_overnight_gatekeeper()` 추가
 - `_execute_scalping_sell_today()` 추가
 - `_execute_scalping_hold_overnight()` 추가
-- 메인 루프에 15:15 독립 실행 구간 삽입
+- 메인 루프에 15:30 독립 실행 구간 삽입
 - `handle_holding_state()`의 기존 시간초과/장마감 강제청산 제거
 
 ---
@@ -148,7 +148,7 @@
 
 1. 이 설계는 **SCALPING 포지션의 종가 의사결정만 독립화**한다.
 2. 장중 익절/손절/AI 모멘텀 로직은 그대로 살아 있다.
-3. 15:15 판정은 **오늘 DB에 적재된 상태 기준**으로 작동한다.
+3. 15:30 판정은 **오늘 DB에 적재된 상태 기준**으로 작동한다.
 4. `SELL_ORDERED`인데 원주문번호가 메모리에 없으면 오버나이트 취소가 완전 보장되지 않을 수 있다.
    이 경우는 로그와 텔레그램 알림으로 추적해야 한다.
 

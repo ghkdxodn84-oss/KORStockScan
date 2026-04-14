@@ -10,6 +10,7 @@ from src.engine.sync_docs_backlog_to_project import (
     _env,
     _env_bool,
     _find_option_id_by_name,
+    _checklist_track_from_source,
     _infer_slot_label,
     _infer_time_window,
     _is_managed_project_title,
@@ -34,7 +35,7 @@ def test_parse_plan_tasks_has_remaining_items():
 def test_parse_checklist_excludes_done_checkboxes():
     tasks = parse_checklist_tasks()
     titles = [t.title for t in tasks]
-    assert any("RELAX-LATENCY 반복 재현성 관찰" in title for title in titles)
+    assert any("SCALPING 모델 shadow 비교안 WATCHING shared prompt 구현 착수" in title for title in titles)
     assert any(t.due_date == "2026-04-14" for t in tasks)
 
 
@@ -46,7 +47,7 @@ def test_parse_checklist_uses_env_override(monkeypatch):
     tasks = parse_checklist_tasks()
     titles = [t.title for t in tasks]
     sources = {t.source for t in tasks}
-    assert any("RELAX-LATENCY 운영서버 승격 가능/불가 1차 결론" in title for title in titles)
+    assert any("SCALPING 모델 shadow 비교안 범위 / 로그 필드 / 성과 비교식" in title for title in titles)
     assert any("2026-04-14-stage2-todo-checklist.md" in source for source in sources)
     assert all("선반영 범위 확정" not in title for title in titles)
 
@@ -67,6 +68,10 @@ def test_parse_checklist_collects_multiple_stage2_files():
     assert "2026-04-14" in due_dates
     assert "2026-04-15" in due_dates
     assert "2026-04-16" in due_dates
+
+
+def test_checklist_track_from_source_uses_mmdd_suffix():
+    assert _checklist_track_from_source(DOC_CHECKLIST.parent / "2026-04-14-stage2-todo-checklist.md") == "Checklist0414"
 
 
 def test_parse_checklist_skips_past_due_stage2_files_by_default(monkeypatch):
@@ -154,16 +159,17 @@ def test_parse_plan_tasks_empty_when_source_missing(monkeypatch):
 def test_managed_title_detection():
     assert _is_managed_project_title("[Plan] something")
     assert _is_managed_project_title("[AIPrompt] something")
+    assert _is_managed_project_title("[Checklist0414] something")
     assert not _is_managed_project_title("[Other] something")
     assert not _is_managed_project_title("plain title")
 
 
 def test_desired_status_option_id():
-    open_titles = {"[Plan] alive task"}
+    open_title_keys = {"[Plan] alive task", "[Checklist] alive task"}
     assert (
         _desired_status_option_id(
             title="[Plan] alive task",
-            desired_open_titles=open_titles,
+            desired_open_title_keys=open_title_keys,
             todo_option_id="todo-id",
             done_option_id="done-id",
         )
@@ -172,7 +178,7 @@ def test_desired_status_option_id():
     assert (
         _desired_status_option_id(
             title="[Plan] closed task",
-            desired_open_titles=open_titles,
+            desired_open_title_keys=open_title_keys,
             todo_option_id="todo-id",
             done_option_id="done-id",
         )
@@ -180,8 +186,17 @@ def test_desired_status_option_id():
     )
     assert (
         _desired_status_option_id(
+            title="[Checklist0413] alive task",
+            desired_open_title_keys=open_title_keys,
+            todo_option_id="todo-id",
+            done_option_id="done-id",
+        )
+        == "todo-id"
+    )
+    assert (
+        _desired_status_option_id(
             title="manual task",
-            desired_open_titles=open_titles,
+            desired_open_title_keys=open_title_keys,
             todo_option_id="todo-id",
             done_option_id="done-id",
         )
@@ -224,7 +239,7 @@ def test_slot_equals_normalized():
 
 
 def test_infer_time_window_uses_explicit_range():
-    task = BacklogTask(title="장중 2차 수집 (13:20~13:35)", source="x", section="체크", track="Checklist0413")
+    task = BacklogTask(title="장중 2차 수집 (13:20~13:35)", source="x", section="체크", track="Checklist0414")
     assert _infer_time_window(task, slot_label="INTRADAY", default_duration_min=30) == "13:20~13:35"
 
 

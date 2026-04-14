@@ -19,6 +19,7 @@ from urllib import request
 from src.engine.sync_docs_backlog_to_project import (
     collect_backlog_tasks,
     _is_managed_project_title,
+    _managed_title_key,
     _title_for_project,
 )
 from src.utils.market_day import get_krx_trading_day_status
@@ -78,7 +79,7 @@ def _status_allowed(status: str, allowed_statuses: set[str]) -> bool:
 
 def _managed_open_titles_from_docs() -> set[str] | None:
     try:
-        return {_title_for_project(task) for task in collect_backlog_tasks()}
+        return {_managed_title_key(_title_for_project(task)) for task in collect_backlog_tasks()}
     except Exception as exc:
         print(f"[PROJECT_CAL_SYNC_WARN] failed to parse docs backlog for managed title filter: {exc}", file=sys.stderr)
         return None
@@ -135,13 +136,10 @@ def _parse_time_window(value: str) -> tuple[str, str, str]:
 
 def _compact_calendar_title(title: str) -> str:
     normalized = str(title or "").strip()
-    replacements = {
-        "[Checklist0413]": "[CL]",
-        "[AIPrompt]": "[AIP]",
-    }
-    for old, new in replacements.items():
-        if normalized.startswith(old):
-            return f"{new}{normalized[len(old):]}"
+    if re.match(r"^\[Checklist\d{4}\]", normalized):
+        return re.sub(r"^\[Checklist\d{4}\]", "[CL]", normalized, count=1)
+    if normalized.startswith("[AIPrompt]"):
+        return f"[AIP]{normalized[len('[AIPrompt]'):]}"
     return normalized
 
 
@@ -405,7 +403,7 @@ def fetch_project_items(
             if (
                 enforce_managed_doc_filter
                 and _is_managed_project_title(parsed.title)
-                and parsed.title not in managed_open_titles
+                and _managed_title_key(parsed.title) not in managed_open_titles
             ):
                 continue
             if not _status_allowed(parsed.status, sync_only_statuses):

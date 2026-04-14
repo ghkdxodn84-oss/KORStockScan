@@ -1206,7 +1206,7 @@ def run_sniper(is_test_mode=False):
 
 
             # =====================================================
-            # 15:15 SCALPING 오버나이트 독립 판정 (DB 기준, 무조건 1회 작동)
+            # 15:30 SCALPING 오버나이트 독립 판정 (DB 기준, 무조건 1회 작동)
             # =====================================================
             today_key = now.date().isoformat()
             last_eod_done = getattr(run_sniper, 'scalping_eod_done_date', None)

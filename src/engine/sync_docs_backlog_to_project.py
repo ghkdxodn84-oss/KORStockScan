@@ -44,11 +44,11 @@ class ProjectItem:
     time_window: str = ""
 
 
-MANAGED_TRACKS = ("Plan", "Checklist0413", "ScalpingLogic", "AIPrompt")
+MANAGED_TRACKS = ("Plan", "ScalpingLogic", "AIPrompt")
+CHECKLIST_TRACK_RE = re.compile(r"^Checklist\d{4}$")
 
 TRACK_DEFAULT_SLOT = {
     "Plan": "POSTCLOSE",
-    "Checklist0413": "PREOPEN",
     "ScalpingLogic": "INTRADAY",
     "AIPrompt": "POSTCLOSE",
 }
@@ -140,6 +140,14 @@ def _read_candidates(paths: list[Path]) -> tuple[Path, str] | None:
             file=sys.stderr,
         )
     return None
+
+
+def _checklist_track_from_source(source_path: Path) -> str:
+    name = source_path.name
+    m = re.match(r"^\d{4}-(\d{2})-(\d{2})-.*checklist\.md$", name)
+    if not m:
+        return "Checklist"
+    return f"Checklist{m.group(1)}{m.group(2)}"
 
 
 def _scalping_doc_candidates() -> list[Path]:
@@ -294,7 +302,7 @@ def parse_checklist_tasks() -> list[BacklogTask]:
                     title=item,
                     source=str(source_path),
                     section=section_label,
-                    track="Checklist0413",
+                    track=_checklist_track_from_source(source_path),
                     due_date=due_date,
                 )
             )
@@ -655,8 +663,17 @@ def _title_for_project(task: BacklogTask) -> str:
     return f"[{task.track}] {task.title}".strip()
 
 
+def _managed_title_key(title: str) -> str:
+    normalized = title.strip()
+    normalized = re.sub(r"^\[Checklist\d{4}\]", "[Checklist]", normalized)
+    return normalized
+
+
 def _is_managed_project_title(title: str) -> bool:
-    return bool(re.match(rf"^\[({'|'.join(MANAGED_TRACKS)})\]\s+.+", title.strip()))
+    normalized = title.strip()
+    if re.match(r"^\[Checklist\d{4}\]\s+.+", normalized):
+        return True
+    return bool(re.match(rf"^\[({'|'.join(MANAGED_TRACKS)})\]\s+.+", normalized))
 
 
 def _slot_key(value: str) -> str:
@@ -679,6 +696,8 @@ def _infer_slot_label(task: BacklogTask) -> str:
         return "POSTCLOSE"
     if any(keyword.lower() in text for keyword in SLOT_INTRADAY_KEYWORDS):
         return "INTRADAY"
+    if CHECKLIST_TRACK_RE.match(str(task.track or "")):
+        return "PREOPEN"
     return TRACK_DEFAULT_SLOT.get(task.track, "POSTCLOSE")
 
 
@@ -782,13 +801,13 @@ def _infer_time_window(task: BacklogTask, *, slot_label: str, default_duration_m
 def _desired_status_option_id(
     *,
     title: str,
-    desired_open_titles: set[str],
+    desired_open_title_keys: set[str],
     todo_option_id: str,
     done_option_id: str,
 ) -> str:
     if not _is_managed_project_title(title):
         return ""
-    return todo_option_id if title in desired_open_titles else done_option_id
+    return todo_option_id if _managed_title_key(title) in desired_open_title_keys else done_option_id
 
 
 def _body_for_project(task: BacklogTask) -> str:
@@ -879,6 +898,7 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
     add_mut = _mutation_add_draft()
     upd_mut = _mutation_update_field()
     tasks_by_title = {_title_for_project(task): task for task in tasks}
+    tasks_by_key = {_managed_title_key(_title_for_project(task)): task for task in tasks}
     slot_by_title = {
         _title_for_project(task): _infer_slot_label(task)
         for task in tasks
@@ -892,8 +912,12 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
         for task in tasks
     }
     desired_open_titles = set(tasks_by_title.keys())
+    desired_open_title_keys = {_managed_title_key(title) for title in desired_open_titles}
+    existing_title_keys = {_managed_title_key(title) for title in existing_titles}
     managed_open_items = [
-        item for item in existing_items if _is_managed_project_title(item.title) and item.title in desired_open_titles
+        item
+        for item in existing_items
+        if _is_managed_project_title(item.title) and _managed_title_key(item.title) in desired_open_title_keys
     ]
     managed_open_blank_slot = sum(1 for item in managed_open_items if not item.slot.strip())
     managed_open_blank_time_window = sum(1 for item in managed_open_items if not item.time_window.strip())
@@ -902,7 +926,7 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
     skipped_existing = 0
     for task in tasks:
         title = _title_for_project(task)
-        if title in existing_titles:
+        if title in existing_titles or _managed_title_key(title) in existing_title_keys:
             skipped_existing += 1
             continue
         if dry_run:
@@ -1004,7 +1028,7 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
         for item in existing_items:
             desired_option_id = _desired_status_option_id(
                 title=item.title,
-                desired_open_titles=desired_open_titles,
+                desired_open_title_keys=desired_open_title_keys,
                 todo_option_id=status_option_id,
                 done_option_id=done_status_option_id,
             )
@@ -1040,9 +1064,9 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
             for item in existing_items:
                 if not _is_managed_project_title(item.title):
                     continue
-                if item.title not in desired_open_titles:
+                if _managed_title_key(item.title) not in desired_open_title_keys:
                     continue
-                task = tasks_by_title.get(item.title)
+                task = tasks_by_key.get(_managed_title_key(item.title))
                 if not task or not task.due_date:
                     continue
                 existing_due = item.due_date.strip()
@@ -1075,9 +1099,9 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
         for item in existing_items:
             if not _is_managed_project_title(item.title):
                 continue
-            if item.title not in desired_open_titles:
+            if _managed_title_key(item.title) not in desired_open_title_keys:
                 continue
-            task = tasks_by_title.get(item.title)
+            task = tasks_by_key.get(_managed_title_key(item.title))
             if not task:
                 continue
             inferred_slot = slot_by_title.get(item.title, _infer_slot_label(task))
@@ -1141,9 +1165,9 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
         for item in existing_items:
             if not _is_managed_project_title(item.title):
                 continue
-            if item.title not in desired_open_titles:
+            if _managed_title_key(item.title) not in desired_open_title_keys:
                 continue
-            task = tasks_by_title.get(item.title)
+            task = tasks_by_key.get(_managed_title_key(item.title))
             if not task:
                 continue
             inferred_slot = slot_by_title.get(item.title, _infer_slot_label(task))

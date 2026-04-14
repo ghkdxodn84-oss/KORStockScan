@@ -168,7 +168,7 @@
   - [src/engine/sniper_overnight_gatekeeper.py](/home/ubuntu/KORStockScan/src/engine/sniper_overnight_gatekeeper.py#L207)
 - 상태:
   - 실행 자체는 상위 호출부에서 `TIME_SCALPING_OVERNIGHT_DECISION`을 사용해 제어된다.
-  - 다만 로그/문구에는 `15:15`가 박혀 있다.
+  - 다만 로그/문구에는 `15:30`가 박혀 있다.
 - 권장 방향:
   - 기능상 문제는 작지만, 운영 문구도 중앙 상수 기반 문자열로 맞추는 편이 좋다.
 
@@ -224,7 +224,7 @@
 1. `sniper_condition_handlers.py` 시간창을 기준점+오프셋 테이블로 변경
 2. `scalping_scanner.py`, `kosdaq_scanner.py`, `sniper_analysis.py`의 직접 문자열 시간을 중앙 규칙 참조로 변경
 3. `bot_main.py`의 `08:50`, `15:40`을 장 기준 오프셋으로 변경
-4. 로그 메시지의 `15:15`, `15:30` 같은 문구도 동적 생성으로 정리
+4. 로그 메시지의 `15:30`, `15:30` 같은 문구도 동적 생성으로 정리
 
 ## 7. 이번 점검 결론
 

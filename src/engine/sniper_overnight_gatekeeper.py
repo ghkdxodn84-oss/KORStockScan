@@ -1,6 +1,7 @@
 """Scalping overnight gatekeeper helpers."""
 
 import time
+from dataclasses import dataclass
 from datetime import datetime
 
 from src.database.models import RecommendationHistory
@@ -21,6 +22,17 @@ _is_ok_response = None
 _extract_ord_no = None
 process_sell_cancellation = None
 DUAL_PERSONA_ENGINE = None
+
+
+@dataclass(frozen=True)
+class OvernightRecordSnapshot:
+    id: int
+    stock_code: str
+    stock_name: str
+    status: str
+    buy_qty: float
+    buy_price: float
+    buy_time: object
 
 
 def bind_overnight_dependencies(
@@ -109,6 +121,18 @@ def _calc_held_minutes(stock=None, db_record=None):
         return 0.0
 
 
+def _snapshot_record(record: RecommendationHistory) -> OvernightRecordSnapshot:
+    return OvernightRecordSnapshot(
+        id=int(getattr(record, "id")),
+        stock_code=str(getattr(record, "stock_code", "") or ""),
+        stock_name=str(getattr(record, "stock_name", "") or ""),
+        status=str(getattr(record, "status", "") or ""),
+        buy_qty=float(getattr(record, "buy_qty", 0) or 0),
+        buy_price=float(getattr(record, "buy_price", 0) or 0),
+        buy_time=getattr(record, "buy_time", None),
+    )
+
+
 def _build_scalping_overnight_ctx(record, mem_stock=None, ws_data=None):
     ctx = kiwoom_utils.build_realtime_analysis_context(
         KIWOOM_TOKEN,
@@ -153,7 +177,7 @@ def _publish_scalping_overnight_decision(stock_name, code, decision, action_take
     esc_reason = escape_markdown(reason)
     esc_risk_note = escape_markdown(risk_note)
     msg = (
-        f"🌙 **[15:15 SCALPING EOD 판정]**\n"
+        f"🌙 **[15:30 SCALPING EOD 판정]**\n"
         f"종목: **{esc_stock_name} ({esc_code})**\n"
         f"AI 결정: `{esc_chosen}` ({confidence}점)\n"
         f"실행: `{esc_action_taken}`\n"
@@ -226,7 +250,18 @@ def _submit_overnight_dual_persona_shadow(stock_name, code, realtime_ctx, decisi
             callback=lambda payload: _log_overnight_dual_persona_shadow_result(stock_name, code, "SCALPING", payload),
         )
     except Exception as e:
-        log_error(f"🚨 [15:15 EOD 듀얼 페르소나 shadow 제출 실패] {stock_name}({code}): {e}")
+        log_error(f"🚨 [15:30 EOD 듀얼 페르소나 shadow 제출 실패] {stock_name}({code}): {e}")
+
+
+def _format_order_error(res) -> str:
+    if isinstance(res, dict):
+        msg = str(res.get("return_msg") or "").strip()
+        code = str(res.get("return_code") or "").strip()
+        if msg and code:
+            return f"{msg} (code={code})"
+        if msg:
+            return msg
+    return str(res)
 
 
 def _execute_scalping_sell_today(record, mem_stock=None):
@@ -239,12 +274,12 @@ def _execute_scalping_sell_today(record, mem_stock=None):
 
     rem_qty = _confirm_cancel_or_reload_remaining(code, orig_ord_no, KIWOOM_TOKEN, expected_qty)
     if rem_qty <= 0:
-        print(f"⚠️ [15:15 EOD] {stock_name}({code}) 청산 대상이지만 잔량 확인 실패/0주. 시장가 청산 생략")
+        print(f"⚠️ [15:30 EOD] {stock_name}({code}) 청산 대상이지만 잔량 확인 실패/0주. 시장가 청산 생략")
         return False, '잔량 없음 또는 확인 실패'
 
     res = _send_market_exit_now(code, rem_qty, KIWOOM_TOKEN)
     if not _is_ok_response(res):
-        return False, f"시장가 매도 실패: {res}"
+        return False, f"시장가 매도 실패: {_format_order_error(res)}"
 
     ord_no = _extract_ord_no(res)
     if mem_stock is not None:
@@ -258,7 +293,7 @@ def _execute_scalping_sell_today(record, mem_stock=None):
         with DB.get_session() as session:
             session.query(RecommendationHistory).filter_by(id=record.id).update({"status": "SELL_ORDERED"})
     except Exception as e:
-        log_error(f"🚨 [15:15 EOD] DB SELL_ORDERED 업데이트 실패 ({code}): {e}")
+        log_error(f"🚨 [15:30 EOD] DB SELL_ORDERED 업데이트 실패 ({code}): {e}")
 
     return True, f"시장가 청산 주문 전송 ({rem_qty}주)"
 
@@ -283,30 +318,31 @@ def _execute_scalping_hold_overnight(record, mem_stock=None):
 
 
 def run_scalping_overnight_gatekeeper(ai_engine=None):
-    """15:15 스캘핑 포지션 오버나이트/당일청산 판정 및 실행."""
+    """15:30 스캘핑 포지션 오버나이트/당일청산 판정 및 실행."""
     global KIWOOM_TOKEN, DB, WS_MANAGER, event_bus, ACTIVE_TARGETS
 
     if ai_engine is None:
-        log_info("⚠️ [15:15 EOD] AI 엔진이 없어 오버나이트 판정을 건너뜁니다.")
+        log_info("⚠️ [15:30 EOD] AI 엔진이 없어 오버나이트 판정을 건너뜁니다.")
         return False
     if DB is None or ACTIVE_TARGETS is None:
-        log_info("⚠️ [15:15 EOD] DB/ACTIVE_TARGETS 의존성 미설정")
+        log_info("⚠️ [15:30 EOD] DB/ACTIVE_TARGETS 의존성 미설정")
         return False
 
     try:
         with DB.get_session() as session:
-            records = (
+            orm_records = (
                 session.query(RecommendationHistory)
                 .filter(RecommendationHistory.status.in_(('HOLDING', 'SELL_ORDERED')))
                 .filter(RecommendationHistory.strategy.in_(('SCALPING', 'SCALP')))
                 .all()
             )
+            records = [_snapshot_record(record) for record in orm_records]
     except Exception as e:
-        log_error(f"🚨 [15:15 EOD] DB 조회 실패: {e}")
+        log_error(f"🚨 [15:30 EOD] DB 조회 실패: {e}")
         return False
 
     if not records:
-        print("✅ [15:15 EOD] 스캘핑 보유/주문 대기 종목이 없습니다.")
+        print("✅ [15:30 EOD] 스캘핑 보유/주문 대기 종목이 없습니다.")
         return True
 
     summary_rows = []
@@ -332,7 +368,7 @@ def run_scalping_overnight_gatekeeper(ai_engine=None):
             sell_count += 1
 
         if not ok:
-            log_info(f"⚠️ [15:15 EOD] {name}({code}) 처리 실패: {action_taken}")
+            log_info(f"⚠️ [15:30 EOD] {name}({code}) 처리 실패: {action_taken}")
 
         summary_rows.append({
             'name': name,
@@ -343,22 +379,18 @@ def run_scalping_overnight_gatekeeper(ai_engine=None):
             'note': action_taken,
         })
 
-    if event_bus and escape_markdown and summary_rows:
+    if event_bus and summary_rows:
         lines = [
-            "🌙 **[15:15 SCALPING EOD 요약]**",
+            "🌙 [15:30 SCALPING EOD 요약]",
             f"대상: {len(summary_rows)} | 당일청산: {sell_count} | 오버나이트: {hold_count}",
         ]
         for row in summary_rows:
-            esc_name = escape_markdown(row['name'])
-            esc_code = escape_markdown(row['code'])
-            esc_action = escape_markdown(row['action'])
-            esc_note = escape_markdown(row['note'])
             lines.append(
-                f"- {esc_name}({esc_code}) | {esc_action} | {row['confidence']}점 | PnL {row['pnl_pct']:+.2f}% | {esc_note}"
+                f"- {row['name']}({row['code']}) | {row['action']} | {row['confidence']}점 | PnL {row['pnl_pct']:+.2f}% | {row['note']}"
             )
         event_bus.publish(
             'TELEGRAM_BROADCAST',
-            {'message': "\n".join(lines), 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'}
+            {'message': "\n".join(lines), 'audience': 'ADMIN_ONLY', 'parse_mode': None}
         )
 
     return True

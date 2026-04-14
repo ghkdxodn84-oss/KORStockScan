@@ -261,11 +261,11 @@ REALTIME_ANALYSIS_PROMPT_DUAL = """
 """
 
 # ==========================================
-# 3-2. 🎯 [신규] 스캘핑 오버나이트 의사결정 프롬프트 (15:15 전용)
+# 3-2. 🎯 [신규] 스캘핑 오버나이트 의사결정 프롬프트 (15:30 전용)
 # ==========================================
 SCALPING_OVERNIGHT_DECISION_PROMPT = """
 너는 장 마감 직전 15년 경력의 베테랑 프랍 트레이더이자 리스크 매니저다.
-네 임무는 원래 당일 청산이 원칙인 SCALPING 포지션을 15시 15분 시점에서 검토해,
+네 임무는 원래 당일 청산이 원칙인 SCALPING 포지션을 15시 30분 시점에서 검토해,
 '오늘 무조건 시장가 청산'할지, 아니면 '예외적으로 오버나이트 보유'할지를 결정하는 것이다.
 
 [핵심 원칙]
@@ -1586,7 +1586,7 @@ class GeminiSniperEngine:
         return result
 
     # ==========================================
-    # 🔍 [신규] 스캘핑 오버나이트 의사결정 (15:15 전용)
+    # 🔍 [신규] 스캘핑 오버나이트 의사결정 (15:30 전용)
     # ==========================================
     def _format_scalping_overnight_context(self, realtime_ctx):
         ctx = realtime_ctx or {}
@@ -1611,10 +1611,10 @@ class GeminiSniperEngine:
         return "\n".join(lines)
 
     def evaluate_scalping_overnight_decision(self, stock_name, stock_code, realtime_ctx):
-        """15:15 SCALPING 포지션의 오버나이트/당일청산 의사결정을 JSON으로 반환합니다."""
+        """15:30 SCALPING 포지션의 오버나이트/당일청산 의사결정을 JSON으로 반환합니다."""
         with self.lock:
             user_input = (
-                f"🚨 [15:15 SCALPING 오버나이트 판정 요청]\n"
+                f"🚨 [15:30 SCALPING 오버나이트 판정 요청]\n"
                 f"종목명: {stock_name}\n종목코드: {stock_code}\n\n"
                 f"📊 [판정 입력 데이터]\n{self._format_scalping_overnight_context(realtime_ctx)}"
             )
