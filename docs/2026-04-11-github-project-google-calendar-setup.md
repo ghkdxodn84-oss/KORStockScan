@@ -138,7 +138,9 @@ Settings -> Secrets and variables -> Actions
   - 값이 설정돼 있으면 `Status`가 비어 있거나 파싱되지 않은 항목은 캘린더에서 제외
   - 자동관리 대상(`[Plan]`, `[Checklist0413]`, `[ScalpingLogic]`, `[AIPrompt]`)은 현재 문서 backlog에 남아 있는 제목만 캘린더에 유지
 - `GCAL_EVENT_PREFIX`  
-  - 예: `[KORStockScan]`
+  - 기본: 빈 문자열
+  - 현재 운영 권장: prefix 없이 제목 그대로 사용
+  - 관리 항목 제목은 캘린더 표시 시 `[Checklist0413] -> [CL]`, `[AIPrompt] -> [AIP]`로 축약
 - `GCAL_EVENT_TIMEZONE`
   - 기본: `Asia/Seoul`
 - `GCAL_USE_SLOT_TIME`

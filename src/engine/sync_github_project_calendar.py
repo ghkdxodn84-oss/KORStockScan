@@ -133,6 +133,18 @@ def _parse_time_window(value: str) -> tuple[str, str, str]:
     return ("none", "", "")
 
 
+def _compact_calendar_title(title: str) -> str:
+    normalized = str(title or "").strip()
+    replacements = {
+        "[Checklist0413]": "[CL]",
+        "[AIPrompt]": "[AIP]",
+    }
+    for old, new in replacements.items():
+        if normalized.startswith(old):
+            return f"{new}{normalized[len(old):]}"
+    return normalized
+
+
 def _graphql_query() -> str:
     return """
 query($owner: String!, $number: Int!, $cursor: String) {
@@ -482,8 +494,10 @@ def _event_body(
         f"Assignees: {item.assignees or '-'}",
         f"URL: {item.url or '-'}",
     ]
+    compact_title = _compact_calendar_title(item.title)
+    summary_parts = [str(event_prefix or "").strip(), compact_title]
     body = {
-        "summary": f"{event_prefix} {item.title}".strip(),
+        "summary": " ".join(part for part in summary_parts if part).strip(),
         "description": "\n".join(description_lines),
         "extendedProperties": {
             "private": {
@@ -646,7 +660,7 @@ def main() -> int:
     track_field_name = _env("GH_PROJECT_TRACK_FIELD_NAME", "Track")
     slot_field_name = _env("GH_PROJECT_SLOT_FIELD_NAME", "Slot")
     time_window_field_name = _env("GH_PROJECT_TIME_WINDOW_FIELD_NAME", "TimeWindow")
-    event_prefix = _env("GCAL_EVENT_PREFIX", "[KORStockScan]")
+    event_prefix = _env("GCAL_EVENT_PREFIX", "")
     event_timezone = _env("GCAL_EVENT_TIMEZONE", "Asia/Seoul")
     use_slot_time = _env_bool("GCAL_USE_SLOT_TIME", True)
     slot_preopen_time = _env("GCAL_SLOT_PREOPEN_TIME", "08:20")

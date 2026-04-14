@@ -341,7 +341,7 @@ def test_event_body_contains_private_extended_properties():
     )
     body = _event_body(
         item,
-        event_prefix="[KORStockScan]",
+        event_prefix="",
         owner="org",
         project_number=3,
         event_timezone="Asia/Seoul",
@@ -352,7 +352,7 @@ def test_event_body_contains_private_extended_properties():
         slot_duration_minutes=30,
         slot_reminder_minutes=0,
     )
-    assert body["summary"] == "[KORStockScan] Task A"
+    assert body["summary"] == "Task A"
     assert body["start"]["date"] == "2026-04-14"
     assert body["end"]["date"] == "2026-04-15"
     assert body["extendedProperties"]["private"]["gh_project_item_id"] == "PVTI_1"
@@ -374,7 +374,7 @@ def test_event_body_timed_when_slot_exists():
     )
     body = _event_body(
         item,
-        event_prefix="[KORStockScan]",
+        event_prefix="",
         owner="org",
         project_number=3,
         event_timezone="Asia/Seoul",
@@ -407,7 +407,7 @@ def test_event_body_holiday_reclassifies_slot_time_to_intraday():
     )
     body = _event_body(
         item,
-        event_prefix="[KORStockScan]",
+        event_prefix="",
         owner="org",
         project_number=3,
         event_timezone="Asia/Seoul",
@@ -438,7 +438,7 @@ def test_event_body_uses_explicit_time_range_from_title_over_slot_default():
     )
     body = _event_body(
         item,
-        event_prefix="[KORStockScan]",
+        event_prefix="",
         owner="org",
         project_number=3,
         event_timezone="Asia/Seoul",
@@ -469,7 +469,7 @@ def test_event_body_holiday_forces_intraday_over_explicit_time_range():
     )
     body = _event_body(
         item,
-        event_prefix="[KORStockScan]",
+        event_prefix="",
         owner="org",
         project_number=3,
         event_timezone="Asia/Seoul",
@@ -500,7 +500,7 @@ def test_event_body_prefers_time_window_field_over_title_and_slot():
     )
     body = _event_body(
         item,
-        event_prefix="[KORStockScan]",
+        event_prefix="",
         owner="org",
         project_number=3,
         event_timezone="Asia/Seoul",
@@ -531,7 +531,7 @@ def test_event_body_holiday_forces_intraday_over_time_window():
     )
     body = _event_body(
         item,
-        event_prefix="[KORStockScan]",
+        event_prefix="",
         owner="org",
         project_number=3,
         event_timezone="Asia/Seoul",
@@ -562,7 +562,7 @@ def test_event_body_all_day_when_unscheduled_time_window():
     )
     body = _event_body(
         item,
-        event_prefix="[KORStockScan]",
+        event_prefix="",
         owner="org",
         project_number=3,
         event_timezone="Asia/Seoul",
@@ -575,6 +575,65 @@ def test_event_body_all_day_when_unscheduled_time_window():
     )
     assert body["start"]["date"] == "2026-04-14"
     assert "dateTime" not in body["start"]
+
+
+def test_event_body_compacts_managed_track_prefixes():
+    checklist_item = ProjectItem(
+        item_id="PVTI_6",
+        content_type="Issue",
+        title="[Checklist0413] 장전 점검",
+        url="https://github.com/org/repo/issues/6",
+        due_date="2026-04-14",
+        status="Todo",
+        track="Checklist0413",
+        slot="PREOPEN",
+        time_window="",
+        assignees="alice",
+        state="OPEN",
+    )
+    aip_item = ProjectItem(
+        item_id="PVTI_7",
+        content_type="Issue",
+        title="[AIPrompt] 작업 8 감사용 핵심값 3종 투입",
+        url="https://github.com/org/repo/issues/7",
+        due_date="2026-04-14",
+        status="Todo",
+        track="AIPrompt",
+        slot="POSTCLOSE",
+        time_window="",
+        assignees="alice",
+        state="OPEN",
+    )
+
+    checklist_body = _event_body(
+        checklist_item,
+        event_prefix="",
+        owner="org",
+        project_number=3,
+        event_timezone="Asia/Seoul",
+        use_slot_time=True,
+        slot_preopen_time="08:20",
+        slot_intraday_time="10:00",
+        slot_postclose_time="15:40",
+        slot_duration_minutes=30,
+        slot_reminder_minutes=0,
+    )
+    aip_body = _event_body(
+        aip_item,
+        event_prefix="",
+        owner="org",
+        project_number=3,
+        event_timezone="Asia/Seoul",
+        use_slot_time=True,
+        slot_preopen_time="08:20",
+        slot_intraday_time="10:00",
+        slot_postclose_time="15:40",
+        slot_duration_minutes=30,
+        slot_reminder_minutes=0,
+    )
+
+    assert checklist_body["summary"] == "[CL] 장전 점검"
+    assert aip_body["summary"] == "[AIP] 작업 8 감사용 핵심값 3종 투입"
 
 
 class _FakeEventsApi:
