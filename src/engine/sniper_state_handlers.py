@@ -420,6 +420,68 @@ def _log_dual_persona_shadow_result(stock_name, code, strategy, payload, record_
     )
 
 
+def _log_watching_shared_prompt_shadow_result(stock_name, code, payload, record_id=None):
+    stock_stub = {"name": stock_name, "id": record_id}
+    if not isinstance(payload, dict):
+        _log_entry_pipeline(
+            stock_stub,
+            code,
+            "watching_shared_prompt_shadow_error",
+            strategy="SCALPING",
+            error="invalid_shadow_payload",
+        )
+        return
+
+    if payload.get("error"):
+        _log_entry_pipeline(
+            stock_stub,
+            code,
+            "watching_shared_prompt_shadow_error",
+            strategy="SCALPING",
+            error=payload.get("error", "unknown"),
+            gpt_model=payload.get("gpt_model", "-"),
+            shadow_extra_ms=payload.get("shadow_extra_ms", 0),
+        )
+        return
+
+    _log_entry_pipeline(
+        stock_stub,
+        code,
+        "watching_shared_prompt_shadow",
+        strategy="SCALPING",
+        gemini_action=payload.get("gemini_action", ""),
+        gemini_score=payload.get("gemini_score", 0),
+        gpt_action=payload.get("gpt_action", ""),
+        gpt_score=payload.get("gpt_score", 0),
+        action_diverged=str(bool(payload.get("action_diverged", False))).lower(),
+        score_gap=payload.get("score_gap", 0),
+        gpt_model=payload.get("gpt_model", "-"),
+        shadow_extra_ms=payload.get("shadow_extra_ms", 0),
+    )
+
+
+def _submit_watching_shared_prompt_shadow(*, stock_name, code, ws_data, recent_ticks, recent_candles, gemini_result, record_id=None):
+    if DUAL_PERSONA_ENGINE is None or not hasattr(DUAL_PERSONA_ENGINE, "submit_watching_shared_prompt_shadow"):
+        return
+    try:
+        DUAL_PERSONA_ENGINE.submit_watching_shared_prompt_shadow(
+            stock_name=stock_name,
+            stock_code=code,
+            ws_data=ws_data,
+            recent_ticks=recent_ticks,
+            recent_candles=recent_candles,
+            gemini_result=gemini_result,
+            callback=lambda payload: _log_watching_shared_prompt_shadow_result(
+                stock_name,
+                code,
+                payload,
+                record_id=record_id,
+            ),
+        )
+    except Exception as e:
+        log_error(f"🚨 [WATCHING shared prompt shadow 제출 실패] {stock_name}({code}): {e}")
+
+
 def _submit_gatekeeper_dual_persona_shadow(*, stock_name, code, strategy, realtime_ctx, gatekeeper, record_id=None):
     if DUAL_PERSONA_ENGINE is None:
         return
@@ -647,6 +709,7 @@ def _build_ai_ops_log_fields(
         "ai_fallback_score_50": bool(payload.get("ai_fallback_score_50", False)),
         "ai_response_ms": int(payload.get("ai_response_ms", 0) or 0),
         "ai_prompt_type": str(payload.get("ai_prompt_type", "-") or "-"),
+        "ai_prompt_version": str(payload.get("ai_prompt_version", "-") or "-"),
         "ai_result_source": str(payload.get("ai_result_source", "-") or "-"),
     }
     if ai_score_raw is not None:
@@ -904,6 +967,7 @@ def _clear_pending_entry_meta(stock):
             'entry_requested_qty',
             'entry_filled_qty',
             'entry_fill_amount',
+            'entry_dynamic_reason',
             'requested_buy_qty',
             'entry_bundle_id',
         ]:
@@ -1084,6 +1148,7 @@ def _cancel_pending_entry_orders(stock, code, *, force=False):
 
 def _stage_buy_order_submission(stock, code, curr_price, requested_qty, msg, entry_orders):
     with ENTRY_LOCK:
+        entry_dynamic_reason = str(stock.get('entry_armed_dynamic_reason', '') or '')
         _clear_entry_arm(stock)
         existing_filled_qty = int(stock.get('entry_filled_qty', 0) or 0)
         existing_fill_amount = int(stock.get('entry_fill_amount', 0) or 0)
@@ -1094,6 +1159,8 @@ def _stage_buy_order_submission(stock, code, curr_price, requested_qty, msg, ent
         stock['entry_requested_qty'] = requested_qty
         stock['entry_filled_qty'] = existing_filled_qty
         stock['entry_fill_amount'] = existing_fill_amount
+        if entry_dynamic_reason:
+            stock['entry_dynamic_reason'] = entry_dynamic_reason
         stock['pending_entry_orders'] = _merge_pending_entry_orders(
             stock.get('pending_entry_orders') or [],
             entry_orders,
@@ -1168,7 +1235,84 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
     if result == 'failed':
         return
 
-    if int(stock.get('buy_qty', 0) or 0) > 0:
+    buy_qty = int(stock.get('buy_qty', 0) or 0)
+    if buy_qty > 0:
+        requested_qty = int(stock.get('entry_requested_qty', 0) or stock.get('requested_buy_qty', 0) or buy_qty)
+        requested_qty = max(requested_qty, buy_qty, 1)
+        fill_ratio = float(buy_qty) / float(requested_qty)
+
+        min_fill_ratio = 0.0
+        partial_fill_ratio_canary_enabled = bool(
+            getattr(TRADING_RULES, 'SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED', False)
+        )
+        if partial_fill_ratio_canary_enabled:
+            min_fill_ratio = float(
+                getattr(TRADING_RULES, 'SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT', 0.20) or 0.20
+            )
+            position_tag = normalize_position_tag(stock.get('strategy'), stock.get('position_tag'))
+            if position_tag == 'SCALP_PRESET_TP':
+                min_fill_ratio = float(
+                    getattr(TRADING_RULES, 'SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP', 0.0) or 0.0
+                )
+            elif str(stock.get('entry_dynamic_reason', '') or '').strip().lower() == 'strong_absolute_override':
+                min_fill_ratio = float(
+                    getattr(TRADING_RULES, 'SCALP_PARTIAL_FILL_MIN_RATIO_STRONG_ABS_OVERRIDE', 0.10) or 0.10
+                )
+            min_fill_ratio = max(0.0, min(1.0, min_fill_ratio))
+
+        _log_entry_pipeline(
+            stock,
+            code,
+            "partial_fill_reconciled",
+            requested_qty=requested_qty,
+            filled_qty=buy_qty,
+            fill_ratio=f"{fill_ratio:.3f}",
+            min_fill_ratio=f"{min_fill_ratio:.3f}",
+            min_fill_ratio_enabled=partial_fill_ratio_canary_enabled,
+            dynamic_reason=stock.get('entry_dynamic_reason'),
+        )
+
+        if partial_fill_ratio_canary_enabled and min_fill_ratio > 0 and fill_ratio < min_fill_ratio:
+            res = kiwoom_orders.send_sell_order_market(code=code, qty=buy_qty, token=KIWOOM_TOKEN)
+            if _is_ok_response(res):
+                stock['status'] = 'SELL_ORDERED'
+                stock['sell_target_price'] = int(stock.get('order_price', 0) or 0)
+                stock['sell_order_time'] = time.time()
+                stock['pending_sell_msg'] = (
+                    f"partial_fill_ratio_below_min(fill_ratio={fill_ratio:.3f},min={min_fill_ratio:.3f})"
+                )
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "partial_fill_ratio_below_min_exit_ordered",
+                    requested_qty=requested_qty,
+                    filled_qty=buy_qty,
+                    fill_ratio=f"{fill_ratio:.3f}",
+                    min_fill_ratio=f"{min_fill_ratio:.3f}",
+                )
+                log_info(
+                    f"[ENTRY_RECONCILED] {stock.get('name')}({code}) "
+                    f"partial fill ratio {fill_ratio:.3f} < min {min_fill_ratio:.3f}; "
+                    "market sell ordered"
+                )
+                return
+
+            err_msg = str(res.get('return_msg', '') if isinstance(res, dict) else res)
+            _log_entry_pipeline(
+                stock,
+                code,
+                "partial_fill_ratio_below_min_exit_failed",
+                requested_qty=requested_qty,
+                filled_qty=buy_qty,
+                fill_ratio=f"{fill_ratio:.3f}",
+                min_fill_ratio=f"{min_fill_ratio:.3f}",
+                error=err_msg or "unknown",
+            )
+            log_error(
+                f"⚠️ [ENTRY_RECONCILED] {stock.get('name')}({code}) "
+                f"partial fill ratio below min but market sell failed: {err_msg}"
+            )
+
         stock['status'] = 'HOLDING'
         stock.pop('odno', None)
         log_info(f"[ENTRY_RECONCILED] {stock.get('name')}({code}) partial fill kept, remaining entry orders cancelled")
@@ -1616,7 +1760,13 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                         recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
 
                         if ws_data.get('orderbook') and recent_ticks:
-                            ai_decision = ai_engine.analyze_target(stock['name'], ws_data, recent_ticks, recent_candles)
+                            ai_decision = ai_engine.analyze_target(
+                                stock['name'],
+                                ws_data,
+                                recent_ticks,
+                                recent_candles,
+                                prompt_profile="watching",
+                            )
                             ai_call_executed = True
 
                             action = ai_decision.get('action', 'WAIT')
@@ -1652,6 +1802,15 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                                     big_bite_bonus_applied=False,
                                     ai_cooldown_blocked=False,
                                 ),
+                            )
+                            _submit_watching_shared_prompt_shadow(
+                                stock_name=stock['name'],
+                                code=code,
+                                ws_data=ws_data,
+                                recent_ticks=recent_ticks,
+                                recent_candles=recent_candles,
+                                gemini_result=ai_decision,
+                                record_id=stock.get("id"),
                             )
 
                             if _should_run_watching_prompt_75_shadow(ai_decision, ai_score):
@@ -2704,7 +2863,13 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                 try:
                     recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
                     ai_decision = ai_engine.analyze_target(
-                        stock['name'], ws_data, recent_ticks, [], strategy="SCALPING"
+                        stock['name'],
+                        ws_data,
+                        recent_ticks,
+                        [],
+                        strategy="SCALPING",
+                        cache_profile="holding",
+                        prompt_profile="holding",
                     )
                     ai_action = ai_decision.get('action', 'WAIT')
                     ai_score = ai_decision.get('score', 50)
@@ -2936,6 +3101,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                             recent_ticks,
                             recent_candles,
                             cache_profile="holding",
+                            prompt_profile="holding",
                         )
                         raw_ai_score = ai_decision.get('score', 50)
                         ai_cache_hit = bool(ai_decision.get('cache_hit', False))

@@ -99,6 +99,7 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
             "ai_fallback_score_50": False,
             "ai_response_ms": 321,
             "ai_prompt_type": "scalping_shared",
+            "ai_prompt_version": "split_v1",
             "ai_result_source": "live",
         },
         ai_score_raw=74,
@@ -113,6 +114,7 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
     assert fields["ai_fallback_score_50"] is False
     assert fields["ai_response_ms"] == 321
     assert fields["ai_prompt_type"] == "scalping_shared"
+    assert fields["ai_prompt_version"] == "split_v1"
     assert fields["ai_result_source"] == "live"
     assert fields["ai_score_raw"] == "74.0"
     assert fields["ai_score_after_bonus"] == "79.0"

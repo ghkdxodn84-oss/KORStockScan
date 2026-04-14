@@ -1,7 +1,14 @@
 import threading
+from dataclasses import replace
 
 from src.engine import ai_engine as ai_engine_module
-from src.engine.ai_engine import GeminiSniperEngine, SCALPING_SYSTEM_PROMPT_75_CANARY
+from src.engine.ai_engine import (
+    GeminiSniperEngine,
+    SCALPING_HOLDING_SYSTEM_PROMPT,
+    SCALPING_SYSTEM_PROMPT,
+    SCALPING_SYSTEM_PROMPT_75_CANARY,
+    SCALPING_WATCHING_SYSTEM_PROMPT,
+)
 
 
 def _build_engine():
@@ -309,6 +316,86 @@ def test_analyze_target_routes_scalping_and_swing_to_expected_tiers(monkeypatch)
     engine.analyze_target("스윙", ws_data, recent_ticks, recent_candles, strategy="KOSDAQ_ML")
 
     assert used_models == ["tier2-model", "tier2-model"]
+
+
+def test_analyze_target_routes_scalping_prompt_profiles(monkeypatch):
+    engine = _build_engine()
+    used_prompts = []
+
+    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "scalp-packet")
+
+    def _fake_call(prompt, *args, **kwargs):
+        used_prompts.append(prompt)
+        return {"action": "WAIT", "score": 61, "reason": "ok"}
+
+    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+
+    ws_data = {"curr": 10000, "fluctuation": 1.0, "orderbook": {"asks": [], "bids": []}}
+    recent_ticks = [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}]
+    recent_candles = [{"체결시간": "10:00:00", "현재가": 10000, "거래량": 100}]
+
+    watching = engine.analyze_target(
+        "스캘프-감시",
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        strategy="SCALPING",
+        prompt_profile="watching",
+    )
+    holding = engine.analyze_target(
+        "스캘프-보유",
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        strategy="SCALPING",
+        cache_profile="holding",
+        prompt_profile="holding",
+    )
+    shared = engine.analyze_target(
+        "스캘프-공용",
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        strategy="SCALPING",
+        prompt_profile="shared",
+    )
+
+    assert used_prompts == [
+        SCALPING_WATCHING_SYSTEM_PROMPT,
+        SCALPING_HOLDING_SYSTEM_PROMPT,
+        SCALPING_SYSTEM_PROMPT,
+    ]
+    assert watching["ai_prompt_type"] == "scalping_watching"
+    assert holding["ai_prompt_type"] == "scalping_holding"
+    assert shared["ai_prompt_type"] == "scalping_shared"
+    assert watching["ai_prompt_version"] == "split_v1"
+
+
+def test_analyze_target_uses_shared_prompt_when_split_disabled(monkeypatch):
+    engine = _build_engine()
+    used_prompts = []
+    disabled_rules = replace(ai_engine_module.TRADING_RULES, SCALPING_PROMPT_SPLIT_ENABLED=False)
+    monkeypatch.setattr(ai_engine_module, "TRADING_RULES", disabled_rules)
+    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "scalp-packet")
+
+    def _fake_call(prompt, *args, **kwargs):
+        used_prompts.append(prompt)
+        return {"action": "WAIT", "score": 55, "reason": "ok"}
+
+    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+
+    result = engine.analyze_target(
+        "스캘프-보유",
+        {"curr": 10000, "fluctuation": 1.0, "orderbook": {"asks": [], "bids": []}},
+        [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}],
+        [{"체결시간": "10:00:00", "현재가": 10000, "거래량": 100}],
+        strategy="SCALPING",
+        prompt_profile="holding",
+    )
+
+    assert used_prompts == [SCALPING_SYSTEM_PROMPT]
+    assert result["ai_prompt_type"] == "scalping_shared"
+    assert result["ai_prompt_version"] == "split_disabled_v1"
 
 
 def test_condition_entry_and_exit_use_tier1_model(monkeypatch):

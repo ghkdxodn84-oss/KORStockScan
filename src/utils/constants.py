@@ -143,6 +143,10 @@ class TradingConfig:
     SCALP_PRESET_HARD_STOP_FALLBACK_BASE_GRACE_SEC: int = 35  # SCALP_BASE + fallback 전용 유예시간
     SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT: float = -1.2  # SCALP_BASE + fallback 비상 손절선
     SCALP_FALLBACK_ENTRY_QTY_MULTIPLIER: float = 0.70  # 2026-04-09 canary: fallback 진입 수량 배율(한 축만 적용)
+    SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED: bool = False  # partial fill 최소 체결비율 canary on/off
+    SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT: float = 0.20  # 기본 최소 체결비율
+    SCALP_PARTIAL_FILL_MIN_RATIO_STRONG_ABS_OVERRIDE: float = 0.10  # strong_absolute_override 예외
+    SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP: float = 0.00  # SCALP_PRESET_TP 예외(적용 제외)
     SCALP_OPEN_RECLAIM_NEVER_GREEN_HOLD_SEC: int = 300  # OPEN_RECLAIM never-green 조기 정리 최소 보유시간
     SCALP_OPEN_RECLAIM_NEVER_GREEN_PEAK_MAX_PCT: float = 0.20  # OPEN_RECLAIM never-green 최대 허용 고점수익
     SCALP_OPEN_RECLAIM_NEAR_AI_EXIT_SCORE_BUFFER: int = 5  # OPEN_RECLAIM near_ai_exit 점수 여유폭
@@ -255,6 +259,7 @@ class TradingConfig:
     AI_WATCHING_75_PROMPT_SHADOW_ENABLED: bool = False  # 작업 4: 75 정합화 shadow canary (remote 전용)
     AI_WATCHING_75_PROMPT_SHADOW_MIN_SCORE: int = 75  # shadow 재평가 시작 점수
     AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE: int = 79  # shadow 재평가 종료 점수
+    SCALPING_PROMPT_SPLIT_ENABLED: bool = True  # WATCHING/HOLDING 프롬프트 분리 on/off 롤백 토글
     ML_GATEKEEPER_PULLBACK_WAIT_COOLDOWN: int = 60 * 20  # 게이트키퍼 '눌림 대기' 재평가 쿨다운
     ML_GATEKEEPER_REJECT_COOLDOWN: int = 60 * 60 * 2  # 게이트키퍼 '전량 회피' 계열 쿨다운
     ML_GATEKEEPER_NEUTRAL_COOLDOWN: int = 60 * 30  # 게이트키퍼 중립/애매 응답 재평가 쿨다운
@@ -403,10 +408,12 @@ def _build_trading_rules() -> TradingConfig:
     env_prompt_shadow_enabled = _env_bool("AI_WATCHING_75_PROMPT_SHADOW_ENABLED")
     env_prompt_shadow_min = _env_int("AI_WATCHING_75_PROMPT_SHADOW_MIN_SCORE")
     env_prompt_shadow_max = _env_int("AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE")
+    env_scalping_prompt_split_enabled = _env_bool("KORSTOCKSCAN_SCALPING_PROMPT_SPLIT_ENABLED")
     if (
         env_prompt_shadow_enabled is not None
         or env_prompt_shadow_min is not None
         or env_prompt_shadow_max is not None
+        or env_scalping_prompt_split_enabled is not None
     ):
         config = replace(
             config,
@@ -419,6 +426,9 @@ def _build_trading_rules() -> TradingConfig:
             AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE=env_prompt_shadow_max
             if env_prompt_shadow_max is not None
             else config.AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE,
+            SCALPING_PROMPT_SPLIT_ENABLED=env_scalping_prompt_split_enabled
+            if env_scalping_prompt_split_enabled is not None
+            else config.SCALPING_PROMPT_SPLIT_ENABLED,
         )
 
     env_dynamic_strength_enabled = _env_bool("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_ENABLED")
@@ -427,6 +437,10 @@ def _build_trading_rules() -> TradingConfig:
     env_dynamic_strength_min_buy_value_ratio = _env_float("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_MIN_BUY_VALUE_RATIO")
     env_dynamic_strength_buy_ratio_tol = _env_float("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_BUY_RATIO_TOL")
     env_dynamic_strength_exec_buy_ratio_tol = _env_float("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_CANARY_EXEC_BUY_RATIO_TOL")
+    env_partial_fill_enabled = _env_bool("KORSTOCKSCAN_SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED")
+    env_partial_fill_min_default = _env_float("KORSTOCKSCAN_SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT")
+    env_partial_fill_min_strong = _env_float("KORSTOCKSCAN_SCALP_PARTIAL_FILL_MIN_RATIO_STRONG_ABS_OVERRIDE")
+    env_partial_fill_min_preset = _env_float("KORSTOCKSCAN_SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP")
     if (
         env_dynamic_strength_enabled is not None
         or env_dynamic_strength_tags is not None
@@ -434,6 +448,10 @@ def _build_trading_rules() -> TradingConfig:
         or env_dynamic_strength_min_buy_value_ratio is not None
         or env_dynamic_strength_buy_ratio_tol is not None
         or env_dynamic_strength_exec_buy_ratio_tol is not None
+        or env_partial_fill_enabled is not None
+        or env_partial_fill_min_default is not None
+        or env_partial_fill_min_strong is not None
+        or env_partial_fill_min_preset is not None
     ):
         config = replace(
             config,
@@ -455,6 +473,18 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_DYNAMIC_STRENGTH_CANARY_EXEC_BUY_RATIO_TOL=env_dynamic_strength_exec_buy_ratio_tol
             if env_dynamic_strength_exec_buy_ratio_tol is not None
             else config.SCALP_DYNAMIC_STRENGTH_CANARY_EXEC_BUY_RATIO_TOL,
+            SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED=env_partial_fill_enabled
+            if env_partial_fill_enabled is not None
+            else config.SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED,
+            SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT=env_partial_fill_min_default
+            if env_partial_fill_min_default is not None
+            else config.SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT,
+            SCALP_PARTIAL_FILL_MIN_RATIO_STRONG_ABS_OVERRIDE=env_partial_fill_min_strong
+            if env_partial_fill_min_strong is not None
+            else config.SCALP_PARTIAL_FILL_MIN_RATIO_STRONG_ABS_OVERRIDE,
+            SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP=env_partial_fill_min_preset
+            if env_partial_fill_min_preset is not None
+            else config.SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP,
         )
     return config
 

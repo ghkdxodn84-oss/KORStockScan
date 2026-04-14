@@ -1136,3 +1136,93 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
             gemini_result,
             callback=callback,
         )
+
+    def _normalize_shared_prompt_result(self, result):
+        if not isinstance(result, dict):
+            result = {}
+        action = str(result.get("action", "WAIT") or "WAIT").upper().strip()
+        if action not in {"BUY", "WAIT", "DROP"}:
+            action = "WAIT"
+        try:
+            score = int(float(result.get("score", 50)))
+        except Exception:
+            score = 50
+        return {
+            "action": action,
+            "score": max(0, min(100, score)),
+            "reason": str(result.get("reason", "") or "").replace("\n", " ").strip()[:160],
+        }
+
+    def _evaluate_watching_shared_prompt_shadow(
+        self,
+        stock_name,
+        stock_code,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        gemini_result,
+    ):
+        started_at = time.perf_counter()
+        try:
+            formatted = self._format_market_data(ws_data, recent_ticks, recent_candles)
+            result = self._call_openai_safe(
+                SCALPING_SYSTEM_PROMPT,
+                formatted,
+                require_json=True,
+                context_name=f"WATCHING-SHARED:{stock_name}",
+                model_override=self.fast_model_name,
+                temperature_override=0.1,
+            )
+            normalized = self._normalize_shared_prompt_result(result)
+            gemini_action = str((gemini_result or {}).get("action", "WAIT") or "WAIT").upper()
+            gemini_score = int(float((gemini_result or {}).get("score", 50) or 50))
+            return {
+                "mode": "shadow",
+                "strategy": "SCALPING",
+                "gemini_action": gemini_action,
+                "gemini_score": gemini_score,
+                "gpt_action": normalized.get("action", "WAIT"),
+                "gpt_score": normalized.get("score", 50),
+                "gpt_reason": normalized.get("reason", ""),
+                "action_diverged": gemini_action != normalized.get("action", "WAIT"),
+                "score_gap": int(normalized.get("score", 50)) - gemini_score,
+                "gpt_model": self.fast_model_name,
+                "shadow_extra_ms": int((time.perf_counter() - started_at) * 1000),
+            }
+        except Exception as e:
+            return {
+                "mode": "shadow",
+                "strategy": "SCALPING",
+                "error": str(e),
+                "gpt_model": self.fast_model_name,
+                "shadow_extra_ms": int((time.perf_counter() - started_at) * 1000),
+            }
+
+    def submit_watching_shared_prompt_shadow(
+        self,
+        *,
+        stock_name,
+        stock_code,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        gemini_result,
+        callback=None,
+    ):
+        future = self.shadow_executor.submit(
+            self._evaluate_watching_shared_prompt_shadow,
+            stock_name,
+            stock_code,
+            ws_data,
+            recent_ticks,
+            recent_candles,
+            gemini_result,
+        )
+        if callback is not None:
+            def _emit_result(done_future):
+                try:
+                    callback(done_future.result())
+                except Exception as exc:
+                    log_error(f"🚨 [WATCHING shared prompt shadow callback] {stock_name}({stock_code}) 실패: {exc}")
+            future.add_done_callback(_emit_result)
+        return future

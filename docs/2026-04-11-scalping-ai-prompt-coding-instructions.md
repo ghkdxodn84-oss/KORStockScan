@@ -516,6 +516,25 @@ PYTHONPATH=. .venv/bin/python -m src.engine.watching_prompt_75_shadow_report \
 - payload 변경 없이 `분리 자체의 효과`를 원격에서 1축 관측할 수 있다
 - `작업 6~12` 범위가 이번 패치에 섞이지 않는다
 
+### `2026-04-14 POSTCLOSE` 확정/착수 메모
+
+- write scope:
+  - `src/engine/ai_engine.py`: `SCALPING_WATCHING_SYSTEM_PROMPT`, `SCALPING_HOLDING_SYSTEM_PROMPT`, prompt router 추가
+  - `src/engine/sniper_state_handlers.py`: WATCHING/HOLDING 호출 분기 연결
+- rollback 가드:
+  - `KORSTOCKSCAN_SCALPING_PROMPT_SPLIT_ENABLED=false` 1개 토글로 기존 `SCALPING_SYSTEM_PROMPT` 단일 경로로 즉시 복귀
+- `main`은 `develop` shadow 비교 전 승격 금지
+- 비교지표:
+  - `ai_prompt_type`, `ai_prompt_version`, `action_diverged_rate`, `entry_funnel_delta(submitted/entered/holding_started)`
+  - 장후 비교는 `WATCHING shared prompt shadow` 기준 `Tier2 Gemini Flash` vs `GPT-4.1-mini` counterfactual 결과로 묶는다
+- `2026-04-15 07:51 KST` 구현 착수 메모:
+  - `handle_watching_state()` 직후 `watching_shared_prompt_shadow` 비동기 로그 경로를 추가했다.
+  - 공통 로그 필드는 `gemini_action`, `gemini_score`, `gpt_action`, `gpt_score`, `action_diverged`, `score_gap`, `gpt_model`, `shadow_extra_ms`로 고정했다.
+  - 이 경로는 실주문 비연결 shadow-only다. 장중 첫 표본은 오늘부터 누적하고, `counterfactual` 연결은 장후 비교표에서 계산한다.
+- 오늘 착수 정의:
+  - write scope/rollback/비교지표를 문서에 고정하고 `2026-04-15 PREOPEN` 코드 반영으로 이어간다
+  - `2026-04-14 POSTCLOSE`에 `WATCHING/HOLDING` 프롬프트 상수 분리와 `analyze_target(prompt_profile=...)` 경로를 먼저 반영한다
+
 ---
 
 ## P2. 컨텍스트 주입 순차 진행
