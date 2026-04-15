@@ -1,83 +1,85 @@
 {
-  "bundle_as_of": "2026-04-12T22:00:13Z",
+  "bundle_as_of": "2026-04-14T22:20:16Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 6816.89,
-    "prev_value": 6824.66,
-    "change": -7.77,
-    "change_pct": -0.11,
-    "as_of": "2026-04-10T20:00:00Z",
-    "source": "BNN Bloomberg"
+    "value": 6967.38,
+    "prev_value": 6886.25,
+    "change": 81.13,
+    "change_pct": 1.18,
+    "as_of": "2026-04-14T20:00:00Z",
+    "source": "Morningstar / Dow Jones"
   },
   "nasdaq": {
-    "name": "NASDAQ Composite",
-    "value": 22902.89,
-    "prev_value": 22822.41,
-    "change": 80.48,
-    "change_pct": 0.35,
-    "as_of": "2026-04-10T20:00:00Z",
-    "source": "BNN Bloomberg"
+    "name": "NASDAQ",
+    "value": 23639.08,
+    "prev_value": 23183.73,
+    "change": 455.35,
+    "change_pct": 1.96,
+    "as_of": "2026-04-14T20:00:00Z",
+    "source": "Morningstar / Dow Jones"
   },
   "vix": {
     "name": "VIX",
-    "value": 19.23,
-    "prev_value": 19.49,
-    "change": -0.26,
-    "change_pct": -1.33,
-    "as_of": "2026-04-10T20:00:00Z",
-    "source": "YCharts"
+    "value": 18.36,
+    "prev_value": 19.12,
+    "change": -0.76,
+    "change_pct": -3.97,
+    "as_of": "2026-04-14T20:00:00Z",
+    "source": "Cboe"
   },
   "us10y": {
-    "name": "US 10-Year Treasury Yield",
-    "value": 4.317,
-    "prev_value": 4.29,
-    "change": 0.027,
-    "change_pct": 0.63,
-    "as_of": "2026-04-10T20:00:00Z",
-    "source": "TradingView"
+    "name": "US 10Y Treasury Yield",
+    "value": 4.255,
+    "prev_value": 4.297,
+    "change": -0.042,
+    "change_pct": -0.98,
+    "as_of": "2026-04-14T19:47:00Z",
+    "source": "Morningstar / Dow Jones"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 95.2,
-    "prev_value": 95.92,
-    "change": -0.72,
-    "change_pct": -0.75,
-    "as_of": "2026-04-10T20:00:00Z",
+    "value": 95.14,
+    "prev_value": 99.36,
+    "change": -4.22,
+    "change_pct": -4.25,
+    "as_of": "2026-04-14T20:00:00Z",
     "source": "Trading Economics"
   },
   "headlines": [
     {
-      "title": "Trump orders U.S. Navy blockade of Strait of Hormuz after peace talks fail",
-      "source": "Associated Press",
-      "published_at": "2026-04-12T12:07:00Z",
-      "url": "https://www.9news.com/"
+      "title": "US enforces naval blockade on Iran as nuclear issue takes center stage",
+      "source": "Fox News",
+      "published_at": "2026-04-14T00:00:00Z",
+      "url": "https://www.foxnews.com/"
     },
     {
-      "title": "U.S.-Iran peace talks in Pakistan collapse without an agreement; VP JD Vance departs",
-      "source": "The Guardian",
-      "published_at": "2026-04-12T03:06:00Z",
-      "url": "https://www.theguardian.com/"
+      "title": "Wall Street rallies to the edge of its all-time high as oil prices ease",
+      "source": "BNN Bloomberg",
+      "published_at": "2026-04-14T18:10:00Z",
+      "url": "https://www.bnnbloomberg.ca/"
     },
     {
-      "title": "Iran's Revolutionary Guards warn of 'firm and forceful response' to U.S. military vessels in Hormuz",
-      "source": "The Hindu",
-      "published_at": "2026-04-12T19:07:00Z",
-      "url": "https://www.thehindu.com/"
+      "title": "Diplomats try to arrange second round of US-Iran talks during first full day of American blockade",
+      "source": "Newsday",
+      "published_at": "2026-04-14T20:01:00Z",
+      "url": "https://www.newsday.com/"
     },
     {
-      "title": "Yield Trap: 10-Year Treasury Hits 4.317% as Energy Shocks Chill Tech Sector Growth",
-      "source": "Chronicle Journal",
-      "published_at": "2026-04-10T14:22:00Z",
+      "title": "Live Updates: Iran war continues with U.S. blockade of ports; Lebanon and Israel hold direct talks",
+      "source": "CBS News",
+      "published_at": "2026-04-14T20:17:00Z",
+      "url": "https://www.cbsnews.com/"
+    },
+    {
+      "title": "Global Oil Markets Retrench as Diplomatic Hopes Flare Between Washington and Tehran",
+      "source": "The Chronicle-Journal",
+      "published_at": "2026-04-14T00:00:00Z",
       "url": "https://www.chroniclejournal.com/"
-    },
-    {
-      "title": "Brent crude falls to $95.20 ahead of weekend talks, but faces renewed upside risks following collapsed negotiations",
-      "source": "Trading Economics",
-      "published_at": "2026-04-10T20:00:00Z",
-      "url": "https://tradingeconomics.com/"
     }
   ],
   "notes": [
-    "모든 시장 데이터는 2026년 4월 10일(금) 마감 기준입니다. 4월 12일 일요일에 진행된 미국-이란 파키스탄 평화 협상이 결렬되고, 트럼프 대통령이 호르무즈 해협 봉쇄를 지시함에 따라 월요일 개장 시 유가(Brent) 폭등 및 증시, 국채 금리 등 금융 시장 전반의 큰 변동성이 예상됩니다."
+    "US equity markets rallied on easing energy prices and optimism regarding a potential diplomatic resolution to the US-Iran conflict.",
+    "Brent crude fell sharply, dropping over 4% amid reports of resumed negotiations and a potential easing of the Strait of Hormuz blockade.",
+    "US 10-year Treasury yields pulled back from recent highs as the drop in crude oil prices relieved immediate inflation fears."
   ]
 }

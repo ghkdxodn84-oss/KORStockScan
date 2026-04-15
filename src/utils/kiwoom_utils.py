@@ -284,6 +284,59 @@ def get_account_balance_kt00005(token):
     # 딕셔너리의 Value들만 뽑아서 리스트 형태로 반환
     return list(aggregated_balances.values()), successful_exchanges
 
+
+def get_account_execution_snapshot_kt00008(token):
+    """
+    [kt00008] 계좌별주문체결현황요청
+    전일 체결 기준 익일 결제 예정 내역을 반환합니다.
+    주문번호는 포함되지 않지만 종목/매수매도/수량/체결단가 대조에 활용할 수 있습니다.
+    """
+    url = get_api_url("/api/dostk/acnt")
+    results = fetch_kiwoom_api_continuous(
+        url=url,
+        token=token,
+        api_id="kt00008",
+        payload={},
+        use_continuous=True,
+    )
+    if not results:
+        return []
+
+    snapshot = []
+
+    def to_i(v):
+        if not v:
+            return 0
+        try:
+            clean_v = str(v).replace(",", "").replace("+", "").strip()
+            return int(float(clean_v))
+        except (ValueError, TypeError):
+            return 0
+
+    for res in results:
+        trade_date = str(res.get("trde_dt", "")).strip()
+        settle_date = str(res.get("setl_dt", "")).strip()
+        rows = res.get("acnt_nxdy_setl_frcs_prps_array", []) or []
+        for item in rows:
+            raw_code = str(item.get("stk_cd", "")).strip()
+            clean_code = raw_code.replace("A", "") if raw_code.startswith("A") else raw_code
+            snapshot.append(
+                {
+                    "trade_date": trade_date,
+                    "settle_date": settle_date,
+                    "code": clean_code,
+                    "name": str(item.get("stk_nm", "")).strip(),
+                    "side": str(item.get("sell_tp", "")).strip(),
+                    "qty": to_i(item.get("qty")),
+                    "unit_price": to_i(item.get("unp")),
+                    "contract_amount": to_i(item.get("exct_amt")),
+                    "seq": str(item.get("seq", "")).strip(),
+                    "credit_type": str(item.get("crd_tp", "")).strip(),
+                }
+            )
+
+    return snapshot
+
 def get_industry_list_ka10101(token, market_type="0"):
     """
     [ka10101] 업종코드 리스트 조회

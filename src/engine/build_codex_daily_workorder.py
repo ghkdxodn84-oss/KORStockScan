@@ -34,6 +34,7 @@ class ProjectTask:
     state: str
     source: str
     section: str
+    apply_target: str = ""
 
 
 def _env(name: str, default: str | None = None) -> str:
@@ -212,16 +213,32 @@ def _norm(value: str) -> str:
     return value.strip().lower()
 
 
-def _parse_body_metadata(body: str) -> tuple[str, str]:
+def _parse_body_metadata(body: str) -> tuple[str, str, str]:
     source = ""
     section = ""
+    apply_target = ""
     for raw_line in body.splitlines():
         line = raw_line.strip()
         if line.startswith("Source:"):
             source = line.split(":", 1)[1].strip().strip("`")
         elif line.startswith("Section:"):
             section = line.split(":", 1)[1].strip().strip("`")
-    return source, section
+        elif line.startswith("ApplyTarget:"):
+            apply_target = line.split(":", 1)[1].strip().strip("`")
+    return source, section, apply_target
+
+
+def _infer_apply_target_text(text: str) -> str:
+    raw = str(text or "").lower()
+    has_remote = any(keyword in raw for keyword in ("원격", "remote", "songstockscan", "develop", "canary"))
+    has_main = any(keyword in raw for keyword in ("본서버", "메인", "main", "운영서버"))
+    if has_remote and has_main:
+        return "main,remote"
+    if has_remote:
+        return "remote"
+    if has_main:
+        return "main"
+    return "-"
 
 
 def _parse_project_item(
@@ -244,7 +261,9 @@ def _parse_project_item(
     state = str(content.get("state") or "").strip()
     assignees_nodes = ((content.get("assignees") or {}).get("nodes") or []) if content else []
     assignees = ", ".join(str(n.get("login") or "").strip() for n in assignees_nodes if n.get("login"))
-    source, section = _parse_body_metadata(body)
+    source, section, apply_target = _parse_body_metadata(body)
+    if not apply_target:
+        apply_target = _infer_apply_target_text(f"{title} {source} {section}")
 
     due_date = ""
     status = ""
@@ -286,6 +305,7 @@ def _parse_project_item(
         state=state,
         source=source,
         section=section,
+        apply_target=apply_target,
     )
 
 
@@ -460,7 +480,7 @@ def render_markdown(
             for item in group:
                 lines.append(f"{idx}. `{item.title}`")
                 lines.append(
-                    f"   - 상태: `{item.status or '-'}` / 슬롯: `{item.slot or '-'}` / 트랙: `{item.track or '-'}` / Due: `{item.due_date or '-'}` / TimeWindow: `{item.time_window or '-'}`"
+                    f"   - 상태: `{item.status or '-'}` / 슬롯: `{item.slot or '-'}` / 트랙: `{item.track or '-'}` / 반영대상: `{item.apply_target or '-'}` / Due: `{item.due_date or '-'}` / TimeWindow: `{item.time_window or '-'}`"
                 )
                 if item.section:
                     lines.append(f"   - 섹션: `{item.section}`")
@@ -481,7 +501,7 @@ def render_markdown(
             for item in unknown:
                 lines.append(f"{idx}. `{item.title}`")
                 lines.append(
-                    f"   - 상태: `{item.status or '-'}` / 슬롯: `{item.slot or '-'}` / 트랙: `{item.track or '-'}` / Due: `{item.due_date or '-'}` / TimeWindow: `{item.time_window or '-'}`"
+                    f"   - 상태: `{item.status or '-'}` / 슬롯: `{item.slot or '-'}` / 트랙: `{item.track or '-'}` / 반영대상: `{item.apply_target or '-'}` / Due: `{item.due_date or '-'}` / TimeWindow: `{item.time_window or '-'}`"
                 )
                 if item.section:
                     lines.append(f"   - 섹션: `{item.section}`")
@@ -516,7 +536,7 @@ def render_markdown(
             if group:
                 for item in group:
                     lines.append(
-                        f"- {item.title} | 상태={item.status or '-'} | 슬롯={item.slot or '-'} | Due={item.due_date or '-'} | Source={item.source or '-'} | Section={item.section or '-'} | ID={item.item_id}"
+                        f"- {item.title} | 상태={item.status or '-'} | 슬롯={item.slot or '-'} | 반영대상={item.apply_target or '-'} | Due={item.due_date or '-'} | Source={item.source or '-'} | Section={item.section or '-'} | ID={item.item_id}"
                     )
             else:
                 lines.append("- 없음")
@@ -525,7 +545,7 @@ def render_markdown(
             lines.append("### 기타 슬롯")
             for item in unknown:
                 lines.append(
-                    f"- {item.title} | 상태={item.status or '-'} | 슬롯={item.slot or '-'} | Due={item.due_date or '-'} | Source={item.source or '-'} | Section={item.section or '-'} | ID={item.item_id}"
+                    f"- {item.title} | 상태={item.status or '-'} | 슬롯={item.slot or '-'} | 반영대상={item.apply_target or '-'} | Due={item.due_date or '-'} | Source={item.source or '-'} | Section={item.section or '-'} | ID={item.item_id}"
                 )
     else:
         lines.append("- 없음")

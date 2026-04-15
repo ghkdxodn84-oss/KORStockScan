@@ -46,10 +46,12 @@ class _ReceiptDB:
 
 
 class _SyncSession:
-    def __init__(self, active_records, pending_records):
+    def __init__(self, active_records, pending_records, history_records=None):
         self._active_records = active_records
         self._pending_records = pending_records
+        self._history_records = history_records or []
         self._mode = None
+        self._stock_code = None
 
     def __enter__(self):
         return self
@@ -59,6 +61,7 @@ class _SyncSession:
 
     def query(self, *args, **kwargs):
         self._mode = None
+        self._stock_code = None
         return self
 
     def filter(self, *args, **kwargs):
@@ -67,23 +70,40 @@ class _SyncSession:
 
     def filter_by(self, **kwargs):
         self._mode = kwargs.get("status")
+        self._stock_code = kwargs.get("stock_code")
         return self
 
     def all(self):
+        if self._stock_code is not None:
+            return [
+                record for record in self._history_records
+                if getattr(record, "stock_code", None) == self._stock_code
+            ]
         if self._mode == "BUY_ORDERED":
             return list(self._pending_records)
         return list(self._active_records)
 
+    def add(self, record):
+        self._history_records.append(record)
+
+    def flush(self):
+        for idx, record in enumerate(self._history_records, start=1):
+            if getattr(record, "id", None) is None:
+                record.id = 9000 + idx
+
 
 class _SyncDB:
-    def __init__(self, active_records, pending_records=None):
-        self._session = _SyncSession(active_records, pending_records or [])
+    def __init__(self, active_records, pending_records=None, history_records=None):
+        self._session = _SyncSession(active_records, pending_records or [], history_records or [])
 
     def get_session(self):
         return self._session
 
     def get_latest_is_nxt(self, code):
         return False
+
+    def get_latest_marcap(self, code):
+        return 0
 
 
 class _S15Session:
@@ -232,6 +252,188 @@ def test_periodic_account_sync_uses_net_profit_rate_for_missing_sell_receipt(mon
     assert "123456" not in sniper_sync.HIGHEST_PRICES
 
 
+def test_periodic_account_sync_recovers_broker_only_holding_from_watching_record(monkeypatch):
+    watch_record = type(
+        "Record",
+        (),
+        {
+            "id": 2205,
+            "rec_date": datetime(2026, 4, 15).date(),
+            "stock_code": "189300",
+            "stock_name": "인텔리안테크",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "trade_type": "SCALP",
+            "position_tag": "SCALP_BASE",
+            "prob": 0.8,
+            "buy_qty": 0,
+            "buy_price": 0.0,
+            "buy_time": None,
+            "scale_in_locked": False,
+        },
+    )()
+
+    sniper_sync.KIWOOM_TOKEN = "token"
+    sniper_sync.DB = _SyncDB([], [], [watch_record])
+    sniper_sync.ACTIVE_TARGETS = []
+    sniper_sync.HIGHEST_PRICES = {}
+    sniper_sync.STATE_LOCK = _DummyLock()
+    sniper_sync.EVENT_BUS = _Bus()
+    sniper_sync.KIWOOM_TOKEN = "token"
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_execution_snapshot_kt00008",
+        lambda token: [],
+    )
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_balance_kt00005",
+        lambda token: ([{"code": "189300", "name": "인텔리안테크", "qty": 7, "buy_price": 133610}], {"KRX"}),
+    )
+
+    sniper_sync.periodic_account_sync()
+
+    assert watch_record.status == "HOLDING"
+    assert watch_record.buy_qty == 7
+    assert watch_record.buy_price == 133610
+    assert sniper_sync.ACTIVE_TARGETS
+    assert sniper_sync.ACTIVE_TARGETS[0]["code"] == "189300"
+    assert sniper_sync.ACTIVE_TARGETS[0]["status"] == "HOLDING"
+    assert sniper_sync.ACTIVE_TARGETS[0]["buy_qty"] == 7
+
+
+def test_periodic_account_sync_marks_legacy_broker_recovered_holding(monkeypatch):
+    legacy_watch = type(
+        "Record",
+        (),
+        {
+            "id": 159,
+            "rec_date": datetime(2026, 4, 10).date(),
+            "stock_code": "016360",
+            "stock_name": "삼성증권",
+            "status": "EXPIRED",
+            "strategy": "SCALPING",
+            "trade_type": "SCALP",
+            "position_tag": "SCALP_BASE",
+            "buy_qty": 0,
+            "buy_price": 0.0,
+            "buy_time": None,
+            "scale_in_locked": False,
+        },
+    )()
+
+    sniper_sync.DB = _SyncDB([], [], [legacy_watch])
+    sniper_sync.ACTIVE_TARGETS = []
+    sniper_sync.HIGHEST_PRICES = {}
+    sniper_sync.STATE_LOCK = _DummyLock()
+    sniper_sync.EVENT_BUS = _Bus()
+    sniper_sync.KIWOOM_TOKEN = "token"
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_execution_snapshot_kt00008",
+        lambda token: [
+            {
+                "trade_date": "20260414",
+                "code": "016360",
+                "name": "삼성증권",
+                "side": "매수",
+                "qty": 1,
+                "unit_price": 111400,
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_balance_kt00005",
+        lambda token: ([{"code": "016360", "name": "삼성증권", "qty": 1, "buy_price": 111400}], {"KRX"}),
+    )
+
+    sniper_sync.periodic_account_sync()
+
+    assert legacy_watch.status == "HOLDING"
+    assert sniper_sync.ACTIVE_TARGETS[0]["broker_recovered"] is True
+    assert sniper_sync.ACTIVE_TARGETS[0]["broker_recovered_legacy"] is True
+    assert sniper_sync.ACTIVE_TARGETS[0]["broker_recovered_execution_verified"] is True
+
+
+def test_ensure_runtime_target_recovers_order_refs_from_logs(monkeypatch):
+    monkeypatch.setattr(sniper_sync, "_iter_recovery_log_paths", lambda: ["dummy.log"])
+    monkeypatch.setattr(
+        sniper_sync,
+        "_tail_text",
+        lambda path: "\n".join(
+            [
+                "[2026-04-15 09:52:15] 🔔 [WS 실제체결] 189300 BUY 7주 @ 133610원 (주문번호: 0412345)",
+                "[2026-04-15 09:52:16] 📢 INFO in sniper_execution_receipts: [ENTRY_TP_REFRESH] 인텔리안테크(189300) qty=7 tp_price=135600 ord_no=0412350",
+            ]
+        ),
+    )
+    sniper_sync.DB = _SyncDB([], [], [])
+    sniper_sync.ACTIVE_TARGETS = []
+    sniper_sync.EVENT_BUS = _Bus()
+
+    record = type(
+        "Record",
+        (),
+        {
+            "id": 2241,
+            "stock_code": "189300",
+            "stock_name": "인텔리안테크",
+            "strategy": "SCALPING",
+            "trade_type": "SCALP",
+            "position_tag": "SCALP_BASE",
+            "buy_qty": 7,
+            "buy_price": 133610.0,
+            "buy_time": datetime(2026, 4, 15, 9, 52, 15),
+            "scale_in_locked": False,
+        },
+    )()
+
+    target = sniper_sync._ensure_runtime_target(record)
+
+    assert target["odno"] == "0412345"
+    assert target["preset_tp_ord_no"] == "0412350"
+
+
+def test_ensure_runtime_target_recovers_order_refs_from_pipeline_logs(monkeypatch):
+    monkeypatch.setattr(sniper_sync, "_iter_recovery_log_paths", lambda: ["pipeline.log"])
+    monkeypatch.setattr(
+        sniper_sync,
+        "_tail_text",
+        lambda path: "\n".join(
+            [
+                "[2026-04-15 09:52:04] [ENTRY_PIPELINE] 인텔리안테크(189300) stage=order_leg_sent id=2205 tag=fallback_main ord_no=0036511",
+                "[2026-04-15 09:52:04] [HOLDING_PIPELINE] 인텔리안테크(189300) stage=preset_exit_setup id=2205 preset_tp_price=135800 qty=1 ord_no=0036512",
+            ]
+        ),
+    )
+    sniper_sync.DB = _SyncDB([], [], [])
+    sniper_sync.ACTIVE_TARGETS = []
+    sniper_sync.EVENT_BUS = _Bus()
+
+    record = type(
+        "Record",
+        (),
+        {
+            "id": 2241,
+            "stock_code": "189300",
+            "stock_name": "인텔리안테크",
+            "strategy": "SCALPING",
+            "trade_type": "SCALP",
+            "position_tag": "SCALP_BASE",
+            "buy_qty": 7,
+            "buy_price": 133610.0,
+            "buy_time": datetime(2026, 4, 15, 9, 52, 15),
+            "scale_in_locked": False,
+        },
+    )()
+
+    target = sniper_sync._ensure_runtime_target(record)
+
+    assert target["odno"] == "0036511"
+    assert target["preset_tp_ord_no"] == "0036512"
+
+
 def test_s15_candidate_does_not_store_expiry_in_profit_rate():
     session = _S15Session()
     s15.DB = _S15DB(session)
@@ -292,3 +494,58 @@ def test_holding_state_uses_net_profit_rate_for_sell_decision(monkeypatch):
     assert sell_calls
     assert stock["status"] == "SELL_ORDERED"
     assert "-0.13%" in stock["pending_sell_msg"]
+
+
+def test_holding_state_skips_scalping_loss_exit_for_legacy_broker_recovered(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        ENABLE_SCALE_IN=False,
+        SCALP_STOP=-1.5,
+        SCALP_HARD_STOP=-2.5,
+    )
+    state_handlers.KIWOOM_TOKEN = "token"
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"016360": 111400}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+
+    record = type("Record", (), {"buy_qty": 1, "status": "HOLDING"})()
+    state_handlers.DB = _StateDB(record)
+
+    sell_calls = []
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda **kwargs: sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"},
+    )
+
+    stock = {
+        "id": 159,
+        "code": "016360",
+        "name": "삼성증권",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "buy_price": 111400,
+        "buy_qty": 1,
+        "buy_time": datetime(2026, 4, 15, 10, 22, 46),
+        "rt_ai_prob": 0.5,
+        "broker_recovered": True,
+        "broker_recovered_legacy": True,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="016360",
+        ws_data={"curr": 109500},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    assert not sell_calls
+    assert stock["status"] == "HOLDING"
+    assert stock["last_exit_guard_reason"] == "broker_recovered_legacy"

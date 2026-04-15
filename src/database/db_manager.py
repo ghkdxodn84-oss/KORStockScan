@@ -41,7 +41,15 @@ class DBManager:
             pool_timeout=30,       
             pool_pre_ping=True     
         )
-        self.SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=self.engine)
+        # 운영 루프/백그라운드 스레드에서 commit 직후 ORM 필드를 참조하는 경로가 있어,
+        # 기본값(expire_on_commit=True)에서는 DetachedInstanceError가 간헐적으로 발생합니다.
+        # 세션 종료 후에도 이미 로드된 필드 접근이 가능하도록 expire를 비활성화합니다.
+        self.SessionLocal = sessionmaker(
+            autocommit=False,
+            autoflush=False,
+            bind=self.engine,
+            expire_on_commit=False,
+        )
     
     def init_db(self):
         """프로그램 기동 시 테이블이 없으면 생성합니다."""

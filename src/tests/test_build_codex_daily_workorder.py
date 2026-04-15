@@ -80,6 +80,7 @@ def test_render_markdown_includes_template_and_ids():
             state="OPEN",
             source="docs/example.md",
             section="P0. 즉시 착수 가능한 확인/계측",
+            apply_target="remote",
         )
     ]
     md = render_markdown(
@@ -103,6 +104,7 @@ def test_render_markdown_includes_template_and_ids():
     assert "docs/example.md" in md
     assert "기준일자" in md
     assert "휴장일 재분류" in md
+    assert "반영대상" in md
 
 
 def test_matches_slot_case_insensitive():

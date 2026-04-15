@@ -64,28 +64,33 @@
   - `latency_block`과 별도 누수 경로로 읽을 대표 케이스와 재진입 허용 후보 조건을 메모한다
 - [x] live hard stop taxonomy 관찰
   - `scalp_preset_hard_stop_pct / protect_hard_stop / scalp_hard_stop_pct / hard_time_stop_shadow` 표본 여부를 계속 기록
-- [ ] `AI overlap audit`를 `selective override` 착수 입력으로 정리
+- [x] `AI overlap audit`를 `selective override` 착수 입력으로 정리
   - `blocked_stage / momentum_tag / threshold_profile` 교차표가 `2026-04-16` 설계 착수에 바로 쓰일 수준인지 확인한다
-- [ ] 장후 개선 결론 준비
+- [x] 장후 개선 결론 준비
   - 신규 가설 발굴이 아니라 `RELAX-LATENCY 반영/보류`, `RELAX-DYNSTR 1축 착수`, `partial fill min_fill_ratio canary`, `expired_armed 설계`를 결정할 만큼만 기존 관찰축을 점검한다
 
 ## 장후 체크리스트 (15:30~)
 
 - [x] `RELAX-LATENCY` 운영서버 승격 가능/불가 1차 결론
-- [ ] `RELAX-LATENCY` 운영서버 승격 가능/불가 최종 결론
+- [x] `RELAX-LATENCY` 운영서버 승격 가능/불가 최종 결론
   - `10:00 KST` 중간판정 이후 재점검 시각은 `2026-04-14 15:30 KST` 장후로 고정한다.
 - [x] `2026-04-15 main` 예정 축에 대응하는 `develop` 선행 적용 축이 모두 오늘까지 시작됐는지 확인
 - [x] 체결 품질 표본이 생기면 `full fill / partial fill / preset_exit_sync_mismatch`까지 포함해 재판정
 - [x] `RELAX-DYNSTR` `momentum_tag` 1축 원격 canary 설정값 확정 (`2026-04-15 08:30` 실행용)
-- [ ] `partial fill min_fill_ratio` 원격 canary 설정값 확정 (`기본값/예외/롤백가드` 포함)
-  - 현재는 `min_fill_ratio` 전용 코드 경로 부재가 blocker이며, 재점검/최종판정 시각은 `2026-04-14 15:30 KST` 장후로 둔다.
-- [ ] `expired_armed` 처리 로직 설계 범위와 `2026-04-15 장후` 완료 기준 확정
+- [x] `partial fill min_fill_ratio` 원격 canary 설정값 확정 (`기본값/예외/롤백가드` 포함)
+  - 장후 확정값(설계값): `default=0.20`, `strong_absolute_override=0.10`, `SCALP_PRESET_TP=0.00(적용 제외)`.
+  - 롤백 가드: `partial_fill_ratio_canary_enabled=false` 1개 토글로 즉시 비활성화.
+  - 단, 현재 코드에는 `min_fill_ratio` 경로가 없어 `2026-04-15 08:30` 실가동은 불가하며, 먼저 구현/검증 후 canary를 연다.
+- [x] `expired_armed` 처리 로직 설계 범위와 `2026-04-15 장후` 완료 기준 확정
+  - 설계 범위: 전수 `expired_armed` 표본 + 상위 코호트 + `태광(023160)` anchor case를 분리해 원인/액션을 정의한다.
+  - 완료 기준(`2026-04-15 POSTCLOSE`): 재진입 허용 조건표, 제외 조건표, 롤백 가드, 샘플 리플레이 결과 1회까지 문서에 고정.
 - [x] `AI overlap audit` 기반 `selective override` 설계 착수일을 `2026-04-16`로 고정
-- [ ] `AIPrompt 작업 5 WATCHING/HOLDING 프롬프트 물리 분리` write scope / rollback 가드 / 비교지표를 오늘 확정하고 같은 날 착수
-- [ ] `SCALPING 모델 shadow 비교안` 범위 / 로그 필드 / 성과 비교식을 오늘 확정
+- [x] `AIPrompt 작업 5 WATCHING/HOLDING 프롬프트 물리 분리` write scope / rollback 가드 / 비교지표를 오늘 확정하고 같은 날 착수
+- [x] `SCALPING 모델 shadow 비교안` 범위 / 로그 필드 / 성과 비교식을 오늘 확정
   - 범위 1차는 `WATCHING shared prompt` 동일 입력에 대해 `Tier2 Gemini Flash` vs `GPT-4.1-mini` shadow 비교로 제한한다.
   - 비교 필드는 `gemini_action/score`, `gpt_action/score`, `action_diverged`, `score_gap`, `entered_if_gemini`, `entered_if_gpt`, `realized_pnl_if_gemini`, `realized_pnl_if_gpt`, `missed_winner_cost_if_gemini`, `missed_winner_cost_if_gpt`로 고정한다.
   - `수익예측`은 순수 예측치 대신 장후 체결/미진입 복기와 연결한 `counterfactual realized outcome` 기준으로 먼저 본다.
+  - 성과 비교식은 `delta_realized_pnl_bp=(realized_pnl_if_gemini-realized_pnl_if_gpt)*10000`, `delta_missed_winner_bp=(missed_winner_cost_if_gemini-missed_winner_cost_if_gpt)*10000`, `win_rate_by_model=(positive_outcome_trades/entered_if_model)`로 고정한다.
   - `HOLDING`/`SCALP_PRESET_TP`까지 한 번에 열지 않고 `WATCHING` 1차 shadow가 쌓인 뒤 확장 여부를 판정한다.
 - [x] `AIPrompt 작업 8 감사용 핵심값 3종 투입`은 오늘 같은 날 착수
   - 미착수 시 `사유 + 다음 실행시각`을 장후 결론에 남긴다
@@ -93,12 +98,17 @@
   - 미착수 시 `사유 + 다음 실행시각`을 장후 결론에 남긴다
 - [x] 오늘 착수한 `develop` 축 각각에 대해 `main` 승격 가능 가장 빠른 시점(`2026-04-15` 또는 `2026-04-16`)을 함께 기록
 - [x] `2026-04-15` 장전 반영/착수 항목과 `2026-04-16` 후속 설계 착수 항목을 별도 체크리스트로 승격
-- [ ] 장후 결론을 `날짜 + 액션 + 실행시각` 형식으로 기록
+- [x] 장후 결론을 `날짜 + 액션 + 실행시각` 형식으로 기록
 - [x] `2026-04-15 장중 지속 점검용 관찰축`만 남기고, `신규 관찰축 추가`는 명시적으로 중단
 제외 유지 메모:
 현재 잔여 작업축에서 제외한 `WATCHING 75 shadow`, `post-sell canary`, `remote_error snapshot 재점검`은 재오픈 조건 없이는 다시 올리지 않는다.
 
 ## 2026-04-14 장후 실행 메모
+
+- [x] 워크오더 `POSTCLOSE Todo` 재노출 항목 정리 (`2026-04-14 20:22 KST`)
+  - 판정: 재노출된 8개 항목은 `Source=docs/2026-04-14-stage2-todo-checklist.md` 기준 이미 완료(`- [x]`) 상태다.
+  - 근거: `parse_checklist_tasks()` 기준 `due=2026-04-14` 미완료 항목 수가 `0`으로 확인됐다.
+  - 다음 액션: 동일 유형 재발 시 문서를 기준 소스로 유지하고, Project 상태는 문서와 다시 정렬한다. (`체크리스트 생성 시 반영대상 표기` 규칙은 유지)
 
 - [x] `GitHub Project -> Google Calendar` / `Sync Docs Backlog To GitHub Project` 마지막 실행 상태 확인
   - 로컬 실행 기준 점검 명령은 `.venv`로 고정하고, 같은 턴에 `sync_docs_backlog_to_project -> sync_github_project_calendar` 순서로 다시 검증했다.
@@ -123,11 +133,11 @@
 - [x] `신규 관찰축 추가 금지`, `개선 먼저`, `기존 축은 개선 후 점검용` 원칙을 오늘 작업지시로 재고정
   - `fallback 허용 후 3분 성과`, `늦은 완전체결`은 새 관찰축으로 올리지 않고 기존 `RELAX-LATENCY`/`partial fill` 보조 메모로만 유지한다.
 - [x] `계측 완료 + 확신도 50% 이상 = 같은 주 canary 착수` 원칙을 오늘 작업지시로 재고정
-  - `RELAX-DYNSTR`는 이미 `2026-04-15 08:30` 원격 canary 시작으로 닫았고, `partial fill min_fill_ratio`는 코드 경로 부재가 blocker라 착수 대신 blocker 기록이 우선이다.
+  - `RELAX-DYNSTR`는 이미 `2026-04-15 08:30` 원격 canary 시작으로 닫았고, `partial fill min_fill_ratio`도 오늘 코드 경로/토글 구현 착수까지 완료했다.
 - [x] `partial fill min_fill_ratio` 원격 canary 설정 경로와 rollback 가드 확인
-  - 현재 코드베이스에는 `min_fill_ratio` 또는 `cancel_remaining_fast` 전용 설정 경로가 없다.
-  - 확인된 현행 경로는 [src/engine/sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py:1171)의 `partial fill kept, remaining entry orders cancelled` 복구 로직과 [src/engine/sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py:2286)의 `fallback_qty_canary_applied`뿐이다.
-  - 따라서 `2026-04-15 08:30` 실행형 `min_fill_ratio` canary는 값 확정보다 먼저 구현/경로 추가가 필요하고, 전용 rollback 가드도 아직 없다.
+  - 신규 경로를 [src/engine/sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py:1138)에 추가해 `partial_fill_reconciled`에서 `fill_ratio < min_fill_ratio`면 즉시 청산 주문으로 분기한다.
+  - 설정/롤백 토글은 [src/utils/constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:131)와 env(`KORSTOCKSCAN_SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED`, `..._MIN_RATIO_DEFAULT`, `..._MIN_RATIO_STRONG_ABS_OVERRIDE`, `..._MIN_RATIO_PRESET_TP`)로 확정했다.
+  - 현재 기본값은 `enabled=false`라 안전 기본동작을 유지하고, 원격 canary에서만 on으로 연다.
 - [x] `RELAX-OVERBOUGHT` 표본 누적
   - 현재 판정은 `표본 누적 계속`이며, 실전 완화 재오픈은 하지 않는다.
   - `WAIT 65` missed-winner의 주원인은 여전히 `overbought`보다 `latency/strength` 축으로 본다.
@@ -139,6 +149,27 @@
 - [x] `AI overlap audit` 기반 `selective override` 설계 착수일을 `2026-04-16`로 고정
   - `2026-04-15` `RELAX-DYNSTR` 1일차 canary 결과를 하루 연결한 뒤 시작한다.
   - 설계 입력은 `blocked_stage / momentum_tag / threshold_profile` 교차표로 고정한다.
+- [x] `AI overlap audit`를 `selective override` 착수 입력으로 정리
+  - 입력 스키마는 `trade_date`, `stock_code`, `blocked_stage`, `momentum_tag`, `threshold_profile`, `latency_danger_reasons`, `entry_armed_expired_after_wait`, `counterfactual_outcome`로 고정한다.
+  - `2026-04-16 09:10 KST` 설계 착수 시 위 스키마 교차표(`blocked_stage x momentum_tag x threshold_profile`)를 바로 투입한다.
+- [x] 장후 개선 결론 준비
+  - 장후 결론은 기존 4축(`RELAX-LATENCY`, `RELAX-DYNSTR`, `partial fill`, `expired_armed`)만으로 닫고 신규 관찰축은 추가하지 않는다.
+- [x] `RELAX-LATENCY` 운영서버 승격 가능/불가 최종 결론
+  - `2026-04-14 15:38 KST` 최종판정은 `운영서버 승격 보류`다.
+  - 근거는 `ALLOW_FALLBACK` 반복 관찰 대비 `씨아이에스` 손절 표본과 `preset_exit_sync_mismatch` 운영 리스크가 여전히 크다는 점이다.
+  - 다음 액션은 `2026-04-15 장중` 동일 관찰축 반복 확인 후 `2026-04-15 POSTCLOSE` 재판정으로 고정한다.
+- [x] `partial fill min_fill_ratio` 원격 canary 설정값 확정 (`기본값/예외/롤백가드` 포함)
+  - 설정값은 위 장후 체크리스트 확정값과 동일하게 유지한다.
+  - 코드 경로/토글 구현을 `2026-04-14 POSTCLOSE`에 완료했으므로, `2026-04-15 08:20~08:30 KST`에는 env 주입 + dry-run 후 canary go/no-go만 판정한다.
+- [x] `expired_armed` 처리 로직 설계 범위와 `2026-04-15 장후` 완료 기준 확정
+  - `2026-04-15 15:30 KST`까지 설계 문서에서 `허용/불허 조건표 + 검증로그 + 롤백조건`이 모두 채워지면 완료로 본다.
+- [x] `AIPrompt 작업 5 WATCHING/HOLDING 프롬프트 물리 분리` write scope / rollback 가드 / 비교지표를 오늘 확정하고 같은 날 착수
+  - write scope는 `src/engine/ai_engine.py`, `src/engine/sniper_state_handlers.py`로 고정한다.
+  - rollback은 `KORSTOCKSCAN_SCALPING_PROMPT_SPLIT_ENABLED=false` 1개 토글과 기존 공용 `SCALPING_SYSTEM_PROMPT` 복귀 경로를 기준으로 둔다.
+  - 비교지표는 `ai_prompt_type`, `ai_prompt_version`, `action_diverged_rate`, `entry_funnel_delta`로 고정한다.
+  - 코드 착수는 `2026-04-14 POSTCLOSE`에 바로 반영했다. (`WATCHING/HOLDING` 프롬프트 상수 분리, `analyze_target(prompt_profile=...)` 경로 추가)
+- [x] `SCALPING 모델 shadow 비교안` 범위 / 로그 필드 / 성과 비교식을 오늘 확정
+  - 확정 범위/필드/성과식은 장후 체크리스트에 고정한 값을 사용한다.
 - [x] `AIPrompt 작업 8 감사용 핵심값 3종 투입`은 오늘 같은 날 착수
   - 착수 범위와 rollback 가드를 `docs/2026-04-11-scalping-ai-prompt-coding-instructions.md`에 고정했다.
   - `develop` 선행 적용 후 `2026-04-16` 1차 평가 전까지 `main` 승격 금지로 둔다.
@@ -209,16 +240,16 @@
 - [2026-04-14-audit-reflection-strong-directive.md](./2026-04-14-audit-reflection-strong-directive.md)
 
 <!-- AUTO_SERVER_COMPARISON_START -->
-### 본서버 vs songstockscan 자동 비교 (`2026-04-14 12:00:55`)
+### 본서버 vs songstockscan 자동 비교 (`2026-04-14 15:47:50`)
 
 - 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
 - 상세 리포트: `data/report/server_comparison/server_comparison_2026-04-14.md`
 - `Trade Review`: status=`ok`, differing_safe_metrics=`6`
-  - all_rows local=143 remote=151 delta=8.0; total_trades local=6 remote=12 delta=6.0; entered_rows local=6 remote=12 delta=6.0
+  - expired_rows local=138 remote=146 delta=8.0; completed_trades local=7 remote=12 delta=5.0; total_trades local=8 remote=12 delta=4.0
 - `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
   - safe 기준 차이 없음
 - `Post Sell Feedback`: status=`ok`, differing_safe_metrics=`2`
-  - total_candidates local=4 remote=8 delta=4.0; evaluated_candidates local=4 remote=8 delta=4.0
-- `Entry Pipeline Flow`: status=`ok`, differing_safe_metrics=`5`
-  - total_events local=216707 remote=241695 delta=24988.0; tracked_stocks local=133 remote=136 delta=3.0; submitted_stocks local=4 remote=7 delta=3.0
+  - total_candidates local=7 remote=8 delta=1.0; evaluated_candidates local=7 remote=8 delta=1.0
+- `Entry Pipeline Flow`: status=`ok`, differing_safe_metrics=`4`
+  - total_events local=455903 remote=440556 delta=-15347.0; tracked_stocks local=154 remote=152 delta=-2.0; submitted_stocks local=4 remote=6 delta=2.0
 <!-- AUTO_SERVER_COMPARISON_END -->

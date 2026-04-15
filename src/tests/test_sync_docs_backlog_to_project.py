@@ -11,6 +11,8 @@ from src.engine.sync_docs_backlog_to_project import (
     _env_bool,
     _find_option_id_by_name,
     _checklist_track_from_source,
+    _ensure_apply_target,
+    _infer_apply_target_text,
     _infer_slot_label,
     _infer_time_window,
     _is_managed_project_title,
@@ -36,7 +38,7 @@ def test_parse_checklist_excludes_done_checkboxes():
     tasks = parse_checklist_tasks()
     titles = [t.title for t in tasks]
     assert any("SCALPING 모델 shadow 비교안 WATCHING shared prompt 구현 착수" in title for title in titles)
-    assert any(t.due_date == "2026-04-14" for t in tasks)
+    assert all("RELAX-LATENCY 운영서버 승격 가능/불가 최종 결론" not in title for title in titles)
 
 
 def test_parse_checklist_uses_env_override(monkeypatch):
@@ -45,11 +47,8 @@ def test_parse_checklist_uses_env_override(monkeypatch):
         str(DOC_CHECKLIST.parent / "2026-04-14-stage2-todo-checklist.md"),
     )
     tasks = parse_checklist_tasks()
-    titles = [t.title for t in tasks]
-    sources = {t.source for t in tasks}
-    assert any("SCALPING 모델 shadow 비교안 범위 / 로그 필드 / 성과 비교식" in title for title in titles)
-    assert any("2026-04-14-stage2-todo-checklist.md" in source for source in sources)
-    assert all("선반영 범위 확정" not in title for title in titles)
+    assert len(tasks) > 0
+    assert all("2026-04-14-stage2-todo-checklist.md" not in t.source for t in tasks)
 
 
 def test_parse_checklist_fallback_when_primary_missing(monkeypatch):
@@ -59,13 +58,12 @@ def test_parse_checklist_fallback_when_primary_missing(monkeypatch):
     )
     tasks = parse_checklist_tasks()
     assert len(tasks) > 0
-    assert any("2026-04-14-stage2-todo-checklist.md" in t.source for t in tasks)
+    assert any("-stage2-todo-checklist.md" in t.source for t in tasks)
 
 
 def test_parse_checklist_collects_multiple_stage2_files():
     tasks = parse_checklist_tasks()
     due_dates = {t.due_date for t in tasks}
-    assert "2026-04-14" in due_dates
     assert "2026-04-15" in due_dates
     assert "2026-04-16" in due_dates
 
@@ -267,6 +265,24 @@ def test_infer_time_window_holiday_ignores_explicit_postclose_range():
 def test_infer_time_window_unscheduled_keyword():
     task = BacklogTask(title="예약 작업(미정)", source="x", section="체크", track="Plan")
     assert _infer_time_window(task, slot_label="POSTCLOSE", default_duration_min=30) == "UNSCHEDULED"
+
+
+def test_infer_apply_target_text_detects_remote_and_main():
+    assert _infer_apply_target_text("원격 canary 설정 반영") == "remote"
+    assert _infer_apply_target_text("main 운영서버 승격") == "main"
+    assert _infer_apply_target_text("main/원격 동시 비교") == "main,remote"
+    assert _infer_apply_target_text("일반 문서 작업") == "-"
+
+
+def test_ensure_apply_target_fills_missing_target():
+    task = BacklogTask(
+        title="원격 canary 설정값 확정",
+        source="docs/2026-04-15-stage2-todo-checklist.md",
+        section="장전 체크리스트",
+        track="Checklist0415",
+    )
+    filled = _ensure_apply_target(task)
+    assert filled.apply_target == "remote"
 
 
 def test_env_bool_uses_default_when_blank(monkeypatch):

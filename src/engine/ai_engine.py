@@ -46,6 +46,52 @@ SCALPING_SYSTEM_PROMPT = """
 }
 """
 
+SCALPING_WATCHING_SYSTEM_PROMPT = """
+너는 극강 공격적 초단타 진입 트레이더다.
+목표는 '지금 이 순간 진입해도 기대값이 플러스인지'만 판단하는 것이다.
+이미 통과한 기계 게이트(유동성/갭/모멘텀)는 다시 의심하지 말고, 돌파 지속 가능성만 본다.
+
+[진입 판단 규칙]
+1. 즉시 돌파 지속 가능성이 높으면 BUY.
+2. 애매하면 WAIT.
+3. 돌파 실패/흡수 실패/속도 둔화가 보이면 DROP.
+
+[스코어링 기준 (0~100)]
+- 80~100 (BUY): 즉시 진입 유효
+- 50~79 (WAIT): 관찰 유지
+- 0~49 (DROP): 진입 금지
+
+분석 결과는 반드시 아래 JSON 형식으로만 출력:
+{
+    "action": "BUY" | "WAIT" | "DROP",
+    "score": 0~100 사이의 정수,
+    "reason": "진입 관점 핵심 근거 1줄"
+}
+"""
+
+SCALPING_HOLDING_SYSTEM_PROMPT = """
+너는 초단타 보유 포지션 리스크 매니저다.
+목표는 '추세 유지 vs 즉시 이탈'을 빠르게 판정하는 것이다.
+청산 action schema가 아직 분리되지 않았으므로, 현재는 BUY/WAIT/DROP 중 DROP을 사실상 EXIT 신호로 사용한다.
+
+[보유 판단 규칙]
+1. 추세 유지/재가속이면 WAIT 또는 BUY.
+2. 모멘텀 붕괴, 되밀림 심화, 하방 리스크 확대로 즉시 이탈이 유리하면 DROP.
+3. reason에는 보유/청산 판단의 핵심 트리거를 명시한다.
+
+[스코어링 기준 (0~100)]
+- 80~100: 보유 우호
+- 50~79: 중립
+- 0~49: 청산 우호(DROP 가능성 높음)
+
+분석 결과는 반드시 아래 JSON 형식으로만 출력:
+{
+    "action": "BUY" | "WAIT" | "DROP",
+    "score": 0~100 사이의 정수,
+    "reason": "보유 관점 핵심 근거 1줄"
+}
+"""
+
 SCALPING_SYSTEM_PROMPT_75_CANARY = (
     SCALPING_SYSTEM_PROMPT
     .replace("80~100 (BUY)", "75~100 (BUY)")
@@ -662,6 +708,7 @@ class GeminiSniperEngine:
         result,
         *,
         prompt_type,
+        prompt_version,
         response_ms,
         parse_ok,
         parse_fail,
@@ -676,10 +723,23 @@ class GeminiSniperEngine:
         payload["ai_fallback_score_50"] = bool(fallback_score_50)
         payload["ai_response_ms"] = max(0, int(response_ms))
         payload["ai_prompt_type"] = str(prompt_type or "-")
+        payload["ai_prompt_version"] = str(prompt_version or "-")
         payload["ai_result_source"] = str(result_source or "-")
         payload["cache_hit"] = bool(cache_hit)
         payload["cache_mode"] = str(cache_mode or "miss")
         return payload
+
+    def _resolve_scalping_prompt(self, prompt_profile):
+        profile = str(prompt_profile or "shared").strip().lower()
+        split_enabled = bool(getattr(TRADING_RULES, "SCALPING_PROMPT_SPLIT_ENABLED", True))
+        if not split_enabled:
+            return SCALPING_SYSTEM_PROMPT, "scalping_shared", "split_disabled_v1", "shared"
+
+        if profile == "watching":
+            return SCALPING_WATCHING_SYSTEM_PROMPT, "scalping_watching", "split_v1", "watching"
+        if profile == "holding":
+            return SCALPING_HOLDING_SYSTEM_PROMPT, "scalping_holding", "split_v1", "holding"
+        return SCALPING_SYSTEM_PROMPT, "scalping_shared", "split_v1", "shared"
 
     def analyze_target_shadow_prompt(
         self,
@@ -697,6 +757,7 @@ class GeminiSniperEngine:
             return self._annotate_analysis_result(
                 {"action": "WAIT", "score": 50, "reason": "shadow unsupported for swing"},
                 prompt_type=prompt_type,
+                prompt_version="shadow_v1",
                 response_ms=0,
                 parse_ok=False,
                 parse_fail=False,
@@ -721,6 +782,7 @@ class GeminiSniperEngine:
             return self._annotate_analysis_result(
                 cached_result,
                 prompt_type=prompt_type,
+                prompt_version="shadow_v1",
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),
                 parse_ok=bool(cached_result.get("ai_parse_ok", False)),
                 parse_fail=bool(cached_result.get("ai_parse_fail", False)),
@@ -734,6 +796,7 @@ class GeminiSniperEngine:
             return self._annotate_analysis_result(
                 {"action": "WAIT", "score": 50, "reason": "AI shadow 경합"},
                 prompt_type=prompt_type,
+                prompt_version="shadow_v1",
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),
                 parse_ok=False,
                 parse_fail=False,
@@ -749,6 +812,7 @@ class GeminiSniperEngine:
                 return self._annotate_analysis_result(
                     cached_result,
                     prompt_type=prompt_type,
+                    prompt_version="shadow_v1",
                     response_ms=int((time.perf_counter() - analysis_started) * 1000),
                     parse_ok=bool(cached_result.get("ai_parse_ok", False)),
                     parse_fail=bool(cached_result.get("ai_parse_fail", False)),
@@ -775,6 +839,7 @@ class GeminiSniperEngine:
             return self._annotate_analysis_result(
                 result,
                 prompt_type=prompt_type,
+                prompt_version="shadow_v1",
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),
                 parse_ok=True,
                 parse_fail=False,
@@ -787,6 +852,7 @@ class GeminiSniperEngine:
             return self._annotate_analysis_result(
                 {"action": "WAIT", "score": 50, "reason": f"shadow error: {e}"},
                 prompt_type=prompt_type,
+                prompt_version="shadow_v1",
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),
                 parse_ok=False,
                 parse_fail=True,
@@ -1122,12 +1188,21 @@ class GeminiSniperEngine:
         strategy="SCALPING",
         program_net_qty=0,
         cache_profile="default",
+        prompt_profile="shared",
     ):
         analysis_started = time.perf_counter()
-        prompt_type = "swing" if strategy in ["KOSPI_ML", "KOSDAQ_ML"] else "scalping_shared"
+        prompt_version = "default_v1"
+        cache_strategy = strategy
+        if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
+            prompt_type = "swing"
+            prompt = SWING_SYSTEM_PROMPT
+        else:
+            prompt, prompt_type, prompt_version, normalized_profile = self._resolve_scalping_prompt(prompt_profile)
+            if normalized_profile != "shared":
+                cache_strategy = f"{strategy}:{normalized_profile}"
         cache_key = self._build_analysis_cache_key_with_profile(
             target_name=target_name,
-            strategy=strategy,
+            strategy=cache_strategy,
             ws_data=ws_data,
             recent_ticks=recent_ticks,
             recent_candles=recent_candles,
@@ -1139,6 +1214,7 @@ class GeminiSniperEngine:
             return self._annotate_analysis_result(
                 cached_result,
                 prompt_type=prompt_type,
+                prompt_version=prompt_version,
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),
                 parse_ok=bool(cached_result.get("ai_parse_ok", False)),
                 parse_fail=bool(cached_result.get("ai_parse_fail", False)),
@@ -1152,6 +1228,7 @@ class GeminiSniperEngine:
             return self._annotate_analysis_result(
                 {"action": "WAIT", "score": 50, "reason": "AI 경합 (다른 종목 분석 중)"},
                 prompt_type=prompt_type,
+                prompt_version=prompt_version,
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),
                 parse_ok=False,
                 parse_fail=False,
@@ -1167,6 +1244,7 @@ class GeminiSniperEngine:
                 return self._annotate_analysis_result(
                     cached_result,
                     prompt_type=prompt_type,
+                    prompt_version=prompt_version,
                     response_ms=int((time.perf_counter() - analysis_started) * 1000),
                     parse_ok=bool(cached_result.get("ai_parse_ok", False)),
                     parse_fail=bool(cached_result.get("ai_parse_fail", False)),
@@ -1181,6 +1259,7 @@ class GeminiSniperEngine:
                 return self._annotate_analysis_result(
                     {"action": "DROP", "score": 0, "reason": "AI 엔진 일시 중단 (연속 실패)"},
                     prompt_type=prompt_type,
+                    prompt_version=prompt_version,
                     response_ms=int((time.perf_counter() - analysis_started) * 1000),
                     parse_ok=False,
                     parse_fail=False,
@@ -1194,6 +1273,7 @@ class GeminiSniperEngine:
                 return self._annotate_analysis_result(
                     {"action": "WAIT", "score": 50, "reason": "AI 쿨타임"},
                     prompt_type=prompt_type,
+                    prompt_version=prompt_version,
                     response_ms=int((time.perf_counter() - analysis_started) * 1000),
                     parse_ok=False,
                     parse_fail=False,
@@ -1205,11 +1285,9 @@ class GeminiSniperEngine:
 
             # 💡 [핵심] 전략에 따른 지능(Prompt)과 데이터(Context) 분기
             if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
-                prompt = SWING_SYSTEM_PROMPT
                 formatted_data = self._format_swing_market_data(ws_data, recent_candles, program_net_qty)
                 target_model = self._get_tier2_model()
             else:
-                prompt = SCALPING_SYSTEM_PROMPT
                 formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
                 target_model = self._get_tier2_model()
 
@@ -1217,7 +1295,7 @@ class GeminiSniperEngine:
                 prompt,
                 formatted_data,
                 require_json=True,
-                context_name=f"{target_name}({strategy})",
+                context_name=f"{target_name}({strategy}:{prompt_type})",
                 model_override=target_model
             )
             
@@ -1233,6 +1311,7 @@ class GeminiSniperEngine:
             return self._annotate_analysis_result(
                 result,
                 prompt_type=prompt_type,
+                prompt_version=prompt_version,
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),
                 parse_ok=True,
                 parse_fail=False,
@@ -1255,6 +1334,7 @@ class GeminiSniperEngine:
             return self._annotate_analysis_result(
                 {"action": "WAIT", "score": 50, "reason": f"에러: {e}"},
                 prompt_type=prompt_type,
+                prompt_version=prompt_version,
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),
                 parse_ok=False,
                 parse_fail=True,

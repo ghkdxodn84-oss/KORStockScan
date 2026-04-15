@@ -3,8 +3,15 @@
 import time
 from datetime import datetime
 from math import isclose
+from pathlib import Path
+import re
 
 from src.database.models import RecommendationHistory
+from src.engine.sniper_position_tags import (
+    normalize_position_tag,
+    normalize_strategy,
+    target_identity,
+)
 from src.engine.sniper_scale_in_utils import record_add_history_event, find_latest_open_add_order_no
 from src.engine.trade_profit import calculate_net_profit_rate
 from src.utils import kiwoom_utils
@@ -19,6 +26,11 @@ EVENT_BUS = None
 HIGHEST_PRICES = None
 STATE_LOCK = None
 CONF = None
+_WS_FILL_ORD_RE = re.compile(r"WS 실제체결\]\s*(?P<code>\d{6})\s+(?P<side>BUY|SELL)\b.*?\(주문번호:\s*(?P<ord_no>\d+)\)")
+_ENTRY_TP_RE = re.compile(r"ENTRY_TP_REFRESH\]\s*.*?\((?P<code>\d{6})\).*?\bord_no=(?P<ord_no>\S+)")
+_ENTRY_FILL_RE = re.compile(r"ENTRY_FILL\]\s*.*?\((?P<code>\d{6})\).*?\bord_no=(?P<ord_no>\S+)")
+_PIPELINE_LEG_RE = re.compile(r"\((?P<code>\d{6})\).*?\border_leg_sent\b.*?\bord_no=(?P<ord_no>\S+)")
+_PIPELINE_TP_RE = re.compile(r"\((?P<code>\d{6})\).*?\bpreset_exit_setup\b.*?\bord_no=(?P<ord_no>\S+)")
 
 
 def bind_sync_dependencies(
@@ -88,6 +100,287 @@ def _to_float(value):
         return float(value or 0)
     except Exception:
         return 0.0
+
+
+def _trade_type_for_strategy(strategy):
+    normalized = normalize_strategy(strategy)
+    if normalized == "SCALPING":
+        return "SCALP"
+    if normalized == "KOSDAQ_ML":
+        return "RUNNER"
+    return "MAIN"
+
+
+def _inventory_name(real_data):
+    return (
+        real_data.get("name")
+        or real_data.get("stock_name")
+        or real_data.get("hts_kor_isnm")
+        or real_data.get("item_name")
+        or ""
+    )
+
+
+def _iter_recovery_log_paths():
+    logs_dir = Path(__file__).resolve().parents[2] / "logs"
+    patterns = (
+        "bot_history.log*",
+        "sniper_execution_receipts_info.log*",
+        "pipeline_event_logger_info.log*",
+    )
+    seen = set()
+    for pattern in patterns:
+        for path in sorted(logs_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True):
+            if path.is_file() and path not in seen:
+                seen.add(path)
+                yield path
+
+
+def _tail_text(path: Path, max_bytes: int = 512_000) -> str:
+    try:
+        with path.open("rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(size - max_bytes, 0))
+            return fh.read().decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+
+def _recover_order_refs_from_logs(code: str) -> dict:
+    normalized = str(code or "").strip()[:6]
+    refs = {}
+    if not normalized:
+        return refs
+
+    for path in _iter_recovery_log_paths():
+        text = _tail_text(path)
+        if not text:
+            continue
+        for line in reversed(text.splitlines()):
+            if normalized not in line:
+                continue
+            if "WS 실제체결" in line and "주문번호:" in line and "buy_ord_no" not in refs:
+                match = _WS_FILL_ORD_RE.search(line)
+                if match and match.group("code") == normalized and match.group("side") == "BUY":
+                    refs["buy_ord_no"] = match.group("ord_no")
+            if "ENTRY_FILL" in line and "buy_ord_no" not in refs:
+                match = _ENTRY_FILL_RE.search(line)
+                if match and match.group("code") == normalized:
+                    refs["buy_ord_no"] = match.group("ord_no")
+            if "order_leg_sent" in line and "buy_ord_no" not in refs:
+                match = _PIPELINE_LEG_RE.search(line)
+                if match and match.group("code") == normalized:
+                    refs["buy_ord_no"] = match.group("ord_no")
+            if "ENTRY_TP_REFRESH" in line and "preset_tp_ord_no" not in refs:
+                match = _ENTRY_TP_RE.search(line)
+                if match and match.group("code") == normalized:
+                    refs["preset_tp_ord_no"] = match.group("ord_no")
+            if "preset_exit_setup" in line and "preset_tp_ord_no" not in refs:
+                match = _PIPELINE_TP_RE.search(line)
+                if match and match.group("code") == normalized:
+                    refs["preset_tp_ord_no"] = match.group("ord_no")
+            if "buy_ord_no" in refs and "preset_tp_ord_no" in refs:
+                return refs
+    return refs
+
+
+def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
+    code = str(getattr(record, "stock_code", "") or "").strip()[:6]
+    strategy = normalize_strategy(getattr(record, "strategy", None) or "KOSPI_ML")
+    identity = target_identity(code, strategy)
+    target = next(
+        (
+            t for t in (ACTIVE_TARGETS or [])
+            if target_identity(t.get("code", ""), t.get("strategy", "")) == identity
+        ),
+        None,
+    )
+    resolved_qty = _to_int(buy_qty if buy_qty is not None else getattr(record, "buy_qty", 0))
+    resolved_price = _to_float(buy_price if buy_price is not None else getattr(record, "buy_price", 0))
+    buy_time = getattr(record, "buy_time", None)
+    position_tag = normalize_position_tag(strategy, getattr(record, "position_tag", None))
+    order_refs = _recover_order_refs_from_logs(code)
+    broker_recovered = bool(getattr(record, "_broker_recovered", False))
+    broker_recovered_legacy = bool(getattr(record, "_broker_recovered_legacy", False))
+    broker_recovered_at = getattr(record, "_broker_recovered_at", None) or time.time()
+    broker_recovered_execution_verified = bool(
+        getattr(record, "_broker_recovered_execution_verified", False)
+    )
+
+    if target is None:
+        marcap = int(DB.get_latest_marcap(code) or 0) if DB is not None and code else 0
+        target = {
+            "id": getattr(record, "id", None),
+            "code": code,
+            "name": getattr(record, "stock_name", "") or code,
+            "strategy": strategy,
+            "trade_type": getattr(record, "trade_type", None) or _trade_type_for_strategy(strategy),
+            "status": "HOLDING",
+            "position_tag": position_tag,
+            "buy_qty": resolved_qty,
+            "buy_price": resolved_price,
+            "buy_time": buy_time,
+            "holding_started_at": buy_time or datetime.now(),
+            "added_time": time.time(),
+            "marcap": marcap,
+            "scale_in_locked": bool(getattr(record, "scale_in_locked", False)),
+            "broker_recovered": broker_recovered,
+            "broker_recovered_legacy": broker_recovered_legacy,
+            "broker_recovered_at": broker_recovered_at,
+            "broker_recovered_execution_verified": broker_recovered_execution_verified,
+        }
+        if order_refs.get("buy_ord_no"):
+            target["odno"] = order_refs["buy_ord_no"]
+        if order_refs.get("preset_tp_ord_no"):
+            target["preset_tp_ord_no"] = order_refs["preset_tp_ord_no"]
+        if strategy == "SCALPING":
+            target.setdefault("exit_mode", "SCALP_PRESET_TP")
+        ACTIVE_TARGETS.append(target)
+        if EVENT_BUS is not None and code:
+            EVENT_BUS.publish("COMMAND_WS_REG", {"codes": [code]})
+        return target
+
+    target["id"] = getattr(record, "id", target.get("id"))
+    target["name"] = getattr(record, "stock_name", "") or target.get("name") or code
+    target["strategy"] = strategy
+    target["status"] = "HOLDING"
+    target["position_tag"] = position_tag
+    target["buy_qty"] = resolved_qty
+    target["buy_price"] = resolved_price
+    target["buy_time"] = buy_time or target.get("buy_time")
+    if buy_time and not target.get("holding_started_at"):
+        target["holding_started_at"] = buy_time
+    if order_refs.get("buy_ord_no") and not str(target.get("odno", "") or "").strip():
+        target["odno"] = order_refs["buy_ord_no"]
+    if order_refs.get("preset_tp_ord_no") and not str(target.get("preset_tp_ord_no", "") or "").strip():
+        target["preset_tp_ord_no"] = order_refs["preset_tp_ord_no"]
+    target["scale_in_locked"] = bool(getattr(record, "scale_in_locked", target.get("scale_in_locked", False)))
+    target["broker_recovered"] = broker_recovered or bool(target.get("broker_recovered"))
+    target["broker_recovered_legacy"] = broker_recovered_legacy or bool(target.get("broker_recovered_legacy"))
+    target["broker_recovered_execution_verified"] = (
+        broker_recovered_execution_verified or bool(target.get("broker_recovered_execution_verified"))
+    )
+    if broker_recovered:
+        target["broker_recovered_at"] = broker_recovered_at
+    if strategy == "SCALPING":
+        target.setdefault("exit_mode", "SCALP_PRESET_TP")
+    return target
+
+
+def _recover_missing_broker_holdings(session, real_codes):
+    recovered = 0
+    today = datetime.now().date()
+    execution_snapshot = []
+    if KIWOOM_TOKEN:
+        try:
+            execution_snapshot = kiwoom_utils.get_account_execution_snapshot_kt00008(KIWOOM_TOKEN)
+        except Exception:
+            execution_snapshot = []
+    active_statuses = {"HOLDING", "SELL_ORDERED", "BUY_ORDERED"}
+    tracked_codes = {
+        str(getattr(record, "stock_code", "") or "").strip()[:6]
+        for record in session.query(RecommendationHistory).filter(
+            RecommendationHistory.status.in_(tuple(active_statuses))
+        ).all()
+    }
+    tracked_codes.update(
+        str(t.get("code", "")).strip()[:6]
+        for t in (ACTIVE_TARGETS or [])
+        if str(t.get("status", "")).upper() in active_statuses
+    )
+
+    for code, real_data in real_codes.items():
+        if code in tracked_codes:
+            continue
+
+        real_qty = _to_int(real_data.get("qty", 0))
+        if real_qty <= 0:
+            continue
+
+        raw_price = (
+            real_data.get("buy_price")
+            or real_data.get("purchase_price")
+            or real_data.get("pchs_avg_pric")
+            or 0
+        )
+        real_buy_uv = _to_int(raw_price)
+        stock_name = _inventory_name(real_data) or code
+        execution_match = next(
+            (
+                row for row in execution_snapshot
+                if row.get("code") == code
+                and row.get("side") == "매수"
+                and _to_int(row.get("qty")) == real_qty
+                and (_to_int(row.get("unit_price")) <= 0 or abs(_to_int(row.get("unit_price")) - real_buy_uv) <= 1)
+            ),
+            None,
+        )
+        history_records = session.query(RecommendationHistory).filter_by(stock_code=code).all()
+        latest = max(history_records, key=lambda r: int(getattr(r, "id", 0) or 0), default=None)
+        reusable = next(
+            (
+                r for r in sorted(history_records, key=lambda r: int(getattr(r, "id", 0) or 0), reverse=True)
+                if str(getattr(r, "status", "") or "").upper() in {"WATCHING", "EXPIRED"}
+            ),
+            None,
+        )
+
+        if reusable is not None:
+            record = reusable
+            strategy = normalize_strategy(getattr(record, "strategy", None) or "SCALPING")
+            record.stock_name = stock_name
+            record.status = "HOLDING"
+            record.strategy = strategy
+            record.trade_type = getattr(record, "trade_type", None) or _trade_type_for_strategy(strategy)
+            record.position_tag = normalize_position_tag(strategy, getattr(record, "position_tag", None))
+            record.buy_qty = real_qty
+            record.buy_price = real_buy_uv
+            record.buy_time = getattr(record, "buy_time", None) or datetime.now()
+        else:
+            strategy = normalize_strategy(getattr(latest, "strategy", None) or "KOSPI_ML")
+            record = RecommendationHistory(
+                rec_date=datetime.now().date(),
+                stock_code=code,
+                stock_name=stock_name,
+                trade_type=getattr(latest, "trade_type", None) or _trade_type_for_strategy(strategy),
+                strategy=strategy,
+                status="HOLDING",
+                position_tag=normalize_position_tag(strategy, getattr(latest, "position_tag", None)),
+                prob=float(getattr(latest, "prob", 0.7) or 0.7),
+                buy_price=real_buy_uv,
+                buy_qty=real_qty,
+                buy_time=datetime.now(),
+            )
+            session.add(record)
+            if hasattr(session, "flush"):
+                session.flush()
+
+        rec_date = getattr(record, "rec_date", None)
+        legacy_recovered = bool(rec_date and rec_date < today)
+        if execution_match and execution_match.get("trade_date"):
+            try:
+                exec_trade_date = datetime.strptime(execution_match["trade_date"], "%Y%m%d").date()
+                legacy_recovered = legacy_recovered or exec_trade_date < today
+            except Exception:
+                pass
+        record._broker_recovered = True
+        record._broker_recovered_legacy = legacy_recovered
+        record._broker_recovered_at = time.time()
+        record._broker_recovered_execution_verified = bool(execution_match)
+
+        log_info(
+            f"🔄 [BROKER_RECOVER] {stock_name}({code}) -> HOLDING "
+            f"(qty={real_qty}, buy_price={real_buy_uv}, strategy={getattr(record, 'strategy', '')}, "
+            f"legacy={legacy_recovered}, exec_verified={bool(execution_match)})"
+        )
+        _ensure_runtime_target(record, buy_qty=real_qty, buy_price=real_buy_uv)
+        if HIGHEST_PRICES is not None and real_buy_uv > 0:
+            HIGHEST_PRICES.setdefault(code, real_buy_uv)
+        tracked_codes.add(code)
+        recovered += 1
+
+    return recovered
 
 
 def _with_state_lock():
@@ -235,6 +528,10 @@ def sync_balance_with_db():
 
                     if bool(record.scale_in_locked):
                         _reconcile_scale_in_lock(record, real_qty, real_buy_uv)
+
+            recovered_count = _recover_missing_broker_holdings(session, real_codes)
+            if recovered_count:
+                log_info(f"🔄 [데이터 동기화] broker-only holding {recovered_count}건을 복구")
 
     except Exception as exc:
         log_error(f"🚨 DB 동기화 중 에러 발생: {exc}")
@@ -452,6 +749,8 @@ def periodic_account_sync():
                                     t['buy_qty'] = cur_qty
 
                         synced_count += 1
+
+            synced_count += _recover_missing_broker_holdings(session, real_codes)
 
     except Exception as exc:
         log_error(f"🚨 정기 계좌 동기화 DB 에러: {exc}")
