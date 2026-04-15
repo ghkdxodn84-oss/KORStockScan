@@ -201,6 +201,10 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
     buy_time = getattr(record, "buy_time", None)
     position_tag = normalize_position_tag(strategy, getattr(record, "position_tag", None))
     order_refs = _recover_order_refs_from_logs(code)
+    recovered_buy_ord_no = str(getattr(record, "_broker_recovered_buy_ord_no", "") or "").strip()
+    recovered_orig_ord_no = str(getattr(record, "_broker_recovered_orig_ord_no", "") or "").strip()
+    if recovered_buy_ord_no and "buy_ord_no" not in order_refs:
+        order_refs["buy_ord_no"] = recovered_buy_ord_no
     broker_recovered = bool(getattr(record, "_broker_recovered", False))
     broker_recovered_legacy = bool(getattr(record, "_broker_recovered_legacy", False))
     broker_recovered_at = getattr(record, "_broker_recovered_at", None) or time.time()
@@ -234,6 +238,8 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
             target["odno"] = order_refs["buy_ord_no"]
         if order_refs.get("preset_tp_ord_no"):
             target["preset_tp_ord_no"] = order_refs["preset_tp_ord_no"]
+        if recovered_orig_ord_no:
+            target["broker_recovered_orig_ord_no"] = recovered_orig_ord_no
         if strategy == "SCALPING":
             target.setdefault("exit_mode", "SCALP_PRESET_TP")
         ACTIVE_TARGETS.append(target)
@@ -255,6 +261,8 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
         target["odno"] = order_refs["buy_ord_no"]
     if order_refs.get("preset_tp_ord_no") and not str(target.get("preset_tp_ord_no", "") or "").strip():
         target["preset_tp_ord_no"] = order_refs["preset_tp_ord_no"]
+    if recovered_orig_ord_no:
+        target["broker_recovered_orig_ord_no"] = recovered_orig_ord_no
     target["scale_in_locked"] = bool(getattr(record, "scale_in_locked", target.get("scale_in_locked", False)))
     target["broker_recovered"] = broker_recovered or bool(target.get("broker_recovered"))
     target["broker_recovered_legacy"] = broker_recovered_legacy or bool(target.get("broker_recovered_legacy"))
@@ -272,11 +280,29 @@ def _recover_missing_broker_holdings(session, real_codes):
     recovered = 0
     today = datetime.now().date()
     execution_snapshot = []
+    order_ref_snapshot = []
     if KIWOOM_TOKEN:
         try:
             execution_snapshot = kiwoom_utils.get_account_execution_snapshot_kt00008(KIWOOM_TOKEN)
         except Exception:
             execution_snapshot = []
+        use_order_ref_2nd_pass = False
+        if isinstance(CONF, dict) and "ENABLE_ORDER_REF_2ND_PASS" in CONF:
+            use_order_ref_2nd_pass = bool(CONF.get("ENABLE_ORDER_REF_2ND_PASS"))
+        elif len(str(KIWOOM_TOKEN or "")) >= 40:
+            # 테스트 토큰("token")에서는 호출을 건너뛰고, 실토큰에서만 기본 활성
+            use_order_ref_2nd_pass = True
+        if use_order_ref_2nd_pass:
+            try:
+                qry_tp = str((CONF or {}).get("BROKER_ORDER_REF_QRY_TP", "0")) if isinstance(CONF, dict) else "0"
+                stk_bond_tp = str((CONF or {}).get("BROKER_ORDER_REF_STK_BOND_TP", "0")) if isinstance(CONF, dict) else "0"
+                order_ref_snapshot = kiwoom_utils.get_order_reference_snapshot_2nd_pass(
+                    KIWOOM_TOKEN,
+                    qry_tp=qry_tp,
+                    stk_bond_tp=stk_bond_tp,
+                )
+            except Exception:
+                order_ref_snapshot = []
     active_statuses = {"HOLDING", "SELL_ORDERED", "BUY_ORDERED"}
     tracked_codes = {
         str(getattr(record, "stock_code", "") or "").strip()[:6]
@@ -315,6 +341,14 @@ def _recover_missing_broker_holdings(session, real_codes):
                 and (_to_int(row.get("unit_price")) <= 0 or abs(_to_int(row.get("unit_price")) - real_buy_uv) <= 1)
             ),
             None,
+        )
+        order_ref_match = kiwoom_utils.find_order_reference_match(
+            order_ref_snapshot,
+            code=code,
+            side="매수",
+            qty=real_qty,
+            unit_price=real_buy_uv,
+            max_price_diff=1,
         )
         history_records = session.query(RecommendationHistory).filter_by(stock_code=code).all()
         latest = max(history_records, key=lambda r: int(getattr(r, "id", 0) or 0), default=None)
@@ -367,12 +401,19 @@ def _recover_missing_broker_holdings(session, real_codes):
         record._broker_recovered = True
         record._broker_recovered_legacy = legacy_recovered
         record._broker_recovered_at = time.time()
-        record._broker_recovered_execution_verified = bool(execution_match)
+        record._broker_recovered_execution_verified = bool(execution_match or order_ref_match)
+        record._broker_recovered_buy_ord_no = (
+            str((order_ref_match or {}).get("ord_no", "") or "").strip()
+        )
+        record._broker_recovered_orig_ord_no = (
+            str((order_ref_match or {}).get("orig_ord_no", "") or "").strip()
+        )
 
         log_info(
             f"🔄 [BROKER_RECOVER] {stock_name}({code}) -> HOLDING "
             f"(qty={real_qty}, buy_price={real_buy_uv}, strategy={getattr(record, 'strategy', '')}, "
-            f"legacy={legacy_recovered}, exec_verified={bool(execution_match)})"
+            f"legacy={legacy_recovered}, exec_verified={bool(execution_match or order_ref_match)}, "
+            f"order_ref_verified={bool(order_ref_match)})"
         )
         _ensure_runtime_target(record, buy_qty=real_qty, buy_price=real_buy_uv)
         if HIGHEST_PRICES is not None and real_buy_uv > 0:

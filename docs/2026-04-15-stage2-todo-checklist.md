@@ -180,9 +180,13 @@
     - `remote`: shadow `22`, diverged `6`
     - `entered_if_gemini/gpt`: 당일 로그만으로 확정 불가(실집행 매핑키 부족) → EV 비교는 익일 보강
 - [x] 오늘 보류된 항목이 있으면 `사유 + 다음 실행시각`을 문서에 명시 (`2026-04-15 16:13 KST`)
-- [ ] `kt00007/ka10076` 파라미터 확정 후 `원주문번호 API 대조` 2차 고도화
-  - `kt00008`으로는 종목/매수매도/수량/체결단가 대조만 가능하고 `ord_no`는 확보되지 않았다.
-  - 다음 단계는 `qry_tp`, `stk_bond_tp` 등 필수 파라미터를 확정해 `원주문번호/원주문 참조`까지 API 기반으로 닫는 것이다.
+- [x] `kt00007/ka10076` 파라미터 확정 후 `원주문번호 API 대조` 2차 고도화 (`2026-04-15 17:25 KST`)
+  - 판정: 완료 (`query profile`: `qry_tp=0`, `stk_bond_tp=0`)
+  - 근거:
+    - `kiwoom_utils`에 `kt00007/ka10076` 공통 정규화 스냅샷(`ord_no`, `orig_ord_no`)과 대조 매처를 추가했다.
+    - `sniper_sync` `broker recover` 경로에 2차 대조(선택 실행) 연동: `kt00008` 미검증이어도 주문참조 매칭 시 `exec_verified=True` + `odno` 복구.
+    - 테스트: `test_kiwoom_order_ref_snapshot.py`, `test_periodic_account_sync_recovers_order_ref_when_kt00008_empty` 통과.
+  - 다음 액션: `2026-04-16 POSTCLOSE`에 원격 실표본 1건 이상에서 `ord_no/orig_ord_no` 매칭률과 오탐 여부를 기록해 canary 유지/보정 판정
 
 ### 2026-04-15 보류 항목 및 재실행 시각
 
@@ -232,6 +236,7 @@
 - [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)
 - [2026-04-11-scalping-ai-prompt-coding-instructions.md](./2026-04-11-scalping-ai-prompt-coding-instructions.md)
 - [2026-04-15-tuning-result-report-for-auditor.md](./2026-04-15-tuning-result-report-for-auditor.md)
+- [2026-04-15-main-scalping-performance-pros-cons-audit-report.md](./2026-04-15-main-scalping-performance-pros-cons-audit-report.md)
 
 <!-- AUTO_SERVER_COMPARISON_START -->
 ### 본서버 vs songstockscan 자동 비교 (`2026-04-15 12:01:01`)

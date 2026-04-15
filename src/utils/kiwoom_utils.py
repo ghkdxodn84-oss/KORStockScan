@@ -337,6 +337,188 @@ def get_account_execution_snapshot_kt00008(token):
 
     return snapshot
 
+
+def _to_int_safe(value):
+    if value in (None, ""):
+        return 0
+    try:
+        clean = str(value).replace(",", "").replace("+", "").strip()
+        return int(float(clean))
+    except (ValueError, TypeError):
+        return 0
+
+
+def _pick_first(item, keys):
+    for key in keys:
+        val = item.get(key)
+        if val not in (None, ""):
+            return val
+    return ""
+
+
+def _normalize_side(value):
+    raw = str(value or "").strip().upper()
+    if raw in {"매수", "BUY", "B", "2"}:
+        return "매수"
+    if raw in {"매도", "SELL", "S", "1"}:
+        return "매도"
+    return str(value or "").strip()
+
+
+def _extract_order_rows(res):
+    rows = []
+    if not isinstance(res, dict):
+        return rows
+    for _, value in res.items():
+        if isinstance(value, list) and value and isinstance(value[0], dict):
+            rows.extend(value)
+    return rows
+
+
+def _normalize_order_history_rows(*, results, source_api):
+    normalized = []
+    for res in results or []:
+        trade_date = str(
+            res.get("trde_dt")
+            or res.get("ord_dt")
+            or res.get("dt")
+            or ""
+        ).strip()
+        rows = _extract_order_rows(res)
+        for item in rows:
+            code = normalize_stock_code(_pick_first(item, ("stk_cd", "code", "isu_no", "item_cd")))
+            if not code:
+                continue
+            ord_no = str(_pick_first(item, ("ord_no", "odno", "order_no", "org_ord_no"))).strip()
+            orig_ord_no = str(
+                _pick_first(item, ("orig_ord_no", "orgn_ord_no", "org_ord_no", "orgord_no"))
+            ).strip()
+            qty = _to_int_safe(_pick_first(item, ("qty", "ord_qty", "cntr_qty", "exct_qty")))
+            unit_price = _to_int_safe(
+                _pick_first(item, ("unp", "cntr_prc", "exec_pric", "ord_prc", "prc"))
+            )
+            side = _normalize_side(_pick_first(item, ("sell_tp", "bnst_tp", "trde_tp", "side")))
+            normalized.append(
+                {
+                    "source_api": source_api,
+                    "trade_date": trade_date,
+                    "code": code,
+                    "name": str(_pick_first(item, ("stk_nm", "name", "hts_kor_isnm"))).strip(),
+                    "side": side,
+                    "qty": qty,
+                    "unit_price": unit_price,
+                    "ord_no": ord_no,
+                    "orig_ord_no": orig_ord_no,
+                    "seq": str(_pick_first(item, ("seq", "odno_dseq", "ord_seq"))).strip(),
+                    "raw": item,
+                }
+            )
+    return normalized
+
+
+def get_order_reference_snapshot_kt00007(token, *, qry_tp="0", stk_bond_tp="0", extra_payload=None):
+    """
+    [kt00007] 계좌 주문/체결 이력 스냅샷을 정규화해서 반환합니다.
+    - 파라미터 기본값: qry_tp=0, stk_bond_tp=0
+    - 목적: ord_no / orig_ord_no 확보용
+    """
+    url = get_api_url("/api/dostk/acnt")
+    payload = {"qry_tp": str(qry_tp), "stk_bond_tp": str(stk_bond_tp)}
+    if extra_payload:
+        payload.update({k: v for k, v in dict(extra_payload).items() if v is not None})
+    results = fetch_kiwoom_api_continuous(
+        url=url,
+        token=token,
+        api_id="kt00007",
+        payload=payload,
+        use_continuous=True,
+    )
+    return _normalize_order_history_rows(results=results, source_api="kt00007")
+
+
+def get_order_reference_snapshot_ka10076(token, *, qry_tp="0", stk_bond_tp="0", extra_payload=None):
+    """
+    [ka10076] 주문/체결 조회 응답을 정규화해서 반환합니다.
+    - 파라미터 기본값: qry_tp=0, stk_bond_tp=0
+    - 목적: ord_no / orig_ord_no 보강용
+    """
+    url = get_api_url("/api/dostk/stkinfo")
+    payload = {"qry_tp": str(qry_tp), "stk_bond_tp": str(stk_bond_tp)}
+    if extra_payload:
+        payload.update({k: v for k, v in dict(extra_payload).items() if v is not None})
+    results = fetch_kiwoom_api_continuous(
+        url=url,
+        token=token,
+        api_id="ka10076",
+        payload=payload,
+        use_continuous=True,
+    )
+    return _normalize_order_history_rows(results=results, source_api="ka10076")
+
+
+def get_order_reference_snapshot_2nd_pass(token, *, qry_tp="0", stk_bond_tp="0"):
+    """
+    `kt00007 + ka10076`를 함께 조회해 원주문번호 대조용 스냅샷을 생성합니다.
+    """
+    rows = []
+    try:
+        rows.extend(
+            get_order_reference_snapshot_kt00007(
+                token,
+                qry_tp=qry_tp,
+                stk_bond_tp=stk_bond_tp,
+            )
+        )
+    except Exception as exc:
+        log_info(f"⚠️ [kt00007] 주문참조 스냅샷 조회 실패: {exc}")
+
+    try:
+        rows.extend(
+            get_order_reference_snapshot_ka10076(
+                token,
+                qry_tp=qry_tp,
+                stk_bond_tp=stk_bond_tp,
+            )
+        )
+    except Exception as exc:
+        log_info(f"⚠️ [ka10076] 주문참조 스냅샷 조회 실패: {exc}")
+
+    dedup = {}
+    for row in rows:
+        key = (
+            row.get("code"),
+            row.get("side"),
+            _to_int_safe(row.get("qty")),
+            _to_int_safe(row.get("unit_price")),
+            str(row.get("ord_no", "")).strip(),
+            str(row.get("orig_ord_no", "")).strip(),
+        )
+        dedup[key] = row
+    return list(dedup.values())
+
+
+def find_order_reference_match(order_rows, *, code, side, qty, unit_price, max_price_diff=1):
+    """
+    주문참조 스냅샷에서 종목/매매구분/수량/체결단가 기준으로 일치 항목을 찾습니다.
+    """
+    target_code = normalize_stock_code(code)
+    target_side = _normalize_side(side)
+    target_qty = _to_int_safe(qty)
+    target_price = _to_int_safe(unit_price)
+
+    for row in order_rows or []:
+        if normalize_stock_code(row.get("code")) != target_code:
+            continue
+        if _normalize_side(row.get("side")) != target_side:
+            continue
+        if _to_int_safe(row.get("qty")) != target_qty:
+            continue
+        row_price = _to_int_safe(row.get("unit_price"))
+        if target_price > 0 and row_price > 0 and abs(row_price - target_price) > int(max_price_diff):
+            continue
+        return row
+    return None
+
 def get_industry_list_ka10101(token, market_type="0"):
     """
     [ka10101] 업종코드 리스트 조회

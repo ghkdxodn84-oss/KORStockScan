@@ -356,6 +356,70 @@ def test_periodic_account_sync_marks_legacy_broker_recovered_holding(monkeypatch
     assert sniper_sync.ACTIVE_TARGETS[0]["broker_recovered_execution_verified"] is True
 
 
+def test_periodic_account_sync_recovers_order_ref_when_kt00008_empty(monkeypatch):
+    legacy_watch = type(
+        "Record",
+        (),
+        {
+            "id": 160,
+            "rec_date": datetime(2026, 4, 10).date(),
+            "stock_code": "189300",
+            "stock_name": "인텔리안테크",
+            "status": "WATCHING",
+            "strategy": "SCALPING",
+            "trade_type": "SCALP",
+            "position_tag": "SCALP_BASE",
+            "buy_qty": 0,
+            "buy_price": 0.0,
+            "buy_time": None,
+            "scale_in_locked": False,
+        },
+    )()
+
+    sniper_sync.DB = _SyncDB([], [], [legacy_watch])
+    sniper_sync.ACTIVE_TARGETS = []
+    sniper_sync.HIGHEST_PRICES = {}
+    sniper_sync.STATE_LOCK = _DummyLock()
+    sniper_sync.EVENT_BUS = _Bus()
+    sniper_sync.KIWOOM_TOKEN = "very_long_real_token_for_test_enable_2nd_pass_0123456789"
+    sniper_sync.CONF = {
+        "ENABLE_ORDER_REF_2ND_PASS": True,
+        "BROKER_ORDER_REF_QRY_TP": "0",
+        "BROKER_ORDER_REF_STK_BOND_TP": "0",
+    }
+    monkeypatch.setattr(sniper_sync, "_recover_order_refs_from_logs", lambda code: {})
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_execution_snapshot_kt00008",
+        lambda token: [],
+    )
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_order_reference_snapshot_2nd_pass",
+        lambda token, qry_tp, stk_bond_tp: [
+            {
+                "code": "189300",
+                "side": "매수",
+                "qty": 7,
+                "unit_price": 133610,
+                "ord_no": "0412345",
+                "orig_ord_no": "0000000",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_utils,
+        "get_account_balance_kt00005",
+        lambda token: ([{"code": "189300", "name": "인텔리안테크", "qty": 7, "buy_price": 133610}], {"KRX"}),
+    )
+
+    sniper_sync.periodic_account_sync()
+
+    assert legacy_watch.status == "HOLDING"
+    assert sniper_sync.ACTIVE_TARGETS[0]["broker_recovered_execution_verified"] is True
+    assert sniper_sync.ACTIVE_TARGETS[0]["odno"] == "0412345"
+
+
 def test_ensure_runtime_target_recovers_order_refs_from_logs(monkeypatch):
     monkeypatch.setattr(sniper_sync, "_iter_recovery_log_paths", lambda: ["dummy.log"])
     monkeypatch.setattr(

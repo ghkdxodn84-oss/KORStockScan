@@ -170,23 +170,21 @@ def _publish_scalping_overnight_decision(stock_name, code, decision, action_take
     reason = decision.get('reason', '')
     risk_note = decision.get('risk_note', '')
     chosen = decision.get('action', 'SELL_TODAY')
-    esc_stock_name = escape_markdown(stock_name)
-    esc_code = escape_markdown(code)
-    esc_chosen = escape_markdown(chosen)
-    esc_action_taken = escape_markdown(action_taken)
-    esc_reason = escape_markdown(reason)
-    esc_risk_note = escape_markdown(risk_note)
+    chosen_ko = _humanize_eod_action(chosen)
+    action_ko = _clean_telegram_text(action_taken)
+    reason_ko = _clean_telegram_text(reason)
+    risk_note_ko = _clean_telegram_text(risk_note)
     msg = (
-        f"🌙 **[15:30 SCALPING EOD 판정]**\n"
-        f"종목: **{esc_stock_name} ({esc_code})**\n"
-        f"AI 결정: `{esc_chosen}` ({confidence}점)\n"
-        f"실행: `{esc_action_taken}`\n"
-        f"사유: {esc_reason}\n"
-        f"리스크: {esc_risk_note}"
+        "🌙 15:30 스캘핑 EOD 판정\n"
+        f"종목: {stock_name}({code})\n"
+        f"AI 결정: {chosen_ko} ({confidence}점)\n"
+        f"실행 결과: {action_ko}\n"
+        f"판단 사유: {reason_ko}\n"
+        f"리스크 메모: {risk_note_ko}"
     )
     event_bus.publish(
         'TELEGRAM_BROADCAST',
-        {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'}
+        {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': None}
     )
 
 
@@ -258,10 +256,37 @@ def _format_order_error(res) -> str:
         msg = str(res.get("return_msg") or "").strip()
         code = str(res.get("return_code") or "").strip()
         if msg and code:
-            return f"{msg} (code={code})"
+            return f"{_clean_telegram_text(msg)} (code={code})"
         if msg:
-            return msg
-    return str(res)
+            return _clean_telegram_text(msg)
+    return _clean_telegram_text(str(res))
+
+
+def _clean_telegram_text(text) -> str:
+    # Markdown 이스케이프 흔적(예: \\(, \\., \\])을 사람이 읽기 쉬운 일반 문자열로 복원
+    cleaned = str(text or "")
+    replacements = {
+        r"\(": "(",
+        r"\)": ")",
+        r"\[": "[",
+        r"\]": "]",
+        r"\.": ".",
+        r"\_": "_",
+        r"\-": "-",
+        r"\+": "+",
+    }
+    for src, dst in replacements.items():
+        cleaned = cleaned.replace(src, dst)
+    return cleaned
+
+
+def _humanize_eod_action(action) -> str:
+    normalized = str(action or "").upper().strip()
+    if normalized == "SELL_TODAY":
+        return "당일 청산"
+    if normalized == "HOLD_OVERNIGHT":
+        return "오버나이트 유지"
+    return str(action or "")
 
 
 def _execute_scalping_sell_today(record, mem_stock=None):
@@ -381,12 +406,14 @@ def run_scalping_overnight_gatekeeper(ai_engine=None):
 
     if event_bus and summary_rows:
         lines = [
-            "🌙 [15:30 SCALPING EOD 요약]",
+            "🌙 15:30 스캘핑 EOD 요약",
             f"대상: {len(summary_rows)} | 당일청산: {sell_count} | 오버나이트: {hold_count}",
         ]
         for row in summary_rows:
+            action_ko = _humanize_eod_action(row["action"])
+            note_ko = _clean_telegram_text(row["note"])
             lines.append(
-                f"- {row['name']}({row['code']}) | {row['action']} | {row['confidence']}점 | PnL {row['pnl_pct']:+.2f}% | {row['note']}"
+                f"- {row['name']}({row['code']}) | {action_ko} | 신뢰도 {row['confidence']}점 | 손익 {row['pnl_pct']:+.2f}% | {note_ko}"
             )
         event_bus.publish(
             'TELEGRAM_BROADCAST',

@@ -1003,6 +1003,8 @@ def build_trade_review_report(
     log_paths = [
         LOGS_DIR / "sniper_state_handlers_info.log",
         LOGS_DIR / "sniper_execution_receipts_info.log",
+        # HOLDING_PIPELINE 구조화 이벤트는 pipeline_event_logger에 우선 기록된다.
+        LOGS_DIR / "pipeline_event_logger_info.log",
     ]
     lines = _iter_target_lines(log_paths, target_date=target_date)
     all_events = [event for line in lines if (event := _parse_event(line))]

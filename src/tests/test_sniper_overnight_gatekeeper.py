@@ -1,7 +1,12 @@
 from sqlalchemy.orm.exc import DetachedInstanceError
 
 from src.database.models import RecommendationHistory
-from src.engine.sniper_overnight_gatekeeper import _format_order_error, _snapshot_record
+from src.engine.sniper_overnight_gatekeeper import (
+    _clean_telegram_text,
+    _format_order_error,
+    _humanize_eod_action,
+    _snapshot_record,
+)
 
 
 def test_snapshot_record_survives_detached_instance():
@@ -65,3 +70,14 @@ def test_format_order_error_prefers_return_msg_and_code():
 
 def test_format_order_error_fallback_to_string():
     assert _format_order_error("timeout") == "timeout"
+
+
+def test_format_order_error_unescapes_markdown_style_backslashes():
+    msg = _format_order_error({"return_msg": r"[2000]\(521790:주문 불가능합니다\.\)", "return_code": 20})
+    assert msg == "[2000](521790:주문 불가능합니다.) (code=20)"
+
+
+def test_humanize_eod_action_and_clean_text():
+    assert _humanize_eod_action("SELL_TODAY") == "당일 청산"
+    assert _humanize_eod_action("HOLD_OVERNIGHT") == "오버나이트 유지"
+    assert _clean_telegram_text(r"\[ABC\]\(test\)\.") == "[ABC](test)."
