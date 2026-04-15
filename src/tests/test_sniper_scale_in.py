@@ -2638,3 +2638,206 @@ def test_holding_shadow_band_logs_review_for_near_safe_profit(monkeypatch):
     assert shadow_logs[-1]["action"] == "review"
     assert shadow_logs[-1]["near_safe_profit"] is True
     assert shadow_logs[-1]["near_ai_exit"] is False
+
+
+# ─────────────────────────────────────────────
+#  reversal_add TC-1 ~ TC-10
+# ─────────────────────────────────────────────
+
+def _reversal_add_stock(overrides=None):
+    """정상 트리거 조건의 기본 stock 픽스처."""
+    base = {
+        "reversal_add_state": "STAGNATION",
+        "reversal_add_used": False,
+        "reversal_add_profit_floor": -0.30,
+        "reversal_add_ai_bottom": 42,
+        "reversal_add_ai_history": [44, 41, 42, 45],
+        "reversal_add_executed_at": 0.0,
+        "reversal_add_entry_avg_price": 0.0,
+        "last_reversal_features": {
+            "buy_pressure_10t": 60.0,
+            "tick_acceleration_ratio": 1.05,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": -2.0,
+        },
+    }
+    if overrides:
+        base.update(overrides)
+    return base
+
+
+def _reversal_add_rules(**kwargs):
+    """REVERSAL_ADD_ENABLED=True + 기본값을 적용한 TRADING_RULES 반환."""
+    from src.utils.constants import TRADING_RULES as CONFIG
+    return replace(
+        CONFIG,
+        REVERSAL_ADD_ENABLED=True,
+        REVERSAL_ADD_PNL_MIN=-0.45,
+        REVERSAL_ADD_PNL_MAX=-0.10,
+        REVERSAL_ADD_MIN_HOLD_SEC=20,
+        REVERSAL_ADD_MAX_HOLD_SEC=120,
+        REVERSAL_ADD_MIN_AI_SCORE=60,
+        REVERSAL_ADD_MIN_AI_RECOVERY_DELTA=15,
+        REVERSAL_ADD_MIN_BUY_PRESSURE=55.0,
+        REVERSAL_ADD_MIN_TICK_ACCEL=0.95,
+        REVERSAL_ADD_VWAP_BP_MIN=-5.0,
+        REVERSAL_ADD_STAGNATION_LOW_FLOOR_MARGIN=0.05,
+        **kwargs,
+    )
+
+
+# TC-1: 토글 OFF → 미트리거
+def test_reversal_add_tc1_toggle_off():
+    stock = _reversal_add_stock()
+    result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.25, current_ai_score=65, held_sec=50)
+    assert result["should_add"] is False
+    assert result["reason"] == "reversal_add_disabled"
+
+
+# TC-2: PnL 범위 이탈 → 미트리거
+def test_reversal_add_tc2_pnl_out_of_range():
+    stock = _reversal_add_stock()
+    from src.utils.constants import TRADING_RULES as CONFIG
+    scale_in.TRADING_RULES = _reversal_add_rules()
+    try:
+        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.55, current_ai_score=65, held_sec=50)
+        assert result["should_add"] is False
+        assert "pnl_out_of_range" in result["reason"]
+    finally:
+        scale_in.TRADING_RULES = CONFIG
+
+
+# TC-3: AI 고착 저점 (std ≤ 2, avg < 45) → 차단
+def test_reversal_add_tc3_ai_stuck_at_bottom():
+    stock = _reversal_add_stock({
+        "reversal_add_ai_history": [40, 41, 40, 41],
+        "reversal_add_ai_bottom": 35,
+    })
+    from src.utils.constants import TRADING_RULES as CONFIG
+    scale_in.TRADING_RULES = _reversal_add_rules()
+    try:
+        # ai_bottom=35, current=35+15=50 → recovering_delta OK, but avg(40,41,40,41)=40.5 < 45, std≈0.5 ≤ 2 → stuck
+        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.25, current_ai_score=62, held_sec=50)
+        assert result["should_add"] is False
+        assert result["reason"] == "ai_stuck_at_bottom"
+    finally:
+        scale_in.TRADING_RULES = CONFIG
+
+
+# TC-4: AI 회복 없음 (바닥 대비 +14pt, 직전 2틱도 상승 아님) → 차단
+def test_reversal_add_tc4_ai_not_recovering():
+    stock = _reversal_add_stock({
+        "reversal_add_ai_bottom": 50,
+        # ai_hist[-1]=53, ai_hist[-2]=55 → 53 > 55 = False → 2연속 상승 아님
+        "reversal_add_ai_history": [50, 52, 55, 53],
+    })
+    from src.utils.constants import TRADING_RULES as CONFIG
+    scale_in.TRADING_RULES = _reversal_add_rules()
+    try:
+        # recovering_delta: 64 >= 50+15=65 → False
+        # recovering_consec: ai_hist[-1]=53 > ai_hist[-2]=55 → False
+        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.25, current_ai_score=64, held_sec=50)
+        assert result["should_add"] is False
+        assert result["reason"] == "ai_not_recovering"
+    finally:
+        scale_in.TRADING_RULES = CONFIG
+
+
+# TC-5: 수급 조건 2/4 충족 → 차단
+def test_reversal_add_tc5_supply_conditions_not_met():
+    stock = _reversal_add_stock({
+        "reversal_add_ai_bottom": 42,
+        "reversal_add_ai_history": [42, 44, 50, 55],
+        "last_reversal_features": {
+            "buy_pressure_10t": 40.0,        # 실패
+            "tick_acceleration_ratio": 1.10,  # 통과
+            "large_sell_print_detected": False,  # 통과
+            "curr_vs_micro_vwap_bp": -10.0,  # 실패
+        },
+    })
+    from src.utils.constants import TRADING_RULES as CONFIG
+    scale_in.TRADING_RULES = _reversal_add_rules()
+    try:
+        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.25, current_ai_score=65, held_sec=50)
+        assert result["should_add"] is False
+        assert "supply_conditions_not_met" in result["reason"]
+    finally:
+        scale_in.TRADING_RULES = CONFIG
+
+
+# TC-6: 정상 조건 모두 충족 → 트리거
+def test_reversal_add_tc6_all_conditions_met():
+    stock = _reversal_add_stock({
+        "reversal_add_ai_bottom": 42,
+        "reversal_add_ai_history": [42, 44, 50, 58],
+    })
+    from src.utils.constants import TRADING_RULES as CONFIG
+    scale_in.TRADING_RULES = _reversal_add_rules()
+    try:
+        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.25, current_ai_score=65, held_sec=50)
+        assert result["should_add"] is True
+        assert result["add_type"] == "AVG_DOWN"
+        assert result["reason"] == "reversal_add_ok"
+    finally:
+        scale_in.TRADING_RULES = CONFIG
+
+
+# TC-7: reversal_add_used = True → 재트리거 없음
+def test_reversal_add_tc7_already_used():
+    stock = _reversal_add_stock({"reversal_add_used": True})
+    from src.utils.constants import TRADING_RULES as CONFIG
+    scale_in.TRADING_RULES = _reversal_add_rules()
+    try:
+        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.25, current_ai_score=65, held_sec=50)
+        assert result["should_add"] is False
+        assert result["reason"] == "reversal_add_used"
+    finally:
+        scale_in.TRADING_RULES = CONFIG
+
+
+# TC-8: 저점 갱신 → 차단
+def test_reversal_add_tc8_low_broken():
+    stock = _reversal_add_stock({
+        "reversal_add_profit_floor": -0.30,
+    })
+    from src.utils.constants import TRADING_RULES as CONFIG
+    scale_in.TRADING_RULES = _reversal_add_rules()
+    try:
+        # floor=-0.30, margin=0.05 → -0.30 - 0.05 = -0.35, profit_rate=-0.40 < -0.35 → low_broken
+        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.40, current_ai_score=65, held_sec=50)
+        assert result["should_add"] is False
+        assert result["reason"] == "low_broken"
+    finally:
+        scale_in.TRADING_RULES = CONFIG
+
+
+# TC-9: hold_sec 범위 이탈 → 차단
+def test_reversal_add_tc9_hold_sec_out_of_range():
+    stock = _reversal_add_stock()
+    from src.utils.constants import TRADING_RULES as CONFIG
+    scale_in.TRADING_RULES = _reversal_add_rules()
+    try:
+        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.25, current_ai_score=65, held_sec=5)
+        assert result["should_add"] is False
+        assert "hold_sec_out_of_range" in result["reason"]
+    finally:
+        scale_in.TRADING_RULES = CONFIG
+
+
+# TC-10: _extract_scalping_features 없는 엔진 → buy_pressure만으로 판단 (feat={} 시)
+def test_reversal_add_tc10_no_features_engine_buy_pressure_only():
+    # last_reversal_features가 비어있는 경우 buy_pressure 기본값(50)으로 판단 → 55 미만 → 차단
+    stock = _reversal_add_stock({
+        "last_reversal_features": {},
+        "reversal_add_ai_bottom": 42,
+        "reversal_add_ai_history": [42, 44, 50, 58],
+    })
+    from src.utils.constants import TRADING_RULES as CONFIG
+    scale_in.TRADING_RULES = _reversal_add_rules()
+    try:
+        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.25, current_ai_score=65, held_sec=50)
+        # feat={} 이면 else 분기: buy_pressure_10t=50.0 < 55 → buy_pressure_not_met
+        assert result["should_add"] is False
+        assert result["reason"] == "buy_pressure_not_met(no_features)"
+    finally:
+        scale_in.TRADING_RULES = CONFIG

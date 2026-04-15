@@ -188,6 +188,23 @@ class TradingConfig:
     SCALP_TRAILING_LIMIT_STRONG = 0.8  # 💡 [신규] AI 점수가 75점 이상(수급 폭발)일 때 허용하는 고점 대비 눌림폭 (%)
     SCALP_TRAILING_LIMIT_WEAK = 0.4    # 💡 [신규] AI 점수가 75점 미만(수급 애매)일 때 타이트하게 끊어내는 고점 대비 눌림폭 (%)
 
+    # ── reversal_add ────────────────────────────────────────
+    REVERSAL_ADD_ENABLED: bool = False             # 역전 확인 추가매수 토글
+    REVERSAL_ADD_PNL_MIN: float = -0.45            # 허용 손실 하한 (%)
+    REVERSAL_ADD_PNL_MAX: float = -0.10            # 허용 손실 상한 (%)
+    REVERSAL_ADD_MIN_HOLD_SEC: int = 20            # 최소 보유시간(초)
+    REVERSAL_ADD_MAX_HOLD_SEC: int = 120           # 최대 보유시간(초)
+    REVERSAL_ADD_MIN_AI_SCORE: int = 60            # 실행 직전 최소 AI 점수
+    REVERSAL_ADD_MIN_AI_RECOVERY_DELTA: int = 15   # AI bottom 대비 최소 회복폭
+    REVERSAL_ADD_MIN_BUY_PRESSURE: float = 55.0    # 최소 매수 압도율(%)
+    REVERSAL_ADD_MIN_TICK_ACCEL: float = 0.95      # 최소 틱 가속도 비율
+    REVERSAL_ADD_VWAP_BP_MIN: float = -5.0         # 최소 Micro-VWAP 대비 (bp)
+    REVERSAL_ADD_SIZE_RATIO: float = 0.33          # 추가매수 수량 비율 (기존 보유 대비)
+    REVERSAL_ADD_POST_EVAL_SEC: int = 25           # POST_ADD_EVAL 감시 시간(초)
+    REVERSAL_ADD_SESSION_CUTOFF: str = "14:30"     # 허용 시간대 상한
+    REVERSAL_ADD_BOX_RANGE_MAX_PCT: float = 0.20   # 박스 폭 허용 최대치 (%p)
+    REVERSAL_ADD_STAGNATION_LOW_FLOOR_MARGIN: float = 0.05  # 저점 미갱신 허용 마진 (%p)
+
     # 💡 [신규] 코스닥 스캐너 설정
     KOSDAQ_TARGET: float = 4.0  # 코스닥은 조금 더 높게 목표 (예: 4.0%)
     KOSDAQ_STOP: float = -2.5  # 타이트한 칼손절 적용

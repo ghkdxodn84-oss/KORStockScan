@@ -155,6 +155,94 @@ def evaluate_swing_pyramid(stock, profit_rate, peak_profit):
     return result
 
 
+def evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_sec):
+    """
+    역전 확인 추가매수(reversal_add) 평가.
+    저점 미갱신 + AI 회복 + 수급 재개가 동시 확인될 때 1회 실행.
+    """
+    import statistics as _statistics
+
+    result = _base_result()
+
+    if not getattr(TRADING_RULES, 'REVERSAL_ADD_ENABLED', False):
+        result["reason"] = "reversal_add_disabled"
+        return result
+
+    if stock.get('reversal_add_used'):
+        result["reason"] = "reversal_add_used"
+        return result
+
+    pnl_min = float(getattr(TRADING_RULES, 'REVERSAL_ADD_PNL_MIN', -0.45))
+    pnl_max = float(getattr(TRADING_RULES, 'REVERSAL_ADD_PNL_MAX', -0.10))
+    if not (pnl_min <= profit_rate <= pnl_max):
+        result["reason"] = f"pnl_out_of_range({profit_rate:.2f})"
+        return result
+
+    min_hold = int(getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_HOLD_SEC', 20))
+    max_hold = int(getattr(TRADING_RULES, 'REVERSAL_ADD_MAX_HOLD_SEC', 120))
+    if not (min_hold <= held_sec <= max_hold):
+        result["reason"] = f"hold_sec_out_of_range({held_sec}s)"
+        return result
+
+    # 저점 미갱신 확인
+    floor = float(stock.get('reversal_add_profit_floor', 0.0))
+    margin = float(getattr(TRADING_RULES, 'REVERSAL_ADD_STAGNATION_LOW_FLOOR_MARGIN', 0.05))
+    if profit_rate < floor - margin:
+        result["reason"] = "low_broken"
+        return result
+
+    # AI 점수 최소 기준
+    min_ai = int(getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_AI_SCORE', 60))
+    if current_ai_score < min_ai:
+        result["reason"] = f"ai_score_too_low({current_ai_score})"
+        return result
+
+    # AI 회복 방향성 (바닥 대비 +15pt OR 2연속 상승)
+    ai_bottom = int(stock.get('reversal_add_ai_bottom', 100))
+    recovery_delta = int(getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_AI_RECOVERY_DELTA', 15))
+    ai_hist = list(stock.get('reversal_add_ai_history', []))
+    recovering_delta = (current_ai_score >= ai_bottom + recovery_delta)
+    recovering_consec = (len(ai_hist) >= 2 and ai_hist[-1] > ai_hist[-2] and current_ai_score > ai_hist[-1])
+    if not (recovering_delta or recovering_consec):
+        result["reason"] = "ai_not_recovering"
+        return result
+
+    # AI 고착 저점 차단
+    if len(ai_hist) >= 4:
+        try:
+            std = _statistics.stdev(ai_hist)
+            avg = sum(ai_hist) / len(ai_hist)
+            if std <= 2 and avg < 45:
+                result["reason"] = "ai_stuck_at_bottom"
+                return result
+        except Exception:
+            pass
+
+    # 수급 재개 조건 (4개 중 3개, 피처 없으면 buy_pressure만 확인)
+    feat = stock.get('last_reversal_features', {})
+    if feat:
+        checks = [
+            feat.get('buy_pressure_10t', 0) >= getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_BUY_PRESSURE', 55),
+            feat.get('tick_acceleration_ratio', 0) >= getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_TICK_ACCEL', 0.95),
+            not feat.get('large_sell_print_detected', True),
+            feat.get('curr_vs_micro_vwap_bp', -999) >= getattr(TRADING_RULES, 'REVERSAL_ADD_VWAP_BP_MIN', -5.0),
+        ]
+        if sum(checks) < 3:
+            result["reason"] = f"supply_conditions_not_met({sum(checks)}/4)"
+            return result
+    else:
+        # 피처 미사용 엔진: buy_pressure만 확인
+        bp = float(stock.get('last_reversal_features', {}).get('buy_pressure_10t', 50.0))
+        if bp < getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_BUY_PRESSURE', 55):
+            result["reason"] = "buy_pressure_not_met(no_features)"
+            return result
+
+    result["should_add"] = True
+    result["add_type"] = "AVG_DOWN"
+    result["reason"] = "reversal_add_ok"
+    return result
+
+
 def calc_scale_in_qty(stock, curr_price, deposit, add_type, strategy):
     """
     추가매수 수량 계산 (1차 보수적 템플릿).

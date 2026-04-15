@@ -28,6 +28,7 @@ from src.engine.sniper_scale_in import (
     evaluate_scalping_pyramid,
     evaluate_swing_avg_down,
     evaluate_swing_pyramid,
+    evaluate_scalping_reversal_add,
     calc_scale_in_qty,
 )
 from src.engine.sniper_scale_in_utils import record_add_history_event
@@ -3126,6 +3127,53 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                         stock['last_ai_market_snapshot'] = market_snapshot
                         stock['last_ai_market_signature_at'] = review_completed_ts
 
+                        # reversal_add: 수급 피처 저장 및 STAGNATION 상태 갱신
+                        if getattr(TRADING_RULES, 'REVERSAL_ADD_ENABLED', False):
+                            if hasattr(ai_engine, '_extract_scalping_features') and recent_ticks:
+                                try:
+                                    feat = ai_engine._extract_scalping_features(ws_data, recent_ticks, recent_candles)
+                                    stock['last_reversal_features'] = {
+                                        'buy_pressure_10t': feat.get('buy_pressure_10t', 50.0),
+                                        'tick_acceleration_ratio': feat.get('tick_acceleration_ratio', 0.0),
+                                        'large_sell_print_detected': feat.get('large_sell_print_detected', False),
+                                        'curr_vs_micro_vwap_bp': feat.get('curr_vs_micro_vwap_bp', 0.0),
+                                    }
+                                except Exception:
+                                    pass
+
+                            # AI bottom/history 갱신 (STAGNATION/REVERSAL_CANDIDATE 구간에서만)
+                            if stock.get('reversal_add_state') in ('STAGNATION', 'REVERSAL_CANDIDATE'):
+                                _ra_hist = list(stock.get('reversal_add_ai_history', []))
+                                _ra_hist.append(current_ai_score)
+                                stock['reversal_add_ai_history'] = _ra_hist[-4:]
+                                stock['reversal_add_ai_bottom'] = min(
+                                    int(stock.get('reversal_add_ai_bottom', 100)),
+                                    current_ai_score,
+                                )
+                                stock['reversal_add_profit_floor'] = min(
+                                    float(stock.get('reversal_add_profit_floor', 0.0)),
+                                    profit_rate,
+                                )
+
+                            # STAGNATION 진입 판단
+                            _ra_pnl_min = float(getattr(TRADING_RULES, 'REVERSAL_ADD_PNL_MIN', -0.45))
+                            _ra_pnl_max = float(getattr(TRADING_RULES, 'REVERSAL_ADD_PNL_MAX', -0.10))
+                            if (not stock.get('reversal_add_used')
+                                    and not stock.get('reversal_add_state')
+                                    and _ra_pnl_min <= profit_rate <= _ra_pnl_max
+                                    and ai_low_score_hits == 0):
+                                stock['reversal_add_state'] = 'STAGNATION'
+                                stock['reversal_add_profit_floor'] = profit_rate
+                                stock['reversal_add_ai_bottom'] = current_ai_score
+                                stock['reversal_add_ai_history'] = [current_ai_score]
+                            # STAGNATION 리셋 조건
+                            elif stock.get('reversal_add_state') == 'STAGNATION':
+                                if profit_rate < _ra_pnl_min or profit_rate > 0 or ai_low_score_hits > 0:
+                                    stock['reversal_add_state'] = ''
+                                    stock['reversal_add_profit_floor'] = 0.0
+                                    stock['reversal_add_ai_bottom'] = 100
+                                    stock['reversal_add_ai_history'] = []
+
                         print(
                             f"👁️ [AI 보유감시: {stock['name']}] 수익: {profit_rate:+.2f}% | "
                             f"AI: {current_ai_score:.0f}점 | 하방카운트: {ai_low_score_hits}/{ai_exit_needed_hits} | "
@@ -3155,6 +3203,31 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                 log_info(f"🚨 [보유 AI 감시 에러] {stock['name']}({code}): {e}")
             finally:
                 LAST_AI_CALL_TIMES[code] = time.time()
+
+    # ── reversal_add POST_ADD_EVAL 집중 감시 ──────────────────
+    if not is_sell_signal and stock.get('reversal_add_state') == 'POST_ADD_EVAL':
+        _ra_executed_at = float(stock.get('reversal_add_executed_at', 0))
+        _ra_eval_sec = int(getattr(TRADING_RULES, 'REVERSAL_ADD_POST_EVAL_SEC', 25))
+        _ra_elapsed = time.time() - _ra_executed_at
+        _ra_feat = stock.get('last_reversal_features', {})
+        _ra_floor = float(stock.get('reversal_add_profit_floor', -1.0))
+        _ra_post_fail = (
+            current_ai_score < 55
+            or profit_rate < _ra_floor - 0.05
+            or _ra_feat.get('large_sell_print_detected', False)
+            or _ra_feat.get('tick_acceleration_ratio', 1.0) < 0.90
+        )
+        if _ra_post_fail and _ra_elapsed < _ra_eval_sec:
+            is_sell_signal = True
+            sell_reason_type = "LOSS"
+            reason = (
+                f"🚨 reversal_add POST_EVAL 실패 "
+                f"(AI:{current_ai_score:.0f}, profit:{profit_rate:.2f}%, "
+                f"elapsed:{_ra_elapsed:.0f}s)"
+            )
+            exit_rule = "reversal_add_post_eval_fail"
+        elif _ra_elapsed >= _ra_eval_sec:
+            stock['reversal_add_state'] = ""  # 일반 HOLDING 복귀
 
     if hard_stop_price > 0 and curr_p <= hard_stop_price:
         is_sell_signal = True
@@ -3654,6 +3727,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             peak_profit=peak_profit,
             curr_price=curr_p,
             ws_data=ws_data,
+            current_ai_score=current_ai_score,
+            held_sec=held_sec,
         )
         if scale_in_action:
             log_info(
@@ -3663,13 +3738,17 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                 f"reason={scale_in_action.get('reason')} "
                 f"profit={profit_rate:+.2f}% peak={peak_profit:+.2f}%"
             )
-            _process_scale_in_action(
+            add_result = _process_scale_in_action(
                 stock=stock,
                 code=code,
                 ws_data=ws_data,
                 action=scale_in_action,
                 admin_id=admin_id,
             )
+            if add_result and scale_in_action.get("reason") == "reversal_add_ok":
+                stock['reversal_add_used'] = True
+                stock['reversal_add_state'] = "POST_ADD_EVAL"
+                stock['reversal_add_executed_at'] = time.time()
             return
     else:
         last_block = float(stock.get('last_add_block_log_ts', 0) or 0)
@@ -3990,6 +4069,8 @@ def _evaluate_scale_in_signal(
     peak_profit,
     curr_price,
     ws_data,
+    current_ai_score=50,
+    held_sec=0,
 ):
     """전략별 추가매수 시그널 평가 (퍼센트 기반 1차 버전)."""
     _ = (ws_data,)
@@ -4005,6 +4086,12 @@ def _evaluate_scale_in_signal(
 
         avg_down = evaluate_scalping_avg_down(stock, profit_rate)
         pyramid = evaluate_scalping_pyramid(stock, profit_rate, peak_profit, is_new_high)
+
+        # reversal_add: 가격낙폭/불타기 모두 미트리거인 경우에만 검토
+        if not avg_down.get("should_add") and not pyramid.get("should_add"):
+            reversal = evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_sec)
+            if reversal.get("should_add"):
+                avg_down = reversal
     elif raw_strategy in ('KOSPI_ML', 'KOSDAQ_ML'):
         avg_down = evaluate_swing_avg_down(stock, profit_rate, market_regime)
         pyramid = evaluate_swing_pyramid(stock, profit_rate, peak_profit)
