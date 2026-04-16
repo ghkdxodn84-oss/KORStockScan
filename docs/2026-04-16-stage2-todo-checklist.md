@@ -57,6 +57,7 @@
 - [ ] `운영반영 로직 정상동작 확인 (진입/보유/청산 라우팅)`
 - [ ] `퍼널 병목(`budget_pass -> submitted`) 재확인 및 blocker 분포 확인`
 - [ ] `체결품질(full/partial 분리) 및 sync mismatch 추적`
+- [ ] `관찰축 5: add_judgment_locked blocker 분포 추적 (종목/시간대/정체코호트)`
 - [ ] `Gatekeeper/holding 지연 지표 확인 (실운영 기준)`
 - [ ] `원격 스캘핑+조건검색 모델 적용 상태 점검`
 - [ ] `이상징후 발생 시 즉시 수정 또는 롤백 가드 실행`
@@ -66,6 +67,7 @@
 - [ ] `운영반영 결과 요약 작성 (거래수/퍼널/blocker/체결품질 우선)`
 - [ ] `COMPLETED + valid profit_rate 기준으로 손익 집계`
 - [ ] `full fill / partial fill 분리 성과표 기록`
+- [ ] `관찰축 5 결과 기록: add_blocked_lock_count_by_stock / timebucket / held_sec 코호트`
 - [ ] `scalping_exit 액션스키마 분리 포함여부 최종 확정 기록`
 - [ ] `미포함 시 차기 plan에 검토항목 고정`
 - [ ] `[Checklist0416] 모델별 A/B 테스트 별도 시나리오 초안 backlog 등록` (`Due: 2026-04-17`, `Slot: PREOPEN`, `TimeWindow: 08:00~08:30`)
@@ -88,16 +90,16 @@
 - [2026-04-15-performance-review-followup.md](./2026-04-15-performance-review-followup.md)
 
 <!-- AUTO_SERVER_COMPARISON_START -->
-### 본서버 vs songstockscan 자동 비교 (`2026-04-16 12:01:03`)
+### 본서버 vs songstockscan 자동 비교 (`2026-04-16 12:51:34`)
 
 - 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
 - 상세 리포트: `data/report/server_comparison/server_comparison_2026-04-16.md`
 - `Trade Review`: status=`ok`, differing_safe_metrics=`7`
-  - holding_events local=1739 remote=689 delta=-1050.0; completed_trades local=9 remote=25 delta=16.0; total_trades local=14 remote=26 delta=12.0
+  - holding_events local=3360 remote=96 delta=-3264.0; completed_trades local=12 remote=26 delta=14.0; expired_rows local=145 remote=159 delta=14.0
 - `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
   - safe 기준 차이 없음
 - `Post Sell Feedback`: status=`ok`, differing_safe_metrics=`2`
-  - total_candidates local=9 remote=24 delta=15.0; evaluated_candidates local=9 remote=24 delta=15.0
-- `Entry Pipeline Flow`: status=`ok`, differing_safe_metrics=`2`
-  - total_events local=261136 remote=271146 delta=10010.0; blocked_stocks local=23 remote=18 delta=-5.0
+  - total_candidates local=11 remote=25 delta=14.0; evaluated_candidates local=11 remote=25 delta=14.0
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
 <!-- AUTO_SERVER_COMPARISON_END -->

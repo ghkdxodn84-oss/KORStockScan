@@ -11,13 +11,13 @@
 
 | metric | local | remote | delta(remote-local) |
 | --- | ---: | ---: | ---: |
-| `total_trades` | `14` | `26` | `12.0` |
-| `completed_trades` | `9` | `25` | `16.0` |
-| `open_trades` | `5` | `1` | `-4.0` |
-| `holding_events` | `1739` | `689` | `-1050.0` |
-| `all_rows` | `170` | `182` | `12.0` |
-| `entered_rows` | `14` | `26` | `12.0` |
-| `expired_rows` | `125` | `130` | `5.0` |
+| `total_trades` | `19` | `28` | `9.0` |
+| `completed_trades` | `12` | `26` | `14.0` |
+| `open_trades` | `7` | `2` | `-5.0` |
+| `holding_events` | `3360` | `96` | `-3264.0` |
+| `all_rows` | `195` | `208` | `13.0` |
+| `entered_rows` | `19` | `28` | `9.0` |
+| `expired_rows` | `145` | `159` | `14.0` |
 
 ## Performance Tuning
 - status: `remote_error`
@@ -31,31 +31,10 @@
 
 | metric | local | remote | delta(remote-local) |
 | --- | ---: | ---: | ---: |
-| `total_candidates` | `9` | `24` | `15.0` |
-| `evaluated_candidates` | `9` | `24` | `15.0` |
+| `total_candidates` | `11` | `25` | `14.0` |
+| `evaluated_candidates` | `11` | `25` | `14.0` |
 
 ## Entry Pipeline Flow
-- status: `ok`
+- status: `remote_error`
 - remote_url: `https://songstockscan.ddns.net/api/entry-pipeline-flow?date=2026-04-16&since=09:00:00&top=10`
-
-| metric | local | remote | delta(remote-local) |
-| --- | ---: | ---: | ---: |
-| `total_events` | `261136` | `271146` | `10010.0` |
-| `tracked_stocks` | `151` | `151` | `0.0` |
-| `submitted_stocks` | `0` | `0` | `0.0` |
-| `blocked_stocks` | `23` | `18` | `-5.0` |
-| `waiting_stocks` | `0` | `0` | `0.0` |
-
-- local_latest_stage_breakdown:
-  - `name=strength_momentum_observed, count=104`
-  - `name=blocked_overbought, count=13`
-  - `name=watching_shared_prompt_shadow, count=12`
-  - `name=strength_momentum_pass, count=6`
-  - `name=partial_fill_reconciled, count=6`
-
-- remote_latest_stage_breakdown:
-  - `name=strength_momentum_observed, count=106`
-  - `name=watching_shared_prompt_shadow, count=16`
-  - `name=blocked_overbought, count=14`
-  - `name=strength_momentum_pass, count=8`
-  - `name=blocked_gatekeeper_reject, count=4`
+- remote_error: `TimeoutError: The read operation timed out`

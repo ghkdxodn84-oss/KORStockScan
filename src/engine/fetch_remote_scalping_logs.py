@@ -30,6 +30,7 @@ def _build_optional_snapshot_paths(remote_root: str, target_date: str) -> list[s
         f"{remote_root}/data/report/monitor_snapshots/trade_review_{target_date}.json",
         f"{remote_root}/data/report/monitor_snapshots/post_sell_feedback_{target_date}.json",
         f"{remote_root}/data/report/monitor_snapshots/performance_tuning_{target_date}.json",
+        f"{remote_root}/data/report/monitor_snapshots/add_blocked_lock_{target_date}.json",
     ]
 
 

@@ -36,6 +36,7 @@
 | partial fill canary 1차 정리 | 완료. canary on 유지, 효과판정은 원격 표본 추가 필요 | 중간 | 낮음 | main은 체결품질 코호트 확보, 원격은 기존 운영 로그 기준 추가 관찰 |
 | RELAX-LATENCY 유지 점검 | 완료. 전일 결론 유지 | 낮음(변경 없음) | 낮음(변경 없음) | 체크리스트/로그 상 신규 완화 미적용 |
 | 기존 관찰축 최소 유지 | 완료 | 낮음(집중도 개선) | 낮음(집중도 개선) | 4축( dynstr/partial/shadow/expired )로 수렴 |
+| 관찰축 5 승격 준비 (`add_judgment_locked`) | 완료(축 정의/집계기준 확정) | 중간(보유 정체 코호트 원인 귀속 강화) | 중간(동일) | `ADD_BLOCKED reason=add_judgment_locked` 종목/시간대/정체코호트 집계 기준 확정 |
 | expired_armed 전수 분포 재확인 | 완료 | 중간(병목 가시화) | 중간(병목 가시화) | main 374, remote 394 / after_wait 편중 |
 | expired_armed 설계 문서 작성 | 완료 | 중간(익일 의사결정 품질 향상) | 중간(동일) | [2026-04-15-expired-armed-design.md](./2026-04-15-expired-armed-design.md) |
 | AIPrompt 작업5 분리 검증축 확인 | 완료(진행 중) | 낮음(표본 1건) | 중간(표본 22건) | shadow 로그(`watching_shared_prompt_shadow`) |

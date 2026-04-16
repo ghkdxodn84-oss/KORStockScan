@@ -198,6 +198,7 @@ def archive_target_date_logs(target_date: str, log_paths: Iterable[Path]) -> lis
 
 
 def save_monitor_snapshots_for_date(target_date: str) -> dict[str, str]:
+    from src.engine.add_blocked_lock_report import build_add_blocked_lock_report
     from src.engine.buy_pause_guard import evaluate_buy_pause_guard
     from src.engine.sniper_missed_entry_counterfactual import build_missed_entry_counterfactual_report
     from src.engine.sniper_performance_tuning_report import build_performance_tuning_report
@@ -235,21 +236,28 @@ def save_monitor_snapshots_for_date(target_date: str) -> dict[str, str]:
     missed_entry_counterfactual.setdefault("meta", {})
     missed_entry_counterfactual["meta"]["saved_snapshot_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     missed_entry_counterfactual["meta"]["snapshot_kind"] = "missed_entry_counterfactual"
+    add_blocked_lock = build_add_blocked_lock_report(target_date=target_date)
+    add_blocked_lock.setdefault("meta", {})
+    add_blocked_lock["meta"]["saved_snapshot_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    add_blocked_lock["meta"]["snapshot_kind"] = "add_blocked_lock"
     buy_pause_guard = evaluate_buy_pause_guard(target_date, send_alert=True)
     trade_review["meta"]["buy_pause_guard"] = buy_pause_guard
     performance_tuning["meta"]["buy_pause_guard"] = buy_pause_guard
     post_sell_feedback["meta"]["buy_pause_guard"] = buy_pause_guard
     missed_entry_counterfactual["meta"]["buy_pause_guard"] = buy_pause_guard
+    add_blocked_lock["meta"]["buy_pause_guard"] = buy_pause_guard
 
     trade_review_path = save_monitor_snapshot("trade_review", target_date, trade_review)
     performance_path = save_monitor_snapshot("performance_tuning", target_date, performance_tuning)
     post_sell_path = save_monitor_snapshot("post_sell_feedback", target_date, post_sell_feedback)
     missed_entry_counterfactual_path = save_monitor_snapshot("missed_entry_counterfactual", target_date, missed_entry_counterfactual)
+    add_blocked_lock_path = save_monitor_snapshot("add_blocked_lock", target_date, add_blocked_lock)
     result = {
         "trade_review": str(trade_review_path),
         "performance_tuning": str(performance_path),
         "post_sell_feedback": str(post_sell_path),
         "missed_entry_counterfactual": str(missed_entry_counterfactual_path),
+        "add_blocked_lock": str(add_blocked_lock_path),
     }
     try:
         server_comparison = _save_server_comparison_artifacts(target_date)
