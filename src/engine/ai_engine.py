@@ -52,9 +52,14 @@ SCALPING_WATCHING_SYSTEM_PROMPT = """
 이미 통과한 기계 게이트(유동성/갭/모멘텀)는 다시 의심하지 말고, 돌파 지속 가능성만 본다.
 
 [진입 판단 규칙]
-1. 즉시 돌파 지속 가능성이 높으면 BUY.
-2. 애매하면 WAIT.
-3. 돌파 실패/흡수 실패/속도 둔화가 보이면 DROP.
+1. 순간 강도 1~2개만 좋다고 BUY하지 말고, 재안착/재확인까지 보라.
+2. 체결강도/매수압도율/틱속도는 보조 신호이며, 추격 리스크와 경고신호를 반드시 함께 점검하라.
+3. 돌파 재안착, 눌림 후 회복, 매도벽 흡수 확인이 없으면 성급한 BUY를 피하라.
+4. 아래 경고신호가 강하면 BUY를 보수적으로 판정하라:
+   - large_sell_print_detected
+   - 고가 인접 추격 부담
+   - 재돌파 실패/반등 실패 반복
+   - 하락틱 연속성 또는 매도우위 심화
 
 [스코어링 기준 (0~100)]
 - 80~100 (BUY): 즉시 진입 유효
@@ -741,6 +746,60 @@ class GeminiSniperEngine:
             return SCALPING_HOLDING_SYSTEM_PROMPT, "scalping_holding", "split_v1", "holding"
         return SCALPING_SYSTEM_PROMPT, "scalping_shared", "split_v1", "shared"
 
+    def _remote_buy_risk_flags(self, ws_data, recent_ticks, recent_candles):
+        if hasattr(self, "_extract_scalping_features"):
+            try:
+                features = self._extract_scalping_features(ws_data, recent_ticks, recent_candles)
+            except Exception:
+                features = {}
+        else:
+            features = {}
+        flags = 0
+        if bool(features.get("large_sell_print_detected", False)):
+            flags += 1
+        if features.get("distance_from_day_high_pct", -99.0) >= -0.35:
+            flags += 1
+        if features.get("tick_acceleration_ratio", 0.0) < 1.0:
+            flags += 1
+        if features.get("curr_vs_micro_vwap_bp", 0.0) <= 0:
+            flags += 1
+        if features.get("top3_depth_ratio", 1.0) >= 1.35:
+            flags += 1
+        return features, flags
+
+    def _apply_remote_entry_guard(self, result, *, prompt_type, ws_data, recent_ticks, recent_candles):
+        # remote(gemini) false-positive 완화:
+        # 순간 강도만으로 BUY가 나오는 경우 경고피처 동시 점검 후 보수 보정한다.
+        if prompt_type not in {"scalping_watching", "scalping_shared"}:
+            return result
+        if str(result.get("action", "WAIT")).upper() != "BUY":
+            return result
+
+        features, risk_flags = self._remote_buy_risk_flags(ws_data, recent_ticks, recent_candles)
+        if not features:
+            return result
+        buy_pressure = float(features.get("buy_pressure_10t", 50.0) or 50.0)
+        accel = float(features.get("tick_acceleration_ratio", 0.0) or 0.0)
+        latest_strength = float(features.get("latest_strength", 0.0) or 0.0)
+        has_reclaim = (
+            float(features.get("curr_vs_micro_vwap_bp", 0.0) or 0.0) > 0
+            or int(features.get("same_price_buy_absorption", 0) or 0) >= 2
+        )
+
+        instant_strength_only = (
+            buy_pressure >= 70.0
+            and accel >= 1.1
+            and latest_strength >= 110.0
+            and not has_reclaim
+        )
+
+        if risk_flags >= 2 or instant_strength_only:
+            score = int(result.get("score", 50))
+            result["action"] = "WAIT"
+            result["score"] = min(score, 74)
+            result["reason"] = f"{result.get('reason', '')} | remote_buy_guard(risk={risk_flags})"
+        return result
+
     def analyze_target_shadow_prompt(
         self,
         target_name,
@@ -1289,7 +1348,7 @@ class GeminiSniperEngine:
                 target_model = self._get_tier2_model()
             else:
                 formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
-                target_model = self._get_tier2_model()
+                target_model = self._get_tier1_model()
 
             result = self._call_gemini_safe(
                 prompt,
@@ -1298,6 +1357,15 @@ class GeminiSniperEngine:
                 context_name=f"{target_name}({strategy}:{prompt_type})",
                 model_override=target_model
             )
+
+            if strategy not in ["KOSPI_ML", "KOSDAQ_ML"]:
+                result = self._apply_remote_entry_guard(
+                    result,
+                    prompt_type=prompt_type,
+                    ws_data=ws_data,
+                    recent_ticks=recent_ticks,
+                    recent_candles=recent_candles,
+                )
             
             # 호출 성공 시 실패 횟수 리셋
             self.consecutive_failures = 0

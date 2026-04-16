@@ -379,8 +379,22 @@ def send_sell_order_market(code, qty, token, order_type="3", price=0):
         'api-id': 'kt10001'
     }
 
-    # 💡 [핵심] 지정가("00") 매도일 경우에만 단가(price)를 세팅합니다.
-    ord_price_str = str(int(price)) if str(order_type) == "00" and price > 0 else ""
+    # 💡 [핵심] 지정가("00") 매도일 경우 단가를 호가단위로 정규화합니다.
+    ord_price_str = ""
+    if str(order_type) == "00" and price > 0:
+        try:
+            raw_price = int(price)
+            tick = int(kiwoom_utils.get_tick_size(raw_price))
+            normalized_price = int((raw_price // tick) * tick) if tick > 0 else raw_price
+            if normalized_price <= 0:
+                normalized_price = raw_price
+            if normalized_price != raw_price:
+                log_info(
+                    f"[주문단가정규화] {clean_code} 지정가 매도 {raw_price} -> {normalized_price} (tick={tick})"
+                )
+            ord_price_str = str(normalized_price)
+        except Exception:
+            ord_price_str = str(int(price))
 
     payload = {
         "dmst_stex_tp": "SOR",
@@ -405,7 +419,11 @@ def send_sell_order_market(code, qty, token, order_type="3", price=0):
             
             # 📢 EventBus를 통한 에러 브로드캐스트
             msg = f"❌ [매도거절] 종목:{clean_code}, 사유:{err_msg} (코드:{err_code})"
-            log_error(msg)
+            if ('매도가능수량' in str(err_msg)) or ('잔고' in str(err_msg) and '부족' in str(err_msg)):
+                log_info(msg + " [비치명]")
+                data['non_fatal_no_qty'] = True
+            else:
+                log_error(msg)
             # EventBus().publish("TELEGRAM_ADMIN_NOTIFY", {"text": msg})
             return data
             

@@ -54,24 +54,30 @@ SCALPING_SYSTEM_PROMPT_V3 = """
 4. [호가창]
 
 [핵심 매수 조건]
-- BUY는 아래 조건이 동시에 강할 때만 허용:
-  1) 매수 압도율(Buy Pressure) 68% 이상
-  2) 최근 틱 속도 가속(tick_acceleration_ratio > 1.2)
-  3) net_aggressive_delta가 양수
-  4) 현재가가 Micro-VWAP 위이거나, 최소한 재돌파 직전
-  5) 대량 매도틱(large_sell_print_detected)이 없어야 함
+- BUY는 '완벽 신호'가 아니라 기대값 우위 기준으로 판단한다.
+- 아래 강한 긍정 신호가 2개 이상이면 BUY를 적극 검토:
+  1) 매수 압도율(Buy Pressure) 우위
+  2) 최근 틱 속도 가속(tick_acceleration_ratio 개선)
+  3) net_aggressive_delta 양수
+  4) Micro-VWAP/MA5 재안착 또는 재돌파 시도
+  5) 매도벽 흡수/되밀림 회복 패턴
 
 [즉시 DROP 조건]
-- 현재가가 Micro-VWAP 아래인데 buy_pressure만 높은 경우
-- 고가 부근에서 large_sell_print_detected = true
-- tick_acceleration_ratio가 둔화되거나 recent_5tick_seconds가 급격히 느린 경우
-- microprice_edge_bp가 음수인데 호가상 매도우위가 강한 경우
-- 위꼬리/고점 밀림이 감지된 경우
+- 단일 부정 신호 1개만으로 즉시 DROP하지 마라.
+- DROP은 아래처럼 복합 경고가 겹칠 때만 우선 사용:
+  1) Micro-VWAP/MA5 하회 + 가속 둔화 동시 발생
+  2) 고가 부근 대량매도틱 + 매도우위 심화 동시 발생
+  3) 재돌파 실패 반복 + 회복 실패 동시 발생
+- 부정 신호가 약하거나 단일이면 WAIT 또는 조건부 BUY 검토로 남겨라.
 
 [판정 규칙]
 - BUY: 80~100
 - WAIT: 50~79
 - DROP: 0~49
+
+[추가 규칙]
+- WAIT 남발 금지: 관찰 가치가 명확할 때만 WAIT를 사용한다.
+- 부정 사유가 약한데 관성적으로 WAIT를 주지 마라.
 
 [출력 규칙]
 반드시 아래 JSON 형식으로만 출력하고, 설명/마크다운/코드블록을 절대 추가하지 마라:
@@ -214,7 +220,7 @@ DUAL_PERSONA_CONSERVATIVE_PROMPT = """
 """
 
 class GPTSniperEngine:
-    def __init__(self, api_keys):
+    def __init__(self, api_keys, announce_startup=True):
         if isinstance(api_keys, str):
             api_keys = [api_keys]
             
@@ -236,10 +242,25 @@ class GPTSniperEngine:
         self.last_call_time = 0
         self.min_interval = getattr(TRADING_RULES, 'GPT_ENGINE_MIN_INTERVAL', 0.5)
 
+        if announce_startup:
+            self._print_engine_banner()
+
+    def _print_engine_banner(self):
         print(
             f"🧠 [OpenAI 엔진] {len(self.api_keys)}개 키 로테이션 가동! "
             f"(FAST: {self.fast_model_name} / DEEP: {self.deep_model_name} / REPORT: {self.report_model_name})"
         )
+
+    def set_model_names(self, *, fast_model=None, deep_model=None, report_model=None, announce=True):
+        if fast_model:
+            self.fast_model_name = str(fast_model)
+        if deep_model:
+            self.deep_model_name = str(deep_model)
+        if report_model:
+            self.report_model_name = str(report_model)
+        self.current_model_name = self.fast_model_name
+        if announce:
+            self._print_engine_banner()
 
     def _rotate_client(self):
         self.current_key = next(self.key_cycle)
@@ -700,6 +721,62 @@ class GPTSniperEngine:
 
         return ambiguous_score or conflict_1 or conflict_2 or conflict_3 or conflict_4 or conflict_5
 
+    def _count_negative_flags(self, features):
+        neg = 0
+        if features.get("curr_vs_micro_vwap_bp", 0.0) <= 0:
+            neg += 1
+        if features.get("curr_vs_ma5_bp", 0.0) <= 0:
+            neg += 1
+        if bool(features.get("large_sell_print_detected", False)):
+            neg += 1
+        if features.get("tick_acceleration_ratio", 0.0) < 1.0:
+            neg += 1
+        if features.get("buy_pressure_10t", 50.0) < 62.0:
+            neg += 1
+        if features.get("distance_from_day_high_pct", -99.0) >= -0.35:
+            neg += 1
+        return neg
+
+    def _count_positive_flags(self, features):
+        pos = 0
+        if features.get("buy_pressure_10t", 50.0) >= 68.0:
+            pos += 1
+        if features.get("tick_acceleration_ratio", 0.0) > 1.15:
+            pos += 1
+        if features.get("net_aggressive_delta_10t", 0) > 0:
+            pos += 1
+        if features.get("curr_vs_micro_vwap_bp", 0.0) > 0:
+            pos += 1
+        if features.get("same_price_buy_absorption", 0) >= 2:
+            pos += 1
+        if features.get("large_buy_print_detected", False):
+            pos += 1
+        return pos
+
+    def _apply_main_entry_bias_relief(self, features, result, prompt_type):
+        # false-negative 완화: entry/shared에서 단일 부정신호 veto를 약화한다.
+        if prompt_type not in {"scalping_entry", "scalping_shared"}:
+            return result
+
+        action = result.get("action", "WAIT")
+        score = int(result.get("score", 50))
+        neg = self._count_negative_flags(features)
+        pos = self._count_positive_flags(features)
+
+        if action == "DROP" and neg <= 1:
+            result["action"] = "WAIT"
+            result["score"] = max(score, 52)
+            result["reason"] = f"{result.get('reason', '')} | single-negative veto 완화"
+            return result
+
+        if action == "WAIT" and pos >= 3 and neg <= 2 and score >= 60:
+            result["action"] = "BUY"
+            result["score"] = max(score, 80)
+            result["reason"] = f"{result.get('reason', '')} | 기대값 우위 BUY 보정"
+            return result
+
+        return result
+
     # ==========================================
     # 6. 🚀 실전 분석 실행 메서드 5종 (Gemini 모델과 100% 호환)
     # ==========================================
@@ -711,24 +788,47 @@ class GPTSniperEngine:
             return False
         return self._should_escalate_scalping(features, result)
 
-    def analyze_target(self, target_name, ws_data, recent_ticks, recent_candles):
+    def analyze_target(
+        self,
+        target_name,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        strategy="SCALPING",
+        program_net_qty=0,
+        cache_profile="default",
+        prompt_profile="shared",
+    ):
         """실시간 초단타 타점 분석 - fast 우선, 선택적 deep 재판정"""
         if not self.lock.acquire(blocking=False):
             return {"action": "WAIT", "score": 50, "reason": "AI 경합 (다른 종목 분석 중)"}
             
         try:
+            if str(strategy or "SCALPING").upper() not in {"SCALPING", "SCALP"}:
+                return {"action": "WAIT", "score": 50, "reason": "OpenAI scalping-only route"}
+
             if time.time() - self.last_call_time < self.min_interval:
                 return {"action": "WAIT", "score": 50, "reason": "AI 쿨타임"}
 
             features = self._extract_scalping_features(ws_data, recent_ticks, recent_candles)
             formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
+            profile = str(prompt_profile or "shared").strip().lower()
+            if profile == "watching":
+                prompt_type = "scalping_entry"
+            elif profile == "holding":
+                prompt_type = "scalping_holding"
+            elif profile == "exit":
+                prompt_type = "scalping_exit"
+            else:
+                prompt_type = "scalping_shared"
+            formatted_data = f"[task_type]\n{prompt_type}\n\n{formatted_data}"
 
             # 1차: 빠른 모델
             raw_result = self._call_openai_safe(
                 SCALPING_SYSTEM_PROMPT_V3,
                 formatted_data,
                 require_json=True,
-                context_name=target_name,
+                context_name=f"{target_name}:{prompt_type}",
                 model_override=self.fast_model_name,
                 temperature_override=0.05
             )
@@ -753,6 +853,11 @@ class GPTSniperEngine:
                 )
                 result = self._normalize_scalping_result(deep_raw_result)
 
+            result = self._apply_main_entry_bias_relief(features, result, prompt_type)
+
+            result["ai_prompt_type"] = prompt_type
+            result["ai_prompt_version"] = "openai_v2_structured_v1"
+            result["cache_hit"] = False
             self.last_call_time = time.time()
             return result
                 

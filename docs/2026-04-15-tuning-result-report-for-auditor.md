@@ -1,6 +1,6 @@
 # 2026-04-15 튜닝 작업 결과보고서 (감사용)
 
-> 작성시각: 2026-04-15 16:20 KST  
+> 작성시각: 2026-04-15 22:10 KST (메인 로그 재집계 반영)  
 > 기준 Source/Section: `docs/2026-04-15-stage2-todo-checklist.md` (`장중 체크리스트`, `장후 체크리스트`, `익일 이월 작업`)  
 > 운영모드: `No-Decision Day` 유지 (당일 실전 파라미터/승격 변경 보류)
 
@@ -21,7 +21,8 @@
 | `budget_pass -> submitted` 전환율 | 0.0% | 0.0% | 공통 병목 존재 |
 | `expired_armed_total` | 374 | 394 | 원격 만료 이벤트 더 많음 |
 
-검증: `build_trade_review_report('2026-04-15')`, `build_entry_pipeline_flow_report('2026-04-15')`
+검증: `build_trade_review_report('2026-04-15')`, `build_entry_pipeline_flow_report('2026-04-15')`  
+재집계 메인 핵심값: `holding_events=5,403`, `full_fill=27`, `partial_fill=53`, `preset_exit_sync_ok/mismatch=40/13`
 
 ---
 
@@ -31,8 +32,8 @@
 |---|---|---|---|---|
 | RELAX-DYNSTR 퍼널 기록 (`AI BUY->entry_armed->budget_pass->submitted`) | 완료. `submitted` 전환 미확인 | 중간(음): `budget_pass` 대비 전환 0 | 중간(음): 동일 | pipeline 이벤트 집계: `entry_armed/resume` 증가, `submitted=0` |
 | RELAX-DYNSTR 1일차 canary 1차 정리 | 완료. 유지+계측보강 판정 | 중간(관찰): 신규 완화 없음 | 중간(관찰): 신규 완화 없음 | checklist 반영 + 퍼널 지표 |
-| partial fill min_fill_ratio 효과 기록 | 완료(유보). 표본 부족 | 낮음(유보) | 낮음(유보) | trade review: `partial_fill_events=0`, `full_fill_events=0` |
-| partial fill canary 1차 정리 | 완료. canary on 유지, 효과판정 보류 | 낮음 | 낮음 | env on(원격), 이벤트 0건 |
+| partial fill min_fill_ratio 효과 기록 | 재집계 반영. 메인 표본 확인, 원격은 보수 해석 유지 | 중간(관찰): `partial/full=53/27`, `sync mismatch=13` | 낮음(유보) | trade review(main): `partial_fill_events=53`, `full_fill_events=27` |
+| partial fill canary 1차 정리 | 완료. canary on 유지, 효과판정은 원격 표본 추가 필요 | 중간 | 낮음 | main은 체결품질 코호트 확보, 원격은 기존 운영 로그 기준 추가 관찰 |
 | RELAX-LATENCY 유지 점검 | 완료. 전일 결론 유지 | 낮음(변경 없음) | 낮음(변경 없음) | 체크리스트/로그 상 신규 완화 미적용 |
 | 기존 관찰축 최소 유지 | 완료 | 낮음(집중도 개선) | 낮음(집중도 개선) | 4축( dynstr/partial/shadow/expired )로 수렴 |
 | expired_armed 전수 분포 재확인 | 완료 | 중간(병목 가시화) | 중간(병목 가시화) | main 374, remote 394 / after_wait 편중 |
@@ -81,7 +82,8 @@
 
 2. **중기(장중~장후)**  
    원격은 shadow 표본이 충분히 쌓이기 시작했으므로(`22건`), `action_diverged` 패턴 기반 selective override 후보를 좁힐 수 있다.  
-   다만 partial fill 코호트는 표본이 없어 당일 효익 추정은 과신 금지.
+   메인은 partial/full 표본이 복구되어(`53/27`) 결함축(`sync mismatch=13`)까지 추적 가능해졌다.  
+   원격 partial fill 효익 추정은 기존처럼 보수적으로 유지한다.
 
 3. **리스크**  
    현재 핵심 리스크는 손익 자체보다 `집계 품질(대시보드 노출 불완전)`과 `entry 전환율 0% 병목`이다.  
@@ -104,4 +106,3 @@ build_entry_pipeline_flow_report('2026-04-15')
 ```bash
 grep -n "not bound to a Session|bhk3|데이터 동기화|완벽히 일치" logs/bot_history.log
 ```
-

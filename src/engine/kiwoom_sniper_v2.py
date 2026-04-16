@@ -126,7 +126,8 @@ from src.engine import kiwoom_orders
 from src.engine.kiwoom_websocket import KiwoomWSManager
 from src.engine.signal_radar import SniperRadar
 from src.engine.ai_engine import GeminiSniperEngine
-from src.engine.ai_engine_openai_v2 import OpenAIDualPersonaShadowEngine
+from src.engine.ai_engine_openai_v2 import GPTSniperEngine, OpenAIDualPersonaShadowEngine
+from src.engine.runtime_ai_router import RuntimeAIEngineRouter, resolve_runtime_role
 
 # 💡 VIX, 유가지표 임포트
 from src.market_regime import MarketRegimeService, summarize_market_regime_snapshot
@@ -1034,22 +1035,40 @@ def run_sniper(is_test_mode=False):
     # 1. CONF에서 GEMINI_API_KEY 관련 값들만 추출
     # GEMINI_API_KEY, GEMINI_API_KEY_2, GEMINI_API_KEY_3 등을 모두 가져옵니다.
     ai_engine = None
+    gemini_engine = None
+    openai_scalping_engine = None
     AI_ENGINE = None
     dual_persona_engine = None
     global DUAL_PERSONA_ENGINE
+    runtime_role = resolve_runtime_role()
 
     api_keys = [v for k, v in CONF.items() if k.startswith("GEMINI_API_KEY") and v]
     if not api_keys:
         log_error("❌ 제미나이 키 발급 실패로 엔진을 중단합니다.")
         event_bus.publish('TELEGRAM_BROADCAST', {'message': "🚨 [시스템 에러] 제미나이 키 발급 실패로 엔진을 중단합니다."})
     else:
-        ai_engine = GeminiSniperEngine(api_keys=api_keys)
-        AI_ENGINE = ai_engine
+        gemini_engine = GeminiSniperEngine(api_keys=api_keys)
+        ai_engine = gemini_engine
+        AI_ENGINE = gemini_engine
         print(f"🤖 제미나이 AI 엔진이 {len(api_keys)}개의 API 키로 가동됩니다.")
 
     openai_dual_enabled = bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_ENABLED", True))
     openai_shadow_mode = bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_SHADOW_MODE", True))
     openai_api_keys = [v for k, v in CONF.items() if k.startswith("OPENAI_API_KEY") and v]
+    if runtime_role == "main" and openai_api_keys:
+        try:
+            openai_scalping_engine = GPTSniperEngine(api_keys=openai_api_keys, announce_startup=False)
+            openai_scalping_engine.set_model_names(
+                fast_model="gpt-5.4-nano",
+                deep_model="gpt-5.4-nano",
+                report_model="gpt-5.4-nano",
+                announce=True,
+            )
+            print("🧠 메인 스캘핑 OpenAI 엔진을 gpt-5.4-nano로 고정 완료.")
+        except Exception as e:
+            log_error(f"🚨 OpenAI 스캘핑 엔진 초기화 실패: {e}")
+            openai_scalping_engine = None
+
     if openai_dual_enabled and openai_shadow_mode and openai_api_keys:
         try:
             dual_persona_engine = OpenAIDualPersonaShadowEngine(api_keys=openai_api_keys)
@@ -1061,6 +1080,18 @@ def run_sniper(is_test_mode=False):
             DUAL_PERSONA_ENGINE = None
     elif openai_dual_enabled and not openai_api_keys:
         log_info("ℹ️ OPENAI_API_KEY 미설정으로 듀얼 페르소나 shadow 엔진은 비활성화됩니다.")
+
+    if gemini_engine is not None:
+        ai_engine = RuntimeAIEngineRouter(
+            gemini_engine=gemini_engine,
+            openai_scalping_engine=openai_scalping_engine,
+            runtime_role=runtime_role,
+        )
+        AI_ENGINE = ai_engine
+        print(
+            f"🧭 AI 라우팅 활성화: role={runtime_role} "
+            f"(main_scalping_openai={'ON' if runtime_role == 'main' and openai_scalping_engine else 'OFF'})"
+        )
 
     bind_analysis_dependencies(ai_engine=AI_ENGINE)
     bind_state_dependencies(dual_persona_engine=DUAL_PERSONA_ENGINE)

@@ -317,6 +317,18 @@ def _refresh_scalp_preset_exit_order(target_stock, code, total_qty):
             )
             return False
 
+    if preset_tp_price > 0:
+        tick = int(kiwoom_utils.get_tick_size(preset_tp_price))
+        if tick > 0:
+            normalized_price = int((preset_tp_price // tick) * tick)
+            if normalized_price != preset_tp_price:
+                log_info(
+                    f"[ENTRY_TP_REFRESH] {target_stock.get('name')}({code}) "
+                    f"preset_tp_price 정규화 {preset_tp_price} -> {normalized_price} (tick={tick})"
+                )
+            preset_tp_price = max(normalized_price, tick)
+            target_stock['preset_tp_price'] = preset_tp_price
+
     if preset_tp_price <= 0 or total_qty <= 0:
         if total_qty <= 0:
             target_stock['preset_tp_qty'] = 0
@@ -330,6 +342,16 @@ def _refresh_scalp_preset_exit_order(target_stock, code, total_qty):
         price=preset_tp_price,
     )
     new_ord_no = sell_res.get('ord_no') if isinstance(sell_res, dict) else ''
+    if isinstance(sell_res, dict):
+        err_msg = str(sell_res.get('return_msg') or sell_res.get('err_msg') or '')
+        if ('매도가능수량' in err_msg) or ('잔고' in err_msg and '부족' in err_msg):
+            target_stock['preset_tp_ord_no'] = ''
+            target_stock['preset_tp_qty'] = 0
+            log_info(
+                f"[ENTRY_TP_REFRESH] {target_stock.get('name')}({code}) "
+                "보유수량 부족 응답 수신으로 preset TP를 비활성화합니다."
+            )
+            return True
     target_stock['preset_tp_ord_no'] = new_ord_no
     target_stock['preset_tp_qty'] = int(total_qty or 0)
     if not new_ord_no:

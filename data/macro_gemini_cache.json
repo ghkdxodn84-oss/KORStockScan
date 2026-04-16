@@ -1,85 +1,85 @@
 {
-  "bundle_as_of": "2026-04-14T22:20:16Z",
+  "bundle_as_of": "2026-04-15T22:20:20Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 6967.38,
-    "prev_value": 6886.25,
-    "change": 81.13,
-    "change_pct": 1.18,
-    "as_of": "2026-04-14T20:00:00Z",
-    "source": "Morningstar / Dow Jones"
+    "value": 7022.95,
+    "prev_value": 6967.38,
+    "change": 55.57,
+    "change_pct": 0.8,
+    "as_of": "2026-04-15T20:00:00Z",
+    "source": "TheStreet / CT Insider"
   },
   "nasdaq": {
-    "name": "NASDAQ",
-    "value": 23639.08,
-    "prev_value": 23183.73,
-    "change": 455.35,
-    "change_pct": 1.96,
-    "as_of": "2026-04-14T20:00:00Z",
-    "source": "Morningstar / Dow Jones"
+    "name": "NASDAQ Composite",
+    "value": 24016.02,
+    "prev_value": 23639.09,
+    "change": 376.93,
+    "change_pct": 1.6,
+    "as_of": "2026-04-15T20:00:00Z",
+    "source": "TheStreet / CT Insider"
   },
   "vix": {
     "name": "VIX",
-    "value": 18.36,
-    "prev_value": 19.12,
-    "change": -0.76,
-    "change_pct": -3.97,
-    "as_of": "2026-04-14T20:00:00Z",
-    "source": "Cboe"
+    "value": 18.01,
+    "prev_value": 18.36,
+    "change": -0.35,
+    "change_pct": -1.91,
+    "as_of": "2026-04-15T19:27:00Z",
+    "source": "Cboe Global Markets"
   },
   "us10y": {
-    "name": "US 10Y Treasury Yield",
-    "value": 4.255,
-    "prev_value": 4.297,
-    "change": -0.042,
-    "change_pct": -0.98,
-    "as_of": "2026-04-14T19:47:00Z",
-    "source": "Morningstar / Dow Jones"
+    "name": "US 10-Year Treasury Yield",
+    "value": 4.281,
+    "prev_value": 4.256,
+    "change": 0.025,
+    "change_pct": 0.59,
+    "as_of": "2026-04-15T20:00:00Z",
+    "source": "TheStreet / StoneX"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 95.14,
-    "prev_value": 99.36,
-    "change": -4.22,
-    "change_pct": -4.25,
-    "as_of": "2026-04-14T20:00:00Z",
-    "source": "Trading Economics"
+    "value": 94.27,
+    "prev_value": 94.79,
+    "change": -0.52,
+    "change_pct": -0.55,
+    "as_of": "2026-04-15T00:54:00Z",
+    "source": "The Economic Times"
   },
   "headlines": [
     {
-      "title": "US enforces naval blockade on Iran as nuclear issue takes center stage",
-      "source": "Fox News",
-      "published_at": "2026-04-14T00:00:00Z",
-      "url": "https://www.foxnews.com/"
+      "title": "US pivots to economic warfare on Iran with naval blockade and secondary sanctions on banks",
+      "source": "AP / WRAL",
+      "published_at": "2026-04-15T20:13:11Z",
+      "url": "https://www.wral.com/"
     },
     {
-      "title": "Wall Street rallies to the edge of its all-time high as oil prices ease",
-      "source": "BNN Bloomberg",
-      "published_at": "2026-04-14T18:10:00Z",
-      "url": "https://www.bnnbloomberg.ca/"
+      "title": "S&P 500 closes at new record of 7,022.95, Nasdaq clears 24,000 on AI strength and easing war fears",
+      "source": "TheStreet",
+      "published_at": "2026-04-15T20:00:00Z",
+      "url": "https://www.thestreet.com/"
     },
     {
-      "title": "Diplomats try to arrange second round of US-Iran talks during first full day of American blockade",
-      "source": "Newsday",
-      "published_at": "2026-04-14T20:01:00Z",
-      "url": "https://www.newsday.com/"
+      "title": "Oil prices fall below $95 on hopes for renewed US-Iran peace talks",
+      "source": "The Economic Times",
+      "published_at": "2026-04-15T02:55:00Z",
+      "url": "https://economictimes.indiatimes.com/"
     },
     {
-      "title": "Live Updates: Iran war continues with U.S. blockade of ports; Lebanon and Israel hold direct talks",
-      "source": "CBS News",
-      "published_at": "2026-04-14T20:17:00Z",
-      "url": "https://www.cbsnews.com/"
+      "title": "UK Chancellor Reeves calls US war on Iran a 'mistake' amid global economic fallout",
+      "source": "The Guardian",
+      "published_at": "2026-04-15T12:00:00Z",
+      "url": "https://www.theguardian.com/"
     },
     {
-      "title": "Global Oil Markets Retrench as Diplomatic Hopes Flare Between Washington and Tehran",
-      "source": "The Chronicle-Journal",
-      "published_at": "2026-04-14T00:00:00Z",
-      "url": "https://www.chroniclejournal.com/"
+      "title": "Iran's economy faces collapse within three months under blockade, experts warn",
+      "source": "The Jerusalem Post",
+      "published_at": "2026-04-15T10:00:00Z",
+      "url": "https://www.jpost.com/"
     }
   ],
   "notes": [
-    "US equity markets rallied on easing energy prices and optimism regarding a potential diplomatic resolution to the US-Iran conflict.",
-    "Brent crude fell sharply, dropping over 4% amid reports of resumed negotiations and a potential easing of the Strait of Hormuz blockade.",
-    "US 10-year Treasury yields pulled back from recent highs as the drop in crude oil prices relieved immediate inflation fears."
+    "U.S. markets surged to record highs on April 15, driven by strong tech performance (Nasdaq > 24K) and optimism over potential U.S.-Iran negotiations.",
+    "The U.S. has enforced a naval blockade on Iranian ports, halting maritime trade, while Treasury Secretary Scott Bessent announced a pivot to economic warfare with secondary sanctions.",
+    "Brent crude dipped slightly below $95 per barrel amid shifting geopolitical risk premiums and hopes for a continued ceasefire."
   ]
 }

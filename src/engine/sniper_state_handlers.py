@@ -3596,6 +3596,77 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             exit_rule = "kospi_regime_stop_loss"
 
     if is_sell_signal:
+        if sell_reason_type == "LOSS" and strategy == "SCALPING":
+            fallback_gate = can_consider_scale_in(
+                stock=stock,
+                code=code,
+                ws_data=ws_data,
+                strategy=strategy,
+                market_regime=market_regime,
+                skip_add_judgment_lock=True,
+            )
+            fallback_action = None
+            if fallback_gate.get("allowed"):
+                fallback_action = _evaluate_scale_in_signal(
+                    stock=stock,
+                    code=code,
+                    strategy=strategy,
+                    market_regime=market_regime,
+                    profit_rate=profit_rate,
+                    peak_profit=peak_profit,
+                    curr_price=curr_p,
+                    ws_data=ws_data,
+                    current_ai_score=current_ai_score,
+                    held_sec=held_sec,
+                )
+            allowed_reasons = set(
+                str(item).strip()
+                for item in (getattr(TRADING_RULES, "SCALP_LOSS_FALLBACK_ALLOWED_REASONS", ("reversal_add_ok",)) or ())
+                if str(item).strip()
+            )
+            min_fallback_ai = int(getattr(TRADING_RULES, "SCALP_LOSS_FALLBACK_MIN_AI_SCORE", 65) or 65)
+            fallback_reason = str((fallback_action or {}).get("reason") or "")
+            fallback_candidate = bool(
+                fallback_action
+                and (not allowed_reasons or fallback_reason in allowed_reasons)
+                and float(current_ai_score or 0.0) >= float(min_fallback_ai)
+            )
+            _log_holding_pipeline(
+                stock,
+                code,
+                "loss_fallback_probe",
+                gate_allowed=bool(fallback_gate.get("allowed")),
+                gate_reason=fallback_gate.get("reason", "-"),
+                fallback_candidate=fallback_candidate,
+                fallback_reason=fallback_reason or "-",
+                fallback_add_type=(fallback_action or {}).get("add_type", "-"),
+                current_ai_score=f"{current_ai_score:.0f}",
+                min_ai=min_fallback_ai,
+                profit_rate=f"{profit_rate:+.2f}",
+                peak_profit=f"{peak_profit:+.2f}",
+            )
+            if fallback_candidate:
+                observe_only = bool(getattr(TRADING_RULES, "SCALP_LOSS_FALLBACK_OBSERVE_ONLY", True))
+                enabled = bool(getattr(TRADING_RULES, "SCALP_LOSS_FALLBACK_ENABLED", False))
+                if enabled and not observe_only:
+                    log_info(
+                        f"[LOSS_FALLBACK] {stock.get('name')}({code}) "
+                        f"candidate accepted: reason={fallback_reason}, ai={current_ai_score:.0f}"
+                    )
+                    add_result = _process_scale_in_action(
+                        stock=stock,
+                        code=code,
+                        ws_data=ws_data,
+                        action=fallback_action,
+                        admin_id=admin_id,
+                    )
+                    if add_result:
+                        log_info(
+                            f"[LOSS_FALLBACK] {stock.get('name')}({code}) "
+                            "fallback 추가매수 체결 경로로 전환, 손절 전송을 건너뜁니다."
+                        )
+                        return
+
         stock['last_exit_rule'] = exit_rule or ''
         stock['last_exit_reason'] = reason
         _log_holding_pipeline(
@@ -3849,7 +3920,15 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             stock['last_add_block_log_ts'] = time.time()
 
 
-def can_consider_scale_in(stock, code, ws_data, strategy, market_regime):
+def can_consider_scale_in(
+    stock,
+    code,
+    ws_data,
+    strategy,
+    market_regime,
+    *,
+    skip_add_judgment_lock=False,
+):
     """추가매수 공통 게이트: 조건을 만족하는 경우에만 True."""
     _ = (code, ws_data)
 
@@ -3899,10 +3978,12 @@ def can_consider_scale_in(stock, code, ws_data, strategy, market_regime):
         return {"allowed": False, "reason": "sell_ordered"}
 
     # 동일 루프/짧은 시간 중복 호출 방지
-    lock_sec = int(getattr(TRADING_RULES, 'ADD_JUDGMENT_LOCK_SEC', 20) or 20)
-    last_check = float(stock.get('last_scale_in_check_ts', 0) or 0)
-    if last_check > 0 and (time.time() - last_check) < lock_sec:
-        return {"allowed": False, "reason": "add_judgment_locked"}
+    # 손절 직전 fallback probe는 관찰 타이밍이 짧아 lock을 선택적으로 우회한다.
+    if not skip_add_judgment_lock:
+        lock_sec = int(getattr(TRADING_RULES, 'ADD_JUDGMENT_LOCK_SEC', 20) or 20)
+        last_check = float(stock.get('last_scale_in_check_ts', 0) or 0)
+        if last_check > 0 and (time.time() - last_check) < lock_sec:
+            return {"allowed": False, "reason": "add_judgment_locked"}
 
     # 최근 추가매수 직후 쿨다운
     cooldown_sec = int(getattr(TRADING_RULES, 'SCALE_IN_COOLDOWN_SEC', 180) or 180)
@@ -3977,7 +4058,8 @@ def can_consider_scale_in(stock, code, ws_data, strategy, market_regime):
         except Exception:
             pass
 
-    stock['last_scale_in_check_ts'] = time.time()
+    if not skip_add_judgment_lock:
+        stock['last_scale_in_check_ts'] = time.time()
     return {"allowed": True, "reason": "ok"}
 
 

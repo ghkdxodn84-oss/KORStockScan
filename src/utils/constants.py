@@ -204,6 +204,10 @@ class TradingConfig:
     REVERSAL_ADD_SESSION_CUTOFF: str = "14:30"     # 허용 시간대 상한
     REVERSAL_ADD_BOX_RANGE_MAX_PCT: float = 0.20   # 박스 폭 허용 최대치 (%p)
     REVERSAL_ADD_STAGNATION_LOW_FLOOR_MARGIN: float = 0.05  # 저점 미갱신 허용 마진 (%p)
+    SCALP_LOSS_FALLBACK_ENABLED: bool = False       # 손절 직전 fallback 추가매수 실전 적용 토글
+    SCALP_LOSS_FALLBACK_OBSERVE_ONLY: bool = True   # True면 후보만 기록하고 실전 실행하지 않음
+    SCALP_LOSS_FALLBACK_ALLOWED_REASONS: tuple = ("reversal_add_ok",)  # 손절 fallback 허용 reason
+    SCALP_LOSS_FALLBACK_MIN_AI_SCORE: int = 65      # 손절 fallback 후보 최소 AI 점수
 
     # 💡 [신규] 코스닥 스캐너 설정
     KOSDAQ_TARGET: float = 4.0  # 코스닥은 조금 더 높게 목표 (예: 4.0%)

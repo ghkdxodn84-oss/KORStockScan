@@ -70,6 +70,7 @@ class DBManager:
                 conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS scale_in_locked BOOLEAN DEFAULT false;"))
                 conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS hard_stop_price DOUBLE PRECISION;"))
                 conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS trailing_stop_price DOUBLE PRECISION;"))
+                conn.execute(text("ALTER TABLE recommendation_history ADD COLUMN IF NOT EXISTS entry_armed_at_epoch DOUBLE PRECISION;"))
                 conn.execute(text(
                     "ALTER TABLE recommendation_history "
                     "ALTER COLUMN buy_price TYPE DOUBLE PRECISION USING buy_price::double precision;"

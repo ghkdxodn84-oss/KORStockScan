@@ -120,14 +120,39 @@
 8. `2026-04-15 POSTCLOSE` 체크리스트 실행 완료
    - `RELAX-DYNSTR`/`partial fill`/`shadow`/`expired_armed` 항목은 수치 근거를 남겨 1차 종료
    - `task8 감사키 로그`, `shadow EV 확정`, `kt00007/ka10076`는 `사유+재시각`으로 이월
+9. `2026-04-15` 감사 후속 검토 결과 기준 최우선 액션 재정렬 완료
+   - `P0`: `entry_pipeline` 지표 정의 보정 (`submitted latest` vs `submitted ever` vs `filled`)
+   - `P0`: `Gatekeeper fast reuse` / `holding skip` 실패사유 계측 승격
+   - `P1`: `aggregation gate` 기준을 `daily_report schema` / `trade_review snapshot schema`로 분리
+   - `P1`: `partial fill sync mismatch` 코호트 추적항목 고정
 
 ### 아직 남아있는 일
 
-1. 스캘핑 매매로직 `0-1b 원격 경량 프로파일링`
-2. `RELAX-LATENCY` `2026-04-14 develop` 최종 결론 및 `2026-04-15 main` 반영 여부 확정
-3. `RELAX-DYNSTR` `momentum_tag` 1축 원격 canary `2026-04-15 08:30` 착수와 `2026-04-16 main` 반영 판단 준비
-4. `partial fill min_fill_ratio` 원격 canary `2026-04-15` 시작과 `2026-04-16 main` 반영 판단 준비
-5. `expired_armed` 처리 로직 설계 문서 `2026-04-15 장후` 완료
+1. `2026-04-16 PREOPEN` `entry_pipeline` 지표 정의 보정
+   - `submitted latest` / `submitted ever` / `filled`를 분리해 체결 수와 퍼널 지표를 동시에 설명 가능하게 만든다
+   - 수집 목적: 가짜 병목(`submitted 0%`)과 실제 병목을 분리한다
+   - 기대값: 주문 제출/체결 전환이 어느 단계에서 끊기는지 명확해져 다음 수정 1축을 직접 고를 수 있다
+   - 관찰 종료 기준: `submitted ever`/`filled`만으로 체결 수와 퍼널이 모순 없이 설명되면 종료
+   - 구현 단위: `sniper_entry_pipeline_report.py` metric 추가 -> `web/app.py` 카드/표 반영 -> API 응답 검증
+2. `2026-04-16 PREOPEN` `Gatekeeper fast reuse` / `holding skip` 실패사유 계측 승격
+   - 현재 비율 수치만으로는 원인 귀속이 안 되므로 `reason_codes` 상위 분포를 직접 노출한다
+   - 수집 목적: latency를 유발하는 주된 실패사유를 1~2개로 압축한다
+   - 기대값: 캐시 키/TTL/조건 완화 중 무엇을 먼저 건드릴지 추정이 아니라 근거로 결정한다
+   - 관찰 종료 기준: 상위 실패사유가 2거래일 이상 안정적으로 반복되면 관찰 종료 후 수정 단계로 전환
+   - 구현 단위: `sniper_performance_tuning_report.py` breakdown 승격 -> `web/app.py` 시각화 반영 -> snapshot 재생성 검증
+3. `2026-04-16 PREOPEN` `aggregation gate` 기준 재정의
+   - `daily_report`와 `trade_review snapshot`의 schema 차이를 분리해 잘못된 FAIL 판정을 제거한다
+   - 수집 목적: 문서 계약 오류를 데이터 품질 실패로 잘못 해석하는 상태를 제거한다
+   - 기대값: `No-Decision Day`가 실제 복원/정합성 결함에만 반응한다
+   - 관찰 종료 기준: schema 기준과 gate 검사 대상이 일치하고 동일 사유 재발이 없으면 종료
+   - 구현 단위: gate 기준 문서 수정 -> daily report schema 확인 -> checklist 판정 문구 교체
+4. `2026-04-16 PREOPEN` `partial fill sync mismatch` 코호트 추적항목 고정
+   - `sync_status -> exit_rule -> realized_pnl` 연결이 장후 표에 바로 나오게 만든다
+   - 수집 목적: mismatch를 단순 이벤트 수가 아니라 손익영향 기준으로 해석한다
+   - 기대값: partial fill 축이 EV 훼손의 주범인지, 우선순위를 낮춰도 되는지 빠르게 판정한다
+   - 관찰 종료 기준: `mismatch`와 손익 악화의 연결 여부가 2거래일 연속 같은 결론으로 수렴하면 종료
+   - 구현 단위: `trade_review` 또는 `performance_tuning`에 코호트 요약 추가 -> 감사 표 기본 반영 -> 장후 검증 명령 고정
+5. 스캘핑 매매로직 `0-1b 원격 경량 프로파일링`
 6. `AI overlap audit` 기반 `selective override` 설계 착수 (`2026-04-16` 이내)
 7. AI 프롬프트 개선 코드 구현 전반
 8. AI 프롬프트 `작업 5/8/10`의 `develop` 선행 적용과 `main` 후행 승격 기준 확정

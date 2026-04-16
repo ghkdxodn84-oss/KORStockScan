@@ -86,6 +86,7 @@ class RecommendationHistory(Base):
     position_tag = Column(Text, server_default=text("'MIDDLE'"))
     prob = Column(Float, server_default=text("0.70"))
     nxt = Column(Float)
+    entry_armed_at_epoch = Column(Float)
     
     buy_price = Column(Float)
     buy_qty = Column(Integer, server_default=text("0"))

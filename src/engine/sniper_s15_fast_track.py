@@ -118,6 +118,7 @@ def _save_armed_candidate_to_db(code, name, cnd_name, armed_at, expires_at):
         if record:
             record.stock_name = name
             record.position_tag = 'S15_CANDID:' + cnd_name
+            record.entry_armed_at_epoch = armed_at
             record.nxt = armed_at
             record.hard_stop_price = expires_at
             record.profit_rate = 0.0
@@ -131,6 +132,7 @@ def _save_armed_candidate_to_db(code, name, cnd_name, armed_at, expires_at):
                 status='WATCHING',
                 position_tag='S15_CANDID:' + cnd_name,
                 prob=0.0,
+                entry_armed_at_epoch=armed_at,
                 nxt=armed_at,
                 hard_stop_price=expires_at,
                 profit_rate=0.0,
@@ -168,7 +170,7 @@ def _restore_armed_candidates_from_db():
             code = rec.stock_code
             name = rec.stock_name
             cnd_name = rec.position_tag.replace('S15_CANDID:', '') if rec.position_tag else ''
-            armed_at = rec.nxt if rec.nxt else 0.0
+            armed_at = rec.entry_armed_at_epoch if rec.entry_armed_at_epoch else (rec.nxt if rec.nxt else 0.0)
             expires_at = rec.hard_stop_price if rec.hard_stop_price else (rec.profit_rate if rec.profit_rate else 0.0)
             if expires_at < now:
                 session.query(RecommendationHistory).filter_by(
