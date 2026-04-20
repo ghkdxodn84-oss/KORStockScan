@@ -13,10 +13,15 @@
 
 - [ ] `[AuditFix0421] split-entry 즉시 재평가 shadow 1일차 착수 또는 보류 기록` (`Due: 2026-04-21`, `Slot: POSTCLOSE`, `TimeWindow: 15:30~15:40`, `Track: ScalpingLogic`)
   - 판정 기준: `N_min/Δ_min` 충족 + `false_entry_rate` 상한 확정 시에만 착수, 아니면 보류 사유와 재시각 기록
+  - 선행 메모 (`2026-04-20 PREOPEN`): `D+1 이관 확정`. `N_min=50`, `Δ_min=+3.0%p`, `PrimaryMetric=budget_pass_to_submitted_rate` 미충족 시 착수 금지
 - [ ] `[VisibleResult0421] split-entry leakage canary 승격 또는 보류 사유 기록` (`Due: 2026-04-21`, `Slot: POSTCLOSE`, `TimeWindow: 15:40~15:50`, `Track: ScalpingLogic`)
 - [ ] `[AuditFix0421] HOLDING shadow baseline 재계산 + 관측버퍼(D+1) 확인` (`Due: 2026-04-21`, `Slot: POSTCLOSE`, `TimeWindow: 15:50~16:00`, `Track: AIPrompt`)
 - [ ] `AIPrompt 작업 12 Raw 입력 축소 A/B 점검` 범위 확정 (`Due: 2026-04-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:00~16:10`, `Track: AIPrompt`)
 - [ ] `[VisibleResult0421] 다음 영업일 승격축 1개 고정 또는 보류 사유 기록` (`Due: 2026-04-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:10~16:20`, `Track: Plan`)
+- [ ] `[PlanSync0421] 원격 canary 보류 유지 + AI 엔진 A/B 전환 일정 고정` (`Due: 2026-04-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:20~16:30`, `Track: Plan`)
+  - 판정 기준: 현재 튜닝 축에는 원격 신규 canary를 열지 않고, `A/B preflight`를 `2026-04-23 POSTCLOSE`로 고정
+- [ ] `[PlanSync0421] 개별종목(에이럭스) 관찰축 4분해 유지 여부 재확인` (`Due: 2026-04-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:40`, `Track: Plan`)
+  - 판정 기준: `EntryGate/Latency/Liquidity/HoldingExit` 4축 표본이 충분하지 않으면 scale-in/holding/latency 로직 변경 모두 보류
 - [ ] `[AuditFix0421] HOLDING 성과판정 D+2(2026-04-22) 이관 기록` (`Due: 2026-04-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:20~16:25`, `Track: AIPrompt`)
 - [ ] 범위 확정 실패 시 `사유 + 다음 실행시각` 기록 (`Due: 2026-04-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:25~16:30`, `Track: AIPrompt`)
 

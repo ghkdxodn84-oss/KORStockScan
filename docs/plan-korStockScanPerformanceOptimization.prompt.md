@@ -45,6 +45,10 @@
 10. 원인 귀속이 불명확하면 먼저 `리포트 정합성`, `이벤트 복원`, `집계 품질`을 점검한다.
 11. HOLDING 축 승격은 `missed_upside_rate`, `capture_efficiency`, `GOOD_EXIT`와 shadow 로그 축을 함께 본다.
 12. broad relax(`latency/tag/threshold`)는 `split-entry leakage` 1차 판정 이후에만 재오픈한다.
+13. 현재 튜닝 기간에는 원격을 신규 canary 기본 경로로 강제하지 않고, 모델별 A/B 착수 직전에만 `원격 정합화 + shadow/canary` 순서를 적용한다.
+14. `PREOPEN(08:00~09:00)`에는 `bot_main` 동작 중 `run_monitor_snapshot` full build를 금지하고, 필요 시 `sanity check`만 수행한다.
+15. `scale-in qty` 축은 현재 주간에 `split-entry/HOLDING` 관찰축과 섞지 않고, `remote shadow-only -> remote canary -> main flag-off 적재` 순서로만 연다.
+16. 개별 종목(예: 에이럭스) 이슈는 `scale-in` 단일 원인으로 단정하지 않고 `entry gate + latency + liquidity + holding exit` 관찰축으로 먼저 분해 판정한다.
 
 ## 현재 기준 우선순위
 
@@ -55,6 +59,7 @@
 | `HOLDING action schema / prompt split` | shadow-only 착수와 D+2 판정 구조 필요 | `2순위` | `2026-04-20 착수`, `2026-04-22 최종판정` |
 | `AIPrompt 작업 8/9/10/11/12` | `8/10`은 보류 사유가 생겼고 `9`는 실표본 확인 단계 | `진행 중` | `2026-04-20~2026-04-23` |
 | `latency/tag/threshold broad relax` | bugfix-only 외 확장은 근거 부족 | `후순위 유지` | split-entry 1차 판정 후 재오픈 |
+| `물타기축(AVG_DOWN/REVERSAL_ADD)` | 코드/설계는 존재하지만 스캘핑 실전축은 OFF | `이번 주는 일정 확정만, 실주문 변경 금지` | `2026-04-23 일정 고정`, `2026-04-24 다음주 shadow go/no-go` |
 | `정기 성과측정` | 중간 진단은 있으나 정기 보고 기준 분리 필요 | `이번 정리에서 기준 문서화` | 장후/주간 반복 운영 |
 
 ## 2026-04-20~2026-04-24 실행 맵
@@ -64,8 +69,8 @@
 | `2026-04-20 (월)` | `split-entry rebase` shadow 1일차, `HOLDING action schema` shadow-only 착수, `작업 9/8/10` 장후 판정 | split-entry 3축 동시 가동 금지, HOLDING 성과판정은 D+2로 미룬다 | `rebase` 1차 판정, HOLDING baseline/rollback 경로, 작업 8/10 보류 또는 유지 |
 | `2026-04-21 (화)` | `split-entry 즉시 재평가` 착수 또는 보류, `split-entry leakage` 승격/보류, `작업 12` 범위 확정 | `N_min/Δ_min/false_entry_rate` 없으면 착수 금지 | 다음 승격축 `1개` 또는 보류 사유 |
 | `2026-04-22 (수)` | `same-symbol cooldown` 착수 또는 보류, `HOLDING shadow` 최종판정, `작업 10` 확대 여부 최종판정, `작업 11` 보강 | `schema 변경 효과`와 `critical 경량화 효과`를 분리 기록 | HOLDING 축 go/no-go, cooldown 착수 여부 |
-| `2026-04-23 (목)` | `작업 12` 미확정분 최종정리 | `2026-04-21` 미확정이었을 때만 닫는다 | 범위 확정 또는 사유+재시각+escalation |
-| `2026-04-24 (금)` | 주간 통합판정 | `regime 태그` 병기, `canary 1축 + 독립 shadow 최대 2축` 원칙 재확인 | 다음주 PREOPEN 승격축 `1개` |
+| `2026-04-23 (목)` | `작업 12` 미확정분 최종정리 + `AI 엔진 A/B 원격 사전정합화 범위 확정` + `PYRAMID zero_qty Stage 1` 원격 범위/flag/rollback guard 확정 + `물타기축(AVG_DOWN/REVERSAL_ADD)` 재오픈 일정 확정 | `2026-04-21` 미확정이었을 때만 닫고, A/B/scale-in/물타기 모두 실험축 1개만 허용 | 범위 확정 또는 사유+재시각+escalation, A/B/scale-in/물타기 preflight 체크리스트 |
+| `2026-04-24 (금)` | 주간 통합판정 + `AI 엔진 A/B remote shadow 착수 여부` 판정 + `PYRAMID zero_qty Stage 1 remote canary` 승인/보류 + `물타기축 다음주 shadow` 승인/보류 | `regime 태그` 병기, `canary 1축 + 독립 shadow 최대 2축` 원칙 재확인 | 다음주 PREOPEN 승격축 `1개` 또는 A/B/scale-in/물타기 보류사유 |
 
 ## 승격/보류 게이트
 

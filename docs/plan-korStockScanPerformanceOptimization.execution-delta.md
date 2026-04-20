@@ -21,6 +21,12 @@
 | `HOLDING 성과판정` | `2026-04-21` 1일차 판정 | `2026-04-22 D+2` 최종판정 | schema 변경 직후 자기참조 오염 방지, audited table `S-4` 반영 | `2026-04-22 POSTCLOSE` |
 | `AIPrompt 작업 10` | `2026-04-19` 1차 결과 평가 후 확대 여부 판정 | `2026-04-20`에는 `shadow-only 유지/확대 보류`만 판정, 최종 확대는 `2026-04-22` | `holding_action_applied`, `holding_force_exit_triggered`, `holding_override_rule_version` 관찰축 부족 | `2026-04-22 POSTCLOSE` |
 | `AIPrompt 작업 8` | 핵심값 3종 투입 결과 정리 후 완료 후보 | 값 주입은 존재하나 `*_sent` 감사 로그 부족으로 미완료 유지 | 완료 기준과 감사 필드 범위 불일치 | `2026-04-20 POSTCLOSE` 재판정 |
+| `원격 canary 운용` | 튜닝축 신규 변경은 원격 canary 선행을 기본값으로 사용 | 현재 튜닝기간은 `신규 원격 canary 강제`를 보류하고, `AI 엔진 A/B` 직전에만 원격 정합화 후 사용 | split-entry/HOLDING 우선순위 집중 + 실험축 분리 원칙 | `2026-04-23 POSTCLOSE` 재판정 |
+| `PYRAMID zero_qty Stage 1 반영` | 수량 패치가 유효하면 `PYRAMID/REVERSAL_ADD` 동시 범위로 확장 가능 | 현재 실행 기준은 `SCALPING/PYRAMID bugfix-only`에 한해 `remote 범위확정 -> remote canary 판정 -> main code-load(flag OFF)` 순서로만 허용 | LIVE/OFF 축 혼동 방지 + split-entry/HOLDING 관찰축 보존 + main 선반영 금지 | `2026-04-24 POSTCLOSE` go/no-go |
+| `개별 종목 이슈 해석 범위` | scale-in 이슈 중심으로 빠른 수량 패치 논의 가능 | 개별 종목은 `entry gate + latency + liquidity + holding exit` 4축 분해 관찰 후에만 로직 변경 후보화 | 단일 원인 오판 방지 + 기대값 손실의 실제 누수지점 분리 | `2026-04-21 POSTCLOSE` 재확인 |
+| `물타기축(AVG_DOWN/REVERSAL_ADD)` | holding-profit-conversion 플랜 기준으로 `2026-04-20~2026-04-21` 관찰/전환 가능 | 현재 활성 플랜에서는 우선순위에서 내려 `일정 확정만` 수행, 실제 재오픈 여부는 `2026-04-24 POSTCLOSE`에 다음주 shadow go/no-go로 판정 | split-entry/HOLDING 우선 + 실주문 변경축 과밀 방지 | `2026-04-23 일정 확정`, `2026-04-24 go/no-go` |
+| `장전 리포트 빌드 운영` | 장전에도 필요 시 full build 실행 가능으로 운용 | `PREOPEN`에는 `sanity check` 우선, full build는 `bot_main` 동작 중 차단(락 + override 필요) | `2026-04-20` 장전 부하/장애 재발 방지 | 즉시 적용 (`deploy/run_monitor_snapshot_safe.sh`) |
+| `AI 엔진 A/B 착수` | 운영 튜닝과 병행 | 운영 튜닝 종료판정 이후 `remote shadow -> remote canary -> main canary`로 분리 착수 | 원인 귀속 혼선 방지 + 단일축 실험 유지 | `2026-04-24 POSTCLOSE` go/no-go |
 | `broad relax` | `latency/tag/threshold` 확장 후보를 빠르게 재오픈 | `split-entry leakage` 1차 판정 전 재오픈 금지 | 거래수 확대보다 손실축 제거 우선 | split-entry 1차 판정 후 |
 | `운영판정` | 실험축별 판정 중심 | `No-Decision Day` 게이트와 `report integrity / event restoration / aggregation quality` 품질게이트 병행 | 잘못된 집계로 잘못된 승격을 막기 위함 | 장후 반복 적용 |
 
