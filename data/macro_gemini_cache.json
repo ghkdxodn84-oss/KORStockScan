@@ -1,86 +1,86 @@
 {
-  "bundle_as_of": "2026-04-16T22:20:18Z",
+  "bundle_as_of": "2026-04-19T22:20:16Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7041.28,
-    "prev_value": 7022.95,
-    "change": 18.33,
-    "change_pct": 0.26,
-    "as_of": "2026-04-16T20:00:00Z",
-    "source": "TheStreet"
+    "value": 7126.06,
+    "prev_value": 7041.28,
+    "change": 84.78,
+    "change_pct": 1.2,
+    "as_of": "2026-04-17T20:00:00Z",
+    "source": "Associated Press / BNN Bloomberg"
   },
   "nasdaq": {
     "name": "NASDAQ Composite",
-    "value": 24102.7,
-    "prev_value": 24016.01,
-    "change": 86.69,
-    "change_pct": 0.36,
-    "as_of": "2026-04-16T20:00:00Z",
-    "source": "TheStreet"
+    "value": 24468.48,
+    "prev_value": 24102.7,
+    "change": 365.78,
+    "change_pct": 1.52,
+    "as_of": "2026-04-17T20:00:00Z",
+    "source": "Morningstar / Dow Jones Market Data"
   },
   "vix": {
-    "name": "VIX",
-    "value": 17.87,
-    "prev_value": 18.17,
-    "change": -0.3,
-    "change_pct": -1.65,
-    "as_of": "2026-04-16T20:00:00Z",
-    "source": "Reddit / r/FluentInFinance"
+    "name": "CBOE Volatility Index",
+    "value": 17.44,
+    "prev_value": 17.94,
+    "change": -0.5,
+    "change_pct": -2.79,
+    "as_of": "2026-04-17T20:00:00Z",
+    "source": "FRED / Chicago Board Options Exchange"
   },
   "us10y": {
-    "name": "US 10Y Treasury Yield",
-    "value": 4.313,
-    "prev_value": 4.279,
-    "change": 0.034,
-    "change_pct": 0.79,
-    "as_of": "2026-04-16T20:00:00Z",
-    "source": "TheStreet"
+    "name": "US 10-Year Treasury Yield",
+    "value": 4.25,
+    "prev_value": 4.32,
+    "change": -0.07,
+    "change_pct": null,
+    "as_of": "2026-04-17T20:00:00Z",
+    "source": "Trading Economics"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 97.51,
-    "prev_value": 94.94,
-    "change": 2.57,
-    "change_pct": 2.71,
-    "as_of": "2026-04-16T20:00:00Z",
-    "source": "Trading Economics"
+    "value": 90.38,
+    "prev_value": 99.4,
+    "change": -9.02,
+    "change_pct": -9.07,
+    "as_of": "2026-04-17T20:00:00Z",
+    "source": "Trading Economics / BNN Bloomberg"
   },
   "headlines": [
     {
-      "title": "Nasdaq notches 12th straight daily gain; longest winning streak since July 2009",
+      "title": "Oil prices drop 9 per cent and Wall Street rallies to a record after Iran reopens the Strait of Hormuz",
+      "source": "BNN Bloomberg",
+      "published_at": "2026-04-17T09:58:00Z",
+      "url": "https://www.bnnbloomberg.ca"
+    },
+    {
+      "title": "Stock Market Today: Market wide rally continues as Nasdaq Composite notches 13th straight gain, longest streak since 1992",
       "source": "TheStreet",
-      "published_at": "2026-04-16T20:08:00Z",
+      "published_at": "2026-04-17T20:01:00Z",
       "url": "https://www.thestreet.com"
     },
     {
-      "title": "Oil Prices Climb on Ceasefire Extension Caution",
-      "source": "Transport Topics",
-      "published_at": "2026-04-16T12:52:00Z",
-      "url": "https://www.ttnews.com"
+      "title": "VIX Crashes 44% In 3 Weeks — History Points To S&P 500 Upside",
+      "source": "Benzinga",
+      "published_at": "2026-04-17T12:00:00Z",
+      "url": "https://www.benzinga.com"
     },
     {
-      "title": "Rally Slows, Oil Up After Stocks Post New Highs",
-      "source": "Charles Schwab",
-      "published_at": "2026-04-16T13:13:00Z",
-      "url": "https://www.schwab.com"
+      "title": "Brent Crude Tumbles Below $90 After Iran Reopens Strait of Hormuz",
+      "source": "Trading Economics",
+      "published_at": "2026-04-17T14:00:00Z",
+      "url": "https://tradingeconomics.com"
     },
     {
-      "title": "Treasurers increase money market fund allocations amid rising volatility",
-      "source": "Tradeweb",
-      "published_at": "2026-04-16T12:00:00Z",
-      "url": "https://www.tradeweb.com"
-    },
-    {
-      "title": "Wall Street holds near its record high even as oil prices climb",
-      "source": "Pittsburgh Post-Gazette",
-      "published_at": "2026-04-16T09:21:00Z",
-      "url": "https://www.post-gazette.com"
+      "title": "US 10-Year Treasury Yield Eases to 4.25% as Inflation Concerns Subside",
+      "source": "Trading Economics",
+      "published_at": "2026-04-17T20:00:00Z",
+      "url": "https://tradingeconomics.com"
     }
   ],
   "notes": [
-    "S&P 500 and Nasdaq set fresh record highs, largely driven by AI momentum and hopes of a Middle East ceasefire.",
-    "The Nasdaq Composite recorded its 12th straight day of gains, its longest streak since 2009.",
-    "Oil prices traded higher amid continued geopolitical tensions and Strait of Hormuz uncertainties.",
-    "The US 10-year Treasury yield rose slightly to 4.313%."
+    "S&P 500 and NASDAQ both closed at new all-time highs on Friday, April 17, 2026, driven by a broad market rally.",
+    "Brent crude futures plunged over 9% after Iran announced the temporary reopening of the Strait of Hormuz amidst a 10-day ceasefire, removing a significant geopolitical risk premium.",
+    "The 10-year US Treasury yield fell by 7 basis points to 4.25%, easing inflation concerns tied to previously surging energy costs.",
+    "VIX dropped another 2.79% to 17.44, reaching its lowest levels in over two months."
   ]
 }

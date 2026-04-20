@@ -7,16 +7,30 @@ from src.utils.logger import log_info
 
 def resolve_runtime_role() -> str:
     """Return runtime role: main (default) or remote."""
+    host = socket.gethostname().strip().lower()
+    remote_host_hints = ("remote", "windy", "songstockscan", "korstock-test-server")
+    host_looks_remote = any(token in host for token in remote_host_hints)
+
+    # Safety-first default for known remote hosts unless explicitly forced.
+    force_main_on_remote = str(os.getenv("KORSTOCKSCAN_FORCE_MAIN_ON_REMOTE", "") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
     explicit = str(os.getenv("KORSTOCKSCAN_RUNTIME_ROLE", "") or "").strip().lower()
     if explicit in {"main", "remote"}:
+        if explicit == "main" and host_looks_remote and not force_main_on_remote:
+            log_info("[AI_ROUTER] override main->remote on known remote host")
+            return "remote"
         return explicit
 
     latency_profile = str(os.getenv("KORSTOCKSCAN_LATENCY_CANARY_PROFILE", "") or "").strip().lower()
     if "remote" in latency_profile:
         return "remote"
 
-    host = socket.gethostname().strip().lower()
-    if any(token in host for token in ("remote", "windy")):
+    if host_looks_remote:
         return "remote"
     return "main"
 
@@ -101,4 +115,3 @@ class RuntimeAIEngineRouter:
         if self.openai_scalping_engine is not None and hasattr(self.openai_scalping_engine, name):
             return getattr(self.openai_scalping_engine, name)
         raise AttributeError(name)
-
