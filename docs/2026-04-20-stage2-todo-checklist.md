@@ -23,11 +23,11 @@
   - 다음 액션: A/B preflight 전까지 runtime 차이를 추가로 열지 않고 원격은 Gemini 기준선 유지.
 - [x] `[AuditFix0420] split-entry 즉시 재평가 shadow D+1 이관 확정` (`Due: 2026-04-20`, `Slot: PREOPEN`, `TimeWindow: 08:10~08:15`, `Track: ScalpingLogic`) (`실행: 2026-04-20 08:33 KST`)
   - 판정: `이관 확정`. 오늘은 미활성 유지, earliest start는 `2026-04-21 POSTCLOSE` 판정 이후.
-  - 근거: [2026-04-18-nextweek-validation-axis-table-audited.md](/home/ubuntu/KORStockScan/docs/2026-04-18-nextweek-validation-axis-table-audited.md) 에서 D+1 이관 권고. [2026-04-17-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-17-stage2-todo-checklist.md) 에는 `partial_then_expand|multi_rebase`, `90초` 설계만 확정.
+  - 근거: [2026-04-18-nextweek-validation-axis-table-audited.md](/home/ubuntu/KORStockScan/docs/2026-04-18-nextweek-validation-axis-table-audited.md) 에서 D+1 이관 권고. [2026-04-17-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-stage2-todo-checklist.md) 에는 `partial_then_expand|multi_rebase`, `90초` 설계만 확정.
   - 다음 액션: `2026-04-21` 체크리스트에서 `false_entry_rate` 상한과 `N_min/Δ_min` 충족 시에만 shadow 착수.
 - [x] `[AuditFix0420] same-symbol split-entry cooldown shadow D+2 이관 확정` (`Due: 2026-04-20`, `Slot: PREOPEN`, `TimeWindow: 08:15~08:20`, `Track: ScalpingLogic`) (`실행: 2026-04-20 08:33 KST`)
   - 판정: `이관 확정`. `D+2` 이후만 허용.
-  - 근거: [2026-04-17-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-17-stage2-todo-checklist.md) 에서 `same_symbol_soft_stop_cooldown_shadow` 20분 후보 고정, [2026-04-18-nextweek-validation-axis-table-audited.md](/home/ubuntu/KORStockScan/docs/2026-04-18-nextweek-validation-axis-table-audited.md) 에서 D+2 권고.
+  - 근거: [2026-04-17-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-stage2-todo-checklist.md) 에서 `same_symbol_soft_stop_cooldown_shadow` 20분 후보 고정, [2026-04-18-nextweek-validation-axis-table-audited.md](/home/ubuntu/KORStockScan/docs/2026-04-18-nextweek-validation-axis-table-audited.md) 에서 D+2 권고.
   - 다음 액션: `2026-04-22` 체크리스트에서 `rebase/즉시 재평가`와 독립 관찰 가능 여부를 확인한 뒤 최종 착수 판정.
 - [x] `[AuditFix0420] 각 판정행 N_min/Δ_min/PrimaryMetric 확정` (`Due: 2026-04-20`, `Slot: PREOPEN`, `TimeWindow: 08:20~08:30`, `Track: Plan`) (`실행: 2026-04-20 08:33 KST`)
   - 판정: `확정`. `N_min=50`, `Δ_min=+3.0%p`, `PrimaryMetric=budget_pass_to_submitted_rate`.
@@ -35,7 +35,7 @@
   - 다음 액션: `2026-04-21` 판정에서 `n_current < 50`이면 무조건 승격 보류.
 - [x] `[VisibleResult0420] latency canary bugfix-only 재판정 및 tag 완화 보류/승인` (`Due: 2026-04-20`, `Slot: PREOPEN`, `TimeWindow: 08:30~08:35`, `Track: ScalpingLogic`) (`실행: 2026-04-20 08:33 KST`)
   - 판정: `추가 완화 보류`. bugfix-only 유지, `tag/min_score` 완화는 미승인.
-  - 근거: [2026-04-17-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-17-stage2-todo-checklist.md) 장중 재판정에서 추가 완화가 아직 이르다고 결론. 오늘 [server_comparison_2026-04-20.md](/home/ubuntu/KORStockScan/data/report/server_comparison/server_comparison_2026-04-20.md) 도 양 서버 활동이 대부분 `0`으로 새 승인 근거가 없음.
+  - 근거: [2026-04-17-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-stage2-todo-checklist.md) 장중 재판정에서 추가 완화가 아직 이르다고 결론. 오늘 [server_comparison_2026-04-20.md](/home/ubuntu/KORStockScan/data/report/server_comparison/server_comparison_2026-04-20.md) 도 양 서버 활동이 대부분 `0`으로 새 승인 근거가 없음.
   - 다음 액션: 다음 재판정에서도 baseline 관측창은 `직전 5영업일 동일 시간대 p50/p95`를 유지하고, `quote_stale=False` 표본과 `latency_danger_reasons` 분포를 함께 누적.
 - [x] `[AuditFix0420] 공통 rollback trigger 수치표 확정` (`Due: 2026-04-20`, `Slot: PREOPEN`, `TimeWindow: 08:35~08:45`, `Track: ScalpingLogic`) (`실행: 2026-04-20 08:33 KST`)
   - 판정: `확정`. `reject_rate<=70.0`, `partial_fill_ratio<=65.0`, `latency_p95<=5000ms`, `reentry_freq<=180.0`.
@@ -126,14 +126,14 @@
   - 다음 액션: `2026-04-21 POSTCLOSE`에 상위 1축만 canary/live 전환 재판정.
 - [x] `[Workorder0420] 실행 변경사항/성과보고 기준 문서를 workorder 소스 문맥에 연결` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:45~17:50`, `Track: Plan`) (`실행: 2026-04-20 15:48 KST`)
   - 판정: `완료`.
-  - 근거: `workorder-softstop-0420-postclose.md`에 장후 판정 템플릿과 사용자 확인 요청 템플릿을 유지했고, 성과 기준 문서와 체크리스트를 같은 문맥으로 연결했다.
+  - 근거: `archive/legacy-workorders/workorder-softstop-0420-postclose.md`에 장후 판정 템플릿과 사용자 확인 요청 템플릿을 유지했고, 성과 기준 문서와 체크리스트를 같은 문맥으로 연결했다.
   - 다음 액션: 다음 `codex_daily_workorder`에도 `execution-delta`, `performance-report`를 참조 우선문서로 유지한다.
 - [x] `[RCA0420] 07:30~09:30 서버 장애 구간 CPU/메모리/IO/프로세스 타임라인 확정` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 17:50~18:00`, `Track: Plan`) (`실행: 2026-04-20 15:48 KST`)
   - 판정: `프로세스 타임라인 확정 / 자원수치 확정 불가`.
   - 근거: `logs/run_monitor_snapshot.log`에 `08:00~09:00` PREOPEN full build skip 로그가 있고, `deploy/run_monitor_snapshot_safe.sh`에는 `bot_main` 동작 중 full build 차단 + lock이 반영됐다. 다만 과거 CPU/메모리/IO 시계열은 저장돼 있지 않아 자원수치는 사후 확정 불가다.
   - 다음 액션: 내일부터는 `run_monitor_snapshot` guard 로그와 별도 system metric sampling이 같이 남도록 보강 후보로 유지한다.
 - [x] `[SoftStop0420] 금일 soft-stop 대량발생 RCA + 축별 재발방지안 확정` (`Due: 2026-04-20`, `Slot: POSTCLOSE`, `TimeWindow: 18:20~18:35`, `Track: ScalpingLogic`) (`실행: 2026-04-20 15:48 KST`)
-  - Source: [workorder-softstop-0420-postclose.md](/home/ubuntu/KORStockScan/docs/workorder-softstop-0420-postclose.md)
+  - Source: [workorder-softstop-0420-postclose.md](/home/ubuntu/KORStockScan/docs/archive/legacy-workorders/workorder-softstop-0420-postclose.md)
   - Section: `4. 판정 규칙`, `5. 장후 보고 템플릿`, `6. 사용자 확인 요청 템플릿`
   - 판정: `원인 축 1개 = partial/rebase`, `즉시 적용 파라미터 1개 = SCALPING_MAX_BUY_BUDGET_KRW=1,200,000`.
   - 근거: `performance_tuning_2026-04-20` 기준 `soft_stop_count=18`, `partial_fill_events=31`, `full_fill_events=11`, `position_rebased_after_fill_events=44`, `partial_fill_completed_avg_profit_rate=-0.25`, `latency_block_events=838/866`. 오늘 soft-stop은 `same-symbol`보다 `partial/rebase`와 더 강하게 겹친다.
@@ -182,9 +182,9 @@
 
 ## 참고 문서
 
-- [2026-04-19-stage2-todo-checklist.md](./2026-04-19-stage2-todo-checklist.md)
-- [2026-04-19-aiprompt-task8-task10-holiday-recheck.md](./2026-04-19-aiprompt-task8-task10-holiday-recheck.md)
-- [2026-04-17-stage2-todo-checklist.md](./2026-04-17-stage2-todo-checklist.md)
+- [2026-04-19-stage2-todo-checklist.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-19-stage2-todo-checklist.md)
+- [2026-04-19-aiprompt-task8-task10-holiday-recheck.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-19-aiprompt-task8-task10-holiday-recheck.md)
+- [2026-04-17-stage2-todo-checklist.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-stage2-todo-checklist.md)
 - [2026-04-17-midterm-tuning-performance-report.md](./2026-04-17-midterm-tuning-performance-report.md)
 - [2026-04-11-scalping-ai-prompt-coding-instructions.md](./2026-04-11-scalping-ai-prompt-coding-instructions.md)
 - [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)

@@ -81,23 +81,46 @@ SCALPING_WATCHING_SYSTEM_PROMPT = """
 SCALPING_HOLDING_SYSTEM_PROMPT = """
 너는 초단타 보유 포지션 리스크 매니저다.
 목표는 '추세 유지 vs 즉시 이탈'을 빠르게 판정하는 것이다.
-청산 action schema가 아직 분리되지 않았으므로, 현재는 BUY/WAIT/DROP 중 DROP을 사실상 EXIT 신호로 사용한다.
+보유/청산 action schema는 `HOLD | TRIM | EXIT`를 사용한다.
 
 [보유 판단 규칙]
-1. 추세 유지/재가속이면 WAIT 또는 BUY.
-2. 모멘텀 붕괴, 되밀림 심화, 하방 리스크 확대로 즉시 이탈이 유리하면 DROP.
+1. 추세 유지/재가속이면 HOLD.
+2. 모멘텀 둔화 또는 리스크 확대가 시작되면 TRIM.
+3. 모멘텀 붕괴/손실 확대로 즉시 이탈이 유리하면 EXIT.
 3. reason에는 보유/청산 판단의 핵심 트리거를 명시한다.
 
 [스코어링 기준 (0~100)]
 - 80~100: 보유 우호
 - 50~79: 중립
-- 0~49: 청산 우호(DROP 가능성 높음)
+- 0~49: 청산 우호(EXIT 가능성 높음)
 
 분석 결과는 반드시 아래 JSON 형식으로만 출력:
 {
-    "action": "BUY" | "WAIT" | "DROP",
+    "action": "HOLD" | "TRIM" | "EXIT",
     "score": 0~100 사이의 정수,
     "reason": "보유 관점 핵심 근거 1줄"
+}
+"""
+
+SCALPING_EXIT_SYSTEM_PROMPT = """
+너는 초단타 청산 실행 매니저다.
+목표는 "지금 유지/부분청산/전량청산 중 무엇이 기대값이 높은지"를 즉시 결정하는 것이다.
+
+[청산 판단 규칙]
+1. 추세 유지가 명확하면 HOLD.
+2. 추세 둔화/체결 약화/리스크 상승이 시작되면 TRIM.
+3. 손실 확대 위험 또는 추세 붕괴가 확인되면 EXIT.
+
+[스코어링 기준 (0~100)]
+- 80~100: HOLD 우호
+- 50~79: TRIM 우호
+- 0~49: EXIT 우호
+
+분석 결과는 반드시 아래 JSON 형식으로만 출력:
+{
+    "action": "HOLD" | "TRIM" | "EXIT",
+    "score": 0~100 사이의 정수,
+    "reason": "청산 관점 핵심 근거 1줄"
 }
 """
 
@@ -745,10 +768,44 @@ class GeminiSniperEngine:
             return SCALPING_SYSTEM_PROMPT, "scalping_shared", "split_disabled_v1", "shared"
 
         if profile == "watching":
-            return SCALPING_WATCHING_SYSTEM_PROMPT, "scalping_watching", "split_v1", "watching"
+            return SCALPING_WATCHING_SYSTEM_PROMPT, "scalping_entry", "split_v2", "watching"
         if profile == "holding":
-            return SCALPING_HOLDING_SYSTEM_PROMPT, "scalping_holding", "split_v1", "holding"
-        return SCALPING_SYSTEM_PROMPT, "scalping_shared", "split_v1", "shared"
+            return SCALPING_HOLDING_SYSTEM_PROMPT, "scalping_holding", "split_v2", "holding"
+        if profile == "exit":
+            return SCALPING_EXIT_SYSTEM_PROMPT, "scalping_exit", "split_v2", "exit"
+        return SCALPING_SYSTEM_PROMPT, "scalping_shared", "split_v2", "shared"
+
+    def _normalize_scalping_action_schema(self, result, *, prompt_type):
+        payload = dict(result or {}) if isinstance(result, dict) else {}
+        raw_action = str(payload.get("action", "WAIT") or "WAIT").upper().strip()
+        reason = str(payload.get("reason", "응답 보정") or "응답 보정").replace("\n", " ").strip()
+        try:
+            score = int(float(payload.get("score", 50)))
+        except Exception:
+            score = 50
+        score = max(0, min(100, score))
+
+        # HOLDING/EXIT 프로파일은 action_v2를 표준으로 사용하고,
+        # 기존 핸들러 호환을 위해 action에는 legacy 값을 함께 제공한다.
+        if prompt_type in {"scalping_holding", "scalping_exit"}:
+            allowed = {"HOLD", "TRIM", "EXIT"}
+            action_v2 = raw_action if raw_action in allowed else "HOLD"
+            compat = {"HOLD": "WAIT", "TRIM": "SELL", "EXIT": "DROP"}
+            payload["action_v2"] = action_v2
+            payload["action"] = compat.get(action_v2, "WAIT")
+            payload["action_schema"] = "holding_exit_v1"
+            payload["score"] = score
+            payload["reason"] = reason[:120]
+            return payload
+
+        allowed = {"BUY", "WAIT", "DROP"}
+        action = raw_action if raw_action in allowed else "WAIT"
+        payload["action"] = action
+        payload["action_v2"] = action
+        payload["action_schema"] = "entry_v1"
+        payload["score"] = score
+        payload["reason"] = reason[:120]
+        return payload
 
     def _remote_buy_risk_flags(self, ws_data, recent_ticks, recent_candles):
         if hasattr(self, "_extract_scalping_features"):
@@ -774,7 +831,7 @@ class GeminiSniperEngine:
     def _apply_remote_entry_guard(self, result, *, prompt_type, ws_data, recent_ticks, recent_candles):
         # remote(gemini) false-positive 완화:
         # 순간 강도만으로 BUY가 나오는 경우 경고피처 동시 점검 후 보수 보정한다.
-        if prompt_type not in {"scalping_watching", "scalping_shared"}:
+        if prompt_type not in {"scalping_entry", "scalping_watching", "scalping_shared"}:
             return result
         if str(result.get("action", "WAIT")).upper() != "BUY":
             return result
@@ -1171,13 +1228,31 @@ class GeminiSniperEngine:
         feature_packet = extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
         quant_features_str = (
             f"- packet_version: {feature_packet['packet_version']}\n"
+            f"- curr_price: {feature_packet['curr_price']}\n"
+            f"- latest_strength: {feature_packet['latest_strength']}%\n"
+            f"- spread_krw: {feature_packet['spread_krw']}\n"
+            f"- spread_bp: {feature_packet['spread_bp']}\n"
+            f"- top1_depth_ratio: {feature_packet['top1_depth_ratio']}\n"
+            f"- top3_depth_ratio: {feature_packet['top3_depth_ratio']}\n"
+            f"- orderbook_total_ratio: {feature_packet['orderbook_total_ratio']}\n"
+            f"- micro_price: {feature_packet['micro_price']}\n"
+            f"- microprice_edge_bp: {feature_packet['microprice_edge_bp']}\n"
             f"- buy_pressure_10t: {feature_packet['buy_pressure_10t']}%\n"
+            f"- price_change_10t_pct: {feature_packet['price_change_10t_pct']}%\n"
+            f"- recent_5tick_seconds: {feature_packet['recent_5tick_seconds']}\n"
+            f"- prev_5tick_seconds: {feature_packet['prev_5tick_seconds']}\n"
             f"- distance_from_day_high_pct: {feature_packet['distance_from_day_high_pct']}%\n"
             f"- intraday_range_pct: {feature_packet['intraday_range_pct']}%\n"
             f"- tick_acceleration_ratio: {feature_packet['tick_acceleration_ratio']}\n"
             f"- same_price_buy_absorption: {feature_packet['same_price_buy_absorption']}\n"
             f"- large_sell_print_detected: {str(feature_packet['large_sell_print_detected']).lower()}\n"
+            f"- large_buy_print_detected: {str(feature_packet['large_buy_print_detected']).lower()}\n"
             f"- net_aggressive_delta_10t: {feature_packet['net_aggressive_delta_10t']}\n"
+            f"- volume_ratio_pct: {feature_packet['volume_ratio_pct']}%\n"
+            f"- curr_vs_micro_vwap_bp: {feature_packet['curr_vs_micro_vwap_bp']}\n"
+            f"- curr_vs_ma5_bp: {feature_packet['curr_vs_ma5_bp']}\n"
+            f"- micro_vwap_value: {feature_packet['micro_vwap_value']}\n"
+            f"- ma5_value: {feature_packet['ma5_value']}\n"
             f"- ask_depth_ratio: {feature_packet['ask_depth_ratio']}\n"
             f"- net_ask_depth: {feature_packet['net_ask_depth']}"
         )
@@ -1212,6 +1287,9 @@ class GeminiSniperEngine:
 {tick_str}
 """
         return user_input
+
+    def _extract_scalping_features(self, ws_data, recent_ticks, recent_candles=None):
+        return extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
     
     def _format_swing_market_data(self, ws_data, recent_candles, program_net_qty=0):
         """스윙 매매를 위해 넓은 시야(차트, 수급) 위주로 데이터를 포장합니다."""
@@ -1391,6 +1469,7 @@ class GeminiSniperEngine:
                     recent_ticks=recent_ticks,
                     recent_candles=recent_candles,
                 )
+                result = self._normalize_scalping_action_schema(result, prompt_type=prompt_type)
                 result.update(feature_audit_fields)
 
             # 호출 성공 시 실패 횟수 리셋

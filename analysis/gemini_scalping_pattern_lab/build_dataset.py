@@ -1,6 +1,7 @@
 import csv
 import gzip
 import json
+import logging
 import os
 import sys
 from collections import defaultdict
@@ -14,9 +15,33 @@ sys.path.insert(0, str(PROJECT_ROOT))
 import config
 
 try:
-    from src.engine.dashboard_data_repository import load_pipeline_events
+    from src.engine.tuning_duckdb_repository import TuningDuckDBRepository
+    DUCKDB_AVAILABLE = True
 except Exception:
-    load_pipeline_events = None
+    TuningDuckDBRepository = None
+    DUCKDB_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
+
+_DUCKDB_VIEW_READY = False
+
+
+def _normalize_pipeline_row(row: dict) -> dict:
+    """DuckDB parquet row를 pipeline_event 원형 스키마로 보정."""
+    normalized = dict(row)
+    fields: dict = {}
+    for key in list(normalized.keys()):
+        if key.startswith("fields_"):
+            field_key = key.removeprefix("fields_")
+            value = normalized.pop(key)
+            if value is not None:
+                fields[field_key] = value
+    if fields:
+        normalized["fields"] = fields
+    record_id = normalized.get("record_id")
+    if isinstance(record_id, float) and record_id.is_integer():
+        normalized["record_id"] = int(record_id)
+    return normalized
 
 
 def _date_range(start_date: str, end_date: str) -> list[str]:
@@ -73,7 +98,9 @@ def _process_pipeline_events_rows(rows, server_name, funnel_counts, trade_info, 
             funnel_counts[date_str]["submitted_events"] += 1
 
         seq_info[record_id]["server"] = server_name
-        seq_info[record_id]["events"].append(stage)
+        # sequence_fact는 최대 10개 이벤트만 표시하므로 메모리 상한을 둔다.
+        if len(seq_info[record_id]["events"]) < 10:
+            seq_info[record_id]["events"].append(stage)
 
         if "entry_mode" in fields:
             trade_info[record_id]["entry_mode"] = fields["entry_mode"]
@@ -142,20 +169,59 @@ def _process_post_sell_rows(rows, server_name, trade_info, seq_info, trade_facts
         )
 
 
-def _load_local_pipeline_rows(target_date: str) -> list[dict]:
-    if load_pipeline_events is not None:
-        try:
-            rows = load_pipeline_events(target_date, include_file_for_today=True)
-            if rows:
-                return rows
-        except Exception:
-            pass
+def _load_from_duckdb(target_date: str) -> list[dict]:
+    """DuckDB에서 pipeline_events 로드 (날짜 필터 적용)."""
+    global _DUCKDB_VIEW_READY
+    if not DUCKDB_AVAILABLE:
+        return []
+    try:
+        # read_only=False로 열어야 VIEW 생성이 가능하다.
+        with TuningDuckDBRepository(read_only=False) as repo:
+            if not _DUCKDB_VIEW_READY:
+                repo.register_parquet_dataset("pipeline_events")
+                _DUCKDB_VIEW_READY = True
+            # 날짜 범위 쿼리
+            df = repo.query(
+                """
+                SELECT
+                    stage,
+                    record_id,
+                    emitted_date,
+                    emitted_at,
+                    fields_overbought_blocked,
+                    fields_entry_mode,
+                    fields_fill_quality
+                FROM v_pipeline_events
+                WHERE emitted_date = ?
+                """,
+                [target_date]
+            )
+        if df.empty:
+            return []
+        # DataFrame을 원본 JSON 형식으로 변환
+        rows = df.to_dict(orient="records")
+        return [_normalize_pipeline_row(r) for r in rows]
+    except Exception as e:
+        logger.warning("DuckDB 로드 실패 %s: %s", target_date, e)
+        return []
 
+
+def _load_local_pipeline_rows(target_date: str) -> tuple[list[dict], str]:
+    # 새 아키텍처: DuckDB 우선 -> 파일 -> DB fallback
+    # 1. DuckDB
+    if DUCKDB_AVAILABLE:
+        rows = _load_from_duckdb(target_date)
+        if rows:
+            return rows, "duckdb"
+    # 2. 파일
     for suffix in (".jsonl", ".jsonl.gz"):
         path = config.LOCAL_PIPELINE_DIR / f"pipeline_events_{target_date}{suffix}"
         if path.exists():
-            return _load_jsonl_rows(path)
-    return []
+            rows = _load_jsonl_rows(path)
+            if rows:
+                return rows, "jsonl"
+    # legacy DB fallback 제거: 운영 canonical source는 parquet/DuckDB + jsonl이다.
+    return [], "none"
 
 
 def _iter_jsonl_files(base_dir: Path, *, name_contains: str | None = None):
@@ -170,6 +236,41 @@ def _iter_jsonl_files(base_dir: Path, *, name_contains: str | None = None):
             yield Path(root) / filename
 
 
+def _extract_date_token(name: str) -> str | None:
+    # pipeline_events_YYYY-MM-DD(.jsonl/.jsonl.gz), date=YYYY-MM-DD 폴더명 지원
+    if "date=" in name:
+        token = name.split("date=", 1)[1][:10]
+        try:
+            date.fromisoformat(token)
+            return token
+        except ValueError:
+            return None
+    for idx in range(len(name) - 9):
+        token = name[idx:idx + 10]
+        try:
+            date.fromisoformat(token)
+            return token
+        except ValueError:
+            continue
+    return None
+
+
+def _discover_available_pipeline_dates() -> set[str]:
+    dates: set[str] = set()
+    for path in _iter_jsonl_files(config.LOCAL_PIPELINE_DIR, name_contains="pipeline_events_"):
+        token = _extract_date_token(path.name)
+        if token:
+            dates.add(token)
+
+    parquet_dir = config.ANALYTICS_PARQUET_ROOT / "pipeline_events"
+    if parquet_dir.exists():
+        for part in parquet_dir.glob("date=*"):
+            token = _extract_date_token(part.name)
+            if token:
+                dates.add(token)
+    return dates
+
+
 def main():
     print("Building datasets...")
     funnel_counts = defaultdict(lambda: defaultdict(int))
@@ -178,15 +279,24 @@ def main():
         lambda: {"events": [], "partial_then_expand_flag": False, "multi_rebase_flag": False}
     )
     trade_facts = []
+    all_dates = _date_range(config.START_DATE, config.END_DATE)
+    available_dates = _discover_available_pipeline_dates()
+    target_date_tokens = set(all_dates)
+    local_pipeline_sources = defaultdict(int)
+    covered_dates = set()
 
-    # LOCAL pipeline: DB 우선 + 파일 fallback
-    for date_str in _date_range(config.START_DATE, config.END_DATE):
-        rows = _load_local_pipeline_rows(date_str)
+    # LOCAL pipeline: DuckDB 우선 + 파일/DB fallback
+    for date_str in all_dates:
+        rows, source = _load_local_pipeline_rows(date_str)
+        local_pipeline_sources[source] += 1
         if rows:
+            covered_dates.add(date_str)
             _process_pipeline_events_rows(rows, "local", funnel_counts, trade_info, seq_info)
 
     # LOCAL post-sell: 파일(jsonl/jsonl.gz)
     for file_path in _iter_jsonl_files(config.LOCAL_POST_SELL_EVAL_DIR, name_contains="evaluations"):
+        if not any(token in file_path.name for token in target_date_tokens):
+            continue
         _process_post_sell_rows(
             _load_jsonl_rows(file_path), "local", trade_info, seq_info, trade_facts
         )
@@ -195,6 +305,8 @@ def main():
     for file_path in _iter_jsonl_files(config.REMOTE_BASE_DIR):
         path_str = str(file_path)
         if "remote_" not in path_str:
+            continue
+        if not any(token in file_path.name for token in target_date_tokens):
             continue
         if "pipeline_events" in file_path.name:
             _process_pipeline_events_rows(
@@ -299,6 +411,43 @@ def main():
                 f"`profit_valid_flag=true` 표본이 서버별 {config.MIN_VALID_SAMPLES}건 미만이므로 **표본 부족**으로 결론을 확정할 수 없음.\n"
             )
 
+    # run_manifest.json 작성
+    manifest_path = config.OUTPUT_DIR / "run_manifest.json"
+    import json
+    from datetime import datetime
+
+    used_sources = {k for k, v in local_pipeline_sources.items() if v > 0 and k != "none"}
+    if used_sources == {"duckdb"}:
+        data_source_mode = "duckdb_primary"
+    elif used_sources == {"jsonl"}:
+        data_source_mode = "jsonl_fallback"
+    elif used_sources == {"db"}:
+        data_source_mode = "db_fallback"
+    elif used_sources:
+        data_source_mode = "mixed"
+    else:
+        data_source_mode = "none"
+
+    expected_dates = sorted(d for d in all_dates if d in available_dates)
+    if not expected_dates:
+        expected_dates = all_dates
+    history_coverage_start = expected_dates[0] if expected_dates else None
+    history_coverage_end = expected_dates[-1] if expected_dates else None
+    history_coverage_ok = set(expected_dates).issubset(covered_dates) and len(expected_dates) > 0
+    manifest = {
+        "run_at": datetime.now().isoformat(),
+        "data_source_mode": data_source_mode,
+        "history_coverage_start": history_coverage_start,
+        "history_coverage_end": history_coverage_end,
+        "history_coverage_ok": history_coverage_ok,
+        "history_expected_dates": expected_dates,
+        "local_pipeline_source_stats": dict(local_pipeline_sources),
+        "total_trades": total_trades,
+        "valid_trades": len(valid_trades),
+    }
+    with open(manifest_path, "w", encoding="utf-8") as f:
+        json.dump(manifest, f, indent=2, ensure_ascii=False)
+    
     print("Dataset built successfully.")
 
 

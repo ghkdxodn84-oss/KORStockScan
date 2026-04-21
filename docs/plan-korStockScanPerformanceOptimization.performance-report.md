@@ -3,6 +3,14 @@
 기준 시각: `2026-04-20 KST`  
 기준 데이터 baseline: `2026-04-17` 고밀도 표본일 + DB 우선 스냅샷 + 장후 문서
 
+> 현재 활성 실행 기준은 [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)와 [2026-04-21-plan-rebase-auditor-report.md](./2026-04-21-plan-rebase-auditor-report.md)를 따른다.
+> 본 문서의 `entry_filter` 표기는 감사인 원문 표현이며, 현재 실행명은 `entry_filter_quality`다.
+
+> `2026-04-21 Plan Rebase`:
+> `fallback_scout/main`과 `fallback_single`이 `partial/rebase/soft_stop` 지표를 오염시킨 것으로 확인되어, 기존 튜닝 승격 판단은 일시중단한다.
+> 이후 성과판정은 `진입/보유/청산 로직 전수점검 -> 코호트 재정렬 -> 튜닝포인트 1축 재선정` 순서로 재개한다.
+> AI 엔진 A/B 테스트는 `entry_filter` canary 1차 판정 완료 후 재개 여부를 별도 판정하며, 최대 기한은 `2026-04-24 POSTCLOSE`다. Plan Rebase 기간의 live 스캘핑 AI 라우팅은 Gemini로 고정하고 OpenAI dual-persona shadow도 비활성화한다.
+
 이 문서는 장후/주간 반복 성과판정에 쓰는 기준 문서다.  
 일회성 진단은 [2026-04-17-midterm-tuning-performance-report.md](./2026-04-17-midterm-tuning-performance-report.md), 기본계획 대비 실행 변경은 [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)에서 본다.
 
@@ -10,7 +18,9 @@
 
 1. 현재 성과측정의 1순위는 `손익`이 아니라 `거래수`, `퍼널`, `blocker`, `체결품질`, `missed_upside`다.
 2. `2026-04-17`은 고밀도 표본일이 맞지만, baseline은 `문서 파생값`이 아니라 `스냅샷 실필드` 기준으로 다시 고정해야 한다.
-3. 다음주 성과측정의 핵심 baseline은 `latency + partial/rebase 체결품질 축`과 `HOLDING missed_upside/capture_efficiency 개선`이다.
+3. `2026-04-21` 이후 핵심 baseline은 `fallback 오염 제거 normal-only`, `post_fallback_deprecation`, `entry_filter canary`, `HOLDING missed_upside/capture_efficiency`, `position_addition_policy 후순위 후보`로 재정렬한다.
+4. 물타기/불타기/분할진입은 별도 튜닝축이 아니라 하나의 `포지션 증감 상태머신`으로 재설계해야 한다.
+5. OpenAI/Gemini A/B는 독립변수 오염을 막기 위해 `entry_filter` canary 1차 판정 완료 후 재개 여부를 별도 판정한다. 최대 기한은 `2026-04-24 POSTCLOSE`다.
 
 ## 2. 보고 주기
 
@@ -90,6 +100,8 @@
 
 ## 5. 다음주 주요 성과측정 포인트
 
+> 아래 기존 포인트는 `fallback 오염 제거 재집계` 후에만 승격/롤백 판단에 사용한다.
+
 | 구간 | 기준선 | 원하는 방향 |
 | --- | --- | --- |
 | `latency_block_events / budget_pass_events` | `6567 / 6634` | 의미 있게 감소 |
@@ -100,6 +112,34 @@
 | `missed_upside_rate` | 현재 HOLDING 기준선으로 고정 예정 | 감소 |
 | `capture_efficiency_avg_pct` | `39.8%` | 증가 |
 | `GOOD_EXIT` 분포 | `32`건 | 질 유지 또는 개선 |
+
+## 5-1. Plan Rebase 기준 (`2026-04-21`)
+
+### 판정
+
+1. 기존 `split-entry`, `partial/rebase`, `soft-stop` 통합 지표는 오염 제거 전까지 튜닝 결론으로 사용하지 않는다.
+2. `fallback_scout/main`은 탐색형 분할진입이 아니라 동시 2-leg 주문이므로 실패 설계로 폐기한다.
+3. `fallback_single`은 1차 응급가드 오류 표본으로 격리한다.
+4. 오늘 관찰된 불타기 수익 확대는 신규 기대값 개선 후보이나, 즉시 1순위는 `entry_filter` canary로 둔다. 물타기/분할진입은 후순위 `position_addition_policy`로 재설계한다.
+
+### 코호트
+
+| 코호트 | 정의 | 해석 |
+| --- | --- | --- |
+| `normal_only` | `entry_mode=normal`, `tag=normal`, `SAFE -> ALLOW_NORMAL` | 새 baseline 후보 |
+| `fallback_scout_main_contaminated` | `fallback_scout` 또는 `fallback_main` 포함 | 실패 설계 손실/오염 표본 |
+| `fallback_single_contaminated` | `fallback_single` 포함 | 1차 응급가드 오류 표본 |
+| `post_fallback_deprecation` | `2026-04-21 09:45 KST` 이후 표본 | 재정렬 후 운영 표본 |
+| `scale_in_profit_expansion` | 불타기/추가진입으로 수익 확대 | 신규 기대값 개선 후보 |
+| `avg_down_candidate` | 물타기 후보였으나 미실행 | 신규 상태머신 후보 |
+
+### 감사인 검토용 질문
+
+1. 현재 `진입/보유/청산` 로직표에서 누락된 상태 전이가 있는가?
+2. fallback 오염 제거 코호트 정의가 감사 가능한가?
+3. 다음 튜닝 1순위는 감사인 권고에 따라 `entry_filter` canary로 둔다. 단, 장후 코호트 데이터가 반대 근거를 보이면 사유를 기록한다.
+4. `position_addition_policy`는 `entry_filter -> holding_exit` 이후 후순위로 두고, 추가진입 중단 -> 불타기 -> 물타기 -> soft_stop 재해석 순서로 검토한다.
+5. AI 엔진 A/B 재개 여부는 `entry_filter` canary 1차 판정 완료 후, 늦어도 `2026-04-24 POSTCLOSE`에 별도 판정하는 것이 타당한가?
 
 ## 6. 정기 보고서 작성 템플릿
 

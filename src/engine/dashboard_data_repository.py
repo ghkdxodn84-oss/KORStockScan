@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,16 @@ PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 MONITOR_SNAPSHOT_DIR = DATA_DIR / "report" / "monitor_snapshots"
 
 
+def legacy_dashboard_db_enabled() -> bool:
+    """Legacy dashboard raw DB storage is opt-in after parquet migration."""
+    return os.getenv("KORSTOCKSCAN_ENABLE_LEGACY_DASHBOARD_DB", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 def get_db_connection():
     """PostgreSQL 연결을 생성하여 반환."""
     return psycopg2.connect(POSTGRES_URL)
@@ -32,6 +43,9 @@ def get_db_connection():
 
 def ensure_tables():
     """필요한 테이블이 없으면 생성 (부트스트랩)."""
+    if not legacy_dashboard_db_enabled():
+        logger.info("Legacy dashboard DB tables disabled; skipping ensure_tables.")
+        return
     create_pipeline_events = """
     CREATE TABLE IF NOT EXISTS dashboard_pipeline_events (
         id BIGSERIAL PRIMARY KEY,
@@ -48,6 +62,8 @@ def ensure_tables():
     );
     CREATE INDEX IF NOT EXISTS idx_dashboard_pipeline_events_date
         ON dashboard_pipeline_events (event_date);
+    CREATE INDEX IF NOT EXISTS idx_dashboard_pipeline_events_date_emitted_at
+        ON dashboard_pipeline_events (event_date, emitted_at);
     CREATE INDEX IF NOT EXISTS idx_dashboard_pipeline_events_pipeline_stage
         ON dashboard_pipeline_events (pipeline, stage);
     """
@@ -96,6 +112,13 @@ def upsert_pipeline_event_rows(target_date: str, rows: list[dict]) -> int:
     Returns:
         실제 삽입/갱신된 행 수 (중복 제외).
     """
+    if not legacy_dashboard_db_enabled():
+        logger.info(
+            "Legacy dashboard pipeline DB write disabled; skipped %d rows for %s.",
+            len(rows),
+            target_date,
+        )
+        return 0
     ensure_tables()
     conn = None
     inserted = 0
@@ -142,6 +165,13 @@ def upsert_pipeline_event_rows(target_date: str, rows: list[dict]) -> int:
 
 def upsert_monitor_snapshot(kind: str, target_date: str, payload: dict) -> None:
     """모니터 스냅샷을 DB에 저장 (갱신)."""
+    if not legacy_dashboard_db_enabled():
+        logger.info(
+            "Legacy dashboard snapshot DB write disabled; skipped %s for %s.",
+            kind,
+            target_date,
+        )
+        return
     ensure_tables()
     conn = None
     try:
@@ -170,7 +200,12 @@ def upsert_monitor_snapshot(kind: str, target_date: str, payload: dict) -> None:
             conn.close()
 
 
-def load_monitor_snapshot_prefer_db(kind: str, target_date: str) -> dict | None:
+def load_monitor_snapshot_prefer_db(
+    kind: str,
+    target_date: str,
+    *,
+    prefer_file_for_past: bool = False,
+) -> dict | None:
     """과거 날짜는 DB 우선, 당일은 파일 우선으로 스냅샷 로드.
 
     규칙:
@@ -207,7 +242,19 @@ def load_monitor_snapshot_prefer_db(kind: str, target_date: str) -> dict | None:
             snapshot["meta"]["source"] = "db"
         return snapshot
     elif target_dt < today_dt:
-        # 과거: DB 우선
+        if prefer_file_for_past:
+            # 과거(옵션): 파일 우선
+            snapshot = _load_monitor_snapshot_from_file(kind, target_date)
+            if snapshot is not None:
+                snapshot["meta"] = snapshot.get("meta", {})
+                snapshot["meta"]["source"] = "file"
+                return snapshot
+            snapshot = _load_monitor_snapshot_from_db(kind, target_date)
+            if snapshot is not None:
+                snapshot["meta"] = snapshot.get("meta", {})
+                snapshot["meta"]["source"] = "db"
+            return snapshot
+        # 과거(기본): DB 우선
         snapshot = _load_monitor_snapshot_from_db(kind, target_date)
         if snapshot is not None:
             snapshot["meta"] = snapshot.get("meta", {})
@@ -242,6 +289,8 @@ def _load_monitor_snapshot_from_file(kind: str, target_date: str) -> dict | None
 
 def _load_monitor_snapshot_from_db(kind: str, target_date: str) -> dict | None:
     """DB에서 모니터 스냅샷 로드."""
+    if not legacy_dashboard_db_enabled():
+        return None
     conn = None
     try:
         conn = get_db_connection()
@@ -276,7 +325,13 @@ def _list_snapshot_kinds(target_date: str) -> list[str]:
     return sorted(kinds)
 
 
-def load_pipeline_events(target_date: str, *, include_file_for_today: bool = True) -> list[dict]:
+def load_pipeline_events(
+    target_date: str,
+    *,
+    include_file_for_today: bool = True,
+    prefer_file_for_past: bool = False,
+    prefer_file_for_today: bool = False,
+) -> list[dict]:
     """특정 날짜의 pipeline event 목록을 반환.
 
     규칙:
@@ -298,18 +353,20 @@ def load_pipeline_events(target_date: str, *, include_file_for_today: bool = Tru
         return []
 
     events = []
-    # DB 조회
-    db_events = _load_pipeline_events_from_db(target_date)
-    events.extend(db_events)
+    db_events = []
 
     if target_dt == today_dt:
         # 당일: include_file_for_today 플래그에 따라 파일 병합
         if include_file_for_today:
             file_events = _load_pipeline_events_from_file(target_date)
+            if prefer_file_for_today and file_events:
+                return file_events
+            # DB 조회
+            db_events = _load_pipeline_events_from_db(target_date)
             # 중복 제거: emitted_at + pipeline + stock_code + stage + record_id 기준
             seen = set()
             deduped = []
-            for ev in events + file_events:
+            for ev in db_events + file_events:
                 key = (
                     ev.get("emitted_at"),
                     ev.get("pipeline"),
@@ -321,17 +378,23 @@ def load_pipeline_events(target_date: str, *, include_file_for_today: bool = Tru
                     seen.add(key)
                     deduped.append(ev)
             events = deduped
-            source = "mixed"
         else:
-            source = "db"
+            events = _load_pipeline_events_from_db(target_date)
     elif target_dt < today_dt:
-        # 과거: DB에 데이터가 있으면 반환, 없으면 파일 fallback
-        if not events:
+        if prefer_file_for_past:
+            # 과거(옵션): 파일 우선
             file_events = _load_pipeline_events_from_file(target_date)
-            events.extend(file_events)
-            source = "file" if file_events else "db"
+            if file_events:
+                events = file_events
+            else:
+                events = _load_pipeline_events_from_db(target_date)
         else:
-            source = "db"
+            # 과거(기본): DB에 데이터가 있으면 반환, 없으면 파일 fallback
+            db_events = _load_pipeline_events_from_db(target_date)
+            if db_events:
+                events = db_events
+            else:
+                events = _load_pipeline_events_from_file(target_date)
     else:
         # 미래 날짜
         return []
@@ -365,6 +428,8 @@ def _load_pipeline_events_from_file(target_date: str) -> list[dict]:
 
 def _load_pipeline_events_from_db(target_date: str) -> list[dict]:
     """DB에서 pipeline event 로드."""
+    if not legacy_dashboard_db_enabled():
+        return []
     conn = None
     events = []
     try:
@@ -400,12 +465,13 @@ def backfill_dashboard_files(until_date: str, dry_run: bool = False) -> dict:
     """
     from datetime import datetime, timedelta
 
-    if not dry_run:
+    if not dry_run and legacy_dashboard_db_enabled():
         ensure_tables()
     stats = {
         "pipeline_events": {"scanned": 0, "inserted": 0, "skipped": 0, "would_insert": 0},
         "monitor_snapshots": {"scanned": 0, "inserted": 0, "skipped": 0, "would_insert": 0},
         "failed_dates": [],
+        "legacy_db_enabled": legacy_dashboard_db_enabled(),
     }
 
     today = date.today()
@@ -501,6 +567,7 @@ def upload_today_dashboard_files() -> dict:
     stats = {
         "pipeline_events": {"scanned": 0, "inserted": 0, "would_insert": 0},
         "monitor_snapshots": {"scanned": 0, "inserted": 0, "would_insert": 0},
+        "legacy_db_enabled": legacy_dashboard_db_enabled(),
     }
     # pipeline events
     events = _load_pipeline_events_from_file(today)

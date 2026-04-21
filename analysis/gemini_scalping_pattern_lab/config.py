@@ -19,6 +19,9 @@ LOCAL_REPORT_DIR = DATA_DIR / "report"
 LOCAL_POST_SELL_EVAL_DIR = DATA_DIR / "post_sell"
 LOCAL_PIPELINE_DIR = DATA_DIR / "pipeline_events"
 REMOTE_BASE_DIR = TMP_DIR
+# Analytics layer (new architecture)
+ANALYTICS_PARQUET_ROOT = DATA_DIR / "analytics" / "parquet"
+DUCKDB_FILE = DATA_DIR / "analytics" / "duckdb" / "korstockscan_analytics.duckdb"
 
 # Ensure output directory exists
 os.makedirs(OUTPUT_DIR, exist_ok=True)

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, BigInteger, Float, String, Text, Date, DateTime, Boolean, text
+from sqlalchemy import Column, Integer, BigInteger, Float, String, Text, Date, DateTime, Boolean, Index, text
 from sqlalchemy.orm import declarative_base
 
 Base = declarative_base()
@@ -140,6 +140,12 @@ class HoldingAddHistory(Base):
 
 class TradePerformanceFact(Base):
     __tablename__ = 'trade_performance_facts'
+    __table_args__ = (
+        Index("idx_tpf_rec_date", "rec_date"),
+        Index("idx_tpf_rec_date_status", "rec_date", "status"),
+        Index("idx_tpf_rec_date_strategy_tag", "rec_date", "strategy", "position_tag"),
+        Index("idx_tpf_rec_date_pnl_profit", "rec_date", "realized_pnl_krw", "profit_rate"),
+    )
 
     recommendation_id = Column(Integer, primary_key=True)
     rec_date = Column(Date, nullable=False)
@@ -172,6 +178,10 @@ class TradePerformanceFact(Base):
 
 class StrategyPositionPerformanceDaily(Base):
     __tablename__ = 'strategy_position_performance_daily'
+    __table_args__ = (
+        Index("idx_sppd_rec_date_pnl_entered", "rec_date", "realized_pnl_krw", "entered_count"),
+        Index("idx_sppd_strategy_tag_date", "strategy", "position_tag", "rec_date"),
+    )
 
     rec_date = Column(Date, primary_key=True)
     strategy = Column(Text, primary_key=True)

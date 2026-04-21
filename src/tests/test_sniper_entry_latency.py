@@ -62,7 +62,7 @@ def test_latency_entry_blocks_stale_quote_as_danger():
     assert result["latency_danger_reasons"] == "quote_stale,ws_age_too_high"
 
 
-def test_latency_entry_caution_requires_future_live_fallback():
+def test_latency_entry_caution_rejects_deprecated_fallback():
     stock = {"name": "TEST", "position_tag": "MIDDLE"}
     signal_time = datetime.now(UTC)
     freeze_signal_reference(
@@ -89,10 +89,10 @@ def test_latency_entry_caution_requires_future_live_fallback():
         signal_strength=0.9,
     )
 
-    assert result["allowed"] is True
-    assert result["decision"] == "ALLOW_FALLBACK"
-    assert result["mode"] == "fallback"
-    assert len(result["orders"]) >= 1
+    assert result["allowed"] is False
+    assert result["decision"] == "REJECT_MARKET_CONDITION"
+    assert result["reason"] == "latency_fallback_disabled"
+    assert result["mode"] == "reject"
     clear_signal_reference(stock)
 
 
@@ -103,6 +103,7 @@ def test_latency_entry_canary_overrides_reject_danger_for_scanner(monkeypatch):
         replace(
             CONFIG,
             SCALP_LATENCY_GUARD_CANARY_ENABLED=True,
+            SCALP_LATENCY_FALLBACK_ENABLED=True,
             SCALP_LATENCY_GUARD_CANARY_TAGS=("SCANNER",),
             SCALP_LATENCY_GUARD_CANARY_MIN_SIGNAL_SCORE=85.0,
             SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS=450,
@@ -131,10 +132,10 @@ def test_latency_entry_canary_overrides_reject_danger_for_scanner(monkeypatch):
 
     assert result["latency_state"] == "DANGER"
     assert result["latency_canary_applied"] is True
-    assert result["allowed"] is True
-    assert result["decision"] == "ALLOW_FALLBACK"
-    assert result["reason"] == "latency_guard_canary_override"
-    assert result["mode"] == "fallback"
+    assert result["allowed"] is False
+    assert result["decision"] == "REJECT_MARKET_CONDITION"
+    assert result["reason"] == "latency_fallback_deprecated"
+    assert result["mode"] == "reject"
     assert result["latency_danger_reasons"] == "other_danger"
 
 
@@ -145,6 +146,7 @@ def test_latency_entry_canary_normalizes_probability_signal_strength(monkeypatch
         replace(
             CONFIG,
             SCALP_LATENCY_GUARD_CANARY_ENABLED=True,
+            SCALP_LATENCY_FALLBACK_ENABLED=True,
             SCALP_LATENCY_GUARD_CANARY_TAGS=("SCANNER",),
             SCALP_LATENCY_GUARD_CANARY_MIN_SIGNAL_SCORE=85.0,
             SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS=450,
@@ -173,8 +175,9 @@ def test_latency_entry_canary_normalizes_probability_signal_strength(monkeypatch
 
     assert result["latency_state"] == "DANGER"
     assert result["latency_canary_applied"] is True
-    assert result["allowed"] is True
-    assert result["decision"] == "ALLOW_FALLBACK"
+    assert result["allowed"] is False
+    assert result["decision"] == "REJECT_MARKET_CONDITION"
+    assert result["reason"] == "latency_fallback_deprecated"
 
 
 def test_latency_entry_canary_does_not_apply_when_signal_score_low(monkeypatch):
@@ -184,6 +187,7 @@ def test_latency_entry_canary_does_not_apply_when_signal_score_low(monkeypatch):
         replace(
             CONFIG,
             SCALP_LATENCY_GUARD_CANARY_ENABLED=True,
+            SCALP_LATENCY_FALLBACK_ENABLED=True,
             SCALP_LATENCY_GUARD_CANARY_TAGS=("SCANNER",),
             SCALP_LATENCY_GUARD_CANARY_MIN_SIGNAL_SCORE=95.0,
             SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS=450,
@@ -222,6 +226,7 @@ def test_latency_danger_reasons_are_allowlist_controllable(monkeypatch):
         replace(
             CONFIG,
             SCALP_LATENCY_GUARD_CANARY_ENABLED=True,
+            SCALP_LATENCY_FALLBACK_ENABLED=True,
             SCALP_LATENCY_GUARD_CANARY_TAGS=("SCANNER",),
             SCALP_LATENCY_GUARD_CANARY_MIN_SIGNAL_SCORE=85.0,
             SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS=450,

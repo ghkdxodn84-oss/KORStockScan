@@ -127,7 +127,7 @@ from src.engine.kiwoom_websocket import KiwoomWSManager
 from src.engine.signal_radar import SniperRadar
 from src.engine.ai_engine import GeminiSniperEngine
 from src.engine.ai_engine_openai_v2 import GPTSniperEngine, OpenAIDualPersonaShadowEngine
-from src.engine.runtime_ai_router import RuntimeAIEngineRouter, resolve_runtime_role
+from src.engine.runtime_ai_router import RuntimeAIEngineRouter, resolve_runtime_role, resolve_scalping_ai_route
 
 # 💡 VIX, 유가지표 임포트
 from src.market_regime import MarketRegimeService, summarize_market_regime_snapshot
@@ -1041,6 +1041,7 @@ def run_sniper(is_test_mode=False):
     dual_persona_engine = None
     global DUAL_PERSONA_ENGINE
     runtime_role = resolve_runtime_role()
+    scalping_ai_route = resolve_scalping_ai_route()
 
     api_keys = [v for k, v in CONF.items() if k.startswith("GEMINI_API_KEY") and v]
     if not api_keys:
@@ -1055,7 +1056,7 @@ def run_sniper(is_test_mode=False):
     openai_dual_enabled = bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_ENABLED", True))
     openai_shadow_mode = bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_SHADOW_MODE", True))
     openai_api_keys = [v for k, v in CONF.items() if k.startswith("OPENAI_API_KEY") and v]
-    if runtime_role == "main" and openai_api_keys:
+    if scalping_ai_route == "openai" and runtime_role == "main" and openai_api_keys:
         try:
             openai_scalping_engine = GPTSniperEngine(api_keys=openai_api_keys, announce_startup=False)
             fast_model = str(getattr(TRADING_RULES, "GPT_FAST_MODEL", "gpt-5.4-nano") or "gpt-5.4-nano")
@@ -1074,6 +1075,8 @@ def run_sniper(is_test_mode=False):
         except Exception as e:
             log_error(f"🚨 OpenAI 스캘핑 엔진 초기화 실패: {e}")
             openai_scalping_engine = None
+    elif scalping_ai_route == "gemini":
+        log_info("ℹ️ Plan Rebase: 스캘핑 live AI 라우팅을 Gemini로 고정하고 OpenAI 스캘핑 엔진 초기화를 건너뜁니다.")
 
     if openai_dual_enabled and openai_shadow_mode and openai_api_keys:
         try:
@@ -1092,11 +1095,13 @@ def run_sniper(is_test_mode=False):
             gemini_engine=gemini_engine,
             openai_scalping_engine=openai_scalping_engine,
             runtime_role=runtime_role,
+            scalping_ai_route=scalping_ai_route,
         )
         AI_ENGINE = ai_engine
         print(
             f"🧭 AI 라우팅 활성화: role={runtime_role} "
-            f"(main_scalping_openai={'ON' if runtime_role == 'main' and openai_scalping_engine else 'OFF'})"
+            f"route={scalping_ai_route} "
+            f"(main_scalping_openai={'ON' if scalping_ai_route == 'openai' and runtime_role == 'main' and openai_scalping_engine else 'OFF'})"
         )
 
     bind_analysis_dependencies(ai_engine=AI_ENGINE)

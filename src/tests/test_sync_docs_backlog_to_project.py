@@ -30,14 +30,14 @@ from src.engine.sync_docs_backlog_to_project import (
 def test_parse_plan_tasks_has_remaining_items():
     tasks = parse_plan_tasks()
     titles = [t.title for t in tasks]
-    assert any("0-1b 원격 경량 프로파일링" in title for title in titles)
+    assert all("0-1b 원격 경량 프로파일링" not in title for title in titles)
     assert all("SCALP_PRESET_TP SELL 의도 확인" not in title for title in titles)
 
 
 def test_parse_checklist_excludes_done_checkboxes():
     tasks = parse_checklist_tasks()
     titles = [t.title for t in tasks]
-    assert any("SCALPING 모델 shadow 비교안 WATCHING shared prompt 구현 착수" in title for title in titles)
+    assert any("Gemini BUY recovery canary 1일차 판정" in title for title in titles)
     assert all("RELAX-LATENCY 운영서버 승격 가능/불가 최종 결론" not in title for title in titles)
 
 
@@ -64,8 +64,8 @@ def test_parse_checklist_fallback_when_primary_missing(monkeypatch):
 def test_parse_checklist_collects_multiple_stage2_files():
     tasks = parse_checklist_tasks()
     due_dates = {t.due_date for t in tasks}
-    assert "2026-04-15" in due_dates
-    assert "2026-04-16" in due_dates
+    assert "2026-04-22" in due_dates
+    assert "2026-04-24" in due_dates
 
 
 def test_checklist_track_from_source_uses_mmdd_suffix():

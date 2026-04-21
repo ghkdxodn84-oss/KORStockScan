@@ -143,6 +143,27 @@ def _compact_calendar_title(title: str) -> str:
     return normalized
 
 
+def _legacy_calendar_title_key(summary: str, *, event_prefix: str) -> str:
+    normalized = str(summary or "").strip()
+    prefix = str(event_prefix or "").strip()
+    if prefix and normalized.startswith(prefix):
+        normalized = normalized[len(prefix) :].strip()
+    normalized = re.sub(
+        r"\s+\(Due:\s*\d{4}-\d{2}-\d{2},\s*Slot:.*?\)\s*$",
+        "",
+        normalized,
+    ).strip()
+    if normalized.startswith("[CL]"):
+        normalized = f"[Checklist]{normalized[len('[CL]'):]}"
+    elif normalized.startswith("[AIP]"):
+        normalized = f"[AIPrompt]{normalized[len('[AIP]'):]}"
+    if not normalized:
+        return ""
+    if normalized.startswith("[Checklist]") or _is_managed_project_title(normalized):
+        return _managed_title_key(normalized)
+    return ""
+
+
 def _graphql_query() -> str:
     return """
 query($owner: String!, $number: Int!, $cursor: String) {
@@ -603,13 +624,21 @@ def prune_stale_events(
     owner: str,
     project_number: int,
     live_item_ids: set[str],
+    live_managed_title_keys: set[str] | None = None,
+    event_prefix: str = "",
+    legacy_time_min: str = "",
+    legacy_time_max: str = "",
     dry_run: bool,
 ) -> dict[str, int]:
     page_token = None
     deleted = 0
     dry_run_deleted = 0
+    legacy_deleted = 0
+    legacy_dry_run_deleted = 0
+    seen_event_ids: set[str] = set()
     owner_prop = f"gh_project_owner={owner}"
     number_prop = f"gh_project_number={project_number}"
+    project_marker = f"Project: {owner}#{project_number}"
 
     while True:
         resp = (
@@ -627,6 +656,8 @@ def prune_stale_events(
             private = ((event.get("extendedProperties") or {}).get("private") or {})
             item_id = str(private.get("gh_project_item_id") or "").strip()
             event_id = str(event.get("id") or "").strip()
+            if event_id:
+                seen_event_ids.add(event_id)
             if not event_id or not item_id or item_id in live_item_ids:
                 continue
             if dry_run:
@@ -639,9 +670,51 @@ def prune_stale_events(
         if not page_token:
             break
 
+    if legacy_time_min and legacy_time_max and live_managed_title_keys is not None:
+        page_token = None
+        query_text = str(event_prefix or "").strip() or project_marker
+        while True:
+            resp = (
+                service.events()
+                .list(
+                    calendarId=calendar_id,
+                    q=query_text,
+                    timeMin=legacy_time_min,
+                    timeMax=legacy_time_max,
+                    singleEvents=True,
+                    maxResults=250,
+                    pageToken=page_token,
+                )
+                .execute()
+            )
+            for event in resp.get("items", []):
+                private = ((event.get("extendedProperties") or {}).get("private") or {})
+                if str(private.get("gh_project_item_id") or "").strip():
+                    continue
+                event_id = str(event.get("id") or "").strip()
+                if not event_id or event_id in seen_event_ids:
+                    continue
+                description = str(event.get("description") or "")
+                if project_marker not in description:
+                    continue
+                title_key = _legacy_calendar_title_key(str(event.get("summary") or ""), event_prefix=event_prefix)
+                if not title_key or title_key in live_managed_title_keys:
+                    continue
+                if dry_run:
+                    legacy_dry_run_deleted += 1
+                    continue
+                service.events().delete(calendarId=calendar_id, eventId=event_id).execute()
+                legacy_deleted += 1
+
+            page_token = resp.get("nextPageToken")
+            if not page_token:
+                break
+
     return {
         "deleted": deleted,
         "dry_run_deleted": dry_run_deleted,
+        "legacy_deleted": legacy_deleted,
+        "legacy_dry_run_deleted": legacy_dry_run_deleted,
     }
 
 
@@ -669,6 +742,9 @@ def main() -> int:
     calendar_id = _env("GOOGLE_CALENDAR_ID")
     service_account_json = _env("GOOGLE_SERVICE_ACCOUNT_JSON")
     dry_run = args.dry_run or _env_bool("SYNC_DRY_RUN", False)
+    legacy_prune_enabled = _env_bool("GCAL_PRUNE_LEGACY_MANAGED_EVENTS", True)
+    legacy_prune_past_days = _env_int("GCAL_PRUNE_LEGACY_PAST_DAYS", 30)
+    legacy_prune_future_days = _env_int("GCAL_PRUNE_LEGACY_FUTURE_DAYS", 180)
 
     only_status_raw = str(os.getenv("GH_SYNC_ONLY_STATUSES", "") or "").strip()
     if not only_status_raw:
@@ -710,6 +786,16 @@ def main() -> int:
         owner=owner,
         project_number=project_number,
         live_item_ids={item.item_id for item in items},
+        live_managed_title_keys={_managed_title_key(item.title) for item in items if _is_managed_project_title(item.title)}
+        if legacy_prune_enabled
+        else None,
+        event_prefix=event_prefix,
+        legacy_time_min=(datetime.now().astimezone() - timedelta(days=max(0, legacy_prune_past_days))).isoformat()
+        if legacy_prune_enabled
+        else "",
+        legacy_time_max=(datetime.now().astimezone() + timedelta(days=max(0, legacy_prune_future_days))).isoformat()
+        if legacy_prune_enabled
+        else "",
         dry_run=dry_run,
     )
 

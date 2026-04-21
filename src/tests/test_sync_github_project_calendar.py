@@ -745,7 +745,12 @@ def test_prune_stale_events_dry_run_counts_candidates():
         live_item_ids={"PVTI_keep"},
         dry_run=True,
     )
-    assert summary == {"deleted": 0, "dry_run_deleted": 1}
+    assert summary == {
+        "deleted": 0,
+        "dry_run_deleted": 1,
+        "legacy_deleted": 0,
+        "legacy_dry_run_deleted": 0,
+    }
     assert service._events.deleted == []
 
 
@@ -770,5 +775,91 @@ def test_prune_stale_events_deletes_removed_items():
         live_item_ids={"PVTI_keep"},
         dry_run=False,
     )
-    assert summary == {"deleted": 1, "dry_run_deleted": 0}
+    assert summary == {
+        "deleted": 1,
+        "dry_run_deleted": 0,
+        "legacy_deleted": 0,
+        "legacy_dry_run_deleted": 0,
+    }
     assert service._events.deleted == ["evt_drop"]
+
+
+def test_prune_stale_events_deletes_legacy_managed_event_without_private_properties():
+    service = _FakeCalendarService(
+        [
+            {"items": []},
+            {
+                "items": [
+                    {
+                        "id": "evt_legacy_drop",
+                        "summary": "[KORStockScan] [CL] closed task (Due: 2026-04-21, Slot: POSTCLOSE, TimeWindow: 15:40~16:10, Track: Plan)",
+                        "description": "Project: JaehwanPark#1 Type: DraftIssue",
+                    },
+                    {
+                        "id": "evt_legacy_keep",
+                        "summary": "[KORStockScan] [CL] open task (Due: 2026-04-21, Slot: POSTCLOSE, TimeWindow: 15:40~16:10, Track: Plan)",
+                        "description": "Project: JaehwanPark#1 Type: DraftIssue",
+                    },
+                ]
+            },
+        ]
+    )
+
+    summary = prune_stale_events(
+        service=service,
+        calendar_id="primary",
+        owner="JaehwanPark",
+        project_number=1,
+        live_item_ids=set(),
+        live_managed_title_keys={"[Checklist] open task"},
+        event_prefix="[KORStockScan]",
+        legacy_time_min="2026-04-21T00:00:00+09:00",
+        legacy_time_max="2026-04-22T00:00:00+09:00",
+        dry_run=False,
+    )
+
+    assert summary == {
+        "deleted": 0,
+        "dry_run_deleted": 0,
+        "legacy_deleted": 1,
+        "legacy_dry_run_deleted": 0,
+    }
+    assert service._events.deleted == ["evt_legacy_drop"]
+
+
+def test_prune_stale_events_ignores_legacy_event_without_project_marker():
+    service = _FakeCalendarService(
+        [
+            {"items": []},
+            {
+                "items": [
+                    {
+                        "id": "evt_other",
+                        "summary": "[KORStockScan] [CL] closed task (Due: 2026-04-21, Slot: POSTCLOSE, TimeWindow: 15:40~16:10, Track: Plan)",
+                        "description": "Project: Other#1 Type: DraftIssue",
+                    }
+                ]
+            },
+        ]
+    )
+
+    summary = prune_stale_events(
+        service=service,
+        calendar_id="primary",
+        owner="JaehwanPark",
+        project_number=1,
+        live_item_ids=set(),
+        live_managed_title_keys=set(),
+        event_prefix="[KORStockScan]",
+        legacy_time_min="2026-04-21T00:00:00+09:00",
+        legacy_time_max="2026-04-22T00:00:00+09:00",
+        dry_run=False,
+    )
+
+    assert summary == {
+        "deleted": 0,
+        "dry_run_deleted": 0,
+        "legacy_deleted": 0,
+        "legacy_dry_run_deleted": 0,
+    }
+    assert service._events.deleted == []

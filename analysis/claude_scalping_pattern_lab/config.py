@@ -9,8 +9,8 @@ from datetime import date
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # ── 분석 기간 ──────────────────────────────────────────────────────────────────
-ANALYSIS_START = date(2026, 4, 1)
-ANALYSIS_END   = date(2026, 4, 17)
+ANALYSIS_START = date(2026, 4, 20)
+ANALYSIS_END   = date(2026, 4, 20)
 
 # ── 입력 경로 ──────────────────────────────────────────────────────────────────
 SNAPSHOT_DIR       = PROJECT_ROOT / "data" / "report" / "monitor_snapshots"
@@ -54,6 +54,13 @@ SEQUENCE_STAGES = {
     "sell_completed",
     "sell_order_failed",
 }
+
+# ── 새로운 아키텍처 분석 소스 우선순위 ──────────────────────────────────────
+# True: parquet/DuckDB 우선, False: 기존 JSONL 우선
+USE_DUCKDB_PRIMARY = True
+# 분석 계층 경로
+ANALYTICS_PARQUET_ROOT = PROJECT_ROOT / "data" / "analytics" / "parquet"
+DUCKDB_FILE = PROJECT_ROOT / "data" / "analytics" / "duckdb" / "korstockscan_analytics.duckdb"
 
 # ── 손익 판단 기준 ─────────────────────────────────────────────────────────────
 PROFIT_THRESHOLD  =  0.0   # profit_rate > 0 → 수익

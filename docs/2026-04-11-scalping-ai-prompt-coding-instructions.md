@@ -473,7 +473,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.watching_prompt_75_shadow_report \
 
 ### 참고 설계안
 
-- 북극성 문서: [2026-04-13-scalping-holding-prompt-final-design.md](./2026-04-13-scalping-holding-prompt-final-design.md)
+- 북극성 문서: [2026-04-13-scalping-holding-prompt-final-design.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-13-scalping-holding-prompt-final-design.md)
 - 해석 원칙:
   - 최종 설계안은 목표 구조와 장기 적용 순서를 설명하는 문서다.
   - 실제 구현은 아래 `P1 전용 실행 범위`만 수행하고, `P2~P5`는 본 문서의 후속 작업으로 분리한다.

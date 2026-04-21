@@ -3,13 +3,14 @@
 
 입력:
   - monitor snapshots: DB 우선, 파일(.json/.json.gz) fallback
-  - pipeline events: DB 우선, 파일(.jsonl/.jsonl.gz) fallback
+  - pipeline events: DuckDB/parquet 우선(옵션), 파일(.jsonl/.jsonl.gz) fallback
 
 출력:
   - outputs/trade_fact.csv
   - outputs/funnel_fact.csv
   - outputs/sequence_fact.csv
   - outputs/data_quality_report.md
+  - outputs/source_manifest.json
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from __future__ import annotations
 import csv
 import gzip
 import json
+import logging
 import sys
 from collections import defaultdict
 from datetime import date, datetime, timedelta
@@ -40,16 +42,23 @@ from config import (
     SERVER_REMOTE,
     SNAPSHOT_DIR,
     SPLIT_ENTRY_REBASE_THRESHOLD,
+    USE_DUCKDB_PRIMARY,
 )
 
 try:
-    from src.engine.dashboard_data_repository import (
-        load_monitor_snapshot_prefer_db,
-        load_pipeline_events,
-    )
+    from src.engine.dashboard_data_repository import load_monitor_snapshot_prefer_db
 except Exception:
     load_monitor_snapshot_prefer_db = None
-    load_pipeline_events = None
+
+try:
+    from src.engine.tuning_duckdb_repository import TuningDuckDBRepository
+    DUCKDB_AVAILABLE = True
+except Exception:
+    TuningDuckDBRepository = None
+    DUCKDB_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
+_DUCKDB_VIEW_READY = False
 
 
 def _load_json(path: Path) -> dict | None:
@@ -85,40 +94,94 @@ def _load_jsonl(path: Path) -> list[dict]:
     return rows
 
 
-def _load_snapshot_payload(kind: str, target_date: str) -> tuple[dict | None, str]:
-    if load_monitor_snapshot_prefer_db is not None:
-        try:
-            payload = load_monitor_snapshot_prefer_db(kind, target_date)
-            if payload is not None:
-                source = payload.get("meta", {}).get("source", "db")
-                return payload, str(source)
-        except Exception as e:
-            print(f"  [WARN] snapshot DB load failed: {kind} {target_date} — {e}")
+def _normalize_pipeline_row(row: dict[str, Any]) -> dict[str, Any]:
+    """DuckDB parquet row를 pipeline_event 원형 스키마로 보정."""
+    normalized = dict(row)
+    fields: dict[str, Any] = {}
+    for key in list(normalized.keys()):
+        if key.startswith("fields_"):
+            value = normalized.pop(key)
+            if value is None:
+                continue
+            fields[key.removeprefix("fields_")] = value
+    if fields:
+        normalized["fields"] = fields
 
+    record_id = normalized.get("record_id")
+    if isinstance(record_id, float) and record_id.is_integer():
+        normalized["record_id"] = int(record_id)
+    return normalized
+
+
+def _load_pipeline_rows_from_duckdb(target_date: str) -> list[dict]:
+    global _DUCKDB_VIEW_READY
+    if not DUCKDB_AVAILABLE:
+        return []
+    try:
+        with TuningDuckDBRepository(read_only=False) as repo:
+            if not _DUCKDB_VIEW_READY:
+                repo.register_parquet_dataset("pipeline_events")
+                _DUCKDB_VIEW_READY = True
+            df = repo.query(
+                "SELECT * FROM v_pipeline_events WHERE emitted_date = ?",
+                [target_date],
+            )
+        if df.empty:
+            return []
+        return [_normalize_pipeline_row(r) for r in df.to_dict(orient="records")]
+    except Exception as e:
+        logger.warning("DuckDB pipeline load failed %s: %s", target_date, e)
+        return []
+
+
+def _load_snapshot_payload(kind: str, target_date: str) -> tuple[dict | None, str]:
+    # 랩 실행은 파일 우선으로 읽고, 파일이 없을 때만 DB fallback
     for suffix in (".json", ".json.gz"):
         path = SNAPSHOT_DIR / f"{kind}_{target_date}{suffix}"
         if path.exists():
             payload = _load_json(path)
             if payload is not None:
                 return payload, f"file:{suffix}"
+
+    if load_monitor_snapshot_prefer_db is not None:
+        try:
+            payload = load_monitor_snapshot_prefer_db(
+                kind,
+                target_date,
+                prefer_file_for_past=True,
+            )
+            if payload is not None:
+                source = payload.get("meta", {}).get("source", "db")
+                return payload, str(source)
+        except Exception as e:
+            print(f"  [WARN] snapshot DB load failed: {kind} {target_date} — {e}")
+
     return None, "none"
 
 
 def _load_pipeline_rows(target_date: str) -> tuple[list[dict], str]:
-    if load_pipeline_events is not None:
-        try:
-            rows = load_pipeline_events(target_date, include_file_for_today=True)
-            if rows:
-                return rows, "db_or_mixed"
-        except Exception as e:
-            print(f"  [WARN] pipeline DB load failed: {target_date} — {e}")
+    # 신규 아키텍처: DuckDB 우선(옵션) + 파일 fallback + DB fallback
+    def _load_from_file() -> tuple[list[dict], str]:
+        for suffix in (".jsonl", ".jsonl.gz"):
+            path = PIPELINE_EVENT_DIR / f"pipeline_events_{target_date}{suffix}"
+            if path.exists():
+                rows = _load_jsonl(path)
+                if rows:
+                    return rows, f"jsonl:{suffix}"
+        return [], "none"
 
-    for suffix in (".jsonl", ".jsonl.gz"):
-        path = PIPELINE_EVENT_DIR / f"pipeline_events_{target_date}{suffix}"
-        if path.exists():
-            rows = _load_jsonl(path)
+    candidates = ["duckdb", "jsonl"] if USE_DUCKDB_PRIMARY else ["jsonl", "duckdb"]
+    for source in candidates:
+        if source == "duckdb":
+            rows = _load_pipeline_rows_from_duckdb(target_date)
             if rows:
-                return rows, f"file:{suffix}"
+                return rows, "duckdb"
+            continue
+        rows, src = _load_from_file()
+        if rows:
+            return rows, src
+
+    # legacy DB fallback 제거: 운영 canonical source는 parquet/DuckDB + jsonl이다.
     return [], "none"
 
 
@@ -397,29 +460,37 @@ def _stream_sequence_events(
     return rows
 
 
-def build_sequence_fact() -> pd.DataFrame:
+def build_sequence_fact() -> tuple[pd.DataFrame, dict[str, Any]]:
     print("[prepare] building sequence_fact (streaming JSONL) …")
     all_rows: list[dict] = []
     source_count: dict[str, int] = defaultdict(int)
+    covered_dates: set[str] = set()
+    all_dates = [d.isoformat() for d in _date_range(ANALYSIS_START, ANALYSIS_END)]
 
     for d in _date_range(ANALYSIS_START, ANALYSIS_END):
         ds = d.isoformat()
         rows, source = _load_pipeline_rows(ds)
+        source_count[source] += 1
         if not rows:
             continue
-        source_count[source] += 1
+        covered_dates.add(ds)
         print(f"  streaming pipeline_events_{ds} ({source}) …")
         parsed_rows = _stream_sequence_events(rows, ds, SERVER_LOCAL)
         print(f"    → {len(parsed_rows)} records")
         all_rows.extend(parsed_rows)
 
     df = pd.DataFrame(all_rows)
+    source_meta = {
+        "pipeline_source_stats": dict(source_count),
+        "covered_dates": sorted(covered_dates),
+        "expected_dates": all_dates,
+    }
     if df.empty:
         print("  [WARN] sequence_fact is empty")
-        return df
+        return df, source_meta
     df.to_csv(OUTPUT_DIR / "sequence_fact.csv", index=False, encoding="utf-8")
     print(f"  → sequence_fact: {len(df)} rows, source={dict(source_count)}")
-    return df
+    return df, source_meta
 
 
 # ── trade_fact 코호트 갱신 (sequence_fact join) ───────────────────────────────
@@ -570,6 +641,36 @@ def build_quality_report(
     print(f"  → {report_path}")
 
 
+def write_source_manifest(source_meta: dict[str, Any]) -> None:
+    stats = source_meta.get("pipeline_source_stats", {})
+    covered_dates = source_meta.get("covered_dates", [])
+    expected_dates = source_meta.get("expected_dates", [])
+    used_sources = {k for k, v in stats.items() if v > 0 and k != "none"}
+    if used_sources == {"duckdb"}:
+        data_source_mode = "duckdb_primary"
+    elif used_sources and all(src.startswith("jsonl:") for src in used_sources):
+        data_source_mode = "jsonl_fallback"
+    elif used_sources == {"db_fallback"}:
+        data_source_mode = "db_fallback"
+    elif used_sources:
+        data_source_mode = "mixed"
+    else:
+        data_source_mode = "none"
+
+    manifest = {
+        "run_at": datetime.now().isoformat(),
+        "use_duckdb_primary": bool(USE_DUCKDB_PRIMARY),
+        "data_source_mode": data_source_mode,
+        "history_coverage_start": covered_dates[0] if covered_dates else None,
+        "history_coverage_end": covered_dates[-1] if covered_dates else None,
+        "history_coverage_ok": len(covered_dates) == len(expected_dates) and len(expected_dates) > 0,
+        "local_pipeline_source_stats": stats,
+    }
+    manifest_path = OUTPUT_DIR / "source_manifest.json"
+    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"  → {manifest_path}")
+
+
 # ── 진입점 ────────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -577,12 +678,13 @@ def main() -> None:
 
     trade_df  = build_trade_fact()
     funnel_df = build_funnel_fact()
-    seq_df    = build_sequence_fact()
+    seq_df, source_meta = build_sequence_fact()
 
     if not trade_df.empty and not seq_df.empty:
         trade_df = enrich_trade_cohort(trade_df, seq_df)
 
     build_quality_report(trade_df, funnel_df, seq_df)
+    write_source_manifest(source_meta)
     print("[prepare] done.")
 
 

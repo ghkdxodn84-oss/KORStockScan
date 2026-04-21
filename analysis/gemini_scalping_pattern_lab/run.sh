@@ -14,6 +14,22 @@ cd "$SCRIPT_DIR"
 export PYTHONPATH="$PROJECT_ROOT"
 
 echo "=== Gemini Scalping Pattern Lab ==="
+echo "0. Analytics Source Health Check..."
+if ! "$PYTHON" - <<'PY'
+from src.engine.tuning_duckdb_repository import TuningDuckDBRepository
+
+try:
+    with TuningDuckDBRepository(read_only=False) as repo:
+        repo.register_parquet_dataset("pipeline_events")
+        rows = repo.query("SELECT COUNT(*) AS cnt FROM v_pipeline_events").iloc[0]["cnt"]
+    print(f"[OK] duckdb/pipeline_events rows={int(rows)}")
+except Exception as e:
+    raise SystemExit(f"[WARN] duckdb health check failed: {e}")
+PY
+then
+    echo "[WARN] Analytics health check failed. Continuing with jsonl/db fallback path."
+fi
+
 echo "1. Building Datasets..."
 "$PYTHON" build_dataset.py
 

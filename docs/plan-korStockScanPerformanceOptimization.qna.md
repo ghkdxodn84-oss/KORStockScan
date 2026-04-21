@@ -5,9 +5,10 @@
 ## 이 문서를 읽을 때의 전제
 
 1. 최종 목적은 `손실 억제`가 아니라 `기대값/순이익 극대화`다.
-2. 현재 단계는 `리포트 정합성 유지 + split-entry leakage 제거 + HOLDING/청산 판단 분리`다.
-3. `한 번에 한 축 canary`, `shadow-only`, `즉시 롤백 가드`는 보수적 철학이 아니라 `원인 귀속 정확도`와 `실전 리스크 관리`를 위한 운영 규율이다.
-4. `prompt`는 현재 실행 기준, `execution-delta`는 기본계획 대비 변경사항, `performance-report`는 정기 성과측정 baseline, `archive`는 과거 경과 보관용이다.
+2. 현재 단계는 `Plan Rebase`다. 중심 기준은 [plan-korStockScanPerformanceOptimization.rebase.md](./plan-korStockScanPerformanceOptimization.rebase.md)를 본다.
+3. `한 번에 한 축 canary`, `shadow 금지`, `즉시 롤백 가드`는 보수적 철학이 아니라 `원인 귀속 정확도`와 `실전 리스크 관리`를 위한 운영 규율이다.
+4. `rebase`는 중심 기준, `prompt`는 세션 시작용 포인터, `execution-delta`는 기본계획 대비 변경사항, `performance-report`는 정기 성과측정 baseline, `archive`는 과거 경과 보관용이다.
+5. `fallback_scout/main`, `fallback_single`, `latency fallback split-entry` 같은 영문 축 표현은 [Plan Rebase 용어 범례](./plan-korStockScanPerformanceOptimization.rebase.md#2-용어-범례)를 우선한다.
 
 ## 운영/문서 Q&A
 
@@ -160,5 +161,5 @@
 - [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)
 - [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)
 - [plan-korStockScanPerformanceOptimization.performance-report.md](./plan-korStockScanPerformanceOptimization.performance-report.md)
-- [plan-korStockScanPerformanceOptimization.archive-2026-04-19.md](./plan-korStockScanPerformanceOptimization.archive-2026-04-19.md)
+- [plan-korStockScanPerformanceOptimization.archive-2026-04-19.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/plan-korStockScanPerformanceOptimization.archive-2026-04-19.md)
 - [2026-04-18-nextweek-validation-axis-table-audited.md](./2026-04-18-nextweek-validation-axis-table-audited.md)

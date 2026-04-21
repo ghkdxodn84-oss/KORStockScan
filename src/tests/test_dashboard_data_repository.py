@@ -3,7 +3,12 @@ from datetime import date
 from unittest.mock import Mock, patch, MagicMock
 import pytest
 
+import src.engine.dashboard_data_repository as dashboard_repo
 from src.engine.dashboard_data_repository import (
+    ensure_tables,
+    upsert_pipeline_event_rows,
+    upsert_monitor_snapshot,
+    legacy_dashboard_db_enabled,
     load_monitor_snapshot_prefer_db,
     load_pipeline_events,
     _load_monitor_snapshot_from_file,
@@ -13,6 +18,23 @@ from src.engine.dashboard_data_repository import (
     MONITOR_SNAPSHOT_DIR,
     PIPELINE_EVENTS_DIR,
 )
+
+
+def test_legacy_dashboard_db_disabled_by_default(monkeypatch):
+    """parquet 전환 후 legacy raw DB 테이블은 기본 재생성하지 않는다."""
+    monkeypatch.delenv("KORSTOCKSCAN_ENABLE_LEGACY_DASHBOARD_DB", raising=False)
+    get_conn = Mock()
+    monkeypatch.setattr(
+        "src.engine.dashboard_data_repository.get_db_connection",
+        get_conn,
+    )
+
+    assert legacy_dashboard_db_enabled() is False
+    ensure_tables()
+    assert upsert_pipeline_event_rows("2026-04-20", [{"emitted_at": "2026-04-20T10:00:00"}]) == 0
+    upsert_monitor_snapshot("trade_review", "2026-04-20", {"ok": True})
+
+    get_conn.assert_not_called()
 
 
 def test_load_monitor_snapshot_prefer_db_past_date_db_first(monkeypatch, tmp_path):
@@ -96,6 +118,35 @@ def test_load_monitor_snapshot_prefer_db_today_file_first(monkeypatch, tmp_path)
     assert result["meta"]["source"] == "file"
 
 
+def test_load_monitor_snapshot_prefer_db_past_date_file_prefer(monkeypatch, tmp_path):
+    """옵션 사용 시 과거 날짜도 파일을 우선 조회한다."""
+    snapshot_dir = tmp_path / "report" / "monitor_snapshots"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        'src.engine.dashboard_data_repository.MONITOR_SNAPSHOT_DIR',
+        snapshot_dir
+    )
+
+    file_payload = {"source": "file"}
+    file_path = snapshot_dir / "trade_review_2026-04-01.json"
+    file_path.write_text(json.dumps(file_payload), encoding='utf-8')
+
+    monkeypatch.setattr(
+        'src.engine.dashboard_data_repository._load_monitor_snapshot_from_db',
+        lambda *args: {"source": "db"}
+    )
+
+    result = load_monitor_snapshot_prefer_db(
+        "trade_review",
+        "2026-04-01",
+        prefer_file_for_past=True,
+    )
+
+    assert result is not None
+    assert result["source"] == "file"
+    assert result["meta"]["source"] == "file"
+
+
 def test_load_pipeline_events_past_date_db_fallback(monkeypatch, tmp_path):
     """과거 날짜 DB에 데이터가 없으면 파일에서 로드한다."""
     # DB 빈 결과 모의
@@ -132,6 +183,32 @@ def test_load_pipeline_events_past_date_db_fallback(monkeypatch, tmp_path):
     # (구현에 source 필드가 없으므로 생략)
 
 
+def test_load_pipeline_events_past_date_file_prefer(monkeypatch, tmp_path):
+    """옵션 사용 시 과거 날짜는 파일을 먼저 사용한다."""
+    monkeypatch.setattr(
+        'src.engine.dashboard_data_repository._load_pipeline_events_from_db',
+        lambda *args: [{"event": "db", "emitted_at": "2026-04-01T09:00:00", "record_id": 1}]
+    )
+
+    events_dir = tmp_path / "pipeline_events"
+    events_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        'src.engine.dashboard_data_repository.PIPELINE_EVENTS_DIR',
+        events_dir
+    )
+    file_path = events_dir / "pipeline_events_2026-04-01.jsonl"
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write(json.dumps({"event": "file", "emitted_at": "2026-04-01T10:00:00", "record_id": 2}) + '\n')
+
+    result = load_pipeline_events(
+        "2026-04-01",
+        include_file_for_today=True,
+        prefer_file_for_past=True,
+    )
+    assert len(result) == 1
+    assert result[0]["event"] == "file"
+
+
 def test_load_pipeline_events_today_merge(monkeypatch, tmp_path):
     """당일 날짜는 파일과 DB를 병합한다."""
     today = date.today().isoformat()
@@ -159,6 +236,33 @@ def test_load_pipeline_events_today_merge(monkeypatch, tmp_path):
     # 두 이벤트 모두 포함 (중복 없음)
     assert len(result) == 2
     # 중복 제거 로직은 별도 테스트에서 확인
+
+
+def test_load_pipeline_events_today_file_prefer(monkeypatch, tmp_path):
+    """옵션 사용 시 당일은 파일만 우선 사용한다."""
+    today = date.today().isoformat()
+    monkeypatch.setattr(
+        'src.engine.dashboard_data_repository._load_pipeline_events_from_db',
+        lambda *args: [{"event": "db", "emitted_at": f"{today}T09:00:00", "record_id": 1}]
+    )
+
+    events_dir = tmp_path / "pipeline_events"
+    events_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        'src.engine.dashboard_data_repository.PIPELINE_EVENTS_DIR',
+        events_dir
+    )
+    file_path = events_dir / f"pipeline_events_{today}.jsonl"
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write(json.dumps({"event": "file", "emitted_at": f"{today}T10:00:00", "record_id": 2}) + '\n')
+
+    result = load_pipeline_events(
+        today,
+        include_file_for_today=True,
+        prefer_file_for_today=True,
+    )
+    assert len(result) == 1
+    assert result[0]["event"] == "file"
 
 
 if __name__ == '__main__':

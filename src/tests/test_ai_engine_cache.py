@@ -4,6 +4,7 @@ from dataclasses import replace
 from src.engine import ai_engine as ai_engine_module
 from src.engine.ai_engine import (
     GeminiSniperEngine,
+    SCALPING_EXIT_SYSTEM_PROMPT,
     SCALPING_HOLDING_SYSTEM_PROMPT,
     SCALPING_SYSTEM_PROMPT,
     SCALPING_SYSTEM_PROMPT_75_CANARY,
@@ -55,7 +56,7 @@ def test_analyze_target_uses_short_ttl_cache(monkeypatch):
     assert call_count["value"] == 1
     assert first["cache_hit"] is False
     assert second["cache_hit"] is True
-    assert second["action"] == "BUY"
+    assert second["action"] == first["action"]
 
 
 def test_analyze_target_cache_ignores_transient_market_timestamps(monkeypatch):
@@ -351,6 +352,15 @@ def test_analyze_target_routes_scalping_prompt_profiles(monkeypatch):
         cache_profile="holding",
         prompt_profile="holding",
     )
+    exiting = engine.analyze_target(
+        "스캘프-청산",
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        strategy="SCALPING",
+        cache_profile="holding",
+        prompt_profile="exit",
+    )
     shared = engine.analyze_target(
         "스캘프-공용",
         ws_data,
@@ -363,12 +373,38 @@ def test_analyze_target_routes_scalping_prompt_profiles(monkeypatch):
     assert used_prompts == [
         SCALPING_WATCHING_SYSTEM_PROMPT,
         SCALPING_HOLDING_SYSTEM_PROMPT,
+        SCALPING_EXIT_SYSTEM_PROMPT,
         SCALPING_SYSTEM_PROMPT,
     ]
-    assert watching["ai_prompt_type"] == "scalping_watching"
+    assert watching["ai_prompt_type"] == "scalping_entry"
     assert holding["ai_prompt_type"] == "scalping_holding"
+    assert exiting["ai_prompt_type"] == "scalping_exit"
     assert shared["ai_prompt_type"] == "scalping_shared"
-    assert watching["ai_prompt_version"] == "split_v1"
+    assert watching["ai_prompt_version"] == "split_v2"
+
+
+def test_analyze_target_holding_exit_action_schema_compat(monkeypatch):
+    engine = _build_engine()
+    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "scalp-packet")
+    monkeypatch.setattr(
+        engine,
+        "_call_gemini_safe",
+        lambda *args, **kwargs: {"action": "EXIT", "score": 31, "reason": "risk"},
+    )
+
+    result = engine.analyze_target(
+        "스캘프-보유",
+        {"curr": 10000, "fluctuation": 1.0, "orderbook": {"asks": [], "bids": []}},
+        [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}],
+        [{"체결시간": "10:00:00", "현재가": 10000, "거래량": 100}],
+        strategy="SCALPING",
+        prompt_profile="holding",
+    )
+
+    assert result["ai_prompt_type"] == "scalping_holding"
+    assert result["action_v2"] == "EXIT"
+    assert result["action"] == "DROP"
+    assert result["action_schema"] == "holding_exit_v1"
 
 
 def test_analyze_target_uses_shared_prompt_when_split_disabled(monkeypatch):

@@ -31,8 +31,15 @@ def _snapshot_path(kind: str, target_date: str) -> Path:
 
 
 def load_monitor_snapshot(kind: str, target_date: str) -> dict | None:
-    """DB 우선, 당일 파일 우선으로 모니터 스냅샷을 로드합니다."""
-    return load_monitor_snapshot_prefer_db(kind, target_date)
+    """파일 우선으로 모니터 스냅샷을 로드하고, 필요할 때만 legacy DB를 조회합니다."""
+    path = _snapshot_path(kind, target_date)
+    if path.exists():
+        try:
+            with open(path, encoding="utf-8") as handle:
+                return json.load(handle)
+        except Exception:
+            pass
+    return load_monitor_snapshot_prefer_db(kind, target_date, prefer_file_for_past=True)
 
 
 def save_monitor_snapshot(kind: str, target_date: str, payload: dict) -> Path:
@@ -212,6 +219,7 @@ def save_monitor_snapshots_for_date(target_date: str) -> dict[str, str]:
     from src.engine.sniper_performance_tuning_report import build_performance_tuning_report
     from src.engine.sniper_post_sell_feedback import build_post_sell_feedback_report
     from src.engine.sniper_trade_review_report import build_trade_review_report
+    from src.engine.wait6579_ev_cohort_report import build_wait6579_ev_cohort_report
 
     trade_review = build_trade_review_report(
         target_date=target_date,
@@ -248,24 +256,31 @@ def save_monitor_snapshots_for_date(target_date: str) -> dict[str, str]:
     add_blocked_lock.setdefault("meta", {})
     add_blocked_lock["meta"]["saved_snapshot_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     add_blocked_lock["meta"]["snapshot_kind"] = "add_blocked_lock"
+    wait6579_ev_cohort = build_wait6579_ev_cohort_report(target_date=target_date)
+    wait6579_ev_cohort.setdefault("meta", {})
+    wait6579_ev_cohort["meta"]["saved_snapshot_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    wait6579_ev_cohort["meta"]["snapshot_kind"] = "wait6579_ev_cohort"
     buy_pause_guard = evaluate_buy_pause_guard(target_date, send_alert=True)
     trade_review["meta"]["buy_pause_guard"] = buy_pause_guard
     performance_tuning["meta"]["buy_pause_guard"] = buy_pause_guard
     post_sell_feedback["meta"]["buy_pause_guard"] = buy_pause_guard
     missed_entry_counterfactual["meta"]["buy_pause_guard"] = buy_pause_guard
     add_blocked_lock["meta"]["buy_pause_guard"] = buy_pause_guard
+    wait6579_ev_cohort["meta"]["buy_pause_guard"] = buy_pause_guard
 
     trade_review_path = save_monitor_snapshot("trade_review", target_date, trade_review)
     performance_path = save_monitor_snapshot("performance_tuning", target_date, performance_tuning)
     post_sell_path = save_monitor_snapshot("post_sell_feedback", target_date, post_sell_feedback)
     missed_entry_counterfactual_path = save_monitor_snapshot("missed_entry_counterfactual", target_date, missed_entry_counterfactual)
     add_blocked_lock_path = save_monitor_snapshot("add_blocked_lock", target_date, add_blocked_lock)
+    wait6579_ev_cohort_path = save_monitor_snapshot("wait6579_ev_cohort", target_date, wait6579_ev_cohort)
     result = {
         "trade_review": str(trade_review_path),
         "performance_tuning": str(performance_path),
         "post_sell_feedback": str(post_sell_path),
         "missed_entry_counterfactual": str(missed_entry_counterfactual_path),
         "add_blocked_lock": str(add_blocked_lock_path),
+        "wait6579_ev_cohort": str(wait6579_ev_cohort_path),
     }
     try:
         server_comparison = _save_server_comparison_artifacts(target_date)

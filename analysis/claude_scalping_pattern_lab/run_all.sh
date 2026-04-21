@@ -26,6 +26,25 @@ echo " 프로젝트 루트: $PROJECT_ROOT"
 echo "================================================"
 echo ""
 
+echo "[Health] analytics source check"
+if ! "$PYTHON" - <<'PY'
+from analysis.claude_scalping_pattern_lab import config
+from src.engine.tuning_duckdb_repository import TuningDuckDBRepository
+
+if not config.USE_DUCKDB_PRIMARY:
+    print("[INFO] USE_DUCKDB_PRIMARY=false, jsonl-first mode")
+    raise SystemExit(0)
+
+with TuningDuckDBRepository(read_only=False) as repo:
+    repo.register_parquet_dataset("pipeline_events")
+    rows = repo.query("SELECT COUNT(*) AS cnt FROM v_pipeline_events").iloc[0]["cnt"]
+print(f"[OK] duckdb/pipeline_events rows={int(rows)}")
+PY
+then
+    echo "[WARN] DuckDB health check failed; prepare_dataset.py will continue with jsonl/db fallback."
+fi
+echo ""
+
 # ── Step 1: 데이터 준비 ──────────────────────────────────────────────────────
 echo "[Step 1/3] prepare_dataset.py"
 "$PYTHON" "$SCRIPT_DIR/prepare_dataset.py"

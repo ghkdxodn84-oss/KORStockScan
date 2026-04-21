@@ -98,6 +98,8 @@ def _should_apply_latency_guard_canary(
     latest_price: int,
     danger_reasons: list[str] | None = None,
 ) -> tuple[bool, str]:
+    if not bool(getattr(TRADING_RULES, "SCALP_LATENCY_FALLBACK_ENABLED", True)):
+        return False, "latency_fallback_disabled"
     if not bool(getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_ENABLED", False)):
         return False, "disabled"
     if str(strategy_id or "").upper() != "SCALPING":
@@ -335,12 +337,19 @@ def evaluate_live_buy_entry(
         ]
         return result
 
-    if effective_decision == EntryDecision.ALLOW_FALLBACK:
+    if effective_decision == EntryDecision.ALLOW_FALLBACK and bool(
+        getattr(TRADING_RULES, "SCALP_LATENCY_FALLBACK_ENABLED", True)
+    ):
         fallback_orders = _FALLBACK_BUILDER.build(
             snapshot=snapshot,
             latest_price=latest_price,
             best_ask=best_ask,
         )
+        if not fallback_orders:
+            result["decision"] = EntryDecision.REJECT_MARKET_CONDITION.value
+            result["reason"] = "latency_fallback_deprecated"
+            result["mode"] = "reject"
+            return result
         result["allowed"] = True
         result["mode"] = "fallback"
         result["orders"] = [
@@ -359,6 +368,10 @@ def evaluate_live_buy_entry(
             f"fallback_bundle_ready orders={len(result['orders'])}"
         )
         return result
+
+    if effective_decision == EntryDecision.ALLOW_FALLBACK:
+        result["decision"] = EntryDecision.REJECT_MARKET_CONDITION.value
+        result["reason"] = "latency_fallback_disabled"
 
     result["mode"] = "reject"
     return result

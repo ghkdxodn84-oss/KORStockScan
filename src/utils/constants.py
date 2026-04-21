@@ -144,6 +144,8 @@ class TradingConfig:
     SCALP_PRESET_HARD_STOP_FALLBACK_BASE_GRACE_SEC: int = 35  # SCALP_BASE + fallback 전용 유예시간
     SCALP_PRESET_HARD_STOP_FALLBACK_BASE_EMERGENCY_PCT: float = -1.2  # SCALP_BASE + fallback 비상 손절선
     SCALP_FALLBACK_ENTRY_QTY_MULTIPLIER: float = 0.70  # 2026-04-09 canary: fallback 진입 수량 배율(한 축만 적용)
+    SCALP_LATENCY_FALLBACK_ENABLED: bool = False  # 폐기: 지연대응 fallback 진입 전체 비활성화
+    SCALP_SPLIT_ENTRY_ENABLED: bool = False  # 폐기 기록용: fallback scout/main 다중 leg 재개 금지
     SCALP_PARTIAL_FILL_RATIO_CANARY_ENABLED: bool = True  # 2026-04-20 immediate fix: partial fill 최소 체결비율 canary on
     SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT: float = 0.20  # 기본 최소 체결비율
     SCALP_PARTIAL_FILL_MIN_RATIO_STRONG_ABS_OVERRIDE: float = 0.10  # strong_absolute_override 예외
@@ -157,7 +159,7 @@ class TradingConfig:
     SCALP_SCANNER_FALLBACK_NEAR_AI_EXIT_SCORE_BUFFER: int = 8  # SCANNER fallback near_ai_exit 점수 여유폭
     SCALP_SCANNER_FALLBACK_NEAR_AI_EXIT_SUSTAIN_SEC: int = 120  # SCANNER fallback near_ai_exit 지속 필요시간
     SCALP_SCANNER_FALLBACK_RETRACE_NEAR_AI_EXIT_SUSTAIN_SEC: int = 150  # SCANNER fallback 양전환 이력 케이스 near_ai_exit 지속 필요시간
-    SCALP_LATENCY_GUARD_CANARY_ENABLED: bool = True  # REJECT_DANGER 중 조건부 케이스만 fallback 허용
+    SCALP_LATENCY_GUARD_CANARY_ENABLED: bool = False  # 긴급 운영가드: REJECT_DANGER -> fallback canary override 비활성화
     SCALP_LATENCY_GUARD_CANARY_TAGS: tuple = ("SCANNER", "VWAP_RECLAIM", "OPEN_RECLAIM")  # latency canary 적용 태그
     SCALP_LATENCY_GUARD_CANARY_MIN_SIGNAL_SCORE: float = 85.0  # latency canary 최소 AI 점수
     SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS: int = 450  # latency canary 최대 ws_age
@@ -281,6 +283,17 @@ class TradingConfig:
     AI_WATCHING_75_PROMPT_SHADOW_ENABLED: bool = False  # 작업 4: 75 정합화 shadow canary (remote 전용)
     AI_WATCHING_75_PROMPT_SHADOW_MIN_SCORE: int = 75  # shadow 재평가 시작 점수
     AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE: int = 79  # shadow 재평가 종료 점수
+    AI_MAIN_BUY_RECOVERY_CANARY_ENABLED: bool = True  # main-only BUY 기회 회복 canary
+    AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE: int = 65  # 재평가 시작 점수
+    AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE: int = 79  # 재평가 종료 점수
+    AI_MAIN_BUY_RECOVERY_CANARY_PROMOTE_SCORE: int = 75  # BUY 승격 최소 점수
+    AI_MAIN_BUY_RECOVERY_CANARY_MIN_BUY_PRESSURE: float = 65.0  # 최소 매수 압도율(%)
+    AI_MAIN_BUY_RECOVERY_CANARY_MIN_TICK_ACCEL: float = 1.20  # 최소 틱 가속 비율
+    AI_MAIN_BUY_RECOVERY_CANARY_MIN_MICRO_VWAP_BP: float = 0.0  # 최소 micro VWAP bp
+    AI_WAIT6579_PROBE_CANARY_ENABLED: bool = True  # WAIT 65~79 BUY 승격표본 소량 실전 probe canary
+    AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW: int = 50_000  # probe 최대 예산
+    AI_WAIT6579_PROBE_CANARY_MIN_QTY: int = 1  # probe 최소 수량
+    AI_WAIT6579_PROBE_CANARY_MAX_QTY: int = 1  # probe 최대 수량
     SCALPING_PROMPT_SPLIT_ENABLED: bool = True  # WATCHING/HOLDING 프롬프트 분리 on/off 롤백 토글
     ML_GATEKEEPER_PULLBACK_WAIT_COOLDOWN: int = 60 * 20  # 게이트키퍼 '눌림 대기' 재평가 쿨다운
     ML_GATEKEEPER_REJECT_COOLDOWN: int = 60 * 60 * 2  # 게이트키퍼 '전량 회피' 계열 쿨다운
@@ -300,7 +313,7 @@ class TradingConfig:
     GPT_REPORT_MODEL = "gpt-5.4-nano"
     GPT_ENABLE_SCALPING_DEEP_RECHECK: bool = False
     GPT_ENGINE_MIN_INTERVAL: float = 0.5 # OpenAI 서버에 쏘는 최소 간격 (초 단위, 0.5초 = 500ms)
-    OPENAI_DUAL_PERSONA_ENABLED: bool = True
+    OPENAI_DUAL_PERSONA_ENABLED: bool = False  # Plan Rebase: AI 엔진 A/B/shadow 비교는 기본 튜닝 로직 정렬 이후 재개
     OPENAI_DUAL_PERSONA_SHADOW_MODE: bool = True
     OPENAI_DUAL_PERSONA_APPLY_GATEKEEPER: bool = False  # 장중 긴급 완화: Gatekeeper dual-persona shadow 일시 비활성화
     OPENAI_DUAL_PERSONA_APPLY_OVERNIGHT: bool = True
@@ -430,11 +443,33 @@ def _build_trading_rules() -> TradingConfig:
     env_prompt_shadow_enabled = _env_bool("AI_WATCHING_75_PROMPT_SHADOW_ENABLED")
     env_prompt_shadow_min = _env_int("AI_WATCHING_75_PROMPT_SHADOW_MIN_SCORE")
     env_prompt_shadow_max = _env_int("AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE")
+    env_main_buy_recovery_enabled = _env_bool("KORSTOCKSCAN_MAIN_BUY_RECOVERY_CANARY_ENABLED")
+    env_main_buy_recovery_min = _env_int("KORSTOCKSCAN_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE")
+    env_main_buy_recovery_max = _env_int("KORSTOCKSCAN_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE")
+    env_main_buy_recovery_promote = _env_int("KORSTOCKSCAN_MAIN_BUY_RECOVERY_CANARY_PROMOTE_SCORE")
+    env_main_buy_recovery_min_pressure = _env_float("KORSTOCKSCAN_MAIN_BUY_RECOVERY_CANARY_MIN_BUY_PRESSURE")
+    env_main_buy_recovery_min_accel = _env_float("KORSTOCKSCAN_MAIN_BUY_RECOVERY_CANARY_MIN_TICK_ACCEL")
+    env_main_buy_recovery_min_vwap_bp = _env_float("KORSTOCKSCAN_MAIN_BUY_RECOVERY_CANARY_MIN_MICRO_VWAP_BP")
+    env_wait6579_probe_enabled = _env_bool("KORSTOCKSCAN_WAIT6579_PROBE_CANARY_ENABLED")
+    env_wait6579_probe_max_budget = _env_int("KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW")
+    env_wait6579_probe_min_qty = _env_int("KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MIN_QTY")
+    env_wait6579_probe_max_qty = _env_int("KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MAX_QTY")
     env_scalping_prompt_split_enabled = _env_bool("KORSTOCKSCAN_SCALPING_PROMPT_SPLIT_ENABLED")
     if (
         env_prompt_shadow_enabled is not None
         or env_prompt_shadow_min is not None
         or env_prompt_shadow_max is not None
+        or env_main_buy_recovery_enabled is not None
+        or env_main_buy_recovery_min is not None
+        or env_main_buy_recovery_max is not None
+        or env_main_buy_recovery_promote is not None
+        or env_main_buy_recovery_min_pressure is not None
+        or env_main_buy_recovery_min_accel is not None
+        or env_main_buy_recovery_min_vwap_bp is not None
+        or env_wait6579_probe_enabled is not None
+        or env_wait6579_probe_max_budget is not None
+        or env_wait6579_probe_min_qty is not None
+        or env_wait6579_probe_max_qty is not None
         or env_scalping_prompt_split_enabled is not None
     ):
         config = replace(
@@ -448,6 +483,39 @@ def _build_trading_rules() -> TradingConfig:
             AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE=env_prompt_shadow_max
             if env_prompt_shadow_max is not None
             else config.AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE,
+            AI_MAIN_BUY_RECOVERY_CANARY_ENABLED=env_main_buy_recovery_enabled
+            if env_main_buy_recovery_enabled is not None
+            else config.AI_MAIN_BUY_RECOVERY_CANARY_ENABLED,
+            AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE=env_main_buy_recovery_min
+            if env_main_buy_recovery_min is not None
+            else config.AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE,
+            AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE=env_main_buy_recovery_max
+            if env_main_buy_recovery_max is not None
+            else config.AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE,
+            AI_MAIN_BUY_RECOVERY_CANARY_PROMOTE_SCORE=env_main_buy_recovery_promote
+            if env_main_buy_recovery_promote is not None
+            else config.AI_MAIN_BUY_RECOVERY_CANARY_PROMOTE_SCORE,
+            AI_MAIN_BUY_RECOVERY_CANARY_MIN_BUY_PRESSURE=env_main_buy_recovery_min_pressure
+            if env_main_buy_recovery_min_pressure is not None
+            else config.AI_MAIN_BUY_RECOVERY_CANARY_MIN_BUY_PRESSURE,
+            AI_MAIN_BUY_RECOVERY_CANARY_MIN_TICK_ACCEL=env_main_buy_recovery_min_accel
+            if env_main_buy_recovery_min_accel is not None
+            else config.AI_MAIN_BUY_RECOVERY_CANARY_MIN_TICK_ACCEL,
+            AI_MAIN_BUY_RECOVERY_CANARY_MIN_MICRO_VWAP_BP=env_main_buy_recovery_min_vwap_bp
+            if env_main_buy_recovery_min_vwap_bp is not None
+            else config.AI_MAIN_BUY_RECOVERY_CANARY_MIN_MICRO_VWAP_BP,
+            AI_WAIT6579_PROBE_CANARY_ENABLED=env_wait6579_probe_enabled
+            if env_wait6579_probe_enabled is not None
+            else config.AI_WAIT6579_PROBE_CANARY_ENABLED,
+            AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW=env_wait6579_probe_max_budget
+            if env_wait6579_probe_max_budget is not None
+            else config.AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW,
+            AI_WAIT6579_PROBE_CANARY_MIN_QTY=env_wait6579_probe_min_qty
+            if env_wait6579_probe_min_qty is not None
+            else config.AI_WAIT6579_PROBE_CANARY_MIN_QTY,
+            AI_WAIT6579_PROBE_CANARY_MAX_QTY=env_wait6579_probe_max_qty
+            if env_wait6579_probe_max_qty is not None
+            else config.AI_WAIT6579_PROBE_CANARY_MAX_QTY,
             SCALPING_PROMPT_SPLIT_ENABLED=env_scalping_prompt_split_enabled
             if env_scalping_prompt_split_enabled is not None
             else config.SCALPING_PROMPT_SPLIT_ENABLED,

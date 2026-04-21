@@ -1,10 +1,12 @@
 from dataclasses import replace
 
 from src.engine.sniper_state_handlers import (
+    _apply_wait6579_probe_canary,
     _build_ai_overlap_log_fields,
     _build_ai_ops_log_fields,
     _build_gatekeeper_fast_signature,
     _build_holding_ai_fast_signature,
+    _should_run_main_buy_recovery_canary,
     _should_run_watching_prompt_75_shadow,
     _resolve_gatekeeper_fast_reuse_sec,
     _resolve_holding_ai_fast_reuse_sec,
@@ -196,3 +198,83 @@ def test_should_run_watching_prompt_75_shadow_only_for_boundary_wait(monkeypatch
     assert _should_run_watching_prompt_75_shadow({"action": "BUY"}, 77) is False
     assert _should_run_watching_prompt_75_shadow({"action": "WAIT", "ai_fallback_score_50": True}, 77) is False
     assert _should_run_watching_prompt_75_shadow({"action": "WAIT"}, 74) is False
+
+
+def test_should_run_main_buy_recovery_canary_with_feature_allowlist(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_MAIN_BUY_RECOVERY_CANARY_ENABLED=True,
+        AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE=65,
+        AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE=79,
+        AI_MAIN_BUY_RECOVERY_CANARY_MIN_BUY_PRESSURE=65.0,
+        AI_MAIN_BUY_RECOVERY_CANARY_MIN_TICK_ACCEL=1.2,
+        AI_MAIN_BUY_RECOVERY_CANARY_MIN_MICRO_VWAP_BP=0.0,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+
+    class _Engine:
+        @staticmethod
+        def _extract_scalping_features(ws_data, recent_ticks, recent_candles):
+            return {
+                "buy_pressure_10t": 70.0,
+                "tick_acceleration_ratio": 1.35,
+                "curr_vs_micro_vwap_bp": 3.0,
+                "large_sell_print_detected": False,
+            }
+
+    assert _should_run_main_buy_recovery_canary({"action": "WAIT"}, 72, {}, [], [], _Engine()) is True
+
+
+def test_should_run_main_buy_recovery_canary_rejects_large_sell_or_danger(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_MAIN_BUY_RECOVERY_CANARY_ENABLED=True,
+        AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE=65,
+        AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE=79,
+        AI_MAIN_BUY_RECOVERY_CANARY_MIN_BUY_PRESSURE=65.0,
+        AI_MAIN_BUY_RECOVERY_CANARY_MIN_TICK_ACCEL=1.2,
+        AI_MAIN_BUY_RECOVERY_CANARY_MIN_MICRO_VWAP_BP=0.0,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+
+    class _BadEngine:
+        @staticmethod
+        def _extract_scalping_features(ws_data, recent_ticks, recent_candles):
+            return {
+                "buy_pressure_10t": 70.0,
+                "tick_acceleration_ratio": 1.35,
+                "curr_vs_micro_vwap_bp": 3.0,
+                "large_sell_print_detected": True,
+            }
+
+    assert _should_run_main_buy_recovery_canary({"action": "WAIT"}, 72, {}, [], [], _BadEngine()) is False
+    assert (
+        _should_run_main_buy_recovery_canary(
+            {"action": "WAIT"},
+            72,
+            {"latency_state": "DANGER"},
+            [],
+            [],
+            _BadEngine(),
+        )
+        is False
+    )
+
+
+def test_apply_wait6579_probe_canary_caps_qty_and_budget():
+    orders = [
+        {"tag": "normal", "qty": 12, "price": 10100, "order_type": "00", "tif": "IOC"},
+    ]
+
+    adjusted, original, scaled, applied = _apply_wait6579_probe_canary(
+        orders,
+        curr_price=10100,
+        max_budget_krw=50_000,
+        min_qty=1,
+        max_qty=1,
+    )
+
+    assert original == 12
+    assert scaled == 1
+    assert applied is True
+    assert adjusted[0]["qty"] == 1

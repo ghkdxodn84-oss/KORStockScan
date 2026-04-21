@@ -308,9 +308,9 @@ PYTHONPATH=. .venv/bin/pytest -q \
 ## 9. 참고 문서
 
 - [2026-04-20-stage2-todo-checklist.md](./2026-04-20-stage2-todo-checklist.md)
-- [2026-04-18-aiprompt-task9-main-openai-audit-report.md](./2026-04-18-aiprompt-task9-main-openai-audit-report.md)
-- [2026-04-19-aiprompt-task8-task10-holiday-recheck.md](./2026-04-19-aiprompt-task8-task10-holiday-recheck.md)
+- [2026-04-18-aiprompt-task9-main-openai-audit-report.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-18-aiprompt-task9-main-openai-audit-report.md)
+- [2026-04-19-aiprompt-task8-task10-holiday-recheck.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-19-aiprompt-task8-task10-holiday-recheck.md)
 - [2026-04-17-midterm-tuning-performance-report.md](./2026-04-17-midterm-tuning-performance-report.md)
 - [plan-korStockScanPerformanceOptimization.performance-report.md](./plan-korStockScanPerformanceOptimization.performance-report.md)
 - [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)
-- [workorder-softstop-0420-postclose.md](./workorder-softstop-0420-postclose.md)
+- [workorder-softstop-0420-postclose.md](./archive/legacy-workorders/workorder-softstop-0420-postclose.md)

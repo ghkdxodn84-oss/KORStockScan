@@ -120,13 +120,29 @@ class EntryOrchestrator:
             orders = [self.normal_entry_builder.build(snapshot=snapshot, latest_price=latest_price)]
             mode = "normal"
         else:
-            self.state_machine.transition(symbol, "FALLBACK_ORDER_SUBMITTING", reason=policy.reason)
             orders = self.fallback_strategy.build(
                 snapshot=snapshot,
                 latest_price=latest_price,
                 best_ask=best_ask,
             )
             mode = "fallback"
+
+        if not orders:
+            self.state_machine.transition(symbol, "REJECTED_MARKET_CONDITION", reason="latency_fallback_deprecated")
+            self.metrics_recorder.increment("entry.reject_market_condition")
+            result = {
+                "status": "REJECTED_MARKET_CONDITION",
+                "mode": "reject",
+                "reason": "latency_fallback_deprecated",
+                "latency_state": latency.state.value,
+                "orders": [],
+                "broker_results": [],
+            }
+            self.trade_logger.log_result(**result)
+            return result
+
+        if mode == "fallback":
+            self.state_machine.transition(symbol, "FALLBACK_ORDER_SUBMITTING", reason=policy.reason)
 
         broker_results = self.order_manager.submit_orders_async(orders)
         for order, broker_result in zip(orders, broker_results):

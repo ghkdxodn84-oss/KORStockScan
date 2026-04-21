@@ -194,7 +194,7 @@ def _translate_latency_state(value):
 def _translate_entry_decision(value):
     return {
         "ALLOW_NORMAL": "기본 진입 허용",
-        "ALLOW_FALLBACK": "분할 진입 허용",
+        "ALLOW_FALLBACK": "폐기된 fallback 경로",
         "REJECT_DANGER": "진입 보류",
         "REJECT": "진입 보류",
     }.get(str(value or "").upper(), value or "-")
@@ -202,8 +202,9 @@ def _translate_entry_decision(value):
 
 def _translate_order_tag(value):
     return {
-        "fallback_scout": "탐색 주문",
-        "fallback_main": "본 주문",
+        "fallback_scout": "폐기된 탐색 주문",
+        "fallback_main": "폐기된 본 주문",
+        "fallback_single": "폐기된 fallback 주문",
     }.get(value, value or "주문")
 
 
@@ -233,7 +234,7 @@ def _publish_entry_mode_summary(stock, code, *, entry_mode, latency_gate):
     order_lines = [_format_entry_order_line(order) for order in orders]
     order_summary = "\n".join(order_lines) if order_lines else "- 주문 계획 없음"
     msg = (
-        f"🧭 **[{stock.get('name')} ({code})] 지연 대응 분할진입 활성화**\n"
+        f"🧭 **[{stock.get('name')} ({code})] 폐기된 지연 fallback 경로 감지**\n"
         f"- 지연 상태: `{_translate_latency_state(latency_gate.get('latency_state'))}`\n"
         f"- 판정: `{_translate_entry_decision(latency_gate.get('decision'))}`\n"
         f"- 기준 가격: 신호가 `{_format_entry_price_text(latency_gate.get('signal_price'))}` / "
@@ -449,6 +450,61 @@ def _apply_fallback_qty_canary(
             scaled_total = 1
 
     return updated_orders, original_total, scaled_total
+
+
+def _apply_wait6579_probe_canary(
+    planned_orders: list[dict],
+    *,
+    curr_price: int,
+    max_budget_krw: int,
+    min_qty: int,
+    max_qty: int,
+) -> tuple[list[dict], int, int, bool]:
+    if not planned_orders:
+        return [], 0, 0, False
+
+    safe_price = max(1, int(curr_price or 0))
+    safe_budget = max(0, int(max_budget_krw or 0))
+    safe_min_qty = max(1, int(min_qty or 1))
+    safe_max_qty = max(safe_min_qty, int(max_qty or safe_min_qty))
+
+    updated_orders: list[dict] = []
+    original_total = 0
+    scaled_total = 0
+    applied = False
+
+    for order in planned_orders:
+        item = dict(order or {})
+        qty = max(0, int(item.get('qty') or 0))
+        price = max(1, int(item.get('price') or safe_price))
+        original_total += qty
+
+        if qty <= 0:
+            item['qty'] = 0
+            updated_orders.append(item)
+            continue
+
+        budget_qty_cap = (safe_budget // price) if safe_budget > 0 else safe_max_qty
+        if budget_qty_cap <= 0:
+            budget_qty_cap = safe_min_qty
+        scaled_qty = min(qty, safe_max_qty, budget_qty_cap)
+        scaled_qty = max(1, scaled_qty)
+        if scaled_qty != qty:
+            applied = True
+        item['qty'] = scaled_qty
+        scaled_total += scaled_qty
+        updated_orders.append(item)
+
+    if scaled_total <= 0 and updated_orders:
+        for item in updated_orders:
+            if int(item.get('qty') or 0) > 0:
+                continue
+            item['qty'] = safe_min_qty
+            scaled_total += safe_min_qty
+            applied = True
+            break
+
+    return updated_orders, original_total, scaled_total, applied
 
 
 def _emit_scalp_hard_time_stop_shadow(
@@ -891,6 +947,121 @@ def _should_run_watching_prompt_75_shadow(ai_decision, ai_score):
     if bool((ai_decision or {}).get("ai_fallback_score_50", False)):
         return False
     return str((ai_decision or {}).get("action", "WAIT") or "WAIT").upper() != "BUY"
+
+
+def _extract_buy_recovery_probe_features(ai_engine, ws_data, recent_ticks, recent_candles):
+    if ai_engine is None or not hasattr(ai_engine, "_extract_scalping_features"):
+        return None
+    try:
+        features = ai_engine._extract_scalping_features(ws_data or {}, recent_ticks or [], recent_candles or []) or {}
+    except Exception:
+        return None
+    return {
+        "buy_pressure": float(features.get("buy_pressure_10t", 0.0) or 0.0),
+        "tick_accel": float(features.get("tick_acceleration_ratio", 0.0) or 0.0),
+        "micro_vwap_bp": float(features.get("curr_vs_micro_vwap_bp", 0.0) or 0.0),
+        "large_sell_print": bool(features.get("large_sell_print_detected", False)),
+    }
+
+
+def _is_wait65_79_candidate(action, ai_score) -> bool:
+    if str(action or "WAIT").upper() == "BUY":
+        return False
+    try:
+        score = float(ai_score or 0.0)
+    except Exception:
+        return False
+    min_score = float(getattr(TRADING_RULES, "AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE", 65) or 65)
+    max_score = float(getattr(TRADING_RULES, "AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE", 79) or 79)
+    return min_score <= score <= max_score
+
+
+def _log_wait65_79_ev_candidate(
+    *,
+    stock,
+    code,
+    action,
+    ai_score,
+    ai_decision,
+    ws_data,
+    feature_probe,
+):
+    probe = feature_probe or {}
+    latency_state = str((ws_data or {}).get("latency_state", "") or "").strip().upper() or "-"
+    _log_entry_pipeline(
+        stock,
+        code,
+        "wait65_79_ev_candidate",
+        action=str(action or "WAIT").upper(),
+        ai_score=f"{float(ai_score or 0.0):.1f}",
+        buy_pressure=f"{float(probe.get('buy_pressure', 0.0) or 0.0):.2f}",
+        tick_accel=f"{float(probe.get('tick_accel', 0.0) or 0.0):.3f}",
+        micro_vwap_bp=f"{float(probe.get('micro_vwap_bp', 0.0) or 0.0):.2f}",
+        latency_state=latency_state,
+        parse_ok=bool((ai_decision or {}).get("ai_parse_ok", False)),
+        ai_response_ms=int((ai_decision or {}).get("ai_response_ms", 0) or 0),
+        terminal_blocker="-",
+    )
+
+
+def _should_run_main_buy_recovery_canary(
+    ai_decision,
+    ai_score,
+    ws_data,
+    recent_ticks,
+    recent_candles,
+    ai_engine,
+    *,
+    feature_probe=None,
+):
+    if not bool(getattr(TRADING_RULES, "AI_MAIN_BUY_RECOVERY_CANARY_ENABLED", False)):
+        return False
+    if bool((ai_decision or {}).get("ai_fallback_score_50", False)):
+        return False
+    if str((ai_decision or {}).get("action", "WAIT") or "WAIT").upper() == "BUY":
+        return False
+
+    try:
+        score = float(ai_score or 0.0)
+    except Exception:
+        return False
+    min_score = float(getattr(TRADING_RULES, "AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE", 65) or 65)
+    max_score = float(getattr(TRADING_RULES, "AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE", 79) or 79)
+    if score < min_score or score > max_score:
+        return False
+
+    # DANGER latency 표본은 기회 회복 canary 대상에서 제외한다.
+    latency_state = str((ws_data or {}).get("latency_state", "") or "").strip().upper()
+    if latency_state == "DANGER":
+        return False
+
+    probe = feature_probe or _extract_buy_recovery_probe_features(
+        ai_engine,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+    )
+    if not isinstance(probe, dict):
+        return False
+
+    min_buy_pressure = float(getattr(TRADING_RULES, "AI_MAIN_BUY_RECOVERY_CANARY_MIN_BUY_PRESSURE", 65.0) or 65.0)
+    min_tick_accel = float(getattr(TRADING_RULES, "AI_MAIN_BUY_RECOVERY_CANARY_MIN_TICK_ACCEL", 1.20) or 1.20)
+    min_micro_vwap_bp = float(getattr(TRADING_RULES, "AI_MAIN_BUY_RECOVERY_CANARY_MIN_MICRO_VWAP_BP", 0.0) or 0.0)
+
+    buy_pressure = float(probe.get("buy_pressure", 0.0) or 0.0)
+    tick_accel = float(probe.get("tick_accel", 0.0) or 0.0)
+    micro_vwap_bp = float(probe.get("micro_vwap_bp", 0.0) or 0.0)
+    large_sell_print = bool(probe.get("large_sell_print", False))
+
+    if large_sell_print:
+        return False
+    if buy_pressure < min_buy_pressure:
+        return False
+    if tick_accel < min_tick_accel:
+        return False
+    if micro_vwap_bp < min_micro_vwap_bp:
+        return False
+    return True
 
 
 def _resolve_holding_elapsed_sec(stock):
@@ -1920,10 +2091,25 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                                 prompt_profile="watching",
                             )
                             ai_call_executed = True
+                            stock.pop('wait6579_probe_canary_armed', None)
+                            stock.pop('wait6579_probe_canary_source', None)
+                            stock.pop('wait6579_probe_canary_score', None)
 
                             action = ai_decision.get('action', 'WAIT')
                             ai_score = ai_decision.get('score', 50)
                             reason = ai_decision.get('reason', '사유 없음')
+                            feature_probe = _extract_buy_recovery_probe_features(
+                                ai_engine,
+                                ws_data,
+                                recent_ticks,
+                                recent_candles,
+                            ) or {
+                                "buy_pressure": 0.0,
+                                "tick_accel": 0.0,
+                                "micro_vwap_bp": 0.0,
+                                "large_sell_print": False,
+                            }
+                            latency_state = str((ws_data or {}).get("latency_state", "") or "").strip().upper() or "-"
                             overlap_snapshot = _extract_ai_overlap_snapshot(
                                 ws_data=ws_data,
                                 recent_ticks=recent_ticks,
@@ -1937,6 +2123,11 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                                 "ai_confirmed",
                                 action=action,
                                 vip_target=is_vip_target,
+                                buy_pressure=f"{float(feature_probe.get('buy_pressure', 0.0) or 0.0):.2f}",
+                                tick_accel=f"{float(feature_probe.get('tick_accel', 0.0) or 0.0):.3f}",
+                                micro_vwap_bp=f"{float(feature_probe.get('micro_vwap_bp', 0.0) or 0.0):.2f}",
+                                large_sell_print_detected=bool(feature_probe.get("large_sell_print", False)),
+                                latency_state=latency_state,
                                 **_build_ai_overlap_log_fields(
                                     stock=stock,
                                     ai_score=ai_score,
@@ -1955,6 +2146,16 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                                     ai_cooldown_blocked=False,
                                 ),
                             )
+                            if _is_wait65_79_candidate(action, ai_score):
+                                _log_wait65_79_ev_candidate(
+                                    stock=stock,
+                                    code=code,
+                                    action=action,
+                                    ai_score=ai_score,
+                                    ai_decision=ai_decision,
+                                    ws_data=ws_data,
+                                    feature_probe=feature_probe,
+                                )
                             _submit_watching_shared_prompt_shadow(
                                 stock_name=stock['name'],
                                 code=code,
@@ -1998,6 +2199,69 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                                         ai_cooldown_blocked=False,
                                     ),
                                 )
+
+                            if _should_run_main_buy_recovery_canary(
+                                ai_decision,
+                                ai_score,
+                                ws_data,
+                                recent_ticks,
+                                recent_candles,
+                                ai_engine,
+                                feature_probe=feature_probe,
+                            ):
+                                recovery_decision = ai_engine.analyze_target_shadow_prompt(
+                                    stock['name'],
+                                    ws_data,
+                                    recent_ticks,
+                                    recent_candles,
+                                    strategy="SCALPING",
+                                    prompt_type="scalping_buy_recovery_canary",
+                                    cache_profile="watching_buy_recovery_canary",
+                                )
+                                recovery_action = str(recovery_decision.get("action", "WAIT") or "WAIT").upper()
+                                recovery_score = float(recovery_decision.get("score", 50) or 50)
+                                promote_threshold = float(
+                                    getattr(TRADING_RULES, "AI_MAIN_BUY_RECOVERY_CANARY_PROMOTE_SCORE", 75) or 75
+                                )
+                                can_promote = (
+                                    str(action or "WAIT").upper() != "BUY"
+                                    and recovery_action == "BUY"
+                                    and recovery_score >= promote_threshold
+                                )
+                                _log_entry_pipeline(
+                                    stock,
+                                    code,
+                                    "watching_buy_recovery_canary",
+                                    main_action=str(action or "WAIT").upper(),
+                                    main_score=f"{float(ai_score or 0.0):.1f}",
+                                    recovery_action=recovery_action,
+                                    recovery_score=f"{recovery_score:.1f}",
+                                    promoted=str(can_promote).lower(),
+                                    promote_threshold=f"{promote_threshold:.1f}",
+                                    **_build_ai_ops_log_fields(
+                                        recovery_decision,
+                                        ai_score_raw=recovery_score,
+                                        ai_score_after_bonus=recovery_score,
+                                        entry_score_threshold=promote_threshold,
+                                        big_bite_bonus_applied=False,
+                                        ai_cooldown_blocked=False,
+                                    ),
+                                )
+                                if can_promote:
+                                    action = "BUY"
+                                    ai_score = recovery_score
+                                    reason = (
+                                        f"{reason} | buy_recovery_canary:{recovery_score:.0f}"
+                                        if reason
+                                        else f"buy_recovery_canary:{recovery_score:.0f}"
+                                    )
+                                    ai_decision = dict(ai_decision or {})
+                                    ai_decision["action"] = action
+                                    ai_decision["score"] = ai_score
+                                    ai_decision["reason"] = reason
+                                    stock['wait6579_probe_canary_armed'] = True
+                                    stock['wait6579_probe_canary_source'] = "buy_recovery_canary_promoted"
+                                    stock['wait6579_probe_canary_score'] = f"{float(recovery_score):.1f}"
 
                             if ai_score != 50:
                                 stock['rt_ai_prob'] = ai_score / 100.0
@@ -2592,6 +2856,50 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
 
         requested_qty = int(real_buy_qty or 0)
         planned_orders = latency_gate.get('orders') or []
+        wait6579_probe_applied = False
+        if (
+            strategy == 'SCALPING'
+            and bool(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_ENABLED", True))
+            and bool(stock.get('wait6579_probe_canary_armed'))
+        ):
+            probe_max_budget = int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 50_000) or 50_000)
+            probe_min_qty = int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MIN_QTY", 1) or 1)
+            probe_max_qty = int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_QTY", 1) or 1)
+            adjusted_orders, original_qty, scaled_qty, applied = _apply_wait6579_probe_canary(
+                planned_orders,
+                curr_price=curr_price,
+                max_budget_krw=probe_max_budget,
+                min_qty=probe_min_qty,
+                max_qty=probe_max_qty,
+            )
+            if adjusted_orders:
+                planned_orders = adjusted_orders
+                latency_gate["orders"] = planned_orders
+            if scaled_qty > 0:
+                requested_qty = scaled_qty
+            wait6579_probe_applied = bool(applied)
+            _log_entry_pipeline(
+                stock,
+                code,
+                "wait6579_probe_canary_applied",
+                source=stock.get('wait6579_probe_canary_source', '-'),
+                ai_score=stock.get('wait6579_probe_canary_score', '-'),
+                max_budget_krw=probe_max_budget,
+                min_qty=probe_min_qty,
+                max_qty=probe_max_qty,
+                original_qty=original_qty,
+                scaled_qty=scaled_qty,
+                legs=len(planned_orders),
+                applied=wait6579_probe_applied,
+            )
+            log_info(
+                f"[WAIT6579_PROBE_CANARY] {stock.get('name')}({code}) "
+                f"qty={original_qty}->{scaled_qty} max_budget={probe_max_budget} applied={wait6579_probe_applied}"
+            )
+            stock.pop('wait6579_probe_canary_armed', None)
+            stock.pop('wait6579_probe_canary_source', None)
+            stock.pop('wait6579_probe_canary_score', None)
+
         if entry_mode == "fallback":
             fallback_qty_multiplier = float(getattr(TRADING_RULES, "SCALP_FALLBACK_ENTRY_QTY_MULTIPLIER", 1.0) or 1.0)
             adjusted_orders, original_qty, scaled_qty = _apply_fallback_qty_canary(
@@ -2785,6 +3093,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             entry_mode=entry_mode,
             requested_qty=requested_qty,
             legs=len(successful_orders),
+            wait6579_probe_canary_applied=wait6579_probe_applied,
         )
 
         if strategy in ['SCALPING', 'SCALP']:
@@ -3032,8 +3341,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                     stock['ai_review_action'] = ai_action
                     stock['ai_review_score'] = ai_score
 
-                    # Shared scalping prompt still emits BUY|WAIT|DROP today.
-                    # Keep SELL as an explicit placeholder until a dedicated HOLDING/exit action schema lands.
+                    # Gemini holding/exit action schema(HOLD/TRIM/EXIT)는 action_v2로 전달된다.
+                    # 현 실행경로는 기존 호환을 위해 action(legacy: WAIT/SELL/DROP)을 함께 사용한다.
                     if ai_action in ['SELL', 'DROP']:
                         _log_holding_pipeline(
                             stock,

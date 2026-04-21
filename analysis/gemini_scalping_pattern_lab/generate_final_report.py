@@ -38,23 +38,35 @@ def generate():
         f.write("   - 검증 지표: shadow execution 시 블록 건수 및 놓친 수익 거래 비율\n\n")
 
     # run_manifest.json
-    manifest = {
-        "executed_at": datetime.datetime.now().isoformat(),
-        "inputs_processed": [
-            "data/pipeline_events/",
-            "data/post_sell/",
-            "tmp/remote_*"
-        ],
-        "outputs_generated": [
-            "trade_fact.csv",
-            "funnel_fact.csv",
-            "sequence_fact.csv",
-            "llm_payload_summary.json",
-            "llm_payload_cases.json"
-        ]
-    }
-    with open(config.OUTPUT_DIR / 'run_manifest.json', 'w', encoding='utf-8') as f:
-        json.dump(manifest, f, indent=2)
+    manifest_path = config.OUTPUT_DIR / 'run_manifest.json'
+    manifest = {}
+    if os.path.exists(manifest_path):
+        try:
+            with open(manifest_path, 'r', encoding='utf-8') as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                manifest = loaded
+        except Exception:
+            manifest = {}
+
+    manifest["executed_at"] = datetime.datetime.now().isoformat()
+    manifest["inputs_processed"] = [
+        "data/pipeline_events/",
+        "data/post_sell/",
+        "tmp/remote_*"
+    ]
+    manifest["outputs_generated"] = [
+        "trade_fact.csv",
+        "funnel_fact.csv",
+        "sequence_fact.csv",
+        "llm_payload_summary.json",
+        "llm_payload_cases.json",
+        "pattern_analysis_report.md",
+        "ev_improvement_backlog.md",
+    ]
+
+    with open(manifest_path, 'w', encoding='utf-8') as f:
+        json.dump(manifest, f, indent=2, ensure_ascii=False)
 
 if __name__ == '__main__':
     generate()

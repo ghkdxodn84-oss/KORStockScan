@@ -51,7 +51,7 @@
 1. `plan-korStockScanPerformanceOptimization.prompt.md`
    - `### 아직 남아있는 일`만 사용
    - `즉시 착수 체크리스트`는 요약/운영 메모로 보고 Project 항목 소스로는 쓰지 않는다
-2. `2026-04-13-stage2-todo-checklist.md`
+2. `archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-13-stage2-todo-checklist.md`
    - 미완료 체크박스(`- [ ]`)만 사용
 3. `2026-04-10-scalping-ai-coding-instructions.md`
    - `#### 0-1b/2-1/2-2/3-1/3-2` 상세 단계만 사용

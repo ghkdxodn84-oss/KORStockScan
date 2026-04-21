@@ -146,7 +146,7 @@ def run_scalper(is_test_mode=False):
                 except Exception as e:
                     log_info(f"⚠️ DB 저장 실패 ({code}): {e}")
                 
-                # 최대 5개까지만 선택
+                # 최대 10개까지만 선택
                 if len(new_codes_found) >= max_new_codes:
                     break
             

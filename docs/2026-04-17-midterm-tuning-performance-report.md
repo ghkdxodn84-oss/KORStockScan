@@ -162,7 +162,7 @@
 
 ## 6. 참고(추가 감리 문서)
 
-- `작업 9 메인 OpenAI 이식 감리`: `docs/2026-04-18-aiprompt-task9-main-openai-audit-report.md`
+- `작업 9 메인 OpenAI 이식 감리`: `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-18-aiprompt-task9-main-openai-audit-report.md`
 
 ### 5-1. `165건 vs 148건` 표본 차이 제외 규칙
 
@@ -262,7 +262,7 @@
 
 - [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)
 - [2026-04-16-holding-profit-conversion-plan.md](./2026-04-16-holding-profit-conversion-plan.md)
-- [2026-04-16-profit-conversion-gap-analysis.md](./2026-04-16-profit-conversion-gap-analysis.md)
-- [2026-04-17-stage2-todo-checklist.md](./2026-04-17-stage2-todo-checklist.md)
+- [2026-04-16-profit-conversion-gap-analysis.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-16-profit-conversion-gap-analysis.md)
+- [2026-04-17-stage2-todo-checklist.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-stage2-todo-checklist.md)
 - [analysis/gemini_scalping_pattern_lab/outputs/final_review_report_for_lead_ai.md](../analysis/gemini_scalping_pattern_lab/outputs/final_review_report_for_lead_ai.md)
 - [analysis/claude_scalping_pattern_lab/outputs/final_review_report_for_lead_ai.md](../analysis/claude_scalping_pattern_lab/outputs/final_review_report_for_lead_ai.md)

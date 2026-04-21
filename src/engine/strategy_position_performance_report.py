@@ -302,10 +302,18 @@ def sync_trade_performance_for_date(target_date: str) -> dict[str, Any]:
             delete(StrategyPositionPerformanceDaily).where(StrategyPositionPerformanceDaily.rec_date == rec_date)
         )
         synced_at = datetime.now()
-        for fact in facts:
-            session.add(TradePerformanceFact(**fact, synced_at=synced_at))
-        for row in summary_rows:
-            session.add(StrategyPositionPerformanceDaily(**row, synced_at=synced_at))
+        if facts:
+            session.bulk_insert_mappings(
+                TradePerformanceFact,
+                [{**fact, "synced_at": synced_at} for fact in facts],
+            )
+        if summary_rows:
+            session.bulk_insert_mappings(
+                StrategyPositionPerformanceDaily,
+                [{**row, "synced_at": synced_at} for row in summary_rows],
+            )
+
+    _DB.analyze_performance_tables()
 
     return {
         "target_date": target_date,
@@ -345,7 +353,20 @@ def build_strategy_position_performance_report(target_date: str, *, refresh: boo
                 )
 
             facts = (
-                session.query(TradePerformanceFact)
+                session.query(
+                    TradePerformanceFact.recommendation_id,
+                    TradePerformanceFact.stock_code,
+                    TradePerformanceFact.stock_name,
+                    TradePerformanceFact.strategy,
+                    TradePerformanceFact.position_tag,
+                    TradePerformanceFact.status,
+                    TradePerformanceFact.profit_rate,
+                    TradePerformanceFact.realized_pnl_krw,
+                    TradePerformanceFact.exit_rule,
+                    TradePerformanceFact.sell_reason_type,
+                    TradePerformanceFact.buy_time,
+                    TradePerformanceFact.sell_time,
+                )
                 .filter(TradePerformanceFact.rec_date == rec_date)
                 .order_by(
                     TradePerformanceFact.realized_pnl_krw.desc(),

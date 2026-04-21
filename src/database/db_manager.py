@@ -153,8 +153,54 @@ class DBManager:
                 """))
         except Exception as e:
             print(f"⚠️ 컬럼 추가 확인 중 에러 (최초 생성 시 무시 가능): {e}")
-            
+
+        # 운영 중 대용량 테이블에 대한 online 인덱스 보강
+        self._ensure_performance_table_indexes()
+
         print("✅ 데이터베이스 초기화 및 테이블 검증 완료")
+
+    def _ensure_performance_table_indexes(self):
+        """성과/튜닝 조회 빈도가 높은 테이블 인덱스를 보강합니다."""
+        if self.engine.dialect.name != "postgresql":
+            return
+
+        index_statements = [
+            # trade_performance_facts
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_tpf_rec_date ON trade_performance_facts (rec_date);",
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_tpf_rec_date_status ON trade_performance_facts (rec_date, status);",
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_tpf_rec_date_strategy_tag ON trade_performance_facts (rec_date, strategy, position_tag);",
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_tpf_rec_date_pnl_profit ON trade_performance_facts (rec_date, realized_pnl_krw, profit_rate);",
+            # COMPLETED 상위/하위 성과 조회 전용 partial index
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_tpf_completed_rec_date_pnl ON trade_performance_facts (rec_date, realized_pnl_krw, profit_rate) WHERE status = 'COMPLETED';",
+            # strategy_position_performance_daily
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_sppd_rec_date_pnl_entered ON strategy_position_performance_daily (rec_date, realized_pnl_krw, entered_count);",
+            "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_sppd_strategy_tag_date ON strategy_position_performance_daily (strategy, position_tag, rec_date);",
+        ]
+
+        try:
+            with self.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+                for statement in index_statements:
+                    conn.execute(text(statement))
+        except Exception as e:
+            # CONCURRENTLY 불가 환경(권한/버전/드라이버)에서는 일반 CREATE INDEX로 폴백
+            try:
+                with self.engine.begin() as conn:
+                    for statement in index_statements:
+                        fallback_statement = statement.replace("CONCURRENTLY ", "")
+                        conn.execute(text(fallback_statement))
+            except Exception as fallback_error:
+                print(f"⚠️ 성과 테이블 인덱스 보강 실패: {fallback_error} (원인: {e})")
+
+    def analyze_performance_tables(self):
+        """쿼리 플래너 통계 갱신."""
+        if self.engine.dialect.name != "postgresql":
+            return
+        try:
+            with self.engine.connect().execution_options(isolation_level="AUTOCOMMIT") as conn:
+                conn.execute(text("ANALYZE trade_performance_facts;"))
+                conn.execute(text("ANALYZE strategy_position_performance_daily;"))
+        except Exception as e:
+            print(f"⚠️ 성과 테이블 ANALYZE 실패: {e}")
 
     def find_reusable_watching_record(self, session, *, rec_date, stock_code, strategy=None):
         """체결/청산 이력이 없는 WATCHING/EXPIRED row만 재사용 대상으로 찾습니다."""

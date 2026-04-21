@@ -40,6 +40,12 @@ dist/
 *.backup
 *.gz
 *.log
+*.parquet
+*.duckdb
+*.h5
+*.hdf5
+*.zip
+*.tar.gz
 
 # bot_main.py에서 생성하는 로그 폴더
 logs/

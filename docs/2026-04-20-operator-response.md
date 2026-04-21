@@ -1,7 +1,7 @@
 # 2026-04-20 운영자 응답 및 2차 감사 재검토 반영
 
 > 작성시각: `2026-04-20 KST`  
-> 대상 감사: [2026-04-20-auditor-review.md](./2026-04-20-auditor-review.md), [2026-04-20-auditor-second-review.md](./2026-04-20-auditor-second-review.md), [2026-04-20-auditor-third-review.md](./2026-04-20-auditor-third-review.md)  
+> 대상 감사: [2026-04-20-auditor-review.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-20-auditor-review.md), [2026-04-20-auditor-second-review.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-20-auditor-second-review.md), [2026-04-20-auditor-third-review.md](./2026-04-20-auditor-third-review.md)  
 > 작성 원칙: 감사 의견과 운영자 응답 분리, claim/evidence 분리, 수치 오류 즉시 정정
 
 ---

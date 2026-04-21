@@ -1,4 +1,4 @@
-"""Compress raw dashboard files only after DB ingestion is verified."""
+"""Compress raw dashboard files only after analytics ingestion is verified."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from src.utils.constants import DATA_DIR
 
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 MONITOR_SNAPSHOT_DIR = DATA_DIR / "report" / "monitor_snapshots"
+ANALYTICS_PARQUET_DIR = DATA_DIR / "analytics" / "parquet"
 
 
 def _parse_iso_date(value: str) -> date | None:
@@ -43,7 +44,29 @@ def _kind_and_date_from_snapshot_file(path: Path) -> tuple[str, date] | None:
     return kind, maybe_date
 
 
+def _table_exists(conn, table_name: str) -> bool:
+    with conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT EXISTS (
+                SELECT 1
+                FROM information_schema.tables
+                WHERE table_name = %s
+            )
+            """,
+            (table_name,),
+        )
+        return bool(cur.fetchone()[0])
+
+
+def _parquet_partition_exists(dataset: str, target_date: date) -> bool:
+    partition_dir = ANALYTICS_PARQUET_DIR / dataset / f"date={target_date.isoformat()}"
+    return partition_dir.exists() and any(partition_dir.glob("*.parquet"))
+
+
 def _db_has_pipeline_events(conn, target_date: date) -> bool:
+    if not _table_exists(conn, "dashboard_pipeline_events"):
+        return False
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -58,6 +81,8 @@ def _db_has_pipeline_events(conn, target_date: date) -> bool:
 
 
 def _db_has_snapshot(conn, kind: str, target_date: date) -> bool:
+    if not _table_exists(conn, "dashboard_monitor_snapshots"):
+        return False
     with conn.cursor() as cur:
         cur.execute(
             """
@@ -113,7 +138,9 @@ def run(*, retention_days: int, today: date, dry_run: bool) -> dict:
                 continue
             stats["pipeline"]["scanned"] += 1
             try:
-                verified = _db_has_pipeline_events(conn, target_date)
+                verified = _parquet_partition_exists("pipeline_events", target_date)
+                if not verified:
+                    verified = _db_has_pipeline_events(conn, target_date)
                 if not verified:
                     stats["skipped_unverified"] += 1
                     continue

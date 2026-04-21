@@ -368,9 +368,31 @@ def write_run_manifest(trade_df: pd.DataFrame, funnel_df: pd.DataFrame, seq_df: 
     manifest = {
         "run_at":  datetime.now().isoformat(),
         "version": "1.0.0",
+        "data_source_mode": "none",
+        "history_coverage_start": None,
+        "history_coverage_end": None,
+        "history_coverage_ok": False,
+        "local_pipeline_source_stats": {},
         "inputs":  [],
         "outputs": [],
     }
+
+    source_manifest_path = OUTPUT_DIR / "source_manifest.json"
+    if source_manifest_path.exists():
+        try:
+            source_manifest = json.loads(source_manifest_path.read_text(encoding="utf-8"))
+            for key in [
+                "data_source_mode",
+                "history_coverage_start",
+                "history_coverage_end",
+                "history_coverage_ok",
+                "local_pipeline_source_stats",
+                "use_duckdb_primary",
+            ]:
+                if key in source_manifest:
+                    manifest[key] = source_manifest[key]
+        except Exception:
+            pass
 
     for fname, df in [
         ("trade_fact.csv", trade_df),
@@ -386,6 +408,7 @@ def write_run_manifest(trade_df: pd.DataFrame, funnel_df: pd.DataFrame, seq_df: 
 
     for fname in [
         "data_quality_report.md",
+        "source_manifest.json",
         "ev_analysis_result.json",
         "ev_improvement_backlog_for_ops.md",
         "claude_payload_summary.json",

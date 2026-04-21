@@ -102,6 +102,11 @@ def test_save_monitor_snapshots_for_date_includes_missed_entry_counterfactual(tm
     )
     monkeypatch.setitem(
         sys.modules,
+        "src.engine.wait6579_ev_cohort_report",
+        types.SimpleNamespace(build_wait6579_ev_cohort_report=lambda **kwargs: {"date": kwargs["target_date"], "meta": {}}),
+    )
+    monkeypatch.setitem(
+        sys.modules,
         "src.engine.buy_pause_guard",
         types.SimpleNamespace(evaluate_buy_pause_guard=lambda *args, **kwargs: {"status": "ok"}),
     )
@@ -142,12 +147,17 @@ def test_save_monitor_snapshots_for_date_includes_missed_entry_counterfactual(tm
     result = service.save_monitor_snapshots_for_date("2026-04-09")
 
     assert "missed_entry_counterfactual" in result
+    assert "wait6579_ev_cohort" in result
     assert "server_comparison_snapshot" in result
     assert "server_comparison_report" in result
     saved = service.load_monitor_snapshot("missed_entry_counterfactual", "2026-04-09")
     assert saved is not None
     assert saved["meta"]["snapshot_kind"] == "missed_entry_counterfactual"
     assert saved["meta"]["buy_pause_guard"] == {"status": "ok"}
+    wait6579_saved = service.load_monitor_snapshot("wait6579_ev_cohort", "2026-04-09")
+    assert wait6579_saved is not None
+    assert wait6579_saved["meta"]["snapshot_kind"] == "wait6579_ev_cohort"
+    assert wait6579_saved["meta"]["buy_pause_guard"] == {"status": "ok"}
     comparison_saved = service.load_monitor_snapshot("server_comparison", "2026-04-09")
     assert comparison_saved is not None
     assert comparison_saved["date"] == "2026-04-09"

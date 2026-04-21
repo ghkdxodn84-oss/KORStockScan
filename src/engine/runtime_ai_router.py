@@ -35,21 +35,45 @@ def resolve_runtime_role() -> str:
     return "main"
 
 
+def resolve_scalping_ai_route() -> str:
+    """Return live scalping AI route: gemini (default) or openai."""
+    explicit = str(os.getenv("KORSTOCKSCAN_SCALPING_AI_ROUTE", "") or "").strip().lower()
+    if explicit in {"gemini", "openai"}:
+        return explicit
+
+    # Plan Rebase default: keep live decisions on Gemini until the core
+    # trading logic and observation axes are realigned.
+    return "gemini"
+
+
 class RuntimeAIEngineRouter:
     """
     Runtime router:
-    - main: scalping analyze_target -> OpenAI engine
-    - remote: keep Gemini path (with Gemini's own model routing)
+    - gemini route: scalping analyze_target -> Gemini engine
+    - openai route + main role: scalping analyze_target -> OpenAI engine
     """
 
-    def __init__(self, *, gemini_engine: Any, openai_scalping_engine: Any = None, runtime_role: str = "main"):
+    def __init__(
+        self,
+        *,
+        gemini_engine: Any,
+        openai_scalping_engine: Any = None,
+        runtime_role: str = "main",
+        scalping_ai_route: str = "gemini",
+    ):
         self.gemini_engine = gemini_engine
         self.openai_scalping_engine = openai_scalping_engine
         self.runtime_role = str(runtime_role or "main").strip().lower()
+        self.scalping_ai_route = str(scalping_ai_route or "gemini").strip().lower()
 
-        openai_enabled = self.runtime_role == "main" and self.openai_scalping_engine is not None
+        openai_enabled = (
+            self.scalping_ai_route == "openai"
+            and self.runtime_role == "main"
+            and self.openai_scalping_engine is not None
+        )
         log_info(
             f"[AI_ROUTER] role={self.runtime_role} "
+            f"scalping_route={self.scalping_ai_route} "
             f"scalping_openai={'on' if openai_enabled else 'off'}"
         )
 
@@ -68,6 +92,8 @@ class RuntimeAIEngineRouter:
         prompt_profile="shared",
     ):
         if (
+            self.scalping_ai_route == "openai"
+            and
             self.runtime_role == "main"
             and self.openai_scalping_engine is not None
             and self._is_scalping_strategy(strategy)
@@ -103,7 +129,11 @@ class RuntimeAIEngineRouter:
         return {"action": "WAIT", "score": 50, "reason": "shadow unsupported"}
 
     def _extract_scalping_features(self, *args, **kwargs):
-        if self.runtime_role == "main" and self.openai_scalping_engine is not None:
+        if (
+            self.scalping_ai_route == "openai"
+            and self.runtime_role == "main"
+            and self.openai_scalping_engine is not None
+        ):
             return self.openai_scalping_engine._extract_scalping_features(*args, **kwargs)
         if hasattr(self.gemini_engine, "_extract_scalping_features"):
             return self.gemini_engine._extract_scalping_features(*args, **kwargs)

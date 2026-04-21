@@ -1,5 +1,6 @@
 import time
 from datetime import UTC, datetime
+from types import SimpleNamespace
 
 from src.trading.config.entry_config import EntryConfig
 from src.trading.entry.entry_orchestrator import EntryOrchestrator
@@ -52,15 +53,32 @@ def test_orchestrator_safe_path_returns_normal():
     assert result["status"] == "ORDER_FILLED"
 
 
-def test_orchestrator_caution_path_returns_fallback():
+def test_orchestrator_caution_path_rejects_when_fallback_disabled():
     config = EntryConfig(
         max_order_rtt_avg_ms_for_safe=50,
         max_order_rtt_avg_ms_for_caution=300,
     )
     orchestrator = _build_orchestrator(config, order_rtt_avg_ms=120)
     result = orchestrator.process(_snapshot())
-    assert result["mode"] == "fallback"
-    assert len(result["orders"]) == 2
+    assert result["mode"] == "reject"
+    assert result["status"] == "REJECTED_MARKET_CONDITION"
+    assert result["reason"] == "latency_fallback_disabled"
+
+
+def test_orchestrator_caution_path_returns_fallback_when_enabled(monkeypatch):
+    monkeypatch.setattr(
+        "src.trading.entry.entry_policy.TRADING_RULES",
+        SimpleNamespace(SCALP_LATENCY_FALLBACK_ENABLED=True),
+    )
+    config = EntryConfig(
+        max_order_rtt_avg_ms_for_safe=50,
+        max_order_rtt_avg_ms_for_caution=300,
+    )
+    orchestrator = _build_orchestrator(config, order_rtt_avg_ms=120)
+    result = orchestrator.process(_snapshot())
+    assert result["mode"] == "reject"
+    assert result["status"] == "REJECTED_MARKET_CONDITION"
+    assert result["reason"] == "latency_fallback_deprecated"
 
 
 def test_orchestrator_danger_path_rejects():

@@ -146,7 +146,7 @@
 ## 7. 참고 문서
 
 - [2026-04-20-operator-response.md](./2026-04-20-operator-response.md)
-- [2026-04-20-auditor-second-review.md](./2026-04-20-auditor-second-review.md)
+- [2026-04-20-auditor-second-review.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-20-auditor-second-review.md)
 - [2026-04-21-stage2-todo-checklist.md](./2026-04-21-stage2-todo-checklist.md)
 - [plan-korStockScanPerformanceOptimization.performance-report.md](./plan-korStockScanPerformanceOptimization.performance-report.md)
 - `src/engine/sniper_state_handlers.py:991~1024`

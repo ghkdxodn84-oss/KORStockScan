@@ -18,23 +18,25 @@ def _snapshot(planned_qty=10):
     )
 
 
-def test_fallback_one_share_mode():
+def test_fallback_strategy_is_deprecated_null_object():
     strategy = FallbackStrategy(EntryConfig(scout_qty_mode="ONE_SHARE", scout_min_qty=1))
     orders = strategy.build(snapshot=_snapshot(10), latest_price=10_020, best_ask=10_030)
-    assert orders[0].qty == 1
-    assert orders[1].qty == 9
+    assert orders == []
 
 
-def test_fallback_percent_mode():
+def test_fallback_strategy_does_not_restore_scout_main_from_config():
+    strategy = FallbackStrategy(EntryConfig(scout_qty_mode="ONE_SHARE", scout_min_qty=1))
+    orders = strategy.build(snapshot=_snapshot(10), latest_price=10_020, best_ask=10_030)
+    assert orders == []
+
+
+def test_fallback_percent_mode_is_deprecated():
     strategy = FallbackStrategy(EntryConfig(scout_qty_mode="PERCENT", scout_qty_percent=0.2, scout_min_qty=1))
     orders = strategy.build(snapshot=_snapshot(10), latest_price=10_020, best_ask=10_030)
-    assert orders[0].qty == 2
-    assert orders[1].qty == 8
+    assert orders == []
 
 
-def test_main_price_uses_more_conservative_anchor():
+def test_deprecated_fallback_ignores_price_anchors():
     strategy = FallbackStrategy(EntryConfig(fallback_main_defensive_ticks=2))
     orders = strategy.build(snapshot=_snapshot(10), latest_price=10_100, best_ask=10_110)
-    scout_order, main_order = orders
-    assert scout_order.price >= 10_110
-    assert main_order.price < 10_000
+    assert orders == []
