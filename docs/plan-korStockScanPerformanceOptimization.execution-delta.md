@@ -3,7 +3,8 @@
 기준 시각: `2026-04-19 KST`
 
 이 문서는 `2026-04-11` 원안 계획과 `2026-04-19` 현재 실행 기준 사이에서 실제로 변경된 사항만 추린다.  
-현재 기준 실행안은 [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)를 본다.
+현재 중심 기준은 [plan-korStockScanPerformanceOptimization.rebase.md](./plan-korStockScanPerformanceOptimization.rebase.md)를 본다.  
+`fallback_scout/main`, `fallback_single`, `latency fallback split-entry` 등 영문 축 표현은 [Plan Rebase 용어 범례](./plan-korStockScanPerformanceOptimization.rebase.md#2-용어-범례)를 우선한다.
 
 ## 1. 판정
 
@@ -18,11 +19,14 @@
 
 | 영역 | 기본계획 | 현재 실행 기준 | 변경 이유 | 현재 닫힘 시점 |
 | --- | --- | --- | --- | --- |
+| `Plan Rebase 문서 역할` | 날짜형 workorder가 중심 기준/체크리스트/실행로그를 함께 보유 | `plan-korStockScanPerformanceOptimization.rebase.md`를 중심축으로 신설하고, 날짜별 checklist는 실행, workorder는 상세 근거, 감사보고서는 수치 근거로 분리 | 원칙/판정축/체크리스트 혼재로 의사결정 추적성이 떨어짐 | 즉시 적용 (`2026-04-22`) |
+| `Plan Rebase 중심 문서 감리 반영` | 중심 문서 구조 승인 전 상태 | `audit-reports/2026-04-22-plan-rebase-central-audit-review.md`를 감사보고서로 보관하고, S-1~S-3/B-1~B-4 중 기준화가 필요한 항목만 rebase/checklist에 반영 | 감사보고서는 매일 생성되므로 전문을 중심 문서에 흡수하지 않고, 안정 규칙/일정/guard만 기준화 | 즉시 적용 (`2026-04-22`) |
 | `split-entry shadow` | `2026-04-20`에 `rebase/즉시 재평가/cooldown` 3축 동시 판정 | `2026-04-20 rebase`, `2026-04-21 즉시 재평가`, `2026-04-22 cooldown` 순차 도입 | 동일 세션 원인귀속 불가, audited table `S-1` 반영 | `2026-04-22` |
 | `split-entry 판정 조건` | 표본 부족 시 결론 유예 수준의 서술형 | 각 판정 행에 `N_min/Δ_min/PrimaryMetric` 명시 필요 | audited table `S-2` 반영 | `2026-04-20 PREOPEN` |
 | `rollback guard` | 문서상 점검 수준 | `reject_rate/partial_fill_ratio/latency_p95/reentry_freq` 정량화 필요 | audited table `S-3` 반영 | `2026-04-20 PREOPEN` |
 | `HOLDING 성과판정` | `2026-04-21` 1일차 판정 | `2026-04-22 D+2` 최종판정 | schema 변경 직후 자기참조 오염 방지, audited table `S-4` 반영 | `2026-04-22 POSTCLOSE` |
 | `AIPrompt 작업 10` | `2026-04-19` 1차 결과 평가 후 확대 여부 판정 | `2026-04-20`에는 `shadow-only 유지/확대 보류`만 판정, 최종 확대는 `2026-04-22` | `holding_action_applied`, `holding_force_exit_triggered`, `holding_override_rule_version` 관찰축 부족 | `2026-04-22 POSTCLOSE` |
+| `프로파일별 특화 프롬프트 잔여과제` | 프로파일 분기/스키마 이식 완료를 사실상 종료로 해석 가능 | `shared 의존 제거`와 `개별 특화`는 별도 잔여과제로 분리한다. `09:00~12:00` 오전 반나절 관찰 후 `2026-04-22 12:20~12:30 KST`에 `watching 특화 / holding 특화 / exit 특화 / shared 제거 / 전부 미착수` 중 하나로 강제판정한다. 미관측 후보는 추가 유예 없이 관찰축 오류 또는 live 영향 없음으로 닫는다 | 구조 이식 완료와 성능/행동 품질 개선 완료를 분리해 원인귀속 정확도 확보. `shared 제거`는 오전 중 `scalping_shared`가 주문/보유/청산 의사결정에 연결될 때만 live canary 후보이며, 미관측이면 코드정리 또는 현행 유지다 | `2026-04-22 12:20~12:30` 최종 잠금 |
 | `AIPrompt 작업 8` | 핵심값 3종 투입 결과 정리 후 완료 후보 | 값 주입은 존재하나 `*_sent` 감사 로그 부족으로 미완료 유지 | 완료 기준과 감사 필드 범위 불일치 | `2026-04-20 POSTCLOSE` 재판정 |
 | `원격 canary 운용` | 튜닝축 신규 변경은 원격 canary 선행을 기본값으로 사용 | 현재 튜닝기간은 `신규 원격 canary 강제`를 보류하고, `AI 엔진 A/B` 직전에만 원격 정합화 후 사용 | split-entry/HOLDING 우선순위 집중 + 실험축 분리 원칙 | `2026-04-23 POSTCLOSE` 재판정 |
 | `PYRAMID zero_qty Stage 1 반영` | 수량 패치가 유효하면 `PYRAMID/REVERSAL_ADD` 동시 범위로 확장 가능 | 현재 실행 기준은 `SCALPING/PYRAMID bugfix-only`에 한해 `remote 범위확정 -> remote canary 판정 -> main code-load(flag OFF)` 순서로만 허용 | LIVE/OFF 축 혼동 방지 + split-entry/HOLDING 관찰축 보존 + main 선반영 금지 | `2026-04-24 POSTCLOSE` go/no-go |
