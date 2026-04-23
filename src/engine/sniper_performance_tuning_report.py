@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 from collections import Counter, defaultdict
 from dataclasses import dataclass
@@ -46,13 +47,14 @@ _STRATEGY_LABELS = {
     "other": "기타",
 }
 _STRATEGY_ORDER = ("scalping", "swing")
-PERFORMANCE_TUNING_SCHEMA_VERSION = 3
+PERFORMANCE_TUNING_SCHEMA_VERSION = 4
 _BLOCKER_LABELS = {
     "blocked_strength_momentum": "동적 체결강도",
     "blocked_liquidity": "유동성",
     "blocked_ai_score": "AI 점수",
     "latency_block": "지연 리스크",
     "blocked_zero_qty": "주문 가능 수량",
+    "auth_zero_qty": "인증 장애 0원 예산",
     "blocked_gap_from_scan": "포착가 대비 갭",
     "blocked_overbought": "과열",
     "blocked_big_bite_hard_gate": "Big-Bite 하드게이트",
@@ -78,6 +80,7 @@ _SWING_DAILY_BLOCKER_LABELS = {
     "blocked_gatekeeper_reject": "Gatekeeper 거부",
     "blocked_swing_gap": "스윙 갭상승",
     "blocked_zero_qty": "주문 가능 수량",
+    "auth_zero_qty": "인증 장애 0원 예산",
     "latency_block": "지연 리스크",
 }
 
@@ -727,6 +730,21 @@ def _build_strategy_outcomes(
     return strategy_rows
 
 
+def _resolve_trend_max_dates(override: int | None = None) -> int:
+    if override is not None:
+        try:
+            return max(1, min(60, int(override)))
+        except Exception:
+            pass
+    env_value = os.getenv("KORSTOCKSCAN_PERF_TREND_MAX_DATES", "").strip()
+    if env_value:
+        try:
+            return max(1, min(60, int(env_value)))
+        except Exception:
+            pass
+    return 20
+
+
 def _fetch_trade_history_rows(target_date: str, max_dates: int = 20) -> tuple[list[dict], list[str], list[str]]:
     warnings: list[str] = []
     try:
@@ -1297,7 +1315,12 @@ def _build_holding_axis_summary(holding_events: list[PerfEvent], exit_signals: l
     }
 
 
-def build_performance_tuning_report(*, target_date: str, since_time: str | None = None) -> dict:
+def build_performance_tuning_report(
+    *,
+    target_date: str,
+    since_time: str | None = None,
+    trend_max_dates: int | None = None,
+) -> dict:
     entry_events, holding_events = _load_pipeline_events_from_jsonl(target_date=target_date)
     if not entry_events and not holding_events:
         log_path = LOGS_DIR / "sniper_state_handlers_info.log"
@@ -1344,6 +1367,10 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
     holding_review_ms = [float(v) for e in holding_reviews if (v := _safe_float(e.fields.get("review_ms"))) is not None]
     holding_skip_ws_ages = [float(v) for e in holding_skips if (v := _safe_float(e.fields.get("ws_age_sec"))) is not None]
     gatekeeper_eval_ms = [float(v) for e in gatekeeper_decisions if (v := _safe_float(e.fields.get("gatekeeper_eval_ms"))) is not None]
+    gatekeeper_lock_wait_ms = [float(v) for e in gatekeeper_decisions if (v := _safe_float(e.fields.get("gatekeeper_lock_wait_ms"))) is not None]
+    gatekeeper_packet_build_ms = [float(v) for e in gatekeeper_decisions if (v := _safe_float(e.fields.get("gatekeeper_packet_build_ms"))) is not None]
+    gatekeeper_model_call_ms = [float(v) for e in gatekeeper_decisions if (v := _safe_float(e.fields.get("gatekeeper_model_call_ms"))) is not None]
+    gatekeeper_total_internal_ms = [float(v) for e in gatekeeper_decisions if (v := _safe_float(e.fields.get("gatekeeper_total_internal_ms"))) is not None]
     gatekeeper_fast_ws_ages = [float(v) for e in gatekeeper_fast_reuse if (v := _safe_float(e.fields.get("ws_age_sec"))) is not None]
     dual_shadow_extra_ms = [float(v) for e in dual_persona_events if (v := _safe_float(e.fields.get("shadow_extra_ms"))) is not None]
 
@@ -1355,7 +1382,12 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
     dual_persona_winners = Counter(str(e.fields.get("winner", "-") or "-") for e in dual_persona_events)
     dual_persona_decision_types = Counter(str(e.fields.get("decision_type", "-") or "-") for e in dual_persona_events)
     trade_rows, trade_warnings = _build_current_trade_rows(target_date)
-    history_rows, history_warnings, recent_history_dates = _fetch_trade_history_rows(target_date)
+    trend_max_dates = _resolve_trend_max_dates(trend_max_dates)
+    try:
+        history_rows, history_warnings, recent_history_dates = _fetch_trade_history_rows(target_date, trend_max_dates)
+    except TypeError:
+        # 테스트/호환 경로: 구 시그니처(target_date만 인자)를 허용한다.
+        history_rows, history_warnings, recent_history_dates = _fetch_trade_history_rows(target_date)
     trend_by_group = _build_strategy_trends(history_rows, recent_history_dates)
     fill_quality_by_trade_id: dict[str, str] = {}
     for event in fill_rebased_events:
@@ -1493,6 +1525,14 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
         "gatekeeper_ai_cache_hit_ratio": _ratio(gatekeeper_ai_cache_hit_count, total_gatekeeper_samples),
         "gatekeeper_eval_ms_avg": _avg(gatekeeper_eval_ms),
         "gatekeeper_eval_ms_p95": round(_percentile(gatekeeper_eval_ms, 95), 2),
+        "gatekeeper_lock_wait_ms_avg": _avg(gatekeeper_lock_wait_ms),
+        "gatekeeper_lock_wait_ms_p95": round(_percentile(gatekeeper_lock_wait_ms, 95), 2),
+        "gatekeeper_packet_build_ms_avg": _avg(gatekeeper_packet_build_ms),
+        "gatekeeper_packet_build_ms_p95": round(_percentile(gatekeeper_packet_build_ms, 95), 2),
+        "gatekeeper_model_call_ms_avg": _avg(gatekeeper_model_call_ms),
+        "gatekeeper_model_call_ms_p95": round(_percentile(gatekeeper_model_call_ms, 95), 2),
+        "gatekeeper_total_internal_ms_avg": _avg(gatekeeper_total_internal_ms),
+        "gatekeeper_total_internal_ms_p95": round(_percentile(gatekeeper_total_internal_ms, 95), 2),
         "gatekeeper_fast_reuse_ws_age_p95": round(_percentile(gatekeeper_fast_ws_ages, 95), 2),
         "gatekeeper_action_age_p95": round(_percentile(gatekeeper_action_ages, 95), 2) if gatekeeper_action_ages else 0,
         "gatekeeper_allow_entry_age_p95": round(_percentile(gatekeeper_allow_ages, 95), 2) if gatekeeper_allow_ages else 0,
@@ -1546,6 +1586,8 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
         _metric_card("Gatekeeper 결정", f"{metrics['gatekeeper_decisions']}건", "실제 허용/보류 판단"),
         _metric_card("Gatekeeper fast reuse", f"{metrics['gatekeeper_fast_reuse_ratio']:.1f}%", "같은 장면 재사용 비율"),
         _metric_card("Gatekeeper p95", f"{metrics['gatekeeper_eval_ms_p95']:.0f}ms", "평가 지연 상위 5%"),
+        _metric_card("Gate lock p95", f"{metrics['gatekeeper_lock_wait_ms_p95']:.0f}ms", "엔진 lock 대기 상위 5%"),
+        _metric_card("Gate model p95", f"{metrics['gatekeeper_model_call_ms_p95']:.0f}ms", "모델 호출 상위 5%"),
         _metric_card("Dual Persona shadow", f"{metrics['dual_persona_shadow_samples']}건", "Gatekeeper + Overnight shadow 표본"),
         _metric_card("Dual Persona 충돌률", f"{metrics['dual_persona_conflict_ratio']:.1f}%", "Gemini와 다른 결론 비중"),
         _metric_card("보수 veto", f"{metrics['dual_persona_conservative_veto_ratio']:.1f}%", "보수 페르소나 veto 비중"),
@@ -1595,6 +1637,9 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
                 "name": e.name,
                 "code": e.code,
                 "gatekeeper_eval_ms": _safe_int(e.fields.get("gatekeeper_eval_ms"), 0) or 0,
+                "gatekeeper_lock_wait_ms": _safe_int(e.fields.get("gatekeeper_lock_wait_ms"), 0) or 0,
+                "gatekeeper_model_call_ms": _safe_int(e.fields.get("gatekeeper_model_call_ms"), 0) or 0,
+                "gatekeeper_total_internal_ms": _safe_int(e.fields.get("gatekeeper_total_internal_ms"), 0) or 0,
                 "cache": e.fields.get("gatekeeper_cache", "miss"),
                 "action": e.fields.get("action", e.fields.get("gatekeeper", "")),
             }
@@ -1634,6 +1679,7 @@ def build_performance_tuning_report(*, target_date: str, since_time: str | None 
             "outcome_basis": "기준일 누적 성과 (trade review 정규화)",
             "engine_basis": "조회 구간 엔진 지표",
             "trend_basis": f"최근 {len(recent_history_dates)}개 거래일 rolling 성과" if recent_history_dates else "최근 거래일 rolling 성과",
+            "trend_max_dates": trend_max_dates,
         },
         "breakdowns": {
             "latency_reason_breakdown": [{"label": key, "count": value} for key, value in latency_reason_counts.most_common()],

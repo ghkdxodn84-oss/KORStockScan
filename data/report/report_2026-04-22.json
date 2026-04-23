@@ -8,9 +8,9 @@
     "avg_bull": 50.9,
     "total_valid": 144,
     "qualified_count": 5,
-    "status_text": "상승장",
-    "color": "text-success",
-    "tone": "good"
+    "status_text": "하락장",
+    "color": "text-danger",
+    "tone": "bad"
   },
   "insights": {
     "dashboard": "시총 상위 우량주 중 20일선 위 종목 비율이 90.3%로 넓게 확산돼 있습니다.",
@@ -1013,7 +1013,7 @@
   },
   "meta": {
     "schema_version": 2,
-    "report_generated_at": "2026-04-22 07:40:25",
+    "report_generated_at": "2026-04-22 16:59:03",
     "warnings": [
       "요청일 2026-04-22 대신 최근 시세일 2026-04-21 기준으로 리포트를 생성했습니다."
     ],

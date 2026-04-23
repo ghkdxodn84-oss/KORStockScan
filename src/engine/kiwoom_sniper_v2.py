@@ -37,7 +37,7 @@ import json
 # 💡 Level 1 & 2 공통 모듈 (경로 및 패키지 구조에 맞게 통일)
 from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
-from src.utils.constants import TRADING_RULES, CREDENTIALS_PATH
+from src.utils.constants import CREDENTIALS_PATH, RESTART_FLAG_PATH, TRADING_RULES
 from src.database.db_manager import DBManager
 from src.core.event_bus import EventBus
 from src.utils.google_sheets_utils import GoogleSheetsManager
@@ -1153,10 +1153,10 @@ def run_sniper(is_test_mode=False):
 
     try:
         while True:
-            if os.path.exists("restart.flag"):
+            if RESTART_FLAG_PATH.exists():
                 print("🔄 [우아한 종료] 재시작 깃발을 확인했습니다. 시스템을 안전하게 정지합니다.")
                 event_bus.publish('TELEGRAM_BROADCAST', {'message': "🛑 스나이퍼 엔진이 하던 작업을 마치고 우아하게 재시작됩니다."})
-                os.remove("restart.flag")
+                RESTART_FLAG_PATH.unlink()
                 break
 
             now = datetime.now()

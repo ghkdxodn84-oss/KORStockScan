@@ -249,19 +249,50 @@ def calc_scale_in_qty(stock, curr_price, deposit, add_type, strategy, add_reason
     - 남은 허용 포지션(최대 비중) 기반 cap 우선
     - 템플릿은 기존 보유수량 비율 기반
     """
+    details = describe_scale_in_qty(
+        stock=stock,
+        curr_price=curr_price,
+        deposit=deposit,
+        add_type=add_type,
+        strategy=strategy,
+        add_reason=add_reason,
+    )
+    return int(details["qty"])
+
+
+def describe_scale_in_qty(stock, curr_price, deposit, add_type, strategy, add_reason=None):
+    """추가매수 수량과 zero_qty 원인을 함께 반환한다."""
     if curr_price <= 0 or deposit <= 0:
-        return 0
+        return {
+            "qty": 0,
+            "template_qty": 0,
+            "cap_qty": 0,
+            "remaining_budget": 0,
+            "floor_applied": False,
+        }
 
     buy_qty = int(float(stock.get('buy_qty', 0) or 0))
     if buy_qty <= 0:
-        return 0
+        return {
+            "qty": 0,
+            "template_qty": 0,
+            "cap_qty": 0,
+            "remaining_budget": 0,
+            "floor_applied": False,
+        }
 
     max_pos_pct = float(getattr(TRADING_RULES, 'MAX_POSITION_PCT', 0.30) or 0.30)
     max_budget = deposit * max_pos_pct
     current_value = buy_qty * curr_price
     remaining_budget = max(max_budget - current_value, 0)
     if remaining_budget <= 0:
-        return 0
+        return {
+            "qty": 0,
+            "template_qty": 0,
+            "cap_qty": 0,
+            "remaining_budget": remaining_budget,
+            "floor_applied": False,
+        }
 
     raw_strategy = (strategy or "").upper()
     add_type = (add_type or "").upper()
@@ -277,9 +308,31 @@ def calc_scale_in_qty(stock, curr_price, deposit, add_type, strategy, add_reason
         ratio = 0.50 if add_type == 'AVG_DOWN' else 0.30
 
     template_qty = int(buy_qty * ratio)
-    if template_qty <= 0:
-        return 0
-
     cap_qty = int((remaining_budget * 0.95) // curr_price)
+    floor_applied = False
+    if (
+        raw_strategy == 'SCALPING'
+        and add_type == 'PYRAMID'
+        and bool(getattr(TRADING_RULES, 'SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED', False))
+        and template_qty <= 0
+        and cap_qty >= 1
+    ):
+        template_qty = 1
+        floor_applied = True
+    if template_qty <= 0:
+        return {
+            "qty": 0,
+            "template_qty": 0,
+            "cap_qty": cap_qty,
+            "remaining_budget": remaining_budget,
+            "floor_applied": floor_applied,
+        }
+
     qty = min(template_qty, cap_qty)
-    return qty if qty >= 1 else 0
+    return {
+        "qty": qty if qty >= 1 else 0,
+        "template_qty": template_qty,
+        "cap_qty": cap_qty,
+        "remaining_budget": remaining_budget,
+        "floor_applied": floor_applied,
+    }

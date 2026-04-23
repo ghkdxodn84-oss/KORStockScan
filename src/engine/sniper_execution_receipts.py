@@ -625,6 +625,13 @@ def _update_db_for_sell(target_id, exec_price, now, target_stock, strategy, is_s
                     exit_rule=target_stock.get('last_exit_rule') or '-',
                     strategy=strategy,
                     revive=bool(is_scalp_revive),
+                    peak_profit=target_stock.get('last_exit_peak_profit'),
+                    held_sec=target_stock.get('last_exit_held_sec'),
+                    current_ai_score=target_stock.get('last_exit_current_ai_score'),
+                    soft_stop_threshold_pct=target_stock.get('last_exit_soft_stop_threshold_pct'),
+                    same_symbol_soft_stop_cooldown_would_block=target_stock.get(
+                        'last_exit_same_symbol_soft_stop_cooldown_would_block'
+                    ),
                 )
             except Exception as exc:
                 log_error(f"[POST_SELL] candidate record failed (id={target_id}): {exc}")
@@ -1130,6 +1137,13 @@ def handle_real_execution(exec_data):
                                 exit_rule=target_stock.get('last_exit_rule') or '-',
                                 strategy=strategy,
                                 revive=True,
+                                peak_profit=target_stock.get('last_exit_peak_profit'),
+                                held_sec=target_stock.get('last_exit_held_sec'),
+                                current_ai_score=target_stock.get('last_exit_current_ai_score'),
+                                soft_stop_threshold_pct=target_stock.get('last_exit_soft_stop_threshold_pct'),
+                                same_symbol_soft_stop_cooldown_would_block=target_stock.get(
+                                    'last_exit_same_symbol_soft_stop_cooldown_would_block'
+                                ),
                             )
                         except Exception as exc:
                             log_error(f"[POST_SELL] candidate record failed (id={target_id}): {exc}")

@@ -1,85 +1,86 @@
 {
-  "bundle_as_of": "2026-04-21T22:20:17Z",
+  "bundle_as_of": "2026-04-22T22:20:10Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7064.01,
-    "prev_value": 7109.14,
-    "change": -45.13,
-    "change_pct": -0.63,
-    "as_of": "2026-04-21T20:29:00Z",
+    "value": 7137.9,
+    "prev_value": 7064.01,
+    "change": 73.89,
+    "change_pct": 1.05,
+    "as_of": "2026-04-22T20:00:00Z",
     "source": "Morningstar / Dow Jones Market Data"
   },
   "nasdaq": {
     "name": "NASDAQ Composite",
-    "value": 24259.96,
-    "prev_value": 24404.39,
-    "change": -144.43,
-    "change_pct": -0.59,
-    "as_of": "2026-04-21T20:29:00Z",
+    "value": 24657.57,
+    "prev_value": 24259.97,
+    "change": 397.6,
+    "change_pct": 1.64,
+    "as_of": "2026-04-22T20:00:00Z",
     "source": "Morningstar / Dow Jones Market Data"
   },
   "vix": {
     "name": "VIX",
-    "value": 19.6,
-    "prev_value": 18.87,
-    "change": 0.73,
-    "change_pct": 3.87,
-    "as_of": "2026-04-21T19:24:00Z",
+    "value": 18.92,
+    "prev_value": 19.5,
+    "change": -0.58,
+    "change_pct": -2.97,
+    "as_of": "2026-04-22T20:15:00Z",
     "source": "Cboe Global Markets"
   },
   "us10y": {
-    "name": "US 10-Year Treasury Yield",
-    "value": 4.29,
-    "prev_value": 4.26,
-    "change": 0.03,
-    "change_pct": 0.7,
-    "as_of": "2026-04-21T20:00:00Z",
-    "source": "Capital Street FX"
+    "name": "US 10Y Treasury Yield",
+    "value": 4.293,
+    "prev_value": 4.29,
+    "change": 0.003,
+    "change_pct": 0.07,
+    "as_of": "2026-04-22T20:25:00Z",
+    "source": "Morningstar / Tradeweb"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 97.3,
-    "prev_value": 95.11,
-    "change": 2.19,
-    "change_pct": 2.3,
-    "as_of": "2026-04-21T20:00:00Z",
-    "source": "Capital Street FX"
+    "value": 98.48,
+    "prev_value": 95.48,
+    "change": 3.0,
+    "change_pct": 3.14,
+    "as_of": "2026-04-22T20:00:00Z",
+    "source": "Sprague Energy / CME"
   },
   "headlines": [
     {
-      "title": "Stocks end lower, oil ends higher as US-Iran ceasefire set to expire",
-      "source": "TheStreet",
-      "published_at": "2026-04-21T20:22:00Z",
-      "url": "https://www.thestreet.com"
+      "title": "S&P 500, Nasdaq end at record as Trump extends ceasefire deadline with Iran",
+      "source": "Seeking Alpha",
+      "published_at": "2026-04-22T20:06:00Z",
+      "url": "https://seekingalpha.com"
     },
     {
-      "title": "Fed Chair nominee Kevin Warsh strikes hawkish tone at Senate confirmation hearing",
-      "source": "Capital Street FX",
-      "published_at": "2026-04-21T20:00:00Z",
-      "url": "https://capitalstreetfx.com"
+      "title": "10-Year Treasury Yield Rises to 4.293% — Data Talk",
+      "source": "Morningstar",
+      "published_at": "2026-04-22T20:25:00Z",
+      "url": "https://www.morningstar.com"
     },
     {
-      "title": "Citi Warns Oil Could Hit $110 if Strait of Hormuz Disruption Persists",
-      "source": "TheStreet",
-      "published_at": "2026-04-21T15:01:00Z",
-      "url": "https://www.thestreet.com"
+      "title": "The VIX Hasn't Been This Calm Since March. Here's Why Traders Are Breathing Easier.",
+      "source": "24/7 Wall St.",
+      "published_at": "2026-04-22T14:00:00Z",
+      "url": "https://247wallst.com"
     },
     {
-      "title": "Apple announces transition as hardware veteran John Ternus succeeds Tim Cook as CEO",
+      "title": "Oil Rises Ahead of WTI Expiration as Market Eyes Iran Talks",
+      "source": "Sprague Energy",
+      "published_at": "2026-04-22T20:00:00Z",
+      "url": "https://www.spragueenergy.com"
+    },
+    {
+      "title": "Options Brief - Iran ceasefire extends - risk-on",
       "source": "Saxo Bank",
-      "published_at": "2026-04-21T12:00:00Z",
+      "published_at": "2026-04-22T12:00:00Z",
       "url": "https://home.saxo"
-    },
-    {
-      "title": "UnitedHealth Climbs After Q1 Earnings Beat; Raises 2026 Outlook",
-      "source": "TheStreet",
-      "published_at": "2026-04-21T13:30:00Z",
-      "url": "https://www.thestreet.com"
     }
   ],
   "notes": [
-    "US equities closed lower across the board ahead of Wednesday's US-Iran ceasefire expiry and ensuing geopolitical uncertainty.",
-    "Brent crude and WTI continued to spike as the Strait of Hormuz remains closed, raising supply deficit fears.",
-    "The 10-Year Treasury Yield ticked up amid renewed inflation concerns from climbing oil prices and hawkish Senate hearing statements by Fed Chair nominee Kevin Warsh."
+    "미국 S&P 500 및 NASDAQ 지수는 미국-이란 휴전 연장 소식에 힘입어 사상 최고치로 마감했습니다.",
+    "안전자산에 대한 수요가 줄어들며 VIX(변동성 지수)는 20 아래로 떨어졌습니다.",
+    "국채 10년물 금리는 소폭 상승하여 4.293%를 기록했습니다.",
+    "브렌트유는 호르무즈 해협 등 지정학적 리스크 잔존과 함께 상승세를 보이며 배럴당 $98.48 수준으로 마감했습니다."
   ]
 }

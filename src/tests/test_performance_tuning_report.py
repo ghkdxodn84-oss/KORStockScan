@@ -604,3 +604,32 @@ def test_swing_daily_summary_includes_market_regime_and_blockers(monkeypatch, tm
     assert blocker_rows["시장 국면 제한"]["count"] == 1
     assert blocker_rows["스윙 갭상승"]["count"] == 1
     assert gatekeeper_actions["눌림 대기"] == 2
+
+
+def test_performance_tuning_report_accepts_dynamic_trend_window(monkeypatch):
+    monkeypatch.setattr(report_mod, "_iter_target_lines", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        report_mod,
+        "build_trade_review_report",
+        lambda target_date, since_time=None, top_n=10000, scope="all": {
+            "meta": {"warnings": []},
+            "sections": {"recent_trades": []},
+        },
+    )
+    captured = {}
+
+    def _fake_history(target_date, max_dates=20):
+        captured["target_date"] = target_date
+        captured["max_dates"] = max_dates
+        return [], [], []
+
+    monkeypatch.setattr(report_mod, "_fetch_trade_history_rows", _fake_history)
+    report = report_mod.build_performance_tuning_report(
+        target_date="2026-04-03",
+        since_time=None,
+        trend_max_dates=7,
+    )
+
+    assert captured["target_date"] == "2026-04-03"
+    assert captured["max_dates"] == 7
+    assert report["meta"]["trend_max_dates"] == 7

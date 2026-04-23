@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import gzip
 import json
+import os
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
@@ -17,17 +19,24 @@ from src.engine.dashboard_data_repository import (
 
 LOG_ARCHIVE_DIR = DATA_DIR / "log_archive"
 MONITOR_SNAPSHOT_DIR = DATA_DIR / "report" / "monitor_snapshots"
+MONITOR_SNAPSHOT_MANIFEST_DIR = MONITOR_SNAPSHOT_DIR / "manifests"
 SERVER_COMPARISON_REPORT_DIR = DATA_DIR / "report" / "server_comparison"
 DOCS_DIR = Path(__file__).resolve().parents[2] / "docs"
 
 LOG_ARCHIVE_DIR.mkdir(parents=True, exist_ok=True)
 MONITOR_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+MONITOR_SNAPSHOT_MANIFEST_DIR.mkdir(parents=True, exist_ok=True)
 SERVER_COMPARISON_REPORT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _snapshot_path(kind: str, target_date: str) -> Path:
     safe_kind = str(kind or "").strip().lower().replace("-", "_")
     return MONITOR_SNAPSHOT_DIR / f"{safe_kind}_{target_date}.json"
+
+
+def _snapshot_manifest_path(target_date: str, profile: str) -> Path:
+    safe_profile = str(profile or "full").strip().lower().replace("-", "_")
+    return MONITOR_SNAPSHOT_MANIFEST_DIR / f"monitor_snapshot_manifest_{target_date}_{safe_profile}.json"
 
 
 def load_monitor_snapshot(kind: str, target_date: str) -> dict | None:
@@ -54,6 +63,25 @@ def save_monitor_snapshot(kind: str, target_date: str, payload: dict) -> Path:
         import logging
         logging.getLogger(__name__).warning("DB 저장 실패 (스냅샷 %s %s): %s", kind, target_date, e)
     return path
+
+
+def save_monitor_snapshot_manifest(target_date: str, *, profile: str, snapshots: dict[str, str]) -> Path:
+    manifest_path = _snapshot_manifest_path(target_date, profile)
+    tracked_paths = {
+        key: value
+        for key, value in (snapshots or {}).items()
+        if isinstance(value, str) and value.startswith("/")
+    }
+    payload = {
+        "target_date": target_date,
+        "profile": str(profile or "full"),
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "snapshot_kinds": sorted(tracked_paths.keys()),
+        "snapshot_paths": tracked_paths,
+    }
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
+    manifest_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return manifest_path
 
 
 def _relative_to_repo(path: Path) -> str:
@@ -213,6 +241,21 @@ def archive_target_date_logs(target_date: str, log_paths: Iterable[Path]) -> lis
 
 
 def save_monitor_snapshots_for_date(target_date: str) -> dict[str, str]:
+    return save_monitor_snapshots_for_date_with_profile(
+        target_date,
+        profile="full",
+        io_delay_sec=0.0,
+        include_server_comparison=True,
+    )
+
+
+def save_monitor_snapshots_for_date_with_profile(
+    target_date: str,
+    *,
+    profile: str = "full",
+    io_delay_sec: float = 0.0,
+    include_server_comparison: bool | None = None,
+) -> dict[str, str]:
     from src.engine.add_blocked_lock_report import build_add_blocked_lock_report
     from src.engine.buy_pause_guard import evaluate_buy_pause_guard
     from src.engine.sniper_missed_entry_counterfactual import build_missed_entry_counterfactual_report
@@ -221,73 +264,134 @@ def save_monitor_snapshots_for_date(target_date: str) -> dict[str, str]:
     from src.engine.sniper_trade_review_report import build_trade_review_report
     from src.engine.wait6579_ev_cohort_report import build_wait6579_ev_cohort_report
 
-    trade_review = build_trade_review_report(
-        target_date=target_date,
-        since_time=None,
-        top_n=300,
-        scope="entered",
-    )
-    trade_review.setdefault("meta", {})
-    trade_review["meta"]["saved_snapshot_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    trade_review["meta"]["snapshot_kind"] = "trade_review"
-
-    performance_tuning = build_performance_tuning_report(
-        target_date=target_date,
-        since_time=None,
-    )
-    performance_tuning.setdefault("meta", {})
-    performance_tuning["meta"]["saved_snapshot_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    performance_tuning["meta"]["snapshot_kind"] = "performance_tuning"
-
-    post_sell_feedback = build_post_sell_feedback_report(
-        target_date=target_date,
-        evaluate_now=True,
-    )
-    post_sell_feedback.setdefault("meta", {})
-    post_sell_feedback["meta"]["saved_snapshot_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    post_sell_feedback["meta"]["snapshot_kind"] = "post_sell_feedback"
-    missed_entry_counterfactual = build_missed_entry_counterfactual_report(
-        target_date=target_date,
-    )
-    missed_entry_counterfactual.setdefault("meta", {})
-    missed_entry_counterfactual["meta"]["saved_snapshot_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    missed_entry_counterfactual["meta"]["snapshot_kind"] = "missed_entry_counterfactual"
-    add_blocked_lock = build_add_blocked_lock_report(target_date=target_date)
-    add_blocked_lock.setdefault("meta", {})
-    add_blocked_lock["meta"]["saved_snapshot_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    add_blocked_lock["meta"]["snapshot_kind"] = "add_blocked_lock"
-    wait6579_ev_cohort = build_wait6579_ev_cohort_report(target_date=target_date)
-    wait6579_ev_cohort.setdefault("meta", {})
-    wait6579_ev_cohort["meta"]["saved_snapshot_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    wait6579_ev_cohort["meta"]["snapshot_kind"] = "wait6579_ev_cohort"
-    buy_pause_guard = evaluate_buy_pause_guard(target_date, send_alert=True)
-    trade_review["meta"]["buy_pause_guard"] = buy_pause_guard
-    performance_tuning["meta"]["buy_pause_guard"] = buy_pause_guard
-    post_sell_feedback["meta"]["buy_pause_guard"] = buy_pause_guard
-    missed_entry_counterfactual["meta"]["buy_pause_guard"] = buy_pause_guard
-    add_blocked_lock["meta"]["buy_pause_guard"] = buy_pause_guard
-    wait6579_ev_cohort["meta"]["buy_pause_guard"] = buy_pause_guard
-
-    trade_review_path = save_monitor_snapshot("trade_review", target_date, trade_review)
-    performance_path = save_monitor_snapshot("performance_tuning", target_date, performance_tuning)
-    post_sell_path = save_monitor_snapshot("post_sell_feedback", target_date, post_sell_feedback)
-    missed_entry_counterfactual_path = save_monitor_snapshot("missed_entry_counterfactual", target_date, missed_entry_counterfactual)
-    add_blocked_lock_path = save_monitor_snapshot("add_blocked_lock", target_date, add_blocked_lock)
-    wait6579_ev_cohort_path = save_monitor_snapshot("wait6579_ev_cohort", target_date, wait6579_ev_cohort)
-    result = {
-        "trade_review": str(trade_review_path),
-        "performance_tuning": str(performance_path),
-        "post_sell_feedback": str(post_sell_path),
-        "missed_entry_counterfactual": str(missed_entry_counterfactual_path),
-        "add_blocked_lock": str(add_blocked_lock_path),
-        "wait6579_ev_cohort": str(wait6579_ev_cohort_path),
+    normalized_profile = str(profile or "full").strip().lower()
+    if normalized_profile not in {"full", "intraday_light"}:
+        raise ValueError(f"Unsupported monitor snapshot profile: {profile}")
+    server_comparison_policy_enabled = os.getenv("KORSTOCKSCAN_ENABLE_SERVER_COMPARISON", "").lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
     }
+    if include_server_comparison is None:
+        include_server_comparison = normalized_profile == "full" and server_comparison_policy_enabled
+
+    sleep_sec = max(0.0, float(io_delay_sec))
+    trend_env_name = (
+        "MONITOR_SNAPSHOT_INTRADAY_TREND_MAX_DATES"
+        if normalized_profile == "intraday_light"
+        else "MONITOR_SNAPSHOT_FULL_TREND_MAX_DATES"
+    )
+    trend_max_dates = None
+    trend_env_value = os.getenv(trend_env_name, "").strip()
+    if trend_env_value:
+        try:
+            trend_max_dates = int(trend_env_value)
+        except Exception:
+            trend_max_dates = None
+    snapshot_order = (
+        (
+            "trade_review",
+            lambda: build_trade_review_report(
+                target_date=target_date,
+                since_time=None,
+                top_n=300,
+                scope="entered",
+            ),
+        ),
+        (
+            "performance_tuning",
+            lambda: build_performance_tuning_report(
+                target_date=target_date,
+                since_time=None,
+                trend_max_dates=trend_max_dates,
+            ),
+        ),
+        (
+            "wait6579_ev_cohort",
+            lambda: build_wait6579_ev_cohort_report(
+                target_date=target_date,
+            ),
+        ),
+        (
+            "post_sell_feedback",
+            lambda: build_post_sell_feedback_report(
+                target_date=target_date,
+                evaluate_now=True,
+            ),
+        ),
+        (
+            "missed_entry_counterfactual",
+            lambda: build_missed_entry_counterfactual_report(
+                target_date=target_date,
+            ),
+        ),
+        (
+            "add_blocked_lock",
+            lambda: build_add_blocked_lock_report(
+                target_date=target_date,
+            ),
+        ),
+    )
+    allowed_by_profile = {
+        "full": {
+            "trade_review",
+            "performance_tuning",
+            "wait6579_ev_cohort",
+            "post_sell_feedback",
+            "missed_entry_counterfactual",
+            "add_blocked_lock",
+        },
+        "intraday_light": {
+            "trade_review",
+            "performance_tuning",
+            "wait6579_ev_cohort",
+        },
+    }
+
+    send_alert = normalized_profile == "full"
+    buy_pause_guard = evaluate_buy_pause_guard(target_date, send_alert=send_alert)
+    result: dict[str, str] = {
+        "profile": normalized_profile,
+        "io_delay_sec": f"{sleep_sec:.3f}",
+    }
+    if trend_max_dates is not None:
+        result["trend_max_dates"] = str(trend_max_dates)
+
+    selected_kinds = allowed_by_profile[normalized_profile]
+    selected_entries = [item for item in snapshot_order if item[0] in selected_kinds]
+    for idx, (snapshot_kind, build_fn) in enumerate(selected_entries):
+        if idx > 0 and sleep_sec > 0:
+            time.sleep(sleep_sec)
+        payload = build_fn()
+        payload.setdefault("meta", {})
+        payload["meta"]["saved_snapshot_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        payload["meta"]["snapshot_kind"] = snapshot_kind
+        payload["meta"]["buy_pause_guard"] = buy_pause_guard
+        result[snapshot_kind] = str(save_monitor_snapshot(snapshot_kind, target_date, payload))
+
+    def _finalize_snapshot_manifest() -> dict[str, str]:
+        manifest_path = save_monitor_snapshot_manifest(
+            target_date,
+            profile=normalized_profile,
+            snapshots=result,
+        )
+        result["snapshot_manifest"] = str(manifest_path)
+        return result
+
+    if not include_server_comparison:
+        if not server_comparison_policy_enabled:
+            result["server_comparison_status"] = "policy_disabled"
+        return _finalize_snapshot_manifest()
+
     try:
+        if sleep_sec > 0:
+            time.sleep(sleep_sec)
         server_comparison = _save_server_comparison_artifacts(target_date)
     except Exception as exc:
         result["server_comparison_error"] = f"{type(exc).__name__}: {exc}"
-        return result
+        return _finalize_snapshot_manifest()
 
     if server_comparison:
         result.update(server_comparison)
-    return result
+    return _finalize_snapshot_manifest()

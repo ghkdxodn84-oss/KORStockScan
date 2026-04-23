@@ -150,6 +150,60 @@ def _should_apply_latency_guard_canary(
     return True, "canary_applied"
 
 
+def _should_apply_latency_spread_relief_canary(
+    *,
+    strategy_id: str,
+    position_tag: str,
+    signal_strength: float,
+    latency_status,
+    signal_price: int,
+    latest_price: int,
+    danger_reasons: list[str] | None = None,
+) -> tuple[bool, str]:
+    if not bool(getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED", False)):
+        return False, "disabled"
+    if str(strategy_id or "").upper() != "SCALPING":
+        return False, "non_scalping"
+    if getattr(latency_status, "quote_stale", False):
+        return False, "quote_stale"
+
+    normalized_reasons = _normalized_reason_set(danger_reasons or _latency_danger_reasons(latency_status))
+    if normalized_reasons != {"spread_too_wide"}:
+        return False, "spread_only_required"
+
+    allow_tags = {
+        str(tag).strip().upper()
+        for tag in (getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_TAGS", ()) or ())
+        if str(tag).strip()
+    }
+    normalized_tag = str(position_tag or "").strip().upper()
+    if allow_tags and normalized_tag not in allow_tags:
+        return False, "tag_not_allowed"
+
+    min_signal = _to_float(getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE", 85.0), 85.0)
+    signal_score = _normalize_signal_score(signal_strength)
+    if signal_score < min_signal:
+        return False, "low_signal"
+
+    max_spread_ratio = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO", 0.0120),
+        0.0120,
+    )
+    if _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0) > max_spread_ratio:
+        return False, "spread_relief_limit_exceeded"
+
+    allowed_slippage = _ENTRY_POLICY._allowed_slippage(
+        signal_price=signal_price,
+        latest_price=latest_price,
+        tick_limit=_CONFIG.normal_allowed_slippage_ticks,
+        pct_limit=_CONFIG.normal_allowed_slippage_pct,
+    )
+    if not _ENTRY_POLICY._slippage_ok(signal_price, latest_price, allowed_slippage, "BUY"):
+        return False, "normal_slippage_exceeded"
+
+    return True, "spread_relief_canary_applied"
+
+
 def freeze_signal_reference(
     stock: dict[str, Any],
     *,
@@ -265,6 +319,31 @@ def evaluate_live_buy_entry(
     latency_canary_reason = ""
     latency_danger_reasons = ",".join(_latency_danger_reasons(latency))
     if policy.decision == EntryDecision.REJECT_DANGER:
+        spread_relief_ok, spread_relief_reason = _should_apply_latency_spread_relief_canary(
+            strategy_id=strategy_id,
+            position_tag=str(stock.get("position_tag") or ""),
+            signal_strength=float(signal_strength or 0.0),
+            latency_status=latency,
+            signal_price=frozen_price,
+            latest_price=latest_price,
+            danger_reasons=latency_danger_reasons.split(","),
+        )
+        if spread_relief_ok:
+            latency_canary_applied = True
+            latency_canary_reason = spread_relief_reason
+            effective_decision = EntryDecision.ALLOW_NORMAL
+            effective_reason = "latency_spread_relief_normal_override"
+            log_info(
+                f"[LATENCY_SPREAD_RELIEF_CANARY] {stock.get('name')}({code}) "
+                f"tag={stock.get('position_tag')} signal_score={_normalize_signal_score(signal_strength):.1f} "
+                f"ws_age_ms={latency.ws_age_ms} ws_jitter_ms={latency.ws_jitter_ms} "
+                f"spread_ratio={latency.spread_ratio:.6f} "
+                f"danger_reasons={latency_danger_reasons}"
+            )
+        else:
+            latency_canary_reason = spread_relief_reason
+
+    if policy.decision == EntryDecision.REJECT_DANGER and effective_decision == EntryDecision.REJECT_DANGER:
         canary_ok, canary_reason = _should_apply_latency_guard_canary(
             strategy_id=strategy_id,
             position_tag=str(stock.get("position_tag") or ""),
@@ -287,15 +366,21 @@ def evaluate_live_buy_entry(
                 f"danger_reasons={latency_danger_reasons}"
             )
         else:
-            latency_canary_reason = canary_reason
+            if not latency_canary_reason or latency_canary_reason == "disabled":
+                latency_canary_reason = canary_reason
 
     computed_allowed_slippage = int(policy.computed_allowed_slippage or 0)
     if latency_canary_applied and computed_allowed_slippage <= 0:
+        tick_limit = _CONFIG.fallback_allowed_slippage_ticks
+        pct_limit = _CONFIG.fallback_allowed_slippage_pct
+        if effective_decision == EntryDecision.ALLOW_NORMAL:
+            tick_limit = _CONFIG.normal_allowed_slippage_ticks
+            pct_limit = _CONFIG.normal_allowed_slippage_pct
         computed_allowed_slippage = _ENTRY_POLICY._allowed_slippage(
             signal_price=frozen_price,
             latest_price=latest_price,
-            tick_limit=_CONFIG.fallback_allowed_slippage_ticks,
-            pct_limit=_CONFIG.fallback_allowed_slippage_pct,
+            tick_limit=tick_limit,
+            pct_limit=pct_limit,
         )
 
     result = {

@@ -19,7 +19,6 @@
 - `docs/2026-04-22-stage2-todo-checklist.md`
 - `docs/2026-04-23-stage2-todo-checklist.md`
 - `docs/2026-04-24-stage2-todo-checklist.md`
-- `docs/@My-Opinion.md`
 - `docs/plan-korStockScanPerformanceOptimization.execution-delta.md`
 - `docs/plan-korStockScanPerformanceOptimization.performance-report.md`
 - `docs/plan-korStockScanPerformanceOptimization.prompt.md`

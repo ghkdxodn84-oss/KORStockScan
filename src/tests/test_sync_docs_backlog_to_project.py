@@ -16,6 +16,7 @@ from src.engine.sync_docs_backlog_to_project import (
     _infer_slot_label,
     _infer_time_window,
     _is_managed_project_title,
+    _select_duplicate_project_items,
     _slot_equals,
     _slot_key,
     collect_backlog_tasks,
@@ -34,11 +35,27 @@ def test_parse_plan_tasks_has_remaining_items():
     assert all("SCALP_PRESET_TP SELL 의도 확인" not in title for title in titles)
 
 
-def test_parse_checklist_excludes_done_checkboxes():
+def test_parse_checklist_excludes_done_checkboxes(monkeypatch, tmp_path):
+    checklist = tmp_path / "2026-04-23-stage2-todo-checklist.md"
+    checklist.write_text(
+        "\n".join(
+            [
+                "# Checklist",
+                "",
+                "## 장중 체크리스트",
+                "- [ ] `[ParserTest0423] 열린 항목` (`Due: 2026-04-23`, `Slot: INTRADAY`, `TimeWindow: 14:00~14:10`, `Track: Plan`)",
+                "- [x] `[ParserTest0423] 닫힌 항목` (`Due: 2026-04-23`, `Slot: INTRADAY`, `TimeWindow: 14:10~14:20`, `Track: Plan`)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DOC_BACKLOG_TODAY", "2026-04-23")
+    monkeypatch.setenv("DOC_CHECKLIST_PATH", str(checklist))
+
     tasks = parse_checklist_tasks()
     titles = [t.title for t in tasks]
-    assert any("Gemini BUY recovery canary 1일차 판정" in title for title in titles)
-    assert all("RELAX-LATENCY 운영서버 승격 가능/불가 최종 결론" not in title for title in titles)
+    assert any("[ParserTest0423] 열린 항목" in title for title in titles)
+    assert all("[ParserTest0423] 닫힌 항목" not in title for title in titles)
 
 
 def test_parse_checklist_uses_env_override(monkeypatch):
@@ -61,11 +78,12 @@ def test_parse_checklist_fallback_when_primary_missing(monkeypatch):
     assert any("-stage2-todo-checklist.md" in t.source for t in tasks)
 
 
-def test_parse_checklist_collects_multiple_stage2_files():
+def test_parse_checklist_collects_multiple_stage2_files(monkeypatch):
+    monkeypatch.setenv("DOC_BACKLOG_TODAY", "2026-04-23")
     tasks = parse_checklist_tasks()
     due_dates = {t.due_date for t in tasks}
-    assert "2026-04-22" in due_dates
     assert "2026-04-24" in due_dates
+    assert all((not due_date) or due_date >= "2026-04-23" for due_date in due_dates)
 
 
 def test_checklist_track_from_source_uses_mmdd_suffix():
@@ -136,6 +154,27 @@ def test_collect_backlog_tasks_deduped():
     assert all(t.title != "SCALP_PRESET_TP SELL 의도 확인" for t in tasks)
 
 
+def test_infer_apply_target_text_requires_explicit_remote_or_main():
+    assert _infer_apply_target_text("원격 canary 설정 반영") == "remote"
+    assert _infer_apply_target_text("main 운영서버 승격") == "main"
+    assert _infer_apply_target_text("main/원격 동시 비교") == "main,remote"
+    assert _infer_apply_target_text("장중 canary 모니터링") == "-"
+    assert _infer_apply_target_text("일반 문서 작업") == "-"
+
+
+def test_ensure_apply_target_does_not_infer_remote_from_section_only():
+    task = BacklogTask(
+        title="[Checklist0423] 일반 문서 작업",
+        source="docs/2026-04-23-stage2-todo-checklist.md",
+        section="원격 canary 후보 검토",
+        due_date="2026-04-23",
+        track="Checklist0423",
+    )
+
+    ensured = _ensure_apply_target(task)
+    assert ensured.apply_target == "-"
+
+
 def test_parse_scalping_logic_fallback_when_primary_missing(monkeypatch):
     monkeypatch.setattr(
         "src.engine.sync_docs_backlog_to_project.DOC_SCALPING",
@@ -160,6 +199,39 @@ def test_managed_title_detection():
     assert _is_managed_project_title("[Checklist0414] something")
     assert not _is_managed_project_title("[Other] something")
     assert not _is_managed_project_title("plain title")
+
+
+def test_select_duplicate_project_items_keeps_most_complete_managed_item():
+    key = "[Checklist] duplicate task"
+    items = [
+        ProjectItem(
+            item_id="ITEM_A",
+            title="[Checklist0423] duplicate task",
+            content_type="DraftIssue",
+            due_date="2026-04-23",
+            slot="",
+            time_window="",
+        ),
+        ProjectItem(
+            item_id="ITEM_B",
+            title="[Checklist0423] duplicate task",
+            content_type="DraftIssue",
+            due_date="2026-04-23",
+            slot="POSTCLOSE",
+            time_window="16:50~17:00",
+        ),
+        ProjectItem(
+            item_id="ITEM_C",
+            title="[Other] duplicate task",
+            content_type="DraftIssue",
+            due_date="2026-04-23",
+            slot="POSTCLOSE",
+            time_window="16:50~17:00",
+        ),
+    ]
+
+    duplicates = _select_duplicate_project_items(items, {key})
+    assert [item.item_id for item in duplicates] == ["ITEM_A"]
 
 
 def test_desired_status_option_id():
@@ -281,6 +353,7 @@ def test_infer_apply_target_text_detects_remote_and_main():
     assert _infer_apply_target_text("원격 canary 설정 반영") == "remote"
     assert _infer_apply_target_text("main 운영서버 승격") == "main"
     assert _infer_apply_target_text("main/원격 동시 비교") == "main,remote"
+    assert _infer_apply_target_text("장중 canary 모니터링") == "-"
     assert _infer_apply_target_text("일반 문서 작업") == "-"
 
 
@@ -362,3 +435,47 @@ def test_sync_backlog_updates_due_for_existing_item(monkeypatch):
     assert summary["due_filled"] == 1
     assert summary["due_reclassified"] == 0
     assert any(call.get("value") == {"date": "2026-04-12"} for call in calls)
+
+
+def test_sync_backlog_deletes_duplicate_managed_project_items(monkeypatch):
+    task = BacklogTask(
+        title="[OpsEODSplit0423] 관찰축 정리 완료 시 KRX/NXT 분리 EOD 청산 시간/실행경로 확정 (Due: 2026-04-23, Slot: POSTCLOSE, TimeWindow: 16:50~17:00, Track: ScalpingLogic)",
+        source="docs/2026-04-23-stage2-todo-checklist.md",
+        section="장후 체크리스트 (15:20~) / 체크박스 미완료",
+        track="Checklist0423",
+        due_date="2026-04-23",
+    )
+    title = "[Checklist0423] [OpsEODSplit0423] 관찰축 정리 완료 시 KRX/NXT 분리 EOD 청산 시간/실행경로 확정 (Due: 2026-04-23, Slot: POSTCLOSE, TimeWindow: 16:50~17:00, Track: ScalpingLogic)"
+
+    monkeypatch.setenv("GH_PROJECT_TOKEN", "token")
+    monkeypatch.setenv("GH_PROJECT_OWNER", "JaehwanPark")
+    monkeypatch.setenv("GH_PROJECT_NUMBER", "1")
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project.collect_backlog_tasks",
+        lambda: [task],
+    )
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project._fetch_project_metadata",
+        lambda *args, **kwargs: (
+            "PROJECT_1",
+            {},
+            {title},
+            [
+                ProjectItem("ITEM_KEEP", title, "DraftIssue", "2026-04-23", "POSTCLOSE", "16:50~17:00"),
+                ProjectItem("ITEM_DROP", title, "DraftIssue", "2026-04-23", "POSTCLOSE", "16:50~17:00"),
+            ],
+        ),
+    )
+
+    calls = []
+
+    def _fake_graphql_request(token, query, variables):
+        calls.append((query, variables))
+        return {}
+
+    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project._graphql_request", _fake_graphql_request)
+
+    summary = sync_backlog_to_project(dry_run=False, limit=10)
+    assert summary["created_or_would_create"] == 0
+    assert summary["duplicates_deleted_or_would_delete"] == 1
+    assert any("deleteProjectV2Item" in query and variables["itemId"] == "ITEM_DROP" for query, variables in calls)

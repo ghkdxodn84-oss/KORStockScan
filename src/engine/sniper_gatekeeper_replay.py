@@ -104,6 +104,12 @@ def record_gatekeeper_snapshot(
         "position_tag": str(stock.get("position_tag", "") or ""),
         "action_label": str(gatekeeper.get("action_label", "") or "UNKNOWN"),
         "allow_entry": bool(gatekeeper.get("allow_entry", False)),
+        "cache_mode": str(gatekeeper.get("cache_mode", "") or ""),
+        "eval_ms": int(gatekeeper.get("eval_ms", 0) or 0),
+        "lock_wait_ms": int(gatekeeper.get("lock_wait_ms", 0) or 0),
+        "packet_build_ms": int(gatekeeper.get("packet_build_ms", 0) or 0),
+        "model_call_ms": int(gatekeeper.get("model_call_ms", 0) or 0),
+        "total_internal_ms": int(gatekeeper.get("total_internal_ms", 0) or 0),
         "report": str(gatekeeper.get("report", "") or ""),
         "report_preview": str(gatekeeper.get("report", "") or "")[:240],
         "ctx_summary": {

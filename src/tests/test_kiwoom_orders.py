@@ -96,3 +96,33 @@ def test_get_deposit_uses_recent_cached_amount_after_api_failure(monkeypatch):
     monkeypatch.setattr(kiwoom_orders.time, "time", lambda: 1_005.0)
 
     assert kiwoom_orders.get_deposit("TOKEN") == 9_876_543
+
+
+def test_get_deposit_records_auth_failure(monkeypatch):
+    class DummyResponse:
+        status_code = 401
+
+        def json(self):
+            return {"return_code": "8005", "return_msg": "Token이 유효하지 않습니다"}
+
+    monkeypatch.setattr(sniper_config, "CONF", {"VIRTUAL_ORDERABLE_AMOUNT": 0})
+    monkeypatch.setattr(kiwoom_orders, "_LAST_DEPOSIT_OVERRIDE", None)
+    monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT", 0)
+    monkeypatch.setattr(kiwoom_orders, "_LAST_SUCCESSFUL_DEPOSIT_AT", 0.0)
+    monkeypatch.setattr(
+        kiwoom_orders.kiwoom_utils,
+        "get_api_url",
+        lambda path: f"https://example.test{path}",
+    )
+    monkeypatch.setattr(
+        kiwoom_orders.requests,
+        "post",
+        lambda *args, **kwargs: DummyResponse(),
+    )
+    monkeypatch.setattr(kiwoom_orders.time, "sleep", lambda _: None)
+
+    assert kiwoom_orders.get_deposit("TOKEN") == 0
+    errors = kiwoom_orders.get_last_deposit_errors()
+    assert errors
+    assert kiwoom_orders.is_auth_failure_error(errors[0]) is True
+    assert errors[0]["return_code"] == "8005"

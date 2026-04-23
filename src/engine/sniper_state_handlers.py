@@ -25,12 +25,12 @@ from src.engine.sniper_condition_handlers_big_bite import (
     confirm_big_bite_follow_through,
 )
 from src.engine.sniper_scale_in import (
+    describe_scale_in_qty,
     evaluate_scalping_avg_down,
     evaluate_scalping_pyramid,
     evaluate_swing_avg_down,
     evaluate_swing_pyramid,
     evaluate_scalping_reversal_add,
-    calc_scale_in_qty,
 )
 from src.engine.sniper_scale_in_utils import record_add_history_event
 from src.engine.trade_pause_control import is_buy_side_paused, get_pause_state_label
@@ -52,6 +52,7 @@ from src.engine.sniper_position_tags import (
     normalize_position_tag,
     normalize_strategy,
 )
+from src.engine.ai_engine import SCALPING_BUY_RECOVERY_CANARY_PROMPT
 
 
 KIWOOM_TOKEN = None
@@ -247,6 +248,84 @@ def _publish_entry_mode_summary(stock, code, *, entry_mode, latency_gate):
         )
 
 
+def _resolve_buy_signal_audience(*, liquidity_value=0, ai_score=0):
+    threshold = getattr(TRADING_RULES, 'VIP_LIQUIDITY_THRESHOLD', 1_000_000_000) if TRADING_RULES else 1_000_000_000
+    try:
+        liquidity = float(liquidity_value or 0)
+    except (TypeError, ValueError):
+        liquidity = 0.0
+    try:
+        score = float(ai_score or 0)
+    except (TypeError, ValueError):
+        score = 0.0
+    return 'VIP_ALL' if liquidity >= float(threshold or 0) and score >= 90.0 else 'ADMIN_ONLY'
+
+
+def _publish_buy_signal_submission_notice(
+    stock,
+    code,
+    *,
+    strategy,
+    curr_price,
+    requested_qty,
+    entry_mode,
+    latency_gate,
+    liquidity_value=0,
+    ai_score=0,
+):
+    if EVENT_BUS is None:
+        return
+
+    bundle_id = str(stock.get('entry_bundle_id', '') or '').strip()
+    if bundle_id and stock.get('last_buy_signal_telegram_bundle_id') == bundle_id:
+        return
+
+    audience = _resolve_buy_signal_audience(liquidity_value=liquidity_value, ai_score=ai_score)
+    dynamic_reason = (
+        stock.get('entry_dynamic_reason')
+        or stock.get('entry_armed_dynamic_reason')
+        or '-'
+    )
+    msg = (
+        f"🛒 **[BUY 신호/주문 제출] {stock.get('name')} ({code})**\n"
+        f"전략: `{strategy}` | 진입모드: `{entry_mode}`\n"
+        f"현재가: `{int(curr_price):,}원` | 주문수량: `{int(requested_qty or 0)}주`\n"
+        f"진입근거: `{dynamic_reason}`\n"
+        f"Latency: `{_translate_latency_state(latency_gate.get('latency_state'))}` / "
+        f"`{_translate_entry_decision(latency_gate.get('decision'))}`"
+    )
+    try:
+        EVENT_BUS.publish(
+            'TELEGRAM_BROADCAST',
+            {'message': msg, 'audience': audience, 'parse_mode': 'Markdown'},
+        )
+        if bundle_id:
+            stock['last_buy_signal_telegram_bundle_id'] = bundle_id
+        _log_entry_pipeline(
+            stock,
+            code,
+            "buy_signal_telegram_enqueued",
+            audience=audience,
+            entry_mode=entry_mode,
+            requested_qty=int(requested_qty or 0),
+            liquidity_value=int(float(liquidity_value or 0)),
+            ai_score=f"{float(ai_score or 0):.1f}",
+            latency=latency_gate.get('latency_state'),
+            decision=latency_gate.get('decision'),
+            dynamic_reason=dynamic_reason,
+        )
+    except Exception as exc:
+        log_error(f"🚨 [BUY 신호 알림 실패] {stock.get('name')}({code}): {exc}")
+        _log_entry_pipeline(
+            stock,
+            code,
+            "buy_signal_telegram_enqueue_failed",
+            audience=audience,
+            entry_mode=entry_mode,
+            error=str(exc),
+        )
+
+
 def _log_entry_pipeline(stock, code, stage, **fields):
     record_id = stock.get("id") if isinstance(stock, dict) else None
     emit_pipeline_event(
@@ -304,6 +383,35 @@ def _mark_same_symbol_soft_stop(code: str, *, now_ts: float) -> None:
     if cooldown_sec <= 0:
         return
     _SAME_SYMBOL_SOFT_STOP_TS[code] = now_ts
+
+
+def _remember_exit_context(
+    *,
+    stock: dict,
+    exit_rule: str | None,
+    peak_profit: float,
+    held_sec: int,
+    current_ai_score: float,
+    soft_stop_threshold_pct: float | None = None,
+) -> None:
+    stock["last_exit_rule"] = exit_rule or ""
+    stock["last_exit_peak_profit"] = round(float(peak_profit or 0.0), 3)
+    stock["last_exit_held_sec"] = max(0, int(held_sec or 0))
+    stock["last_exit_current_ai_score"] = round(float(current_ai_score or 0.0), 1)
+    if soft_stop_threshold_pct is not None:
+        stock["last_exit_soft_stop_threshold_pct"] = round(float(soft_stop_threshold_pct or 0.0), 3)
+    else:
+        stock.pop("last_exit_soft_stop_threshold_pct", None)
+
+    cooldown_sec = int(
+        getattr(TRADING_RULES, "SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_SEC", 600) or 600
+    )
+    cooldown_enabled = bool(
+        getattr(TRADING_RULES, "SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED", True)
+    )
+    stock["last_exit_same_symbol_soft_stop_cooldown_would_block"] = bool(
+        str(exit_rule or "").strip() == "scalp_soft_stop_pct" and cooldown_enabled and cooldown_sec > 0
+    )
 
 
 def _emit_same_symbol_soft_stop_cooldown_shadow(
@@ -2215,6 +2323,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                                     recent_ticks,
                                     recent_candles,
                                     strategy="SCALPING",
+                                    prompt_override=SCALPING_BUY_RECOVERY_CANARY_PROMPT,
                                     prompt_type="scalping_buy_recovery_canary",
                                     cache_profile="watching_buy_recovery_canary",
                                 )
@@ -2539,6 +2648,10 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                         'action_label': stock.get('last_gatekeeper_action', 'UNKNOWN'),
                         'report': stock.get('last_gatekeeper_report', ''),
                         'eval_ms': 0,
+                        'lock_wait_ms': 0,
+                        'packet_build_ms': 0,
+                        'model_call_ms': 0,
+                        'total_internal_ms': 0,
                         'cache_hit': True,
                         'cache_mode': 'fast_reuse',
                     }
@@ -2641,6 +2754,10 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 stock['last_gatekeeper_eval_ms'] = gatekeeper_eval_ms
                 stock['last_gatekeeper_allow_entry'] = gatekeeper_allow
                 stock['last_gatekeeper_cache_mode'] = gatekeeper_cache_mode
+                stock['last_gatekeeper_lock_wait_ms'] = int(gatekeeper.get('lock_wait_ms', 0) or 0)
+                stock['last_gatekeeper_packet_build_ms'] = int(gatekeeper.get('packet_build_ms', 0) or 0)
+                stock['last_gatekeeper_model_call_ms'] = int(gatekeeper.get('model_call_ms', 0) or 0)
+                stock['last_gatekeeper_total_internal_ms'] = int(gatekeeper.get('total_internal_ms', 0) or 0)
                 stock['last_gatekeeper_fast_signature'] = gatekeeper_fast_sig
                 if is_new_evaluation and realtime_ctx is not None:
                     _submit_gatekeeper_dual_persona_shadow(
@@ -2661,6 +2778,10 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                     strategy=strategy,
                     cooldown_sec=gatekeeper_error_cd,
                     gatekeeper_eval_ms=gatekeeper_eval_ms,
+                    gatekeeper_lock_wait_ms=stock.get('last_gatekeeper_lock_wait_ms', 0),
+                    gatekeeper_packet_build_ms=stock.get('last_gatekeeper_packet_build_ms', 0),
+                    gatekeeper_model_call_ms=stock.get('last_gatekeeper_model_call_ms', 0),
+                    gatekeeper_total_internal_ms=stock.get('last_gatekeeper_total_internal_ms', 0),
                 )
                 return
 
@@ -2678,6 +2799,10 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                     cooldown_policy=gatekeeper_cd_policy,
                     gatekeeper_eval_ms=gatekeeper_eval_ms,
                     gatekeeper_cache=stock.get('last_gatekeeper_cache_mode', 'miss'),
+                    gatekeeper_lock_wait_ms=stock.get('last_gatekeeper_lock_wait_ms', 0),
+                    gatekeeper_packet_build_ms=stock.get('last_gatekeeper_packet_build_ms', 0),
+                    gatekeeper_model_call_ms=stock.get('last_gatekeeper_model_call_ms', 0),
+                    gatekeeper_total_internal_ms=stock.get('last_gatekeeper_total_internal_ms', 0),
                 )
                 return
 
@@ -2697,6 +2822,10 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 score=round(float(score), 2),
                 gatekeeper_eval_ms=gatekeeper_eval_ms,
                 gatekeeper_cache=stock.get('last_gatekeeper_cache_mode', 'miss'),
+                gatekeeper_lock_wait_ms=stock.get('last_gatekeeper_lock_wait_ms', 0),
+                gatekeeper_packet_build_ms=stock.get('last_gatekeeper_packet_build_ms', 0),
+                gatekeeper_model_call_ms=stock.get('last_gatekeeper_model_call_ms', 0),
+                gatekeeper_total_internal_ms=stock.get('last_gatekeeper_total_internal_ms', 0),
             )
 
             score_weight = max(0.0, min(1.0, (float(score) - buy_threshold) / max(1.0, (100 - buy_threshold))))
@@ -2733,6 +2862,12 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
         if real_buy_qty <= 0:
             zero_qty_cooldown_sec = _resolve_zero_qty_cooldown_sec(deposit)
             is_zero_deposit = int(float(deposit or 0)) <= 0
+            deposit_errors = kiwoom_orders.get_last_deposit_errors()
+            auth_failure = next(
+                (err for err in deposit_errors if kiwoom_orders.is_auth_failure_error(err)),
+                None,
+            )
+            zero_qty_stage = "auth_zero_qty" if is_zero_deposit and auth_failure else "blocked_zero_qty"
             if is_zero_deposit:
                 print(
                     f"⚠️ [매수보류] {stock['name']}: 주문가능금액 조회가 0원으로 반환되어 재조회 대기합니다. "
@@ -2756,7 +2891,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             _log_entry_pipeline(
                 stock,
                 code,
-                "blocked_zero_qty",
+                zero_qty_stage,
                 deposit=deposit,
                 ratio=f"{ratio:.4f}",
                 target_budget=target_budget,
@@ -2765,6 +2900,8 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 curr_price=curr_price,
                 budget_cap=budget_cap if budget_cap_applied else "-",
                 cooldown_sec=zero_qty_cooldown_sec,
+                auth_return_code=(auth_failure or {}).get("return_code", "-"),
+                auth_return_msg=(auth_failure or {}).get("return_msg", "-"),
             )
             return
 
@@ -3086,6 +3223,17 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             msg=msg,
             entry_orders=successful_orders,
         )
+        _publish_buy_signal_submission_notice(
+            stock,
+            code,
+            strategy=strategy,
+            curr_price=curr_price,
+            requested_qty=requested_qty,
+            entry_mode=entry_mode,
+            latency_gate=latency_gate,
+            liquidity_value=liquidity_value if 'liquidity_value' in locals() else 0,
+            ai_score=latency_signal_score if 'latency_signal_score' in locals() else current_ai_score,
+        )
         _log_entry_pipeline(
             stock,
             code,
@@ -3188,7 +3336,13 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
         except Exception:
             preset_held_sec = 0
 
-        stock['last_exit_rule'] = exit_rule or ''
+        _remember_exit_context(
+            stock=stock,
+            exit_rule=exit_rule,
+            peak_profit=peak_profit,
+            held_sec=preset_held_sec,
+            current_ai_score=preset_ai_score,
+        )
         stock['last_exit_reason'] = reason
         _log_holding_pipeline(
             stock,
@@ -4134,7 +4288,14 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                         )
                         return
 
-        stock['last_exit_rule'] = exit_rule or ''
+        _remember_exit_context(
+            stock=stock,
+            exit_rule=exit_rule,
+            peak_profit=peak_profit,
+            held_sec=int(held_time_min * 60),
+            current_ai_score=current_ai_score,
+            soft_stop_threshold_pct=dynamic_stop_pct if str(exit_rule or "").strip() == "scalp_soft_stop_pct" else None,
+        )
         stock['last_exit_reason'] = reason
         _log_holding_pipeline(
             stock,
@@ -4789,7 +4950,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         return None
 
     deposit = kiwoom_orders.get_deposit(KIWOOM_TOKEN)
-    qty = calc_scale_in_qty(
+    qty_details = describe_scale_in_qty(
         stock=stock,
         curr_price=curr_price,
         deposit=deposit,
@@ -4797,11 +4958,16 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         strategy=stock.get('strategy', ''),
         add_reason=action.get('reason'),
     )
+    qty = int(qty_details.get("qty", 0) or 0)
+    template_qty = int(qty_details.get("template_qty", 0) or 0)
+    cap_qty = int(qty_details.get("cap_qty", 0) or 0)
+    floor_applied = bool(qty_details.get("floor_applied", False))
     if qty <= 0:
         log_info(
             f"[ADD_BLOCKED] {stock.get('name')}({code}) "
             f"reason=zero_qty deposit={deposit} curr_price={curr_price} "
-            f"buy_qty={stock.get('buy_qty', 0)} add_type={add_type}"
+            f"buy_qty={stock.get('buy_qty', 0)} add_type={add_type} "
+            f"template_qty={template_qty} cap_qty={cap_qty} floor_applied={floor_applied}"
         )
         print(
             f"⚠️ [추가매수보류] {stock.get('name')}: 추가매수 수량 0주 "
@@ -4860,7 +5026,8 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             log_info(
                 "[ADD_ORDER_SENT] "
                 f"{stock.get('name')}({code}) "
-                f"type={add_type} qty={qty} ord_no={ord_no}"
+                f"type={add_type} qty={qty} ord_no={ord_no} "
+                f"template_qty={template_qty} cap_qty={cap_qty} floor_applied={floor_applied}"
             )
             record_add_history_event(
                 DB,

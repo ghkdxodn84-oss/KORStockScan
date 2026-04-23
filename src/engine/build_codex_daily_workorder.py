@@ -227,20 +227,6 @@ def _parse_body_metadata(body: str) -> tuple[str, str, str]:
             apply_target = line.split(":", 1)[1].strip().strip("`")
     return source, section, apply_target
 
-
-def _infer_apply_target_text(text: str) -> str:
-    raw = str(text or "").lower()
-    has_remote = any(keyword in raw for keyword in ("원격", "remote", "songstockscan", "develop", "canary"))
-    has_main = any(keyword in raw for keyword in ("본서버", "메인", "main", "운영서버"))
-    if has_remote and has_main:
-        return "main,remote"
-    if has_remote:
-        return "remote"
-    if has_main:
-        return "main"
-    return "-"
-
-
 def _parse_project_item(
     node: dict[str, Any],
     *,
@@ -263,7 +249,7 @@ def _parse_project_item(
     assignees = ", ".join(str(n.get("login") or "").strip() for n in assignees_nodes if n.get("login"))
     source, section, apply_target = _parse_body_metadata(body)
     if not apply_target:
-        apply_target = _infer_apply_target_text(f"{title} {source} {section}")
+        apply_target = "-"
 
     due_date = ""
     status = ""

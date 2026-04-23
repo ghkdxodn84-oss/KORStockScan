@@ -15,6 +15,7 @@ from src.engine.sniper_position_tags import (
 from src.engine.sniper_scale_in_utils import record_add_history_event, find_latest_open_add_order_no
 from src.engine.trade_profit import calculate_net_profit_rate
 from src.utils import kiwoom_utils
+from src.utils.constants import RESTART_FLAG_PATH, TRADING_RULES
 from src.utils.logger import log_error, log_info
 from src.engine import kiwoom_orders
 
@@ -26,6 +27,7 @@ EVENT_BUS = None
 HIGHEST_PRICES = None
 STATE_LOCK = None
 CONF = None
+_LAST_AUTH_RESTART_TS = 0.0
 _WS_FILL_ORD_RE = re.compile(r"WS 실제체결\]\s*(?P<code>\d{6})\s+(?P<side>BUY|SELL)\b.*?\(주문번호:\s*(?P<ord_no>\d+)\)")
 _ENTRY_TP_RE = re.compile(r"ENTRY_TP_REFRESH\]\s*.*?\((?P<code>\d{6})\).*?\bord_no=(?P<ord_no>\S+)")
 _ENTRY_FILL_RE = re.compile(r"ENTRY_FILL\]\s*.*?\((?P<code>\d{6})\).*?\bord_no=(?P<ord_no>\S+)")
@@ -61,7 +63,7 @@ def bind_sync_dependencies(
 
 
 def _refresh_kiwoom_token(reason, error_detail=None):
-    """토큰 문제 발생 시 즉시 재발급 시도."""
+    """초기 부팅/토큰 미보유 시에만 키움 토큰을 발급합니다."""
     global KIWOOM_TOKEN, CONF
     detail_str = f" | detail={error_detail}" if error_detail else ""
     log_info(f"🔄 [TOKEN 재발급] 사유={reason}{detail_str}")
@@ -75,6 +77,30 @@ def _refresh_kiwoom_token(reason, error_detail=None):
     else:
         log_error("❌ [TOKEN 재발급] 실패")
     return new_token
+
+
+def _request_auth_restart(reason, error_detail=None):
+    """런타임 8005 인증 장애는 hot-refresh 대신 restart.flag 복구로 고정합니다."""
+    global _LAST_AUTH_RESTART_TS
+    cooldown_sec = int(getattr(TRADING_RULES, "KIWOOM_AUTH_RESTART_COOLDOWN_SEC", 120) or 120)
+    now_ts = time.time()
+    detail_str = f" | detail={error_detail}" if error_detail else ""
+    if cooldown_sec > 0 and (now_ts - _LAST_AUTH_RESTART_TS) < cooldown_sec:
+        wait_left = max(0.0, float(cooldown_sec) - (now_ts - _LAST_AUTH_RESTART_TS))
+        log_info(
+            f"⏸️ [AUTH RESTART SKIP] cooldown={cooldown_sec}s wait_left={wait_left:.1f}s "
+            f"reason={reason}{detail_str}"
+        )
+        return False
+
+    try:
+        RESTART_FLAG_PATH.touch()
+        _LAST_AUTH_RESTART_TS = now_ts
+        log_error(f"🚨 [AUTH RESTART REQUESTED] restart.flag set | reason={reason}{detail_str}")
+        return True
+    except Exception as exc:
+        log_error(f"❌ [AUTH RESTART REQUEST FAILED] reason={reason} error={exc}{detail_str}")
+        return False
 
 
 def _detect_auth_failure():
@@ -502,9 +528,9 @@ def sync_balance_with_db():
             log_info(f"⚠️ [동기화 원인] 잔고 조회 실패 상세: {last_errors}")
         auth_failed, auth_err = _detect_auth_failure()
         if auth_failed:
-            _refresh_kiwoom_token("인증 실패(8005)", auth_err)
-            if KIWOOM_TOKEN:
-                real_inventory, successful_exchanges = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)
+            _request_auth_restart("인증 실패(8005)", auth_err)
+            print("⚠️ [동기화 보류] 인증 장애 감지. restart.flag 복구를 기다립니다.")
+            return
         print("⚠️ [동기화 보류] 모든 거래소 잔고 조회 실패, 1회 재시도합니다.")
         time.sleep(1.5)
         real_inventory, successful_exchanges = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)

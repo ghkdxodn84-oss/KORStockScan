@@ -10,8 +10,8 @@ OUTPUT_DIR = BASE_DIR / "outputs"
 TEMPLATE_DIR = BASE_DIR / "prompt_templates"
 
 # Analysis Parameters
-START_DATE = "2026-04-01"
-END_DATE = "2026-04-17"
+START_DATE = os.getenv("ANALYSIS_START_DATE", "2026-04-01").strip() or "2026-04-01"
+END_DATE = os.getenv("ANALYSIS_END_DATE", "2026-04-17").strip() or "2026-04-17"
 MIN_VALID_SAMPLES = 30
 
 # Data sources

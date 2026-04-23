@@ -60,6 +60,7 @@ class TradingConfig:
     SCALPING_AVG_DOWN_MIN_DROP_PCT: float = -3.0
     SCALPING_AVG_DOWN_MAX_DROP_PCT: float = -6.0
     SCALPING_PYRAMID_MIN_PROFIT_PCT: float = 1.5
+    SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED: bool = False
 
     # ==========================================
     # 3.3 추가매수(스윙) 설정
@@ -166,6 +167,10 @@ class TradingConfig:
     SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS: int = 260  # latency canary 최대 ws_jitter
     SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO: float = 0.0100  # latency canary 최대 spread_ratio
     SCALP_LATENCY_GUARD_CANARY_ALLOWED_DANGER_REASONS: tuple = ()  # 비어 있으면 전체 허용, 값이 있으면 해당 danger reason만 canary 허용
+    SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED: bool = True  # fallback 비결합: spread-only danger를 normal로 직접 완화
+    SCALP_LATENCY_SPREAD_RELIEF_TAGS: tuple = ("SCANNER", "VWAP_RECLAIM", "OPEN_RECLAIM")  # spread relief 적용 태그
+    SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE: float = 85.0  # spread relief 최소 AI 점수
+    SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO: float = 0.0120  # spread relief 최대 허용 spread_ratio
     SCALP_DYNAMIC_STRENGTH_CANARY_ENABLED: bool = True  # dynamic strength 근소 미달 조건부 완화
     SCALP_DYNAMIC_STRENGTH_CANARY_TAGS: tuple = ("SCANNER", "VWAP_RECLAIM", "OPEN_RECLAIM")  # dynamic canary 적용 태그
     SCALP_DYNAMIC_STRENGTH_CANARY_ALLOWED_REASONS: tuple = (
@@ -283,7 +288,7 @@ class TradingConfig:
     AI_WATCHING_75_PROMPT_SHADOW_ENABLED: bool = False  # 작업 4: 75 정합화 shadow canary (remote 전용)
     AI_WATCHING_75_PROMPT_SHADOW_MIN_SCORE: int = 75  # shadow 재평가 시작 점수
     AI_WATCHING_75_PROMPT_SHADOW_MAX_SCORE: int = 79  # shadow 재평가 종료 점수
-    AI_MAIN_BUY_RECOVERY_CANARY_ENABLED: bool = True  # main-only BUY 기회 회복 canary
+    AI_MAIN_BUY_RECOVERY_CANARY_ENABLED: bool = False  # same-day 교체: BUY recovery canary 기본 OFF
     AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE: int = 65  # 재평가 시작 점수
     AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE: int = 79  # 재평가 종료 점수
     AI_MAIN_BUY_RECOVERY_CANARY_PROMOTE_SCORE: int = 75  # BUY 승격 최소 점수
@@ -418,11 +423,19 @@ def _build_trading_rules() -> TradingConfig:
     env_ws_age = _env_int("KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS")
     env_spread_ratio = _env_float("KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO")
     env_allowed_danger_reasons = _env_csv_tuple("KORSTOCKSCAN_SCALP_LATENCY_GUARD_CANARY_ALLOWED_DANGER_REASONS")
+    env_spread_relief_enabled = _env_bool("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED")
+    env_spread_relief_tags = _env_csv_tuple("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_TAGS")
+    env_spread_relief_min_signal = _env_float("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE")
+    env_spread_relief_max_spread = _env_float("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO")
     if (
         env_ws_jitter is not None
         or env_ws_age is not None
         or env_spread_ratio is not None
         or env_allowed_danger_reasons is not None
+        or env_spread_relief_enabled is not None
+        or env_spread_relief_tags is not None
+        or env_spread_relief_min_signal is not None
+        or env_spread_relief_max_spread is not None
     ):
         config = replace(
             config,
@@ -438,6 +451,18 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_LATENCY_GUARD_CANARY_ALLOWED_DANGER_REASONS=env_allowed_danger_reasons
             if env_allowed_danger_reasons is not None
             else config.SCALP_LATENCY_GUARD_CANARY_ALLOWED_DANGER_REASONS,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=env_spread_relief_enabled
+            if env_spread_relief_enabled is not None
+            else config.SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED,
+            SCALP_LATENCY_SPREAD_RELIEF_TAGS=env_spread_relief_tags
+            if env_spread_relief_tags is not None
+            else config.SCALP_LATENCY_SPREAD_RELIEF_TAGS,
+            SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE=env_spread_relief_min_signal
+            if env_spread_relief_min_signal is not None
+            else config.SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE,
+            SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO=env_spread_relief_max_spread
+            if env_spread_relief_max_spread is not None
+            else config.SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO,
         )
 
     env_prompt_shadow_enabled = _env_bool("AI_WATCHING_75_PROMPT_SHADOW_ENABLED")
@@ -580,10 +605,14 @@ def _build_trading_rules() -> TradingConfig:
     env_scalp_ai_exit_avgdown_enabled = _env_bool("KORSTOCKSCAN_SCALP_AI_EXIT_AVGDOWN_ENABLED")
     env_scalping_enable_avg_down = _env_bool("KORSTOCKSCAN_SCALPING_ENABLE_AVG_DOWN")
     env_scalping_max_avg_down_count = _env_int("KORSTOCKSCAN_SCALPING_MAX_AVG_DOWN_COUNT")
+    env_scalping_pyramid_zero_qty_stage1_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED"
+    )
     if (
         env_scalp_ai_exit_avgdown_enabled is not None
         or env_scalping_enable_avg_down is not None
         or env_scalping_max_avg_down_count is not None
+        or env_scalping_pyramid_zero_qty_stage1_enabled is not None
     ):
         config = replace(
             config,
@@ -596,6 +625,9 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_MAX_AVG_DOWN_COUNT=env_scalping_max_avg_down_count
             if env_scalping_max_avg_down_count is not None
             else config.SCALPING_MAX_AVG_DOWN_COUNT,
+            SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED=env_scalping_pyramid_zero_qty_stage1_enabled
+            if env_scalping_pyramid_zero_qty_stage1_enabled is not None
+            else config.SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED,
         )
     return config
 

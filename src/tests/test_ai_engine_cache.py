@@ -4,6 +4,7 @@ from dataclasses import replace
 from src.engine import ai_engine as ai_engine_module
 from src.engine.ai_engine import (
     GeminiSniperEngine,
+    SCALPING_BUY_RECOVERY_CANARY_PROMPT,
     SCALPING_EXIT_SYSTEM_PROMPT,
     SCALPING_HOLDING_SYSTEM_PROMPT,
     SCALPING_SYSTEM_PROMPT,
@@ -270,6 +271,12 @@ def test_scalping_prompt_75_canary_rewrites_buy_band():
     assert "50~74 (WAIT)" in SCALPING_SYSTEM_PROMPT_75_CANARY
 
 
+def test_scalping_buy_recovery_prompt_mentions_recovery_band():
+    assert "WAIT 65~79 BUY 회복" in SCALPING_BUY_RECOVERY_CANARY_PROMPT
+    assert "75~100 (BUY)" in SCALPING_BUY_RECOVERY_CANARY_PROMPT
+    assert "50~74 (WAIT)" in SCALPING_BUY_RECOVERY_CANARY_PROMPT
+
+
 def test_analyze_target_shadow_prompt_uses_shadow_prompt_type(monkeypatch):
     engine = _build_engine()
 
@@ -294,6 +301,32 @@ def test_analyze_target_shadow_prompt_uses_shadow_prompt_type(monkeypatch):
     assert result["ai_prompt_type"] == "scalping_buy75_shadow"
     assert result["ai_result_source"] == "shadow_live"
     assert result["cache_hit"] is False
+
+
+def test_analyze_target_shadow_prompt_honors_prompt_override(monkeypatch):
+    engine = _build_engine()
+    used_prompt = {"value": None}
+
+    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "packet")
+
+    def _fake_call(prompt, *args, **kwargs):
+        used_prompt["value"] = prompt
+        return {"action": "WAIT", "score": 68, "reason": "recovery-check"}
+
+    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+
+    engine.analyze_target_shadow_prompt(
+        "테스트",
+        {"curr": 10000, "fluctuation": 2.1, "orderbook": {"asks": [], "bids": []}},
+        [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}],
+        [{"체결시간": "10:00:00", "현재가": 10000, "거래량": 100}],
+        strategy="SCALPING",
+        prompt_override=SCALPING_BUY_RECOVERY_CANARY_PROMPT,
+        prompt_type="scalping_buy_recovery_canary",
+        cache_profile="watching_buy_recovery_canary",
+    )
+
+    assert used_prompt["value"] == SCALPING_BUY_RECOVERY_CANARY_PROMPT
 
 
 def test_analyze_target_routes_scalping_and_swing_to_expected_tiers(monkeypatch):

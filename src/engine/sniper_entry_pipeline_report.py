@@ -28,6 +28,7 @@ _IGNORED_STOCK_KEYS = {
 _EXECUTION_BLOCK_STAGES = {
     "blocked_no_admin",
     "blocked_zero_qty",
+    "auth_zero_qty",
     "blocked_liquidity",
     "latency_block",
     "blocked_pause",
@@ -60,6 +61,7 @@ _DISPLAY_STAGE_LABELS = {
     "blocked_ai_score": "AI 점수 차단",
     "latency_block": "지연 리스크 차단",
     "blocked_zero_qty": "수량 0주 차단",
+    "auth_zero_qty": "인증 장애 0원 예산",
     "blocked_gap_from_scan": "포착가 갭 차단",
     "blocked_overbought": "과열 차단",
     "blocked_big_bite_hard_gate": "Big-Bite 차단",
@@ -259,6 +261,7 @@ def _friendly_gate_name(stage: str) -> str:
         "blocked_ai_score": "AI 점수",
         "latency_block": "지연 리스크",
         "blocked_zero_qty": "주문 가능 수량",
+        "auth_zero_qty": "인증 장애 0원 예산",
         "blocked_gap_from_scan": "포착가 대비 갭",
         "blocked_overbought": "과열",
         "blocked_big_bite_hard_gate": "Big-Bite 하드게이트",

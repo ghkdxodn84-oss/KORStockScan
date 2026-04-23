@@ -112,6 +112,19 @@ def _process_pipeline_events_rows(rows, server_name, funnel_counts, trade_info, 
             seq_info[record_id]["partial_then_expand_flag"] = True
         if "rebase" in stage:
             seq_info[record_id]["multi_rebase_flag"] = True
+            seq_info[record_id]["rebase_count"] += 1
+        if "rebase_integrity" in stage:
+            seq_info[record_id]["rebase_integrity_flag"] = True
+        if "same_symbol_repeat" in stage:
+            seq_info[record_id]["same_symbol_repeat_flag"] = True
+
+
+def _derive_cohort(entry_mode: str, fill_quality: str, seq_flags: dict) -> str:
+    if seq_flags.get("partial_then_expand_flag") or seq_flags.get("multi_rebase_flag"):
+        return "split-entry"
+    if fill_quality == "PARTIAL_FILL" or entry_mode == "partial":
+        return "partial_fill"
+    return "full_fill"
 
 
 def _process_post_sell_rows(rows, server_name, trade_info, seq_info, trade_facts):
@@ -145,6 +158,18 @@ def _process_post_sell_rows(rows, server_name, trade_info, seq_info, trade_facts
         entry_mode = t_info.get("entry_mode", "full")
         if t_info.get("fill_quality") == "PARTIAL_FILL":
             entry_mode = "partial"
+        seq_flags = seq_info.get(rec_id, {})
+        cohort = _derive_cohort(
+            entry_mode=entry_mode,
+            fill_quality=t_info.get("fill_quality", ""),
+            seq_flags=seq_flags,
+        )
+        rec_date = (
+            data.get("signal_date")
+            or str(entry_time)[:10]
+            or str(exit_time)[:10]
+            or ""
+        )
 
         outcome = data.get("outcome", "COMPLETED")
         profit_rate = data.get("profit_rate")
@@ -159,7 +184,9 @@ def _process_post_sell_rows(rows, server_name, trade_info, seq_info, trade_facts
                 "symbol": data.get("stock_code", ""),
                 "entry_time": entry_time,
                 "exit_time": exit_time,
+                "rec_date": rec_date,
                 "held_sec": held_sec,
+                "cohort": cohort,
                 "entry_mode": entry_mode,
                 "exit_rule": data.get("exit_rule", ""),
                 "status": outcome,
@@ -276,7 +303,15 @@ def main():
     funnel_counts = defaultdict(lambda: defaultdict(int))
     trade_info = defaultdict(dict)
     seq_info = defaultdict(
-        lambda: {"events": [], "partial_then_expand_flag": False, "multi_rebase_flag": False}
+        lambda: {
+            "events": [],
+            "partial_then_expand_flag": False,
+            "multi_rebase_flag": False,
+            "rebase_integrity_flag": False,
+            "same_symbol_repeat_flag": False,
+            "same_ts_multi_rebase_flag": False,
+            "rebase_count": 0,
+        }
     )
     trade_facts = []
     all_dates = _date_range(config.START_DATE, config.END_DATE)
@@ -327,7 +362,9 @@ def main():
                 "symbol",
                 "entry_time",
                 "exit_time",
+                "rec_date",
                 "held_sec",
+                "cohort",
                 "entry_mode",
                 "exit_rule",
                 "status",
@@ -370,6 +407,8 @@ def main():
                 "multi_rebase_flag",
                 "rebase_integrity_flag",
                 "same_symbol_repeat_flag",
+                "same_ts_multi_rebase_flag",
+                "rebase_count",
             ],
         )
         writer.writeheader()
@@ -383,8 +422,10 @@ def main():
                     "event_seq": "->".join(info["events"][:10]),
                     "partial_then_expand_flag": str(info["partial_then_expand_flag"]).lower(),
                     "multi_rebase_flag": str(info["multi_rebase_flag"]).lower(),
-                    "rebase_integrity_flag": "true",
-                    "same_symbol_repeat_flag": "false",
+                    "rebase_integrity_flag": str(info["rebase_integrity_flag"]).lower(),
+                    "same_symbol_repeat_flag": str(info["same_symbol_repeat_flag"]).lower(),
+                    "same_ts_multi_rebase_flag": str(info["same_ts_multi_rebase_flag"]).lower(),
+                    "rebase_count": info["rebase_count"],
                 }
             )
 

@@ -36,13 +36,17 @@
 2. `Done/[x]` 항목 제외
 3. 남은 항목만 GitHub Project Draft Item으로 upsert
 4. 기존 같은 제목이 있으면 중복 생성하지 않고 skip
-5. `sync_docs_backlog_to_project`가 생성한 관리 항목(` [Plan]/[ChecklistNNNN]/[ScalpingLogic]/[AIPrompt] `)은
+5. 동일 관리 제목이 Project에 이미 2건 이상 있으면 가장 완성도 높은 항목 1건만 남기고 나머지는 삭제한다
+   - 관리 제목 키는 `[ChecklistNNNN]`을 `[Checklist]`로 정규화한 값이다
+   - 유지 우선순위는 `Due`, `Slot`, `TimeWindow`, `content_type` 필드가 더 많이 채워진 항목이다
+   - 동시 실행으로 새 중복이 생기지 않게 GitHub Actions concurrency를 사용한다
+6. `sync_docs_backlog_to_project`가 생성한 관리 항목(` [Plan]/[ChecklistNNNN]/[ScalpingLogic]/[AIPrompt] `)은
    문서 기준으로 `Status` 자동 동기화
    - 문서에 남아있음: `Todo`
    - 문서에서 제거됨(완료 처리): `Done`
    - 문서에 열린 관리 항목이 `0개`면 캘린더에서도 해당 관리 이벤트를 stale 대상으로 본다
    - 단 문서 파싱 자체가 실패한 실행에서는 오삭제를 막기 위해 managed 이벤트 삭제를 보류한다
-6. `Slot`이 비어있는 관리 항목은 문서 sync 시 자동 추론하여 채움
+7. `Slot`이 비어있는 관리 항목은 문서 sync 시 자동 추론하여 채움
    - 기본 규칙: `Plan/ChecklistNNNN -> PREOPEN`, `ScalpingLogic -> INTRADAY`, `AIPrompt -> POSTCLOSE`
    - 키워드 우선 규칙: `장전/PREOPEN`, `장중/INTRADAY`, `장후/EOD/리포트/검증` 매칭 시 트랙 기본값보다 우선
 
@@ -280,6 +284,12 @@ Codex 일일 작업지시서 자동 생성:
 - `GH_SYNC_ONLY_STATUSES`를 쓰는 경우 `Todo,In Progress`처럼 open 상태만 포함했는지 확인
 - 수동 항목이라도 `Status`가 비어 있으면 최신 스크립트 기준 캘린더 sync 대상에서 제외된다
 - 자동관리 대상은 문서 backlog에 현재 남아 있지 않으면 `Project` 상태가 늦게 갱신돼도 캘린더에서 제거된다
+
+### 같은 체크리스트 항목이 Project에 중복 생성됨
+
+- `sync_docs_backlog_to_project` 실행 결과에서 `duplicates_deleted_or_would_delete`를 확인한다
+- 값이 `1` 이상이면 스크립트가 같은 관리 제목의 중복 Project 항목을 정리한 것이다
+- 값이 계속 증가하면 수동 실행과 Actions 실행이 겹치는지 확인하고, Actions concurrency 설정이 배포됐는지 확인한다
 
 ### 시간이 아니라 종일 이벤트로 생김
 

@@ -66,6 +66,13 @@ def _request_top(default: int) -> int:
     return request.args.get("top", default=default, type=int)
 
 
+def _request_trend_max_dates() -> int | None:
+    value = request.args.get("trend_max_dates", default=None, type=int)
+    if value is None:
+        return None
+    return max(1, min(60, int(value)))
+
+
 def _request_scope(default: str = "entered") -> str:
     scope = _request_stripped("scope")
     return scope or default
@@ -101,8 +108,13 @@ def _resolve_dashboard_since(target_date: str, since: str | None) -> str | None:
     return (datetime.now() - timedelta(minutes=_DEFAULT_DASHBOARD_LOOKBACK_MINUTES)).strftime("%H:%M:%S")
 
 
-def _load_saved_performance_tuning_snapshot(target_date: str, since: str | None, refresh: bool) -> dict | None:
-    if refresh or since:
+def _load_saved_performance_tuning_snapshot(
+    target_date: str,
+    since: str | None,
+    refresh: bool,
+    trend_max_dates: int | None,
+) -> dict | None:
+    if refresh or since or trend_max_dates is not None:
         return None
     snapshot = load_monitor_snapshot("performance_tuning", target_date)
     if not snapshot:
@@ -136,10 +148,15 @@ def _load_or_build_performance_tuning_report(
     target_date: str,
     since: str | None,
     refresh: bool,
+    trend_max_dates: int | None = None,
 ) -> dict:
-    report = _load_saved_performance_tuning_snapshot(target_date, since, refresh)
+    report = _load_saved_performance_tuning_snapshot(target_date, since, refresh, trend_max_dates)
     if report is None:
-        report = build_performance_tuning_report(target_date=target_date, since_time=since)
+        report = build_performance_tuning_report(
+            target_date=target_date,
+            since_time=since,
+            trend_max_dates=trend_max_dates,
+        )
         # 빌드된 리포트에 meta.source 추가
         if "meta" not in report:
             report["meta"] = {}
@@ -1380,10 +1397,12 @@ def performance_tuning_api():
     target_date = _request_target_date()
     since = _request_since(target_date)
     refresh = _request_flag("refresh")
+    trend_max_dates = _request_trend_max_dates()
     report = _load_or_build_performance_tuning_report(
         target_date=target_date,
         since=since,
         refresh=refresh,
+        trend_max_dates=trend_max_dates,
     )
     return jsonify(report)
 
@@ -1874,12 +1893,14 @@ def performance_tuning_preview():
     target_date = _request_target_date()
     since = _request_since(target_date)
     refresh = _request_flag("refresh")
+    trend_max_dates = _request_trend_max_dates()
     top = _request_top(10)
 
     report = _load_or_build_performance_tuning_report(
         target_date=target_date,
         since=since,
         refresh=refresh,
+        trend_max_dates=trend_max_dates,
     )
     metrics = _report_dict(report, 'metrics')
     cards = _report_list(report, 'cards')

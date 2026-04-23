@@ -420,6 +420,33 @@ def test_periodic_account_sync_recovers_order_ref_when_kt00008_empty(monkeypatch
     assert sniper_sync.ACTIVE_TARGETS[0]["odno"] == "0412345"
 
 
+def test_sync_balance_with_db_requests_restart_on_auth_failure(tmp_path, monkeypatch):
+    restart_flag = tmp_path / "restart.flag"
+    sniper_sync.KIWOOM_TOKEN = "token"
+    sniper_sync.DB = _SyncDB([], [])
+    sniper_sync.ACTIVE_TARGETS = []
+    sniper_sync.HIGHEST_PRICES = {}
+    sniper_sync.STATE_LOCK = _DummyLock()
+    sniper_sync._LAST_AUTH_RESTART_TS = 0.0
+
+    monkeypatch.setattr(sniper_sync, "RESTART_FLAG_PATH", restart_flag)
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_orders,
+        "get_my_inventory",
+        lambda token: ([], set()),
+    )
+    monkeypatch.setattr(
+        sniper_sync.kiwoom_orders,
+        "get_last_inventory_errors",
+        lambda: [{"return_code": "8005", "return_msg": "Token이 유효하지 않습니다"}],
+    )
+    monkeypatch.setattr(sniper_sync.time, "sleep", lambda _: None)
+
+    sniper_sync.sync_balance_with_db()
+
+    assert restart_flag.exists() is True
+
+
 def test_ensure_runtime_target_recovers_order_refs_from_logs(monkeypatch):
     monkeypatch.setattr(sniper_sync, "_iter_recovery_log_paths", lambda: ["dummy.log"])
     monkeypatch.setattr(

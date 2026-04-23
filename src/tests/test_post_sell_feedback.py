@@ -103,6 +103,106 @@ def test_record_and_evaluate_post_sell_feedback(monkeypatch, tmp_path):
     assert "GOOD_EXIT 1" in text
 
 
+def test_soft_stop_forensics_report(monkeypatch, tmp_path):
+    monkeypatch.setattr(feedback_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        feedback_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            POST_SELL_FEEDBACK_ENABLED=True,
+            POST_SELL_FEEDBACK_EVAL_ENABLED=True,
+            POST_SELL_FEEDBACK_MISSED_UPSIDE_MFE_PCT=0.8,
+            POST_SELL_FEEDBACK_MISSED_UPSIDE_CLOSE_PCT=0.3,
+            POST_SELL_FEEDBACK_GOOD_EXIT_MAE_PCT=-0.6,
+            POST_SELL_FEEDBACK_GOOD_EXIT_CLOSE_PCT=-0.2,
+            POST_SELL_WS_RETAIN_MINUTES=0,
+        ),
+    )
+    feedback_mod._RECORDED_KEYS.clear()
+    feedback_mod._WS_RETAIN_UNTIL.clear()
+
+    feedback_mod.record_post_sell_candidate(
+        recommendation_id=201,
+        stock={"name": "반등A", "strategy": "SCALPING", "position_tag": "SCANNER"},
+        code="661111",
+        sell_time="2026-04-08 12:00:10",
+        buy_price=10100,
+        sell_price=9900,
+        profit_rate=-1.6,
+        buy_qty=10,
+        exit_rule="scalp_soft_stop_pct",
+        peak_profit=0.1,
+        held_sec=220,
+        current_ai_score=43,
+        soft_stop_threshold_pct=-1.5,
+        same_symbol_soft_stop_cooldown_would_block=True,
+    )
+    feedback_mod.record_post_sell_candidate(
+        recommendation_id=202,
+        stock={"name": "지속약세B", "strategy": "SCALPING", "position_tag": "OPEN_RECLAIM"},
+        code="662222",
+        sell_time="2026-04-08 12:00:10",
+        buy_price=10000,
+        sell_price=9850,
+        profit_rate=-2.2,
+        buy_qty=10,
+        exit_rule="scalp_soft_stop_pct",
+        peak_profit=-0.2,
+        held_sec=80,
+        current_ai_score=38,
+        soft_stop_threshold_pct=-1.5,
+        same_symbol_soft_stop_cooldown_would_block=True,
+    )
+
+    candle_map = {
+        "661111": [
+            _make_candle("12:01:00", 10020, 9880, 9990),
+            _make_candle("12:02:00", 10130, 9950, 10080),
+            _make_candle("12:03:00", 10180, 10040, 10120),
+            _make_candle("12:04:00", 10160, 10010, 10110),
+            _make_candle("12:05:00", 10150, 10020, 10100),
+            _make_candle("12:06:00", 10140, 10030, 10090),
+            _make_candle("12:07:00", 10150, 10040, 10110),
+            _make_candle("12:08:00", 10160, 10050, 10120),
+            _make_candle("12:09:00", 10170, 10060, 10130),
+            _make_candle("12:10:00", 10180, 10070, 10140),
+        ],
+        "662222": [
+            _make_candle("12:01:00", 9840, 9780, 9810),
+            _make_candle("12:02:00", 9850, 9750, 9790),
+            _make_candle("12:03:00", 9840, 9720, 9780),
+            _make_candle("12:04:00", 9830, 9700, 9770),
+            _make_candle("12:05:00", 9820, 9690, 9760),
+            _make_candle("12:06:00", 9810, 9680, 9750),
+            _make_candle("12:07:00", 9800, 9670, 9740),
+            _make_candle("12:08:00", 9790, 9660, 9730),
+            _make_candle("12:09:00", 9780, 9650, 9720),
+            _make_candle("12:10:00", 9770, 9640, 9710),
+        ],
+    }
+    fake_kiwoom = types.SimpleNamespace(
+        get_kiwoom_token=lambda: "dummy",
+        get_minute_candles_ka10080=lambda _token, code, limit=700: candle_map.get(code, []),
+    )
+    monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
+    monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)
+
+    feedback_mod.evaluate_post_sell_candidates("2026-04-08", token="dummy")
+    report = feedback_mod.build_post_sell_feedback_report("2026-04-08", top_n=5, evaluate_now=False)
+
+    forensic = report["soft_stop_forensics"]
+    assert forensic["total_soft_stop"] == 2
+    assert forensic["rebound_above_sell_rate"]["1m"] == 50.0
+    assert forensic["rebound_above_buy_rate"]["3m"] == 50.0
+    assert forensic["median_overshoot_pct"] == 0.4
+    assert forensic["p95_overshoot_pct"] >= 0.66
+    assert forensic["cooldown_would_block_rate"] == 100.0
+    assert forensic["tag_buckets"]
+    assert forensic["held_sec_buckets"]
+    assert forensic["peak_profit_buckets"]
+    assert forensic["top_rebound_cases"][0]["stock_code"] == "661111"
+
+
 def test_post_sell_candidate_dedup(monkeypatch, tmp_path):
     monkeypatch.setattr(feedback_mod, "DATA_DIR", tmp_path)
     monkeypatch.setattr(
@@ -292,3 +392,4 @@ def test_build_post_sell_feedback_report(monkeypatch, tmp_path):
     assert len(report["tag_tuning"]) == 3
     assert report["priority_actions"]
     assert report["top_missed_upside"]
+    assert "soft_stop_forensics" in report

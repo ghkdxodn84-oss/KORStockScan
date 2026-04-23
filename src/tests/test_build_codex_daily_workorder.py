@@ -1,5 +1,6 @@
 from src.engine.build_codex_daily_workorder import (
     ProjectTask,
+    _parse_project_item,
     _matches_slot,
     _resolve_slot_filters_for_target_date,
     _split_csv,
@@ -134,3 +135,44 @@ def test_resolve_slot_filters_skips_preopen_on_holiday():
     assert slots == ["__holiday_skip__"]
     assert holiday_override is True
     assert reason == "weekend"
+
+
+def test_parse_project_item_defaults_apply_target_without_postprocessing():
+    node = {
+        "id": "PVTI_plain",
+        "isArchived": False,
+        "content": {
+            "__typename": "DraftIssue",
+            "title": "장중 canary 모니터링",
+            "url": "",
+            "body": "Source: `docs/checklist.md`\nSection: `원격 canary 후보 검토`",
+            "state": "OPEN",
+            "assignees": {"nodes": []},
+        },
+        "fieldValues": {
+            "nodes": [
+                {
+                    "__typename": "ProjectV2ItemFieldDateValue",
+                    "date": "2026-04-23",
+                    "field": {"name": "Due"},
+                },
+                {
+                    "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                    "name": "Todo",
+                    "field": {"name": "Status"},
+                },
+            ]
+        },
+    }
+
+    parsed = _parse_project_item(
+        node,
+        due_field_name="Due",
+        status_field_name="Status",
+        track_field_name="Track",
+        slot_field_name="Slot",
+        time_window_field_name="TimeWindow",
+    )
+
+    assert parsed is not None
+    assert parsed.apply_target == "-"

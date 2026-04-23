@@ -18,10 +18,31 @@ _LAST_INVENTORY_ERRORS = []
 _LAST_DEPOSIT_OVERRIDE = None
 _LAST_SUCCESSFUL_DEPOSIT = 0
 _LAST_SUCCESSFUL_DEPOSIT_AT = 0.0
+_LAST_DEPOSIT_ERRORS = []
 
 def get_last_inventory_errors():
     """최근 잔고 조회 실패 원인을 반환합니다."""
     return list(_LAST_INVENTORY_ERRORS)
+
+
+def get_last_deposit_errors():
+    """최근 주문가능금액 조회 실패 원인을 반환합니다."""
+    return list(_LAST_DEPOSIT_ERRORS)
+
+
+def is_auth_failure_error(error) -> bool:
+    """키움 인증/토큰 무효화 계열 실패인지 판정합니다."""
+    if not isinstance(error, dict):
+        return False
+    msg = str(error.get('return_msg') or error.get('err_msg') or '')
+    code = str(error.get('return_code') or error.get('rt_cd') or '')
+    lowered = msg.lower()
+    return (
+        '8005' in code
+        or 'token' in lowered
+        or '토큰' in msg
+        or '인증' in msg
+    )
 
 def calc_buy_qty(current_price, total_deposit, ratio=0.1, max_budget=None):
     """
@@ -123,6 +144,7 @@ def get_deposit(token):
     """
     [kt00001] 예수금 조회 - return_code 대응 수정
     """
+    _LAST_DEPOSIT_ERRORS.clear()
     virtual_amount, config_key = _get_virtual_orderable_amount()
     if virtual_amount > 0:
         _log_virtual_orderable_amount_once(virtual_amount, config_key)
@@ -153,8 +175,24 @@ def get_deposit(token):
                 return amount
 
             err_msg = data.get('return_msg') or data.get('err_msg') or '상세 사유 없음'
+            _LAST_DEPOSIT_ERRORS.append(
+                {
+                    'http_status': res.status_code,
+                    'return_code': data.get('return_code', data.get('rt_cd', '')),
+                    'return_msg': err_msg,
+                    'attempt': attempt,
+                }
+            )
             log_error(f"❌ [예수금조회 실패] attempt={attempt}/{retries} 사유: {err_msg}")
         except Exception as exc:
+            _LAST_DEPOSIT_ERRORS.append(
+                {
+                    'http_status': None,
+                    'return_code': None,
+                    'return_msg': str(exc),
+                    'attempt': attempt,
+                }
+            )
             log_error(f"❌ [예수금조회 예외] attempt={attempt}/{retries} 사유: {exc}")
 
         if attempt < retries and retry_delay > 0:

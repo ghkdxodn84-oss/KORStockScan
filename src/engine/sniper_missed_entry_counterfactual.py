@@ -30,6 +30,7 @@ _STAGE_LABELS = {
     "blocked_ai_score": "AI 점수 차단",
     "first_ai_wait": "첫 AI 대기",
     "blocked_zero_qty": "수량 0주 차단",
+    "auth_zero_qty": "인증 장애 0원 예산",
     "blocked_gap_from_scan": "포착가 갭 차단",
     "blocked_overbought": "과열 차단",
     "blocked_big_bite_hard_gate": "Big-Bite 차단",

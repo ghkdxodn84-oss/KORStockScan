@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import gzip
+import json
 import os
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -14,6 +15,7 @@ from src.utils.constants import DATA_DIR
 
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 MONITOR_SNAPSHOT_DIR = DATA_DIR / "report" / "monitor_snapshots"
+MONITOR_SNAPSHOT_MANIFEST_DIR = MONITOR_SNAPSHOT_DIR / "manifests"
 ANALYTICS_PARQUET_DIR = DATA_DIR / "analytics" / "parquet"
 
 
@@ -97,6 +99,23 @@ def _db_has_snapshot(conn, kind: str, target_date: date) -> bool:
         return cur.fetchone() is not None
 
 
+def _snapshot_manifest_verifies(kind: str, target_date: date) -> bool:
+    for manifest_path in sorted(
+        MONITOR_SNAPSHOT_MANIFEST_DIR.glob(f"monitor_snapshot_manifest_{target_date.isoformat()}_*.json")
+    ):
+        try:
+            payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        snapshot_paths = payload.get("snapshot_paths") or {}
+        tracked_path = snapshot_paths.get(kind)
+        if not isinstance(tracked_path, str) or not tracked_path:
+            continue
+        if Path(tracked_path).name == f"{kind}_{target_date.isoformat()}.json":
+            return True
+    return False
+
+
 def _gzip_file(path: Path, *, dry_run: bool) -> tuple[bool, int]:
     """Return (compressed, saved_bytes_estimate)."""
     if not path.exists() or not path.is_file():
@@ -162,7 +181,9 @@ def run(*, retention_days: int, today: date, dry_run: bool) -> dict:
                 continue
             stats["snapshots"]["scanned"] += 1
             try:
-                verified = _db_has_snapshot(conn, kind, target_date)
+                verified = _snapshot_manifest_verifies(kind, target_date)
+                if not verified:
+                    verified = _db_has_snapshot(conn, kind, target_date)
                 if not verified:
                     stats["skipped_unverified"] += 1
                     continue

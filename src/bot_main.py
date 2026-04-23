@@ -49,7 +49,7 @@ from src.engine.sniper_post_sell_feedback import (
 from src.engine.daily_report_service import save_daily_report, build_daily_report
 from src.engine.log_archive_service import archive_target_date_logs, save_monitor_snapshots_for_date
 from src.engine.strategy_position_performance_report import sync_trade_performance_for_date
-from src.utils.constants import TRADING_RULES
+from src.utils.constants import RESTART_FLAG_PATH, TRADING_RULES
 
 # ==========================================
 # 📅 호출 상단 공용 날짜 helper
@@ -298,7 +298,8 @@ if __name__ == '__main__':
         engine_thread.start()
         print("✅ [시스템] 정상거래일 - 스나이퍼 매매 엔진 가동 완료. 조건검색식 가동기간으로 코스닥 스캐너 가동 임시중단 합니다.")
 
-        # 초단타 스캘핑 스캐너 가동 - 10분 주기로 시장을 스캔하여 급등 전조 종목 발굴(10개)
+        # 초단타 스캘핑 스캐너 가동 - 장초반/후반 2분, 그 외 3분 주기로
+        # stale open-top 대신 회전형 신선도 우선 로직으로 감시 대상을 발굴
         try:
             import src.scanners.scalping_scanner as scalping_scanner
             scalper_thread = threading.Thread(target=scalping_scanner.run_scalper, daemon=True)
@@ -368,8 +369,9 @@ if __name__ == '__main__':
                 os.kill(os.getpid(), signal.SIGTERM)
 
             # [스케줄러 3] 관리자의 우아한 재시작(restart.flag) 감지
-            if os.path.exists("restart.flag"):
+            if RESTART_FLAG_PATH.exists():
                 print("🔄 [시스템] 수동 재시작 플래그 감지. 관제탑을 종료합니다.")
+                RESTART_FLAG_PATH.unlink()
                 time.sleep(3) # 다른 쓰레드들이 종료될 시간을 잠시 부여
                 os.kill(os.getpid(), signal.SIGTERM)
 

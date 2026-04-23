@@ -11,7 +11,7 @@ This directory root keeps only documents used for the current Plan Rebase tuning
 - `2026-04-21-stage2-todo-checklist.md`: Plan Rebase transition and main-only baseline lock.
 - `2026-04-22-stage2-todo-checklist.md` through `2026-04-24-stage2-todo-checklist.md`: active/future operating checklists.
 - `workorder-0421-*.md`: Plan Rebase supporting workorders, execution logs, and detailed evidence.
-- `@My-Opinion.md`: current operator-facing logic summary.
+- Personal operator note docs are intentionally excluded from this index and must not be referenced by other documents.
 
 ## Audit Reports
 

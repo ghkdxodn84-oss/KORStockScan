@@ -110,7 +110,6 @@ APPLY_TARGET_REMOTE_KEYWORDS = (
     "remote",
     "songstockscan",
     "develop",
-    "canary",
 )
 
 APPLY_TARGET_MAIN_KEYWORDS = (
@@ -438,7 +437,7 @@ def _infer_apply_target_text(text: str) -> str:
 def _ensure_apply_target(task: BacklogTask) -> BacklogTask:
     if str(task.apply_target or "").strip():
         return task
-    apply_target = _infer_apply_target_text(f"{task.title} {task.section} {task.source}")
+    apply_target = _infer_apply_target_text(task.title)
     return replace(task, apply_target=apply_target)
 
 
@@ -695,6 +694,16 @@ mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $value: ProjectV2FieldVal
 """.strip()
 
 
+def _mutation_delete_item() -> str:
+    return """
+mutation($projectId: ID!, $itemId: ID!) {
+  deleteProjectV2Item(input: { projectId: $projectId, itemId: $itemId }) {
+    deletedItemId
+  }
+}
+""".strip()
+
+
 def _title_for_project(task: BacklogTask) -> str:
     return f"[{task.track}] {task.title}".strip()
 
@@ -710,6 +719,45 @@ def _is_managed_project_title(title: str) -> bool:
     if re.match(r"^\[Checklist\d{4}\]\s+.+", normalized):
         return True
     return bool(re.match(rf"^\[({'|'.join(MANAGED_TRACKS)})\]\s+.+", normalized))
+
+
+def _project_item_keep_score(item: ProjectItem) -> tuple[int, int, int, int]:
+    return (
+        1 if str(item.due_date or "").strip() else 0,
+        1 if str(item.slot or "").strip() else 0,
+        1 if str(item.time_window or "").strip() else 0,
+        1 if str(item.content_type or "").strip() else 0,
+    )
+
+
+def _select_duplicate_project_items(
+    items: list[ProjectItem],
+    desired_open_title_keys: set[str],
+) -> list[ProjectItem]:
+    grouped: dict[str, list[ProjectItem]] = {}
+    for item in items:
+        if not _is_managed_project_title(item.title):
+            continue
+        key = _managed_title_key(item.title)
+        if key not in desired_open_title_keys:
+            continue
+        grouped.setdefault(key, []).append(item)
+
+    duplicates: list[ProjectItem] = []
+    for group_items in grouped.values():
+        if len(group_items) <= 1:
+            continue
+        keep = group_items[0]
+        keep_score = _project_item_keep_score(keep)
+        for item in group_items[1:]:
+            score = _project_item_keep_score(item)
+            if score > keep_score:
+                duplicates.append(keep)
+                keep = item
+                keep_score = score
+            else:
+                duplicates.append(item)
+    return duplicates
 
 
 def _slot_key(value: str) -> str:
@@ -952,6 +1000,7 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
 
     add_mut = _mutation_add_draft()
     upd_mut = _mutation_update_field()
+    del_mut = _mutation_delete_item()
     tasks_by_title = {_title_for_project(task): task for task in tasks}
     tasks_by_key = {_managed_title_key(_title_for_project(task)): task for task in tasks}
     slot_by_title = {
@@ -968,6 +1017,27 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
     }
     desired_open_titles = set(tasks_by_title.keys())
     desired_open_title_keys = {_managed_title_key(title) for title in desired_open_titles}
+
+    duplicate_items = _select_duplicate_project_items(existing_items, desired_open_title_keys)
+    duplicate_item_ids = {item.item_id for item in duplicate_items}
+    duplicate_deleted = 0
+    if duplicate_items:
+        if dry_run:
+            duplicate_deleted = len(duplicate_items)
+        else:
+            for item in duplicate_items:
+                _graphql_request(
+                    token,
+                    del_mut,
+                    {
+                        "projectId": project_id,
+                        "itemId": item.item_id,
+                    },
+                )
+                duplicate_deleted += 1
+        existing_items = [item for item in existing_items if item.item_id not in duplicate_item_ids]
+        existing_titles = {item.title for item in existing_items if item.title}
+
     existing_title_keys = {_managed_title_key(title) for title in existing_titles}
     managed_open_items = [
         item
@@ -1274,6 +1344,7 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
         "parsed_tasks": len(tasks),
         "created_or_would_create": created,
         "skipped_existing": skipped_existing,
+        "duplicates_deleted_or_would_delete": duplicate_deleted,
         "status_synced_todo": synced_status_todo,
         "status_synced_done": synced_status_done,
         "due_filled": synced_due_filled,

@@ -23,6 +23,7 @@ from pathlib import Path
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from config import (
     ANALYSIS_END,
     ANALYSIS_START,
@@ -32,6 +33,7 @@ from config import (
     TOP_N_PATTERNS,
     TRAILING_TP_RULES,
 )
+from tuning_observability_summary import write_tuning_observability_outputs
 
 LAB_DIR = Path(__file__).resolve().parent
 
@@ -81,6 +83,13 @@ def build_summary_payload(ev_result: dict, trade_df: pd.DataFrame) -> dict:
         srv_valid = vt[vt["cohort"] == cs["cohort"]].shape[0] if not vt.empty else 0
         cs["sample_sufficient"] = srv_valid >= MIN_VALID_PROFIT_SAMPLES
 
+    observability = write_tuning_observability_outputs(
+        output_dir=OUTPUT_DIR,
+        target_date=ANALYSIS_END.isoformat(),
+        analysis_start=ANALYSIS_START.isoformat(),
+        analysis_end=ANALYSIS_END.isoformat(),
+    )
+
     payload: dict = {
         "meta": {
             "analysis_period": f"{ANALYSIS_START} ~ {ANALYSIS_END}",
@@ -88,6 +97,7 @@ def build_summary_payload(ev_result: dict, trade_df: pd.DataFrame) -> dict:
             "total_valid_trades": int(len(vt)),
             "cohorts":         ["full_fill", "partial_fill", "split-entry"],
         },
+        "tuning_observability": observability,
         "cohort_summary":   cohort_stats,
         "loss_patterns":    ev_result.get("loss_patterns", []),
         "profit_patterns":  ev_result.get("profit_patterns", []),
@@ -193,6 +203,12 @@ def write_final_review_report(
     opp_cost       = ev_result.get("opportunity_cost", [])
     backlog        = ev_result.get("ev_backlog", [])
     coh_summary    = ev_result.get("cohort_summary", [])
+    observability = write_tuning_observability_outputs(
+        output_dir=OUTPUT_DIR,
+        target_date=ANALYSIS_END.isoformat(),
+        analysis_start=ANALYSIS_START.isoformat(),
+        analysis_end=ANALYSIS_END.isoformat(),
+    )
 
     # 표본 부족 서버 목록
     insufficient_note = ""
@@ -235,6 +251,21 @@ def write_final_review_report(
                 f"| {cs['median_profit']:+.3f}% | {cs['sum_profit']:+.3f}% | {suf} |"
             )
         lines.append("")
+
+    lines += ["### 1-4. 튜닝 관찰축 요약", ""]
+    lines += [
+        f"- `WAIT65~79 total_candidates={observability['buy_recovery_canary']['total_candidates']}`, "
+        f"`recovery_check={observability['buy_recovery_canary']['recovery_check_candidates']}`, "
+        f"`promoted={observability['buy_recovery_canary']['recovery_promoted_candidates']}`, "
+        f"`submitted={observability['buy_recovery_canary']['submitted_candidates']}`",
+        f"- `blocked_ai_score_share={observability['buy_recovery_canary']['blocked_ai_score_share_pct']:.1f}%`, "
+        f"`gatekeeper_eval_ms_p95={observability['entry_funnel']['gatekeeper_eval_ms_p95']:.0f}ms`, "
+        f"`budget_pass_to_submitted_rate={observability['entry_funnel']['budget_pass_to_submitted_rate']:.1f}%`",
+        "",
+    ]
+    for item in observability["priority_findings"]:
+        lines.append(f"- `{item['label']}`: {item['judgment']} — {item['why']}")
+    lines.append("")
 
     # 손실 패턴
     lines += ["### 1-2. 손실 패턴 Top 5", ""]

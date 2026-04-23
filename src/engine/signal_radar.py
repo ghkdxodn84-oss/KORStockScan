@@ -88,7 +88,7 @@ class SniperRadar:
     # ==========================================
     # 🎯 [최종: 융합 및 지시] 메인 스캐너로 넘길 타겟 추출
     # ==========================================
-    def find_supernova_targets(self, mrkt_tp="000"):
+    def find_supernova_targets(self, mrkt_tp="000", candidate_limit=15):
         """
         [V13.5 최종형] AI 가동 전 데이터 정제 및 수급 수치 결합
         """
@@ -101,7 +101,7 @@ class SniperRadar:
         # [효율화] 급증률 상위 정렬
         vol_spikes.sort(key=lambda x: x.get('spike_rate', 0), reverse=True)
         
-        for stock in vol_spikes[:15]: 
+        for stock in vol_spikes[:max(1, int(candidate_limit))]:
             code = stock['code']
             flu = stock.get('flu_rate', 0.0)
             spike = stock.get('spike_rate', 0.0)

@@ -18,7 +18,7 @@ from src.utils.logger import log_error, log_info
 _WRITE_LOCK = threading.RLock()
 _RECORDED_KEYS: dict[tuple[str, str, str, str], float] = {}
 _WS_RETAIN_UNTIL: dict[str, float] = {}
-POST_SELL_REPORT_SCHEMA_VERSION = 1
+POST_SELL_REPORT_SCHEMA_VERSION = 2
 
 
 def _post_sell_dir() -> Path:
@@ -118,6 +118,19 @@ def _median(values: list[float]) -> float:
     return round((ordered[mid - 1] + ordered[mid]) / 2.0, 3)
 
 
+def _percentile(values: list[float], pct: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(float(item) for item in values)
+    rank = ((len(ordered) - 1) * max(0.0, min(100.0, float(pct)))) / 100.0
+    lower = int(rank)
+    upper = min(lower + 1, len(ordered) - 1)
+    if lower == upper:
+        return round(ordered[lower], 3)
+    weight = rank - lower
+    return round((ordered[lower] * (1.0 - weight)) + (ordered[upper] * weight), 3)
+
+
 def _clamp(value: float, lower: float, upper: float) -> float:
     return max(lower, min(upper, value))
 
@@ -149,6 +162,11 @@ def record_post_sell_candidate(
     exit_rule: str | None = None,
     strategy: str | None = None,
     revive: bool = False,
+    peak_profit=None,
+    held_sec=None,
+    current_ai_score=None,
+    soft_stop_threshold_pct=None,
+    same_symbol_soft_stop_cooldown_would_block=None,
 ) -> dict | None:
     if not bool(getattr(TRADING_RULES, "POST_SELL_FEEDBACK_ENABLED", True)):
         return None
@@ -196,6 +214,18 @@ def record_post_sell_candidate(
             "buy_qty": _safe_int(buy_qty, 0),
             "exit_rule": str(exit_rule or stock.get("last_exit_rule") or "-"),
             "revive": bool(revive),
+            "peak_profit": round(_safe_float(peak_profit, stock.get("last_exit_peak_profit", 0.0)), 3),
+            "held_sec": _safe_int(held_sec, stock.get("last_exit_held_sec", 0)),
+            "current_ai_score": round(_safe_float(current_ai_score, stock.get("last_exit_current_ai_score", 0.0)), 1),
+            "soft_stop_threshold_pct": round(
+                _safe_float(soft_stop_threshold_pct, stock.get("last_exit_soft_stop_threshold_pct", 0.0)),
+                3,
+            ),
+            "same_symbol_soft_stop_cooldown_would_block": bool(
+                stock.get("last_exit_same_symbol_soft_stop_cooldown_would_block", False)
+                if same_symbol_soft_stop_cooldown_would_block is None
+                else same_symbol_soft_stop_cooldown_would_block
+            ),
             "evaluation_mode": "post_sell_minute_forward",
         }
 
@@ -240,11 +270,16 @@ def _compute_window_metrics(candidate: dict, candles: list[dict], window_minutes
         relevant.append((candle_dt, candle))
 
     sell_price = float(candidate.get("sell_price", 0) or 0)
+    buy_price = float(candidate.get("buy_price", 0) or 0)
     if sell_price <= 0 or not relevant:
         return {
             "close_ret_pct": 0.0,
             "mfe_pct": 0.0,
             "mae_pct": 0.0,
+            "mfe_vs_buy_pct": 0.0,
+            "close_vs_buy_pct": 0.0,
+            "rebound_above_sell": False,
+            "rebound_above_buy": False,
             "hit_up_05": False,
             "hit_up_10": False,
             "hit_down_05": False,
@@ -254,6 +289,8 @@ def _compute_window_metrics(candidate: dict, candles: list[dict], window_minutes
     highs = []
     lows = []
     close_ret = 0.0
+    highs_vs_buy = []
+    close_vs_buy = 0.0
 
     for _, candle in relevant:
         high_p = float(candle.get("고가", 0) or 0)
@@ -266,13 +303,22 @@ def _compute_window_metrics(candidate: dict, candles: list[dict], window_minutes
             lows.append(((low_p / sell_price) - 1.0) * 100.0)
         if close_p > 0:
             close_ret = ((close_p / sell_price) - 1.0) * 100.0
+        if buy_price > 0 and high_p > 0:
+            highs_vs_buy.append(((high_p / buy_price) - 1.0) * 100.0)
+        if buy_price > 0 and close_p > 0:
+            close_vs_buy = ((close_p / buy_price) - 1.0) * 100.0
 
     mfe_pct = max(highs) if highs else 0.0
     mae_pct = min(lows) if lows else 0.0
+    mfe_vs_buy_pct = max(highs_vs_buy) if highs_vs_buy else 0.0
     return {
         "close_ret_pct": round(close_ret, 3),
         "mfe_pct": round(mfe_pct, 3),
         "mae_pct": round(mae_pct, 3),
+        "mfe_vs_buy_pct": round(mfe_vs_buy_pct, 3),
+        "close_vs_buy_pct": round(close_vs_buy, 3),
+        "rebound_above_sell": mfe_pct > 0.0,
+        "rebound_above_buy": buy_price > 0 and mfe_vs_buy_pct >= 0.0,
         "hit_up_05": mfe_pct >= 0.5,
         "hit_up_10": mfe_pct >= 1.0,
         "hit_down_05": mae_pct <= -0.5,
@@ -377,6 +423,13 @@ def evaluate_post_sell_candidates(target_date: str, token: str | None = None) ->
             "buy_qty": candidate.get("buy_qty", 0),
             "exit_rule": candidate.get("exit_rule", "-"),
             "revive": bool(candidate.get("revive", False)),
+            "peak_profit": candidate.get("peak_profit", 0.0),
+            "held_sec": candidate.get("held_sec", 0),
+            "current_ai_score": candidate.get("current_ai_score", 0.0),
+            "soft_stop_threshold_pct": candidate.get("soft_stop_threshold_pct", 0.0),
+            "same_symbol_soft_stop_cooldown_would_block": bool(
+                candidate.get("same_symbol_soft_stop_cooldown_would_block", False)
+            ),
             "outcome": outcome,
             "metrics_1m": metrics_1m,
             "metrics_3m": metrics_3m,
@@ -500,6 +553,21 @@ def _enrich_post_sell_rows(
         sell_price = _safe_float(item.get("sell_price", candidate.get("sell_price")), 0.0)
         buy_price = _safe_float(item.get("buy_price", candidate.get("buy_price")), 0.0)
         buy_qty = _safe_int(item.get("buy_qty", candidate.get("buy_qty")), 0)
+        peak_profit = _safe_float(item.get("peak_profit", candidate.get("peak_profit")), 0.0)
+        held_sec = _safe_int(item.get("held_sec", candidate.get("held_sec")), 0)
+        current_ai_score = _safe_float(item.get("current_ai_score", candidate.get("current_ai_score")), 0.0)
+        soft_stop_threshold_pct = _safe_float(
+            item.get("soft_stop_threshold_pct", candidate.get("soft_stop_threshold_pct")),
+            0.0,
+        )
+        soft_stop_overshoot_pct = (
+            round(max(0.0, soft_stop_threshold_pct - profit_rate), 3)
+            if soft_stop_threshold_pct < 0.0
+            else 0.0
+        )
+        metrics_1m = dict(item.get("metrics_1m") or {})
+        metrics_3m = dict(item.get("metrics_3m") or {})
+        metrics_5m = dict(item.get("metrics_5m") or {})
         extra_upside_pct = max(0.0, mfe_10m)
         extra_upside_krw_est = int(round(sell_price * buy_qty * (extra_upside_pct / 100.0))) if sell_price > 0 and buy_qty > 0 else 0
         potential_peak_profit_rate = round(profit_rate + extra_upside_pct, 3)
@@ -523,9 +591,20 @@ def _enrich_post_sell_rows(
                 "sell_price": int(round(sell_price)),
                 "buy_qty": int(buy_qty),
                 "profit_rate": round(profit_rate, 3),
+                "peak_profit": round(peak_profit, 3),
+                "held_sec": int(held_sec),
+                "current_ai_score": round(current_ai_score, 1),
                 "exit_rule": str(item.get("exit_rule") or candidate.get("exit_rule") or "-"),
                 "revive": bool(item.get("revive", candidate.get("revive", False))),
                 "outcome": str(item.get("outcome") or "NEUTRAL").upper(),
+                "soft_stop_threshold_pct": round(soft_stop_threshold_pct, 3),
+                "soft_stop_overshoot_pct": float(soft_stop_overshoot_pct),
+                "same_symbol_soft_stop_cooldown_would_block": bool(
+                    item.get(
+                        "same_symbol_soft_stop_cooldown_would_block",
+                        candidate.get("same_symbol_soft_stop_cooldown_would_block", False),
+                    )
+                ),
                 "mfe_10m_pct": round(mfe_10m, 3),
                 "mae_10m_pct": round(mae_10m, 3),
                 "close_10m_pct": round(close_10m, 3),
@@ -533,10 +612,145 @@ def _enrich_post_sell_rows(
                 "extra_upside_10m_krw_est": int(extra_upside_krw_est),
                 "potential_peak_profit_rate_10m": float(potential_peak_profit_rate),
                 "capture_efficiency_pct": float(capture_efficiency_pct),
+                "rebound_above_sell_1m": bool(metrics_1m.get("rebound_above_sell", False)),
+                "rebound_above_sell_3m": bool(metrics_3m.get("rebound_above_sell", False)),
+                "rebound_above_sell_5m": bool(metrics_5m.get("rebound_above_sell", False)),
+                "rebound_above_sell_10m": bool(metrics_10m.get("rebound_above_sell", False)),
+                "rebound_above_buy_1m": bool(metrics_1m.get("rebound_above_buy", False)),
+                "rebound_above_buy_3m": bool(metrics_3m.get("rebound_above_buy", False)),
+                "rebound_above_buy_5m": bool(metrics_5m.get("rebound_above_buy", False)),
+                "rebound_above_buy_10m": bool(metrics_10m.get("rebound_above_buy", False)),
+                "metrics_1m": metrics_1m,
+                "metrics_3m": metrics_3m,
+                "metrics_5m": metrics_5m,
                 "metrics_10m": metrics_10m,
             }
         )
     return rows
+
+
+def _bucket_held_sec(held_sec: int) -> str:
+    value = max(0, int(held_sec or 0))
+    if value < 90:
+        return "<90s"
+    if value < 180:
+        return "90-179s"
+    if value < 300:
+        return "180-299s"
+    return "300s+"
+
+
+def _bucket_peak_profit(peak_profit: float) -> str:
+    value = float(peak_profit or 0.0)
+    if value <= 0.2:
+        return "<=0.2%"
+    if value <= 0.5:
+        return "0.21~0.5%"
+    if value <= 1.0:
+        return "0.51~1.0%"
+    return ">1.0%"
+
+
+def _build_soft_stop_forensics(rows: list[dict]) -> dict:
+    soft_stop_rows = [row for row in rows if str(row.get("exit_rule") or "") == "scalp_soft_stop_pct"]
+    if not soft_stop_rows:
+        return {
+            "total_soft_stop": 0,
+            "rebound_above_sell_rate": {"1m": 0.0, "3m": 0.0, "5m": 0.0, "10m": 0.0},
+            "rebound_above_buy_rate": {"1m": 0.0, "3m": 0.0, "5m": 0.0, "10m": 0.0},
+            "median_overshoot_pct": 0.0,
+            "p95_overshoot_pct": 0.0,
+            "cooldown_would_block_rate": 0.0,
+            "tag_buckets": [],
+            "held_sec_buckets": [],
+            "peak_profit_buckets": [],
+            "top_rebound_cases": [],
+        }
+
+    def _rate(key: str) -> float:
+        return _ratio(sum(1 for row in soft_stop_rows if bool(row.get(key))), len(soft_stop_rows))
+
+    overshoot_values = [
+        _safe_float(row.get("soft_stop_overshoot_pct"), 0.0)
+        for row in soft_stop_rows
+        if _safe_float(row.get("soft_stop_threshold_pct"), 0.0) < 0.0
+    ]
+
+    def _bucket_rows(group_key_fn) -> list[dict]:
+        grouped: dict[str, list[dict]] = defaultdict(list)
+        for row in soft_stop_rows:
+            grouped[group_key_fn(row)].append(row)
+        result: list[dict] = []
+        for bucket, items in grouped.items():
+            result.append(
+                {
+                    "bucket": bucket,
+                    "trades": len(items),
+                    "rebound_above_sell_10m_rate": _ratio(sum(1 for item in items if bool(item.get("rebound_above_sell_10m"))), len(items)),
+                    "rebound_above_buy_10m_rate": _ratio(sum(1 for item in items if bool(item.get("rebound_above_buy_10m"))), len(items)),
+                    "avg_profit_rate": _avg([_safe_float(item.get("profit_rate"), 0.0) for item in items]),
+                    "avg_peak_profit": _avg([_safe_float(item.get("peak_profit"), 0.0) for item in items]),
+                    "median_overshoot_pct": _median([_safe_float(item.get("soft_stop_overshoot_pct"), 0.0) for item in items]),
+                    "cooldown_would_block_rate": _ratio(
+                        sum(1 for item in items if bool(item.get("same_symbol_soft_stop_cooldown_would_block"))),
+                        len(items),
+                    ),
+                }
+            )
+        return sorted(result, key=lambda item: (int(item.get("trades", 0) or 0), str(item.get("bucket") or "")), reverse=True)
+
+    top_rebound_cases = sorted(
+        soft_stop_rows,
+        key=lambda row: (
+            bool(row.get("rebound_above_buy_10m")),
+            _safe_float((row.get("metrics_10m") or {}).get("mfe_vs_buy_pct"), 0.0),
+            _safe_float(row.get("soft_stop_overshoot_pct"), 0.0),
+        ),
+        reverse=True,
+    )[:5]
+
+    return {
+        "total_soft_stop": len(soft_stop_rows),
+        "rebound_above_sell_rate": {
+            "1m": _rate("rebound_above_sell_1m"),
+            "3m": _rate("rebound_above_sell_3m"),
+            "5m": _rate("rebound_above_sell_5m"),
+            "10m": _rate("rebound_above_sell_10m"),
+        },
+        "rebound_above_buy_rate": {
+            "1m": _rate("rebound_above_buy_1m"),
+            "3m": _rate("rebound_above_buy_3m"),
+            "5m": _rate("rebound_above_buy_5m"),
+            "10m": _rate("rebound_above_buy_10m"),
+        },
+        "median_overshoot_pct": _median(overshoot_values),
+        "p95_overshoot_pct": _percentile(overshoot_values, 95.0),
+        "cooldown_would_block_rate": _ratio(
+            sum(1 for row in soft_stop_rows if bool(row.get("same_symbol_soft_stop_cooldown_would_block"))),
+            len(soft_stop_rows),
+        ),
+        "tag_buckets": _bucket_rows(
+            lambda row: f"{str(row.get('strategy') or '-')}/{str(row.get('position_tag') or '-')}"
+        ),
+        "held_sec_buckets": _bucket_rows(lambda row: _bucket_held_sec(_safe_int(row.get("held_sec"), 0))),
+        "peak_profit_buckets": _bucket_rows(lambda row: _bucket_peak_profit(_safe_float(row.get("peak_profit"), 0.0))),
+        "top_rebound_cases": [
+            {
+                **_case_view(row),
+                "held_sec": int(_safe_int(row.get("held_sec"), 0)),
+                "peak_profit": round(_safe_float(row.get("peak_profit"), 0.0), 3),
+                "soft_stop_threshold_pct": round(_safe_float(row.get("soft_stop_threshold_pct"), 0.0), 3),
+                "soft_stop_overshoot_pct": round(_safe_float(row.get("soft_stop_overshoot_pct"), 0.0), 3),
+                "rebound_above_buy_10m": bool(row.get("rebound_above_buy_10m")),
+                "rebound_above_sell_10m": bool(row.get("rebound_above_sell_10m")),
+                "mfe_vs_buy_10m_pct": round(_safe_float((row.get("metrics_10m") or {}).get("mfe_vs_buy_pct"), 0.0), 3),
+                "same_symbol_soft_stop_cooldown_would_block": bool(
+                    row.get("same_symbol_soft_stop_cooldown_would_block")
+                ),
+            }
+            for row in top_rebound_cases
+        ],
+    }
 
 
 def _build_exit_rule_tuning_rows(rows: list[dict]) -> list[dict]:
@@ -754,6 +968,7 @@ def build_post_sell_feedback_report(
             "exit_rule_tuning": [],
             "tag_tuning": [],
             "priority_actions": _build_priority_actions([], limit=3),
+            "soft_stop_forensics": _build_soft_stop_forensics([]),
             "top_missed_upside": [],
             "top_good_exit": [],
             "meta": {
@@ -804,6 +1019,7 @@ def build_post_sell_feedback_report(
     exit_rule_rows = _build_exit_rule_tuning_rows(rows)
     tag_rows = _build_tag_tuning_rows(rows)
     priority_actions = _build_priority_actions(exit_rule_rows, limit=3)
+    soft_stop_forensics = _build_soft_stop_forensics(rows)
 
     top_missed = [
         _case_view(item)
@@ -851,6 +1067,7 @@ def build_post_sell_feedback_report(
         "exit_rule_tuning": exit_rule_rows,
         "tag_tuning": tag_rows,
         "priority_actions": priority_actions,
+        "soft_stop_forensics": soft_stop_forensics,
         "top_missed_upside": top_missed,
         "top_good_exit": top_good,
         "meta": {

@@ -4,13 +4,24 @@
 """
 from pathlib import Path
 from datetime import date
+import os
+
+
+def _env_date(name: str, default: date) -> date:
+    raw = str(os.getenv(name, "")).strip()
+    if not raw:
+        return default
+    try:
+        return date.fromisoformat(raw)
+    except ValueError:
+        return default
 
 # ── 프로젝트 루트 ──────────────────────────────────────────────────────────────
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
 # ── 분석 기간 ──────────────────────────────────────────────────────────────────
-ANALYSIS_START = date(2026, 4, 20)
-ANALYSIS_END   = date(2026, 4, 20)
+ANALYSIS_START = _env_date("ANALYSIS_START_DATE", date(2026, 4, 20))
+ANALYSIS_END   = _env_date("ANALYSIS_END_DATE", date(2026, 4, 20))
 
 # ── 입력 경로 ──────────────────────────────────────────────────────────────────
 SNAPSHOT_DIR       = PROJECT_ROOT / "data" / "report" / "monitor_snapshots"

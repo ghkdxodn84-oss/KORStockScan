@@ -130,6 +130,34 @@ SCALPING_SYSTEM_PROMPT_75_CANARY = (
     .replace("50~79 (WAIT)", "50~74 (WAIT)")
 )
 
+SCALPING_BUY_RECOVERY_CANARY_PROMPT = """
+너는 WAIT 65~79 BUY 회복 전용 초단타 진입 트레이더다.
+목표는 '기본 프롬프트가 WAIT로 남긴 후보 중 실제 기대값이 살아 있는 돌파 직전만 BUY로 승격'하는 것이다.
+단, 무리한 추격 매수는 금지한다.
+
+[회복 판단 규칙]
+1. 이 프롬프트는 WAIT 65~79 후보 전용이다. 관찰 유지보다 기회 회복을 우선하지만, 근거 없는 공격성은 금지한다.
+2. 아래 조건이 동시에 우호이면 BUY에 더 공격적으로 반응하라:
+   - 매수 압도율이 높다.
+   - 틱 속도가 다시 빨라진다.
+   - 현재가가 Micro-VWAP 위이거나 재안착 징후가 있다.
+   - 큰 매도틱이 없다.
+3. 단순 순간 강도 1개만 좋으면 WAIT를 유지하라. 재돌파 실패, 고가 추격 부담, 매도우위 심화가 보이면 BUY로 올리지 마라.
+4. BUY는 '지금 진입해도 기대값이 남아 있다'는 경우에만 준다. 애매하면 WAIT다.
+
+[스코어링 기준 (0~100)]
+- 75~100 (BUY): 회복 BUY 승격 가능
+- 50~74 (WAIT): 관찰 유지
+- 0~49 (DROP): 진입 금지
+
+분석 결과는 반드시 아래 JSON 형식으로만 출력:
+{
+    "action": "BUY" | "WAIT" | "DROP",
+    "score": 0~100 사이의 정수,
+    "reason": "회복 BUY 승격 또는 유지의 핵심 근거 1줄"
+}
+"""
+
 
 # ==========================================
 # 1-2. 🎯 시스템 프롬프트 (스윙/우량주 전용 - KOSPI/KOSDAQ_ML)
@@ -1022,6 +1050,88 @@ class GeminiSniperEngine:
             "analysis_mode": analysis_mode,
             "realtime_ctx": self._compact_gatekeeper_ctx_for_cache(realtime_ctx),
         })
+
+    def _prepare_realtime_report_request(self, stock_name, stock_code, input_data_text, analysis_mode="AUTO"):
+        """Build the realtime-report prompt payload before the model call."""
+        selected_mode = (analysis_mode or "AUTO").upper()
+        realtime_ctx = input_data_text if isinstance(input_data_text, dict) else None
+
+        if realtime_ctx is not None:
+            if selected_mode == "AUTO":
+                selected_mode = self._infer_realtime_mode(realtime_ctx)
+            prompt = self._get_realtime_prompt(selected_mode)
+            packet_text = self._build_realtime_quant_packet(stock_name, stock_code, realtime_ctx, selected_mode)
+            user_input = f"""🚨 [요청 종목]
+종목명: {stock_name}
+종목코드: {stock_code}
+선택된 분석 모드: {selected_mode}
+
+📊 [실시간 전술 패킷]
+{packet_text}"""
+            context_name = f"실시간 분석({selected_mode})"
+        else:
+            if selected_mode == "AUTO":
+                selected_mode = "DUAL"
+            prompt = self._get_realtime_prompt(selected_mode)
+            user_input = f"""🚨 [요청 종목]
+종목명: {stock_name}
+종목코드: {stock_code}
+선택된 분석 모드: {selected_mode}
+
+📊 [실시간 분석 입력]
+{str(input_data_text)}"""
+            context_name = f"실시간 분석(LEGACY:{selected_mode})"
+
+        return {
+            "selected_mode": selected_mode,
+            "prompt": prompt,
+            "user_input": user_input,
+            "context_name": context_name,
+        }
+
+    def _generate_realtime_report_payload(self, stock_name, stock_code, input_data_text, analysis_mode="AUTO"):
+        """Generate realtime report with internal timing breakdown for observability."""
+        total_started_at = time.perf_counter()
+        lock_started_at = time.perf_counter()
+        with self.lock:
+            lock_wait_ms = int((time.perf_counter() - lock_started_at) * 1000)
+
+            build_started_at = time.perf_counter()
+            request = self._prepare_realtime_report_request(
+                stock_name=stock_name,
+                stock_code=stock_code,
+                input_data_text=input_data_text,
+                analysis_mode=analysis_mode,
+            )
+            packet_build_ms = int((time.perf_counter() - build_started_at) * 1000)
+
+            model_started_at = time.perf_counter()
+            report_error = ""
+            try:
+                report = self._call_gemini_safe(
+                    request["prompt"],
+                    request["user_input"],
+                    require_json=False,
+                    context_name=request["context_name"],
+                    model_override=self._get_tier2_model(),
+                )
+            except Exception as e:
+                report_error = str(e)
+                log_error(f"🚨 [{request['context_name']}] AI 에러: {e}")
+                report = f"⚠️ AI 실시간 분석 생성 중 에러 발생: {e}"
+            model_call_ms = int((time.perf_counter() - model_started_at) * 1000)
+
+        total_ms = int((time.perf_counter() - total_started_at) * 1000)
+        return {
+            "report": report,
+            "selected_mode": request["selected_mode"],
+            "context_name": request["context_name"],
+            "lock_wait_ms": lock_wait_ms,
+            "packet_build_ms": packet_build_ms,
+            "model_call_ms": model_call_ms,
+            "total_ms": total_ms,
+            "error": report_error,
+        }
     
     # ==========================================
     # 3. 💡 [아키텍처 포인트] 만능 API 호출기 (중복 코드 완벽 제거)
@@ -1746,47 +1856,12 @@ class GeminiSniperEngine:
     # ==========================================
     def generate_realtime_report(self, stock_name, stock_code, input_data_text, analysis_mode="AUTO"):
         """실시간 종목 분석 리포트 생성 (dict realtime_ctx 권장, legacy string 지원)"""
-        with self.lock:
-            selected_mode = (analysis_mode or "AUTO").upper()
-            realtime_ctx = input_data_text if isinstance(input_data_text, dict) else None
-
-            if realtime_ctx is not None:
-                if selected_mode == "AUTO":
-                    selected_mode = self._infer_realtime_mode(realtime_ctx)
-                prompt = self._get_realtime_prompt(selected_mode)
-                packet_text = self._build_realtime_quant_packet(stock_name, stock_code, realtime_ctx, selected_mode)
-                user_input = f"""🚨 [요청 종목]
-종목명: {stock_name}
-종목코드: {stock_code}
-선택된 분석 모드: {selected_mode}
-
-📊 [실시간 전술 패킷]
-{packet_text}"""
-                context_name = f"실시간 분석({selected_mode})"
-            else:
-                if selected_mode == "AUTO":
-                    selected_mode = "DUAL"
-                prompt = self._get_realtime_prompt(selected_mode)
-                user_input = f"""🚨 [요청 종목]
-종목명: {stock_name}
-종목코드: {stock_code}
-선택된 분석 모드: {selected_mode}
-
-📊 [실시간 분석 입력]
-{str(input_data_text)}"""
-                context_name = f"실시간 분석(LEGACY:{selected_mode})"
-
-            try:
-                return self._call_gemini_safe(
-                    prompt,
-                    user_input,
-                    require_json=False,
-                    context_name=context_name,
-                    model_override=self._get_tier2_model()
-                )
-            except Exception as e:
-                log_error(f"🚨 [{context_name}] AI 에러: {e}")
-                return f"⚠️ AI 실시간 분석 생성 중 에러 발생: {e}"
+        return self._generate_realtime_report_payload(
+            stock_name=stock_name,
+            stock_code=stock_code,
+            input_data_text=input_data_text,
+            analysis_mode=analysis_mode,
+        )["report"]
     
     def extract_realtime_gatekeeper_action(self, report_text):
         """실시간 리포트 본문에서 최종 행동 라벨을 추출합니다."""
@@ -1820,18 +1895,24 @@ class GeminiSniperEngine:
         if cached_gatekeeper is not None:
             return cached_gatekeeper
 
-        report = self.generate_realtime_report(
+        report_payload = self._generate_realtime_report_payload(
             stock_name=stock_name,
             stock_code=stock_code,
             input_data_text=realtime_ctx,
             analysis_mode=analysis_mode,
         )
+        report = report_payload["report"]
         action_label = self.extract_realtime_gatekeeper_action(report)
         allow_entry = action_label == "즉시 매수"
         result = {
             "allow_entry": allow_entry,
             "action_label": action_label,
             "report": report,
+            "selected_mode": report_payload.get("selected_mode", ""),
+            "lock_wait_ms": int(report_payload.get("lock_wait_ms", 0) or 0),
+            "packet_build_ms": int(report_payload.get("packet_build_ms", 0) or 0),
+            "model_call_ms": int(report_payload.get("model_call_ms", 0) or 0),
+            "total_internal_ms": int(report_payload.get("total_ms", 0) or 0),
             "cache_hit": False,
             "cache_mode": "miss",
         }

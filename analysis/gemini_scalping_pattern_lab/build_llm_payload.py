@@ -1,66 +1,139 @@
-import os
 import json
-import csv
-import config
+import os
+import sys
+from datetime import datetime
+from pathlib import Path
 
-def build_llm_payload():
-    # Load funnel facts
-    funnel_facts = []
-    if os.path.exists(config.OUTPUT_DIR / 'funnel_fact.csv'):
-        with open(config.OUTPUT_DIR / 'funnel_fact.csv', 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            funnel_facts = list(reader)
-            
-    # Load pattern stats
-    pattern_stats = {}
-    if os.path.exists(config.OUTPUT_DIR / 'pattern_stats.json'):
-        with open(config.OUTPUT_DIR / 'pattern_stats.json', 'r', encoding='utf-8') as f:
-            pattern_stats = json.load(f)
-            
-    # Build summary
-    summary_payload = {
-        'analysis_period': {
-            'start_date': config.START_DATE,
-            'end_date': config.END_DATE
+import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+
+import config
+from tuning_observability_summary import write_tuning_observability_outputs
+
+
+def _load_json(name: str) -> dict:
+    path = config.OUTPUT_DIR / name
+    if not path.exists():
+        return {}
+    with open(path, "r", encoding="utf-8") as handle:
+        return json.load(handle)
+
+
+def _load_csv(name: str) -> pd.DataFrame:
+    path = config.OUTPUT_DIR / name
+    if not path.exists():
+        return pd.DataFrame()
+    return pd.read_csv(path, encoding="utf-8", low_memory=False)
+
+
+def build_summary_payload(ev_result: dict, trade_df: pd.DataFrame) -> dict:
+    if not trade_df.empty:
+        valid_mask = trade_df["profit_valid_flag"].astype(str).str.lower().isin(["true", "1"])
+        valid_trades = trade_df[valid_mask].copy()
+    else:
+        valid_trades = pd.DataFrame()
+
+    daily_stats = []
+    if not valid_trades.empty and "rec_date" in valid_trades.columns:
+        for rec_date, group in valid_trades.groupby("rec_date"):
+            daily_stats.append(
+                {
+                    "date": str(rec_date),
+                    "n_trades": int(len(group)),
+                    "win_rate": round((group["profit_rate"].astype(float) > 0).mean() * 100, 1),
+                    "median_profit": round(float(group["profit_rate"].astype(float).median()), 3),
+                    "sum_profit": round(float(group["profit_rate"].astype(float).sum()), 3),
+                }
+            )
+
+    observability = write_tuning_observability_outputs(
+        output_dir=config.OUTPUT_DIR,
+        target_date=config.END_DATE,
+        analysis_start=config.START_DATE,
+        analysis_end=config.END_DATE,
+    )
+
+    return {
+        "meta": {
+            "analysis_period": f"{config.START_DATE} ~ {config.END_DATE}",
+            "generated_at": datetime.now().isoformat(),
+            "total_valid_trades": int(len(valid_trades)),
+            "cohorts": ["full_fill", "partial_fill", "split-entry"],
         },
-        'funnel_summary': funnel_facts,
-        'patterns': pattern_stats
+        "tuning_observability": observability,
+        "cohort_summary": ev_result.get("cohort_summary", []),
+        "loss_patterns": ev_result.get("loss_patterns", []),
+        "profit_patterns": ev_result.get("profit_patterns", []),
+        "opportunity_cost": ev_result.get("opportunity_cost", []),
+        "ev_backlog_titles": [row["title"] for row in ev_result.get("ev_backlog", [])],
+        "daily_stats": daily_stats,
     }
-    
-    with open(config.OUTPUT_DIR / 'llm_payload_summary.json', 'w', encoding='utf-8') as f:
-        json.dump(summary_payload, f, indent=2, ensure_ascii=False)
-        
-    # Build cases
-    cases_payload = []
-    if os.path.exists(config.OUTPUT_DIR / 'trade_fact.csv') and os.path.exists(config.OUTPUT_DIR / 'sequence_fact.csv'):
-        # load sequences
-        seq_map = {}
-        with open(config.OUTPUT_DIR / 'sequence_fact.csv', 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                seq_map[row['trade_id']] = row
-                
-        # select a few top/bottom trades as cases
-        with open(config.OUTPUT_DIR / 'trade_fact.csv', 'r', encoding='utf-8') as f:
-            reader = csv.DictReader(f)
-            trades = [row for row in reader if row['profit_valid_flag'] == 'true']
-            
-        for t in trades:
-            t['profit_rate'] = float(t['profit_rate'])
-        trades.sort(key=lambda x: x['profit_rate'])
-        
-        # Bottom 5, Top 5
-        representative_trades = trades[:5] + trades[-5:]
-        for t in representative_trades:
-            case = t.copy()
-            if t['trade_id'] in seq_map:
-                case['sequence'] = seq_map[t['trade_id']]
-            cases_payload.append(case)
-            
-    with open(config.OUTPUT_DIR / 'llm_payload_cases.json', 'w', encoding='utf-8') as f:
-        json.dump(cases_payload, f, indent=2, ensure_ascii=False)
-        
+
+
+def build_cases_payload(trade_df: pd.DataFrame, seq_df: pd.DataFrame) -> dict:
+    cases = {
+        "loss_split_entry": [],
+        "loss_full_fill": [],
+        "profit_split_entry": [],
+        "profit_full_fill": [],
+        "profit_partial_fill": [],
+    }
+    if trade_df.empty:
+        return cases
+
+    valid_mask = trade_df["profit_valid_flag"].astype(str).str.lower().isin(["true", "1"])
+    valid_trades = trade_df[valid_mask].copy()
+    if valid_trades.empty:
+        return cases
+
+    if not seq_df.empty:
+        join_cols = [
+            "trade_id",
+            "partial_then_expand_flag",
+            "multi_rebase_flag",
+            "rebase_integrity_flag",
+            "same_symbol_repeat_flag",
+            "same_ts_multi_rebase_flag",
+            "rebase_count",
+        ]
+        seq_view = seq_df[[col for col in join_cols if col in seq_df.columns]].drop_duplicates("trade_id")
+        valid_trades = valid_trades.merge(seq_view, on="trade_id", how="left")
+
+    valid_trades["profit_rate"] = pd.to_numeric(valid_trades["profit_rate"], errors="coerce")
+    loss_df = valid_trades[valid_trades["profit_rate"] <= 0].sort_values("profit_rate")
+    profit_df = valid_trades[valid_trades["profit_rate"] > 0].sort_values("profit_rate", ascending=False)
+
+    def _serialize(group: pd.DataFrame) -> list[dict]:
+        rows = []
+        for _, row in group.iterrows():
+            item = row.to_dict()
+            rows.append(item)
+        return rows
+
+    cases["loss_split_entry"] = _serialize(loss_df[loss_df["cohort"] == "split-entry"].head(5))
+    cases["loss_full_fill"] = _serialize(loss_df[loss_df["cohort"] == "full_fill"].head(5))
+    cases["profit_split_entry"] = _serialize(profit_df[profit_df["cohort"] == "split-entry"].head(5))
+    cases["profit_full_fill"] = _serialize(profit_df[profit_df["cohort"] == "full_fill"].head(5))
+    cases["profit_partial_fill"] = _serialize(profit_df[profit_df["cohort"] == "partial_fill"].head(5))
+    return cases
+
+
+def build_llm_payload() -> None:
+    ev_result = _load_json("ev_analysis_result.json")
+    trade_df = _load_csv("trade_fact.csv")
+    seq_df = _load_csv("sequence_fact.csv")
+
+    summary_payload = build_summary_payload(ev_result, trade_df)
+    with open(config.OUTPUT_DIR / "llm_payload_summary.json", "w", encoding="utf-8") as handle:
+        json.dump(summary_payload, handle, indent=2, ensure_ascii=False)
+
+    cases_payload = build_cases_payload(trade_df, seq_df)
+    with open(config.OUTPUT_DIR / "llm_payload_cases.json", "w", encoding="utf-8") as handle:
+        json.dump(cases_payload, handle, indent=2, ensure_ascii=False)
+
     print("LLM payload built successfully.")
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     build_llm_payload()

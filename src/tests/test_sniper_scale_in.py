@@ -228,7 +228,17 @@ def test_update_db_for_add_does_not_touch_detached_record_after_commit(monkeypat
 def test_execute_scale_in_order_failure_no_pending(monkeypatch):
     state_handlers.KIWOOM_TOKEN = "test"
 
-    monkeypatch.setattr(state_handlers, "calc_scale_in_qty", lambda *args, **kwargs: 1)
+    monkeypatch.setattr(
+        state_handlers,
+        "describe_scale_in_qty",
+        lambda *args, **kwargs: {
+            "qty": 1,
+            "template_qty": 1,
+            "cap_qty": 1,
+            "remaining_budget": 10000,
+            "floor_applied": False,
+        },
+    )
     monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 100000)
     monkeypatch.setattr(state_handlers.kiwoom_orders, "send_buy_order", lambda *args, **kwargs: None)
 
@@ -282,6 +292,56 @@ def test_calc_scale_in_qty_scalping_non_reversal_keeps_default_ratio():
             add_reason="avg_down_ok",
         )
         assert qty == 5
+    finally:
+        scale_in.TRADING_RULES = original
+
+
+def test_describe_scale_in_qty_stage1_keeps_flag_off_by_default():
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(
+        CONFIG,
+        MAX_POSITION_PCT=1.0,
+        SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED=False,
+    )
+    try:
+        details = scale_in.describe_scale_in_qty(
+            stock={"buy_qty": 1},
+            curr_price=10000,
+            deposit=10_000_000,
+            add_type="PYRAMID",
+            strategy="SCALPING",
+        )
+        assert details["qty"] == 0
+        assert details["template_qty"] == 0
+        assert details["cap_qty"] >= 1
+        assert details["floor_applied"] is False
+    finally:
+        scale_in.TRADING_RULES = original
+
+
+def test_describe_scale_in_qty_stage1_applies_one_share_floor_when_enabled():
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(
+        CONFIG,
+        MAX_POSITION_PCT=1.0,
+        SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED=True,
+    )
+    try:
+        details = scale_in.describe_scale_in_qty(
+            stock={"buy_qty": 1},
+            curr_price=10000,
+            deposit=10_000_000,
+            add_type="PYRAMID",
+            strategy="SCALPING",
+        )
+        assert details["qty"] == 1
+        assert details["template_qty"] == 1
+        assert details["cap_qty"] >= 1
+        assert details["floor_applied"] is True
     finally:
         scale_in.TRADING_RULES = original
 
@@ -781,6 +841,94 @@ def test_publish_entry_mode_summary_formats_fallback_message(monkeypatch):
     assert "신호가 `12,150원` / 현재가 `12,150원`" in payload["message"]
     assert "탐색 주문: 1주 / 12,200원 / 즉시체결 우선" in payload["message"]
     assert "본 주문: 44주 / 12,130원 / 장중 유지" in payload["message"]
+
+
+def test_publish_buy_signal_submission_notice_enqueues_once(monkeypatch):
+    published = []
+    pipeline_stages = []
+
+    class DummyEventBus:
+        def publish(self, topic, payload):
+            published.append((topic, payload))
+
+    monkeypatch.setattr(state_handlers, "EVENT_BUS", DummyEventBus())
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda _stock, _code, stage, **_fields: pipeline_stages.append(stage),
+    )
+
+    stock = {
+        "id": 1,
+        "name": "덕산하이메탈",
+        "entry_bundle_id": "077360-test-bundle",
+        "entry_dynamic_reason": "strong_absolute_override",
+        "msg_audience": "ADMIN_ONLY",
+    }
+    latency_gate = {"latency_state": "SAFE", "decision": "ALLOW_NORMAL"}
+
+    state_handlers._publish_buy_signal_submission_notice(
+        stock,
+        "077360",
+        strategy="SCALPING",
+        curr_price=16720,
+        requested_qty=68,
+        entry_mode="normal",
+        latency_gate=latency_gate,
+    )
+    state_handlers._publish_buy_signal_submission_notice(
+        stock,
+        "077360",
+        strategy="SCALPING",
+        curr_price=16720,
+        requested_qty=68,
+        entry_mode="normal",
+        latency_gate=latency_gate,
+    )
+
+    assert len(published) == 1
+    topic, payload = published[0]
+    assert topic == "TELEGRAM_BROADCAST"
+    assert payload["audience"] == "ADMIN_ONLY"
+    assert payload["parse_mode"] == "Markdown"
+    assert "BUY 신호/주문 제출" in payload["message"]
+    assert "덕산하이메탈 (077360)" in payload["message"]
+    assert "strong_absolute_override" in payload["message"]
+    assert pipeline_stages == ["buy_signal_telegram_enqueued"]
+
+
+def test_publish_buy_signal_submission_notice_uses_vip_liquidity_gate(monkeypatch):
+    published = []
+
+    class DummyEventBus:
+        def publish(self, topic, payload):
+            published.append((topic, payload))
+
+    monkeypatch.setattr(state_handlers, "EVENT_BUS", DummyEventBus())
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda _stock, _code, _stage, **_fields: None,
+    )
+
+    state_handlers._publish_buy_signal_submission_notice(
+        {
+            "id": 1,
+            "name": "유동성충족",
+            "entry_bundle_id": "vip-bundle",
+            "entry_dynamic_reason": "strong_absolute_override",
+        },
+        "111111",
+        strategy="SCALPING",
+        curr_price=10000,
+        requested_qty=10,
+        entry_mode="normal",
+        latency_gate={"latency_state": "SAFE", "decision": "ALLOW_NORMAL"},
+        liquidity_value=1_500_000_000,
+        ai_score=95,
+    )
+
+    assert published[0][1]["audience"] == "VIP_ALL"
 
 
 def test_execution_receipt_accumulates_fallback_bundle_fills(monkeypatch):
