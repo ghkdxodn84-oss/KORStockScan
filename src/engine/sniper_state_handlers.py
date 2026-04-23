@@ -560,6 +560,40 @@ def _apply_fallback_qty_canary(
     return updated_orders, original_total, scaled_total
 
 
+def _apply_initial_entry_qty_cap(
+    planned_orders: list[dict],
+    *,
+    max_total_qty: int,
+) -> tuple[list[dict], int, int, bool]:
+    if not planned_orders:
+        return [], 0, 0, False
+
+    qty_cap = max(1, int(max_total_qty or 1))
+    updated_orders: list[dict] = []
+    original_total = 0
+    scaled_total = 0
+    remaining_qty = qty_cap
+
+    for order in planned_orders:
+        item = dict(order or {})
+        qty = max(0, int(item.get("qty") or 0))
+        original_total += qty
+
+        if qty <= 0 or remaining_qty <= 0:
+            item["qty"] = 0
+            updated_orders.append(item)
+            continue
+
+        scaled_qty = min(qty, remaining_qty)
+        item["qty"] = scaled_qty
+        scaled_total += scaled_qty
+        remaining_qty -= scaled_qty
+        updated_orders.append(item)
+
+    applied = scaled_total != original_total
+    return updated_orders, original_total, scaled_total, applied
+
+
 def _apply_wait6579_probe_canary(
     planned_orders: list[dict],
     *,
@@ -3063,6 +3097,40 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                     f"[FALLBACK_QTY_CANARY] {stock.get('name')}({code}) "
                     f"multiplier={max(0.1, min(1.0, fallback_qty_multiplier)):.2f} "
                     f"qty={original_qty}->{scaled_qty}"
+                )
+
+        if strategy == "SCALPING" and bool(
+            getattr(TRADING_RULES, "SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED", False)
+        ):
+            initial_entry_qty_cap = int(
+                getattr(TRADING_RULES, "SCALPING_INITIAL_ENTRY_MAX_QTY", 1) or 1
+            )
+            adjusted_orders, original_qty, scaled_qty, applied = _apply_initial_entry_qty_cap(
+                planned_orders,
+                max_total_qty=initial_entry_qty_cap,
+            )
+            if adjusted_orders:
+                planned_orders = adjusted_orders
+                latency_gate["orders"] = planned_orders
+            if scaled_qty > 0:
+                requested_qty = scaled_qty
+            _log_entry_pipeline(
+                stock,
+                code,
+                "initial_entry_qty_cap_applied",
+                enabled=True,
+                cap_qty=initial_entry_qty_cap,
+                original_qty=original_qty,
+                scaled_qty=scaled_qty,
+                applied=bool(applied),
+                entry_mode=entry_mode,
+                legs=len(planned_orders),
+            )
+            if applied:
+                log_info(
+                    f"[INITIAL_ENTRY_QTY_CAP] {stock.get('name')}({code}) "
+                    f"qty={original_qty}->{scaled_qty} cap={initial_entry_qty_cap} "
+                    f"entry_mode={entry_mode}"
                 )
 
         _log_entry_pipeline(

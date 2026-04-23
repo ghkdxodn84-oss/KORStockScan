@@ -10,6 +10,7 @@ import src.engine.sniper_sync as sniper_sync
 import src.engine.trade_pause_control as trade_pause_control
 import src.utils.runtime_flags as runtime_flags
 from src.engine import kiwoom_orders
+from src.utils.constants import TRADING_RULES as CONFIG
 
 
 class _DummySession:
@@ -88,6 +89,11 @@ def test_describe_buy_capacity_respects_absolute_budget_cap():
     assert safe_budget == 1900000
     assert qty == 19
     assert used_ratio == 0.95
+
+
+def test_scalping_initial_entry_qty_cap_config_defaults_to_one_share():
+    assert CONFIG.SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED is True
+    assert CONFIG.SCALPING_INITIAL_ENTRY_MAX_QTY == 1
 
 
 def test_add_count_increment_once_on_partial_fills(monkeypatch):

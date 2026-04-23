@@ -6,6 +6,7 @@
 - 주간 판정에는 regime 태그와 조건부 유효범위를 함께 남긴다.
 - 오전 `10:00 KST`까지의 주병목 검증축은 `spread relief canary` 실효성 확인으로 고정한다.
 - `PYRAMID zero_qty Stage 1`은 `SCALPING/PYRAMID bugfix-only` 범위의 `flag OFF` 증적을 먼저 확인하고, 승인 시에도 `main-only 1축 canary`로만 해석한다.
+- 스캘핑 신규 BUY는 임시 `1주 cap` 상태로 유지하고, `PYRAMID`는 계속 허용하되 `initial-only`와 `pyramid-activated` 표본을 섞지 않고 판정한다.
 
 ## 오늘 강제 규칙
 
@@ -53,6 +54,9 @@
 
 - [ ] `[PlanRebase0424] entry_filter_quality parking 재확인` (`Due: 2026-04-24`, `Slot: POSTCLOSE`, `TimeWindow: 15:40~15:50`, `Track: ScalpingLogic`)
 - 판정 기준: `spread relief canary`가 여전히 주병목이면 `entry_filter_quality`는 주병목 축이 아니라 parking 상태로 유지하고, 제출축이 완화됐을 때만 후보 복귀 여부를 판단한다.
+- [ ] `[InitialQtyCap0424] 스캘핑 신규 BUY 1주 cap 유지/해제 판정` (`Due: 2026-04-24`, `Slot: POSTCLOSE`, `TimeWindow: 15:45~15:55`, `Track: ScalpingLogic`)
+  - 판정 기준: `initial-only`와 `pyramid-activated` 표본을 분리한 뒤 `submitted/full/partial`, `soft_stop/trailing/good_exit`, `COMPLETED + valid profit_rate`를 함께 보고 `유지/완화/해제` 중 하나로 닫는다. `soft_stop`만 단독 기준으로 쓰지 않고 holding/exit 전체 판정 안에서 본다.
+  - why 기준: 이 cap은 prompt 재교정 직후 초기 진입 손실 tail을 잠그는 임시 운영가드다. 해제 판단도 `holding/exit` 전체 흐름 안에서 해야 하며, `PYRAMID` 결과와 섞이면 원인귀속이 깨진다.
 - [ ] `[OpsEODSplit0424] EOD/NXT 착수 여부 재판정` (`Due: 2026-04-24`, `Slot: POSTCLOSE`, `TimeWindow: 15:40~15:50`, `Track: ScalpingLogic`)
   - Source: [audit-reports/2026-04-22-plan-rebase-central-audit-review.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-22-plan-rebase-central-audit-review.md)
 - 판정 기준: `spread relief canary`가 주병목으로 남아 있으면 출구축으로 승격하지 않고 parking 또는 다음주 이관으로만 닫는다. 착수 시에만 `exit_rule`, `sell_order_status`, `sell_fail_reason`, `is_nxt`, `COMPLETED+valid profit_rate`, full/partial 분리 기준을 함께 기록한다.

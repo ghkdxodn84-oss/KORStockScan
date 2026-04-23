@@ -78,6 +78,8 @@ class TradingConfig:
     INVEST_RATIO_SCALPING_MIN: float = 0.07  # 2026-04-20 risk cut: 스캘핑 최소 투자 비율 (10% -> 7%)
     INVEST_RATIO_SCALPING_MAX: float = 0.22  # 2026-04-20 risk cut: 스캘핑 최대 투자 비율 (30% -> 22%)
     SCALPING_MAX_BUY_BUDGET_KRW: int = 1_200_000  # 2026-04-20 risk cut: 스캘핑 신규 진입 1회 절대 투자금 상한 (1,600,000 -> 1,200,000)
+    SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED: bool = True  # 임시 운영가드: 신규 BUY 접수 수량 상한 적용
+    SCALPING_INITIAL_ENTRY_MAX_QTY: int = 1  # 임시 운영가드 기본값: 신규 BUY는 1주까지 허용
 
     # 💡 [신규 추가] 스윙 AI 동적 비중 조절용 (Min~Max)
     INVEST_RATIO_KOSDAQ_MIN: float = 0.05  # 코스닥 AI 점수 60점일 때 (5%)
@@ -605,6 +607,12 @@ def _build_trading_rules() -> TradingConfig:
     env_scalp_ai_exit_avgdown_enabled = _env_bool("KORSTOCKSCAN_SCALP_AI_EXIT_AVGDOWN_ENABLED")
     env_scalping_enable_avg_down = _env_bool("KORSTOCKSCAN_SCALPING_ENABLE_AVG_DOWN")
     env_scalping_max_avg_down_count = _env_int("KORSTOCKSCAN_SCALPING_MAX_AVG_DOWN_COUNT")
+    env_scalping_initial_entry_qty_cap_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED"
+    )
+    env_scalping_initial_entry_max_qty = _env_int(
+        "KORSTOCKSCAN_SCALPING_INITIAL_ENTRY_MAX_QTY"
+    )
     env_scalping_pyramid_zero_qty_stage1_enabled = _env_bool(
         "KORSTOCKSCAN_SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED"
     )
@@ -612,6 +620,8 @@ def _build_trading_rules() -> TradingConfig:
         env_scalp_ai_exit_avgdown_enabled is not None
         or env_scalping_enable_avg_down is not None
         or env_scalping_max_avg_down_count is not None
+        or env_scalping_initial_entry_qty_cap_enabled is not None
+        or env_scalping_initial_entry_max_qty is not None
         or env_scalping_pyramid_zero_qty_stage1_enabled is not None
     ):
         config = replace(
@@ -625,6 +635,12 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_MAX_AVG_DOWN_COUNT=env_scalping_max_avg_down_count
             if env_scalping_max_avg_down_count is not None
             else config.SCALPING_MAX_AVG_DOWN_COUNT,
+            SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED=env_scalping_initial_entry_qty_cap_enabled
+            if env_scalping_initial_entry_qty_cap_enabled is not None
+            else config.SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED,
+            SCALPING_INITIAL_ENTRY_MAX_QTY=env_scalping_initial_entry_max_qty
+            if env_scalping_initial_entry_max_qty is not None
+            else config.SCALPING_INITIAL_ENTRY_MAX_QTY,
             SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED=env_scalping_pyramid_zero_qty_stage1_enabled
             if env_scalping_pyramid_zero_qty_stage1_enabled is not None
             else config.SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED,

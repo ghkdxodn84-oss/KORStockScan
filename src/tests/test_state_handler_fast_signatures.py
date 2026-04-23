@@ -1,6 +1,7 @@
 from dataclasses import replace
 
 from src.engine.sniper_state_handlers import (
+    _apply_initial_entry_qty_cap,
     _apply_wait6579_probe_canary,
     _build_ai_overlap_log_fields,
     _build_ai_ops_log_fields,
@@ -278,3 +279,21 @@ def test_apply_wait6579_probe_canary_caps_qty_and_budget():
     assert scaled == 1
     assert applied is True
     assert adjusted[0]["qty"] == 1
+
+
+def test_apply_initial_entry_qty_cap_limits_total_qty_without_reordering():
+    orders = [
+        {"tag": "normal", "qty": 2, "price": 10100, "order_type": "00", "tif": "DAY"},
+        {"tag": "normal", "qty": 3, "price": 10110, "order_type": "00", "tif": "DAY"},
+    ]
+
+    adjusted, original, scaled, applied = _apply_initial_entry_qty_cap(
+        orders,
+        max_total_qty=1,
+    )
+
+    assert original == 5
+    assert scaled == 1
+    assert applied is True
+    assert adjusted[0]["qty"] == 1
+    assert adjusted[1]["qty"] == 0
