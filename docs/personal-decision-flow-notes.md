@@ -70,6 +70,20 @@
 - 왜 중요하나: BUY 회복이 안 보일 때 `gatekeeper_fast_reuse` 비중이 높으면 실제 병목이 모델 호출 지연이 아니라 `같은 장면 재사용`, `score boundary`, `ws freshness`, `signature 변화` 쪽일 수 있다.
 - 이후 튜닝 메모는 이 섹션 아래에 `append`하면서 제출 전 blocker와 체결 품질 해석을 더 세분화한다.
 
+### AI 프롬프트 라벨 정합성 (`shared`만)
+
+- `shared`는 현재 실전 런타임에서 독립적으로 엔진을 바꾸는 “보조 라벨”이 아니다.  
+- `shared`는 **원칙적으로 `watching`/`holding`/`exit` 외의 입력에서 기본 폴백**으로만 나온다.  
+- 실무상 공유점:
+  - `prompt_profile="watching"` → `prompt_type=scalping_entry`
+  - `prompt_profile="holding"` → `prompt_type=scalping_holding`
+  - `prompt_profile="exit"` → `prompt_type=scalping_exit`
+  - 위 3개 외(`prompt_profile` 미지정/기본값 포함) → `prompt_type=scalping_shared`
+- `scalping_shared`가 **실제 판단 호출 기록이라기보다 입력 프로파일 미지정/기본 분기 흔적**으로 해석한다.
+- 혼선을 없애는 규칙:
+  - `scalping_watch_cooldown_blocked`는 `AI_WATCHING_COOLDOWN` 구간에서 **실제 호출 없이 보류만 기록**한 상태.
+  - `scalping_shared`와 `watching_cooldown` 조합이면, 기본 분기 또는 폴백 성격으로 보는 것이 맞다.
+
 ## ID 명명 규칙
 
 | 항목 | 규칙 |

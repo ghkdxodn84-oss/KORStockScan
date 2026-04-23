@@ -2445,6 +2445,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                     stock['big_bite_boost_value'] = 0
 
                 if ai_engine and is_vip_target and last_ai_time > 0 and time_elapsed <= AI_WATCHING_COOLDOWN:
+                    # 쿨다운 구간은 실제 AI 호출이 아닌 보류 판단 상태이므로, shared와 구분되는 라벨로 기록.
                     _log_entry_pipeline(
                         stock,
                         code,
@@ -2457,7 +2458,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                                 "ai_parse_fail": False,
                                 "ai_fallback_score_50": False,
                                 "ai_response_ms": 0,
-                                "ai_prompt_type": "scalping_shared",
+                                "ai_prompt_type": "scalping_watch_cooldown_blocked",
                                 "ai_result_source": "watching_cooldown",
                             },
                             ai_score_raw=current_ai_score,
