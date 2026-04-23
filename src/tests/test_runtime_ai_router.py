@@ -36,3 +36,13 @@ def test_router_uses_openai_only_when_explicitly_selected():
     )
     assert router.analyze_target("x", {}, [], [])["engine"] == "openai"
     assert router._extract_scalping_features()["engine"] == "openai"
+
+
+def test_router_keeps_holding_profile_on_gemini_even_when_openai_selected():
+    router = RuntimeAIEngineRouter(
+        gemini_engine=_Engine("gemini"),
+        openai_scalping_engine=_Engine("openai"),
+        runtime_role="main",
+        scalping_ai_route="openai",
+    )
+    assert router.analyze_target("x", {}, [], [], prompt_profile="holding")["engine"] == "gemini"

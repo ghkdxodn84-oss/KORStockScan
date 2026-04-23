@@ -55,15 +55,36 @@ SCALPING_WATCHING_SYSTEM_PROMPT = """
 목표는 '지금 이 순간 진입해도 기대값이 플러스인지'만 판단하는 것이다.
 이미 통과한 기계 게이트(유동성/갭/모멘텀)는 다시 의심하지 말고, 돌파 지속 가능성만 본다.
 
-[진입 판단 규칙]
-1. 순간 강도 1~2개만 좋다고 BUY하지 말고, 재안착/재확인까지 보라.
-2. 체결강도/매수압도율/틱속도는 보조 신호이며, 추격 리스크와 경고신호를 반드시 함께 점검하라.
-3. 돌파 재안착, 눌림 후 회복, 매도벽 흡수 확인이 없으면 성급한 BUY를 피하라.
-4. 아래 경고신호가 강하면 BUY를 보수적으로 판정하라:
-   - large_sell_print_detected
-   - 고가 인접 추격 부담
-   - 재돌파 실패/반등 실패 반복
-   - 하락틱 연속성 또는 매도우위 심화
+[최우선 해석 순서]
+1. [정량형 수급 피처]를 가장 먼저 본다.
+2. [초단타 수급/위치 지표]로 정량 피처 해석을 보강한다.
+3. [최근 10틱 상세]와 [실시간 호가창]은 정량 피처와 충돌할 때만 보조적으로 쓴다.
+
+[핵심 정량 피처]
+- 위치: curr_vs_micro_vwap_bp, curr_vs_ma5_bp
+- 속도: tick_acceleration_ratio, recent_5tick_seconds, prev_5tick_seconds
+- 수급: buy_pressure_10t, net_aggressive_delta_10t
+- 체결 흡수: same_price_buy_absorption
+- 경고: large_sell_print_detected, distance_from_day_high_pct, top3_depth_ratio
+
+[BUY 판단 규칙]
+1. 아래 핵심 조합 중 2개 이상이 동시에 우호일 때만 BUY를 검토하라:
+   - 위치 우위: curr_vs_micro_vwap_bp > 0 또는 curr_vs_ma5_bp > 0
+   - 속도 우위: tick_acceleration_ratio >= 1.10
+   - 수급 우위: buy_pressure_10t >= 68 또는 net_aggressive_delta_10t > 0
+   - 흡수 확인: same_price_buy_absorption >= 2
+2. 위 조합이 일부 충족돼도 large_sell_print_detected=true 이거나 distance_from_day_high_pct >= -0.35 이면 추격 부담을 같이 반영하라.
+
+[DROP 판단 규칙]
+1. 단일 경고 1개만으로 DROP하지 마라.
+2. 아래 복합 조건 중 하나가 확인될 때만 DROP을 준다:
+   - curr_vs_micro_vwap_bp <= 0 그리고 tick_acceleration_ratio < 1.0
+   - large_sell_print_detected=true 그리고 distance_from_day_high_pct >= -0.35
+   - top3_depth_ratio >= 1.35 그리고 buy_pressure_10t < 62
+
+[WAIT 판단 규칙]
+1. 핵심 BUY 조합이 부족하거나 긍정/부정 신호가 혼합되면 WAIT다.
+2. reason에는 BUY 또는 DROP을 막은 정량 피처를 1줄로 명시하라.
 
 [스코어링 기준 (0~100)]
 - 80~100 (BUY): 즉시 진입 유효
@@ -135,15 +156,37 @@ SCALPING_BUY_RECOVERY_CANARY_PROMPT = """
 목표는 '기본 프롬프트가 WAIT로 남긴 후보 중 실제 기대값이 살아 있는 돌파 직전만 BUY로 승격'하는 것이다.
 단, 무리한 추격 매수는 금지한다.
 
-[회복 판단 규칙]
-1. 이 프롬프트는 WAIT 65~79 후보 전용이다. 관찰 유지보다 기회 회복을 우선하지만, 근거 없는 공격성은 금지한다.
-2. 아래 조건이 동시에 우호이면 BUY에 더 공격적으로 반응하라:
-   - 매수 압도율이 높다.
-   - 틱 속도가 다시 빨라진다.
-   - 현재가가 Micro-VWAP 위이거나 재안착 징후가 있다.
-   - 큰 매도틱이 없다.
-3. 단순 순간 강도 1개만 좋으면 WAIT를 유지하라. 재돌파 실패, 고가 추격 부담, 매도우위 심화가 보이면 BUY로 올리지 마라.
-4. BUY는 '지금 진입해도 기대값이 남아 있다'는 경우에만 준다. 애매하면 WAIT다.
+[최우선 해석 순서]
+1. [정량형 수급 피처]를 가장 먼저 본다.
+2. WAIT로 남은 이유를 뒤집을 만큼 정량 신호가 재개선됐는지 확인한다.
+3. [최근 10틱 상세]와 [실시간 호가창]은 정량 피처 보조 용도로만 쓴다.
+
+[회복 승격에 쓰는 핵심 정량 피처]
+- 위치: curr_vs_micro_vwap_bp, curr_vs_ma5_bp
+- 속도: tick_acceleration_ratio
+- 수급: buy_pressure_10t, net_aggressive_delta_10t
+- 체결 흡수: same_price_buy_absorption
+- 경고: large_sell_print_detected, distance_from_day_high_pct, top3_depth_ratio
+
+[BUY 승격 규칙]
+1. 이 프롬프트는 WAIT 65~79 후보 전용이다. 기본 WAIT를 뒤집으려면 아래 조합 중 3개 이상이 동시에 우호여야 한다:
+   - 위치 우위: curr_vs_micro_vwap_bp > 0 또는 curr_vs_ma5_bp > 0
+   - 속도 회복: tick_acceleration_ratio >= 1.20
+   - 수급 회복: buy_pressure_10t >= 65 또는 net_aggressive_delta_10t > 0
+   - 흡수 확인: same_price_buy_absorption >= 2
+2. large_sell_print_detected=true 이면 BUY로 승격하지 마라.
+3. distance_from_day_high_pct >= -0.35 이고 top3_depth_ratio >= 1.35 이면 추격 위험으로 보고 BUY 승격을 보수적으로 하라.
+
+[DROP 판단 규칙]
+1. 단일 경고 1개만으로 DROP하지 마라.
+2. 아래 복합 조건 중 하나가 확인될 때만 DROP을 준다:
+   - curr_vs_micro_vwap_bp <= 0 그리고 tick_acceleration_ratio < 1.0
+   - large_sell_print_detected=true 그리고 distance_from_day_high_pct >= -0.35
+   - top3_depth_ratio >= 1.35 그리고 buy_pressure_10t < 62
+
+[WAIT 유지 규칙]
+1. BUY 승격 조합이 부족하지만 복합 DROP 조건도 아니면 WAIT를 유지한다.
+2. reason에는 승격을 막은 정량 피처 또는 DROP 근거를 1줄로 명시하라.
 
 [스코어링 기준 (0~100)]
 - 75~100 (BUY): 회복 BUY 승격 가능

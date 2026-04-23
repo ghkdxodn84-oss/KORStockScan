@@ -80,6 +80,24 @@ class RuntimeAIEngineRouter:
     def _is_scalping_strategy(self, strategy: Any) -> bool:
         return str(strategy or "SCALPING").strip().upper() in {"SCALPING", "SCALP"}
 
+    def _supports_openai_scalping_profile(self, prompt_profile: Any) -> bool:
+        """
+        OpenAI scalping route is currently entry-oriented only.
+        Gemini owns holding/exit prompt/schema parity, so keep those profiles
+        on Gemini until OpenAI gets dedicated prompt + action-schema support.
+        """
+        profile = str(prompt_profile or "shared").strip().lower()
+        return profile in {"shared", "watching", "entry"}
+
+    def _should_use_openai_scalping(self, *, strategy: Any, prompt_profile: Any) -> bool:
+        return (
+            self.scalping_ai_route == "openai"
+            and self.runtime_role == "main"
+            and self.openai_scalping_engine is not None
+            and self._is_scalping_strategy(strategy)
+            and self._supports_openai_scalping_profile(prompt_profile)
+        )
+
     def analyze_target(
         self,
         target_name,
@@ -91,13 +109,7 @@ class RuntimeAIEngineRouter:
         cache_profile="default",
         prompt_profile="shared",
     ):
-        if (
-            self.scalping_ai_route == "openai"
-            and
-            self.runtime_role == "main"
-            and self.openai_scalping_engine is not None
-            and self._is_scalping_strategy(strategy)
-        ):
+        if self._should_use_openai_scalping(strategy=strategy, prompt_profile=prompt_profile):
             return self.openai_scalping_engine.analyze_target(
                 target_name,
                 ws_data,
