@@ -204,6 +204,132 @@ def _should_apply_latency_spread_relief_canary(
     return True, "spread_relief_canary_applied"
 
 
+def _should_apply_latency_ws_jitter_relief_canary(
+    *,
+    strategy_id: str,
+    position_tag: str,
+    signal_strength: float,
+    latency_status,
+    signal_price: int,
+    latest_price: int,
+    danger_reasons: list[str] | None = None,
+) -> tuple[bool, str]:
+    if not bool(getattr(TRADING_RULES, "SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED", False)):
+        return False, "disabled"
+    if str(strategy_id or "").upper() != "SCALPING":
+        return False, "non_scalping"
+    if getattr(latency_status, "quote_stale", False):
+        return False, "quote_stale"
+
+    normalized_reasons = _normalized_reason_set(danger_reasons or _latency_danger_reasons(latency_status))
+    if normalized_reasons != {"ws_jitter_too_high"}:
+        return False, "ws_jitter_only_required"
+
+    allow_tags = {
+        str(tag).strip().upper()
+        for tag in (getattr(TRADING_RULES, "SCALP_LATENCY_WS_JITTER_RELIEF_TAGS", ()) or ())
+        if str(tag).strip()
+    }
+    normalized_tag = str(position_tag or "").strip().upper()
+    if allow_tags and normalized_tag not in allow_tags:
+        return False, "tag_not_allowed"
+
+    min_signal = _to_float(getattr(TRADING_RULES, "SCALP_LATENCY_WS_JITTER_RELIEF_MIN_SIGNAL_SCORE", 85.0), 85.0)
+    signal_score = _normalize_signal_score(signal_strength)
+    if signal_score < min_signal:
+        return False, "low_signal"
+
+    max_ws_age_ms = int(getattr(TRADING_RULES, "SCALP_LATENCY_WS_JITTER_RELIEF_MAX_WS_AGE_MS", 450) or 450)
+    if int(getattr(latency_status, "ws_age_ms", 0) or 0) > max_ws_age_ms:
+        return False, "ws_age_limit_exceeded"
+
+    max_ws_jitter_ms = int(getattr(TRADING_RULES, "SCALP_LATENCY_WS_JITTER_RELIEF_MAX_WS_JITTER_MS", 360) or 360)
+    if int(getattr(latency_status, "ws_jitter_ms", 0) or 0) > max_ws_jitter_ms:
+        return False, "ws_jitter_relief_limit_exceeded"
+
+    max_spread_ratio = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_WS_JITTER_RELIEF_MAX_SPREAD_RATIO", 0.0050),
+        0.0050,
+    )
+    if _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0) > max_spread_ratio:
+        return False, "spread_limit_exceeded"
+
+    allowed_slippage = _ENTRY_POLICY._allowed_slippage(
+        signal_price=signal_price,
+        latest_price=latest_price,
+        tick_limit=_CONFIG.normal_allowed_slippage_ticks,
+        pct_limit=_CONFIG.normal_allowed_slippage_pct,
+    )
+    if not _ENTRY_POLICY._slippage_ok(signal_price, latest_price, allowed_slippage, "BUY"):
+        return False, "normal_slippage_exceeded"
+
+    return True, "ws_jitter_relief_canary_applied"
+
+
+def _should_apply_latency_other_danger_relief_canary(
+    *,
+    strategy_id: str,
+    position_tag: str,
+    signal_strength: float,
+    latency_status,
+    signal_price: int,
+    latest_price: int,
+    danger_reasons: list[str] | None = None,
+) -> tuple[bool, str]:
+    if not bool(getattr(TRADING_RULES, "SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED", False)):
+        return False, "disabled"
+    if str(strategy_id or "").upper() != "SCALPING":
+        return False, "non_scalping"
+    if getattr(latency_status, "quote_stale", False):
+        return False, "quote_stale"
+
+    normalized_reasons = _normalized_reason_set(danger_reasons or _latency_danger_reasons(latency_status))
+    if normalized_reasons != {"other_danger"}:
+        return False, "other_danger_only_required"
+
+    allow_tags = {
+        str(tag).strip().upper()
+        for tag in (getattr(TRADING_RULES, "SCALP_LATENCY_OTHER_DANGER_RELIEF_TAGS", ()) or ())
+        if str(tag).strip()
+    }
+    normalized_tag = str(position_tag or "").strip().upper()
+    if allow_tags and normalized_tag not in allow_tags:
+        return False, "tag_not_allowed"
+
+    min_signal = _to_float(getattr(TRADING_RULES, "SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_SIGNAL_SCORE", 90.0), 90.0)
+    signal_score = _normalize_signal_score(signal_strength)
+    if signal_score < min_signal:
+        return False, "low_signal"
+
+    max_ws_age_ms = int(getattr(TRADING_RULES, "SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_AGE_MS", 400) or 400)
+    if int(getattr(latency_status, "ws_age_ms", 0) or 0) > max_ws_age_ms:
+        return False, "ws_age_limit_exceeded"
+
+    max_ws_jitter_ms = int(
+        getattr(TRADING_RULES, "SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_JITTER_MS", 80) or 80
+    )
+    if int(getattr(latency_status, "ws_jitter_ms", 0) or 0) > max_ws_jitter_ms:
+        return False, "ws_jitter_limit_exceeded"
+
+    max_spread_ratio = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_SPREAD_RATIO", 0.0080),
+        0.0080,
+    )
+    if _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0) > max_spread_ratio:
+        return False, "spread_limit_exceeded"
+
+    allowed_slippage = _ENTRY_POLICY._allowed_slippage(
+        signal_price=signal_price,
+        latest_price=latest_price,
+        tick_limit=_CONFIG.normal_allowed_slippage_ticks,
+        pct_limit=_CONFIG.normal_allowed_slippage_pct,
+    )
+    if not _ENTRY_POLICY._slippage_ok(signal_price, latest_price, allowed_slippage, "BUY"):
+        return False, "normal_slippage_exceeded"
+
+    return True, "other_danger_relief_canary_applied"
+
+
 def freeze_signal_reference(
     stock: dict[str, Any],
     *,
@@ -319,6 +445,57 @@ def evaluate_live_buy_entry(
     latency_canary_reason = ""
     latency_danger_reasons = ",".join(_latency_danger_reasons(latency))
     if policy.decision == EntryDecision.REJECT_DANGER:
+        other_danger_relief_ok, other_danger_relief_reason = _should_apply_latency_other_danger_relief_canary(
+            strategy_id=strategy_id,
+            position_tag=str(stock.get("position_tag") or ""),
+            signal_strength=float(signal_strength or 0.0),
+            latency_status=latency,
+            signal_price=frozen_price,
+            latest_price=latest_price,
+            danger_reasons=latency_danger_reasons.split(","),
+        )
+        if other_danger_relief_ok:
+            latency_canary_applied = True
+            latency_canary_reason = other_danger_relief_reason
+            effective_decision = EntryDecision.ALLOW_NORMAL
+            effective_reason = "latency_other_danger_relief_normal_override"
+            log_info(
+                f"[LATENCY_OTHER_DANGER_RELIEF_CANARY] {stock.get('name')}({code}) "
+                f"tag={stock.get('position_tag')} signal_score={_normalize_signal_score(signal_strength):.1f} "
+                f"ws_age_ms={latency.ws_age_ms} ws_jitter_ms={latency.ws_jitter_ms} "
+                f"spread_ratio={latency.spread_ratio:.6f} "
+                f"danger_reasons={latency_danger_reasons}"
+            )
+        else:
+            latency_canary_reason = other_danger_relief_reason
+
+    if policy.decision == EntryDecision.REJECT_DANGER and effective_decision == EntryDecision.REJECT_DANGER:
+        ws_jitter_relief_ok, ws_jitter_relief_reason = _should_apply_latency_ws_jitter_relief_canary(
+            strategy_id=strategy_id,
+            position_tag=str(stock.get("position_tag") or ""),
+            signal_strength=float(signal_strength or 0.0),
+            latency_status=latency,
+            signal_price=frozen_price,
+            latest_price=latest_price,
+            danger_reasons=latency_danger_reasons.split(","),
+        )
+        if ws_jitter_relief_ok:
+            latency_canary_applied = True
+            latency_canary_reason = ws_jitter_relief_reason
+            effective_decision = EntryDecision.ALLOW_NORMAL
+            effective_reason = "latency_ws_jitter_relief_normal_override"
+            log_info(
+                f"[LATENCY_WS_JITTER_RELIEF_CANARY] {stock.get('name')}({code}) "
+                f"tag={stock.get('position_tag')} signal_score={_normalize_signal_score(signal_strength):.1f} "
+                f"ws_age_ms={latency.ws_age_ms} ws_jitter_ms={latency.ws_jitter_ms} "
+                f"spread_ratio={latency.spread_ratio:.6f} "
+                f"danger_reasons={latency_danger_reasons}"
+            )
+        else:
+            if not latency_canary_reason or latency_canary_reason == "disabled":
+                latency_canary_reason = ws_jitter_relief_reason
+
+    if policy.decision == EntryDecision.REJECT_DANGER and effective_decision == EntryDecision.REJECT_DANGER:
         spread_relief_ok, spread_relief_reason = _should_apply_latency_spread_relief_canary(
             strategy_id=strategy_id,
             position_tag=str(stock.get("position_tag") or ""),
@@ -341,7 +518,8 @@ def evaluate_live_buy_entry(
                 f"danger_reasons={latency_danger_reasons}"
             )
         else:
-            latency_canary_reason = spread_relief_reason
+            if not latency_canary_reason or latency_canary_reason == "disabled":
+                latency_canary_reason = spread_relief_reason
 
     if policy.decision == EntryDecision.REJECT_DANGER and effective_decision == EntryDecision.REJECT_DANGER:
         canary_ok, canary_reason = _should_apply_latency_guard_canary(

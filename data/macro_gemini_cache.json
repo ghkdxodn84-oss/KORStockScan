@@ -1,86 +1,86 @@
 {
-  "bundle_as_of": "2026-04-22T22:20:10Z",
+  "bundle_as_of": "2026-04-23T22:20:16Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7137.9,
-    "prev_value": 7064.01,
-    "change": 73.89,
-    "change_pct": 1.05,
-    "as_of": "2026-04-22T20:00:00Z",
+    "value": 7108.4,
+    "prev_value": 7137.9,
+    "change": -29.5,
+    "change_pct": -0.41,
+    "as_of": "2026-04-23T20:27:00Z",
     "source": "Morningstar / Dow Jones Market Data"
   },
   "nasdaq": {
     "name": "NASDAQ Composite",
-    "value": 24657.57,
-    "prev_value": 24259.97,
-    "change": 397.6,
-    "change_pct": 1.64,
-    "as_of": "2026-04-22T20:00:00Z",
+    "value": 24438.5,
+    "prev_value": 24657.56,
+    "change": -219.06,
+    "change_pct": -0.89,
+    "as_of": "2026-04-23T20:27:00Z",
     "source": "Morningstar / Dow Jones Market Data"
   },
   "vix": {
     "name": "VIX",
-    "value": 18.92,
-    "prev_value": 19.5,
-    "change": -0.58,
-    "change_pct": -2.97,
-    "as_of": "2026-04-22T20:15:00Z",
-    "source": "Cboe Global Markets"
+    "value": 19.14,
+    "prev_value": 18.92,
+    "change": 0.22,
+    "change_pct": 1.16,
+    "as_of": "2026-04-23T20:15:00Z",
+    "source": "Reddit Market Recap / CBOE"
   },
   "us10y": {
-    "name": "US 10Y Treasury Yield",
-    "value": 4.293,
-    "prev_value": 4.29,
-    "change": 0.003,
-    "change_pct": 0.07,
-    "as_of": "2026-04-22T20:25:00Z",
+    "name": "US 10-Year Treasury Yield",
+    "value": 4.323,
+    "prev_value": 4.293,
+    "change": 0.03,
+    "change_pct": 0.7,
+    "as_of": "2026-04-23T19:44:00Z",
     "source": "Morningstar / Tradeweb"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 98.48,
-    "prev_value": 95.48,
-    "change": 3.0,
-    "change_pct": 3.14,
-    "as_of": "2026-04-22T20:00:00Z",
-    "source": "Sprague Energy / CME"
+    "value": 105.07,
+    "prev_value": 101.91,
+    "change": 3.16,
+    "change_pct": 3.1,
+    "as_of": "2026-04-23T19:12:00Z",
+    "source": "Morningstar / Dow Jones Market Data"
   },
   "headlines": [
     {
-      "title": "S&P 500, Nasdaq end at record as Trump extends ceasefire deadline with Iran",
-      "source": "Seeking Alpha",
-      "published_at": "2026-04-22T20:06:00Z",
-      "url": "https://seekingalpha.com"
+      "title": "미국, 이란 해상 봉쇄 무기한 연장… 호르무즈 해협 긴장으로 브렌트유 배럴당 105달러 돌파",
+      "source": "The Guardian",
+      "published_at": "2026-04-23T17:15:00Z",
+      "url": "https://www.theguardian.com/world/2026/apr/23/extended-naval-blockade-is-admission-us-military-escalation-poses-even-greater-risk"
     },
     {
-      "title": "10-Year Treasury Yield Rises to 4.293% — Data Talk",
+      "title": "이란, 호르무즈 해협 상업용 선박 3척 공격… 휴전 협상에도 지정학적 갈등 고조",
+      "source": "Saxo Bank",
+      "published_at": "2026-04-23T02:08:00Z",
+      "url": "https://www.home.saxo"
+    },
+    {
+      "title": "S&P 500, 브렌트유 급등과 중동 불안에 0.41% 하락 마감",
       "source": "Morningstar",
-      "published_at": "2026-04-22T20:25:00Z",
+      "published_at": "2026-04-23T20:27:00Z",
       "url": "https://www.morningstar.com"
     },
     {
-      "title": "The VIX Hasn't Been This Calm Since March. Here's Why Traders Are Breathing Easier.",
-      "source": "24/7 Wall St.",
-      "published_at": "2026-04-22T14:00:00Z",
-      "url": "https://247wallst.com"
+      "title": "메타(Meta), '효율성' 강화 위해 전체 인력 10% 구조조정 단행",
+      "source": "TheStreet",
+      "published_at": "2026-04-23T17:39:00Z",
+      "url": "https://www.thestreet.com"
     },
     {
-      "title": "Oil Rises Ahead of WTI Expiration as Market Eyes Iran Talks",
-      "source": "Sprague Energy",
-      "published_at": "2026-04-22T20:00:00Z",
-      "url": "https://www.spragueenergy.com"
-    },
-    {
-      "title": "Options Brief - Iran ceasefire extends - risk-on",
-      "source": "Saxo Bank",
-      "published_at": "2026-04-22T12:00:00Z",
-      "url": "https://home.saxo"
+      "title": "미국 10년물 국채수익률, 중동 휴전 불확실성 및 인플레이션 우려 속 4.323%로 상승",
+      "source": "Morningstar",
+      "published_at": "2026-04-23T19:44:00Z",
+      "url": "https://www.morningstar.com"
     }
   ],
   "notes": [
-    "미국 S&P 500 및 NASDAQ 지수는 미국-이란 휴전 연장 소식에 힘입어 사상 최고치로 마감했습니다.",
-    "안전자산에 대한 수요가 줄어들며 VIX(변동성 지수)는 20 아래로 떨어졌습니다.",
-    "국채 10년물 금리는 소폭 상승하여 4.293%를 기록했습니다.",
-    "브렌트유는 호르무즈 해협 등 지정학적 리스크 잔존과 함께 상승세를 보이며 배럴당 $98.48 수준으로 마감했습니다."
+    "호르무즈 해협에서의 군사적 긴장과 미국-이란 간 휴전 불확실성으로 인해 브렌트유가 3.10% 급등하며 배럴당 105달러를 상회했습니다.",
+    "테크 및 산업재 섹터의 실적 호조에도 불구하고, 유가 급등과 지정학적 리스크로 인해 미국 3대 지수는 일제히 하락 마감했습니다.",
+    "VIX 지수는 19.14로 상승하며 시장의 경계감이 높아졌으며, 옵션 시장에서는 기록적인 지수 수준에도 불구하고 하방 보호(Put) 베팅 비용이 크게 증가했습니다.",
+    "국채 시장은 이란 사태와 유가 상승에 따른 인플레이션 고착화 우려를 반영하며 10년물 수익률이 4.32%대로 올랐습니다."
   ]
 }

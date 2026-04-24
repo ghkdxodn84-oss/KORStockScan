@@ -90,6 +90,73 @@ def test_gatekeeper_fast_signature_absorbs_small_price_and_orderbook_noise():
     assert sig_a == sig_b
 
 
+def test_gatekeeper_fast_signature_ignores_small_signed_program_flow_noise():
+    stock = {"position_tag": "SCANNER"}
+    ws_a = {
+        "curr": 767,
+        "fluctuation": 1.0,
+        "volume": 100000,
+        "v_pw": 100.0,
+        "buy_ratio": 56.0,
+        "prog_net_qty": 1000,
+        "prog_delta_qty": 0,
+        "ask_tot": 1000,
+        "bid_tot": 1000,
+        "net_bid_depth": 0,
+        "net_ask_depth": 0,
+        "orderbook": {
+            "asks": [{"price": 768}],
+            "bids": [{"price": 767}],
+        },
+    }
+    ws_b = dict(ws_a)
+    ws_b.update({
+        "curr": 766,
+        "prog_net_qty": -10,
+        "prog_delta_qty": -1,
+    })
+    ws_b["orderbook"] = {
+        "asks": [{"price": 767}],
+        "bids": [{"price": 766}],
+    }
+
+    sig_a = _build_gatekeeper_fast_signature(stock, ws_a, "KOSPI_ML", 65.0)
+    sig_b = _build_gatekeeper_fast_signature(stock, ws_b, "KOSPI_ML", 65.0)
+
+    assert sig_a == sig_b
+
+
+def test_gatekeeper_fast_signature_keeps_large_program_flow_shift_sensitive():
+    stock = {"position_tag": "SCANNER"}
+    ws_a = {
+        "curr": 767,
+        "fluctuation": 1.0,
+        "volume": 100000,
+        "v_pw": 100.0,
+        "buy_ratio": 56.0,
+        "prog_net_qty": 1000,
+        "prog_delta_qty": 0,
+        "ask_tot": 1000,
+        "bid_tot": 1000,
+        "net_bid_depth": 0,
+        "net_ask_depth": 0,
+        "orderbook": {
+            "asks": [{"price": 768}],
+            "bids": [{"price": 767}],
+        },
+    }
+    ws_b = dict(ws_a)
+    ws_b.update({
+        "prog_net_qty": 30000,
+        "prog_delta_qty": 6000,
+    })
+
+    sig_a = _build_gatekeeper_fast_signature(stock, ws_a, "KOSPI_ML", 65.0)
+    sig_b = _build_gatekeeper_fast_signature(stock, ws_b, "KOSPI_ML", 65.0)
+
+    assert sig_a != sig_b
+
+
 def test_holding_ai_fast_signature_changes_on_meaningful_orderbook_shift():
     ws_a = {
         "curr": 10000,

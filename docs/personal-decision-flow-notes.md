@@ -11,7 +11,7 @@
 | 1 | 감시종목 유입 | 조건검색/스캐너로 WATCHING 대상에 들어옴 | 감시망 미유입 |
 | 2 | 선행 차단 통과 | 과열, 유동성, AI 점수, 스윙 갭 차단을 넘김 | `blocked_overbought`, `blocked_liquidity`, `blocked_ai_score`, `blocked_swing_gap` |
 | 3 | 진입 후보 자격 충족 | `(score >= buy_threshold or is_shooting) and vpw_condition` 충족 | score/vpw 미달 |
-| 4 | gatekeeper 진입 | WATCHING 최종 진입 검증 구간에 도달 | `gatekeeper_fast_reuse_bypass` 후 실평가 또는 `gatekeeper_fast_reuse` |
+| 4 | gatekeeper 진입 | WATCHING 최종 진입 검증 구간에 도달. 먼저 `fast_reuse` 재사용 가능성(`window`, `signature`)을 확인 | `gatekeeper_fast_reuse_bypass` 후 실평가 또는 `gatekeeper_fast_reuse` |
 | 5 | gatekeeper 통과 | AI가 `allow_entry=true`, `action_label=즉시 매수`로 판단 | `blocked_gatekeeper_reject`, `blocked_gatekeeper_error`, `blocked_gatekeeper_missing` |
 | 6 | BUY 신호 | 텔레그램/런타임 기준 BUY 신호로 해석 가능한 상태. 주문 직전 후보 | 이후 `entry_armed`, 예산/수량, `submitted_orders`는 다음 단계 |
 | 7 | 주문 자격 확보 | `entry_armed`, `budget_pass`까지 도달해 실제 주문 제출을 재시도할 수 있는 상태 | `latency_block`, `entry_armed_expired`, `entry_armed_expired_after_wait` |
@@ -38,8 +38,9 @@
     |- 실패 -> BUY 후보 미형성
     v
 [gatekeeper 진입]
-    |- fast signature 재사용 가능 -> gatekeeper_fast_reuse
-    |- 재사용 불가 -> gatekeeper_fast_reuse_bypass -> 실 gatekeeper 평가
+    |- 직전 판단이 재사용 window 안이고 signature도 동일 -> gatekeeper_fast_reuse
+    |- 재사용 window 만료(age_expired) -> gatekeeper_fast_reuse_bypass -> 실 gatekeeper 평가
+    |- 재사용 window 안이지만 signature 변경(sig_changed) -> gatekeeper_fast_reuse_bypass -> 실 gatekeeper 평가
     v
 [gatekeeper 통과 여부]
     |- 실패 -> blocked_gatekeeper_reject / blocked_gatekeeper_error / blocked_gatekeeper_missing
@@ -85,6 +86,8 @@
 - `entry_armed`에 들어간 뒤에는 `latency_block`, `quote_stale`, `ws_age/ws_jitter` 같은 제출 전 병목 때문에 곧바로 `submitted`로 가지 못할 수 있다.
 - 오늘 `2026-04-23 KST` 덕산하이메탈(`077360`)은 `Score 50 fallback -> entry_armed -> budget_pass -> latency_block 반복 -> 주문접수/체결` 사례로, 플로우차트의 주문 전 구간 예시로 본다.
 - `gatekeeper_fast_reuse`는 같은 종목의 직전 gatekeeper 판단을 매우 짧은 시간창에서 재사용한 경우다. fast signature, 재사용 가능 시간, websocket freshness, score 경계값, 직전 action/allow_entry 기록이 모두 맞아야 성립한다.
+- 여기서 `window`는 “직전 판단이 아직 재사용해도 될 만큼 최근인가”를 보는 시간 조건이고, `signature`는 “지금 장면이 직전 판단과 사실상 같은가”를 보는 상태 조건이다.
+- 즉 `window`가 만료되면 `age_expired` 쪽으로 재사용이 깨지고, `window` 안이어도 가격/스프레드/점수/수급 같은 핵심 입력이 달라지면 `sig_changed`로 재사용이 깨진다.
 - 의미는 `새 AI gatekeeper 호출을 생략하고 직전 판단을 그대로 재사용했다`는 것이다. 따라서 `gatekeeper_fast_reuse`가 찍히면 gatekeeper 구간에는 도달한 것이 맞지만, 새로운 모델 평가가 매번 다시 돈 것은 아니다.
 - 왜 중요하나: BUY 회복이 안 보일 때 `gatekeeper_fast_reuse` 비중이 높으면 실제 병목이 모델 호출 지연이 아니라 `같은 장면 재사용`, `score boundary`, `ws freshness`, `signature 변화` 쪽일 수 있다.
 - HOLDING 단계에서는 `is_sell_signal`이 생기기 전까지 `ai_holding_review`와 `scale_in` 후보평가가 반복된다. 즉 제출축이 살아나면 다음 병목은 보유 중 `soft stop/trailing/ai exit` 품질로 넘어간다.

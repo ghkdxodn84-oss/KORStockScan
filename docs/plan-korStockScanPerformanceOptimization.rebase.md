@@ -42,9 +42,9 @@
 7. 원인 귀속이 불명확하면 먼저 리포트 정합성, 이벤트 복원, 집계 품질을 점검한다.
 8. `counterfactual` 수치는 직접 실현손익과 합산하지 않고 우선순위 판단 자료로만 쓴다.
 9. 향후 A/B 테스트의 목적은 단일 모델 우열 확인이 아니라 진입/보유/청산 각 단계에서 `EV`를 높여 기준 조합 대비 `최소 +10%` 개선되는 엔진 조합을 찾는 것이다.
-
 10. AI `fast -> deep` 재판정 트리거는 엔진별 하드코딩 점수대가 아니라 `feature conflict predicates + 최근 실거래 EV 근거`로 분리해 관리한다.
 11. 재판정 구조를 공통축으로 승격할 때는 `submitted/full_fill/partial_fill/COMPLETED + valid profit_rate` 기준으로 `재판정 코호트 vs 비재판정 코호트`를 먼저 비교하고, EV 개선이 확인될 때만 live 공통구조로 올린다.
+
 ## 4. 작업 규칙
 
 | 규칙 | 기준 | 위반 시 처리 |
@@ -56,7 +56,11 @@
 | 라우팅 고정 | live 스캘핑 AI는 Gemini 고정 | A/B는 `entry_filter_quality` 1차 판정 후 별도 판단. 병목 완화 중에는 원격 전체 엔진 라우팅만 GPT로 바꾸는 단순 교체를 금지하고, 진입/보유/청산 단계별 코호트 비교와 품질 가드(`submitted/full/partial/soft_stop/COMPLETED + valid profit_rate`)를 함께 고정한다. |
 | 문서 기준 | 중심 문서는 기준, checklist는 실행, report는 근거 | 중복 작업항목 생성 금지 |
 | 일정 날짜 고정 | 모든 작업일정은 `YYYY-MM-DD KST`와 `Slot/TimeWindow`로 고정 | `후보비교 완료시`, `관찰 후`, `다음주` 같은 상대 일정은 무효. 당일 안에 절대 날짜/시각으로 재작성 |
+| checklist 상단 공통화 | 날짜별 checklist 상단은 [stage2-todo-checklist-template.md](./stage2-todo-checklist-template.md) 형식을 기본으로 사용한다. `오늘 목적`/`오늘 강제 규칙` 공통 bullet는 템플릿에서 복사하고, 날짜별 파일에는 당일 예외만 최소 추가한다. | 미래 checklist가 약한 규칙셋으로 되돌아가면 템플릿 위반으로 보고 같은 턴에 상단 규칙을 재정렬한다. |
 | 관찰 반나절 제한 | live 영향 여부 관찰은 오전/오후 반나절을 넘기지 않음 | 반나절에 미관측이면 관찰축 오류, live 영향 없음, 또는 그대로 진행 가능 중 하나로 판정 |
+| 관찰 후 즉시 판정/즉시 착수 | 관찰창이 끝나면 같은 거래일 안에서 `즉시 판정 -> 다음 축 즉시 착수`를 기본으로 한다. 이미 수집된 데이터만으로 볼 수 있는 판정은 장후/익일로 미루지 않고 그 자리에서 닫는다. 추가 데이터가 아니라 코드베이스 수정이 필요한 경우에도 same-day 형상/가드/재시작 가능 여부를 먼저 판단하고, 가능하면 즉시 반영 후 새 관찰창을 연다. | `장후 보자`, `다음 장전에 보자` 식 이관은 금지한다. 미룰 수 있는 예외는 `1) 단일 조작점이 아직 정의되지 않음`, `2) rollback guard가 문서화되지 않음`, `3) restart/code-load가 운영 경계상 같은 턴에 불가능함` 뿐이며, 이때도 why와 막힌 조건, 다음 절대시각을 checklist에 함께 고정한다. |
+| 장후/익일 이관 무효화 | 관찰축/보조축/승격후보를 장후·익일·다음 장전으로 넘기려면 같은 턴에 `지금 닫을 수 있는가`, `추가 데이터가 필요한가 vs 코드수정이 필요한가`, `same-day 단일 조작점/rollback guard/restart 가능 여부`, `불가하면 막힌 조건과 다음 절대시각` 4가지를 문서에 모두 남겨야 한다. | 위 4개가 없으면 이관 판정은 무효로 본다. 무효 항목은 자동으로 `same-day 재분해/즉시 착수 미이행`으로 간주하고, 다음 응답에서 먼저 재개한다. |
+| PREOPEN 이관 제한 | PREOPEN은 전일에 이미 `단일 조작점`, `rollback guard`, `코드/테스트`, `restart 절차`가 고정된 carry-over 축만 받는다. PREOPEN을 `다음에 생각해볼 후보 검토 슬롯`으로 쓰지 않는다. | same-day에 설계/분해 가능한 축을 PREOPEN으로 넘기면 규칙 위반이다. PREOPEN checklist에는 전일 준비완료 증적과 승인/롤백 판정만 남긴다. |
 | 판정 근거 서술 | `유지/보류/미완/폐기/완료` 모두 수치 + why(기대값 영향/원인귀속/표본충분성)를 함께 남긴다. 수치만 나열하고 해석이 없으면 근거 미충족으로 본다. | checklist/report에 why를 추가 기재하고, why가 없으면 완료/보류 판정을 다시 연다 |
 | 봇 재실행 | 검증/반영에 봇 재실행이 필요하고 권한/안전 조건이 맞으면 AI가 표준 wrapper로 직접 실행 | 토큰/계정/운영 승인 등 보안 경계가 있으면 실행하지 않고 필요한 1개 명령을 사용자에게 요청 |
 | 장중 스냅샷 운용 | 장중 판단용 스냅샷은 `12:00~12:20 full` 1회를 기준으로 하고, 그 외 장중은 `intraday_light` 증분(지연/jitter 포함)으로만 갱신한다. `server_comparison`은 Plan Rebase 기본 입력에서 제외하며, 명시 플래그(`KORSTOCKSCAN_ENABLE_SERVER_COMPARISON`)가 있을 때만 생성한다. `performance_tuning` 거래일 이력은 고정 3일이 아니라 상황별 가변 window(`trend_max_dates` 또는 env)로 운용한다. 체크리스트에 스냅샷 생성 작업을 둘 때는 `max_date_basis`, `trend_max_dates`, `evidence_cutoff`를 함께 기재한다. 12시 full 스냅샷 완료 후에는 admin Telegram 완료 알림을 발송해 일일 작업지시서 전달 기준으로 삼는다. | full 다중 실행, 고정 기간 강제, max date/cutoff 미기재, 원격 비교값을 기준 판단에 혼입하면 규칙 위반으로 간주하고 main-only 기준으로 재집계한다. |
@@ -76,6 +80,7 @@
 | live canary | `N_min`, 주요 metric, rollback guard, OFF 조건, 판정시각이 문서와 로그에 고정됨 |
 | 성과판정 | `COMPLETED + valid profit_rate`, full/partial 분리, blocker 분포, 체결품질이 함께 제시됨 |
 | 보류/미착수 | 보류 사유, 기대값 영향, 표본충분성 또는 관측 누락 이유, 다음 판정시각 또는 폐기/코드정리 판정이 명시됨 |
+| 장후/익일 이관 | `same-day 불가 이유`, `추가 데이터 vs 코드수정` 구분, `단일 조작점`, `rollback guard`, `restart 가능 여부`, `다음 절대시각`이 한 묶음으로 남음 |
 | 판정 근거 | 수치, 기준선 비교, why(왜 그 수치가 유지/보류/미완/폐기로 이어지는지)가 한 묶음으로 남음 |
 | 폐기 | 재개 조건이 없으면 폐기 문서/부속문서로 내리고 중심 문서에는 요약만 유지 |
 | 하위 참조 | 일일 체크리스트, 감사보고서, Q&A, 폐기과제가 역할별로 분리됨 |
@@ -156,6 +161,9 @@
 | `2026-04-23` | same-day next-axis live 전환 검토 | 현재 코드상 즉시 사용 가능한 downstream 후보 `SCALP_LATENCY_GUARD_CANARY_ENABLED`는 `sniper_entry_latency`에서 `SCALP_LATENCY_FALLBACK_ENABLED` 및 `ALLOW_FALLBACK`과 결합되어 `post_fallback_deprecation` 기준에 맞는 독립 downstream 축이 아님 | 장중 live 교체 미실행, `buy_recovery_canary` 유지/고정 후 장후 latency 분해/독립축 설계로 이관 |
 | `2026-04-23` | `spread relief canary` 14시 중간점검 | 12시 same-day 교체 이후 `12:00~14:00 KST` raw 기준 `ai_confirmed unique=29`, `entry_armed unique=5`, `budget_pass=1882`, `latency_block=1882`, `order_bundle_submitted=0`, `blocked_ai_score unique share=96.6%`, `quote_stale=False 1817`, `quote_stale=True 65`, `spread_too_wide=1380`, `ws_jitter_too_high=566`, `ws_age_too_high=217`; `latency_canary_reason`은 `spread_only_required=964`, `low_signal=842`, `quote_stale=65`, `missing=11`, `fresh spread-only ai_score>=85=0`; snapshot `saved_snapshot_at=14:03:44` 기준 `budget_pass_to_submitted_rate=0.1%`, `quote_fresh_latency_pass_rate=0.1%`, `full_fill_events=2`, `partial_fill_events=0`, `fallback_regression=0` | 제출 회복 효과 미확인. 14:15 재점검에서도 `14:04:30~14:15:17` 신규 `ai_confirmed=0`, `entry_armed unique=2`라 즉시 완화 표본이 부족하다. 실전 `[LATENCY_SPREAD_RELIEF_CANARY]` 통과는 0건이므로 전역 spread 완화/threshold 즉시완화 금지, 장후에는 `min_signal/tag/allowlist`와 `spread_only_required` 조건을 재설계 후보로만 재판정 |
 | `2026-04-23` | 스캘핑 신규 BUY 임시 1주 cap 적용 | `SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED=True`, `SCALPING_INITIAL_ENTRY_MAX_QTY=1`를 기본값으로 고정하고, 신규 BUY 제출은 1주 cap으로 제한한다. `PYRAMID` 추가매수 경로는 유지하되 `initial-only`와 `pyramid-activated` 표본을 분리해 holding/exit 판정에 사용한다. | 초기 진입 손실 tail 캡을 우선 적용하고, cap 해제 여부는 `IQC-0424`에서 `submitted/full/partial`, `soft_stop/trailing/good_exit`, `initial-only vs pyramid-activated` 분리 표본으로 재판정 |
+| `2026-04-24` | `other_danger residual` 14시 최종판정 | `13:23:52~14:00 KST` 기준 `ai_confirmed=53`, `entry_armed=34`, `budget_pass=368`, `submitted=0`, `quote_fresh_latency_blocks=251`, `quote_fresh_latency_pass_rate=0.0%`, `full_fill=0`, `partial_fill=0`, `other_quote_fresh=114/251`, `other_danger_relief_canary_applied=0` | same-day 효과 미약. `other_danger residual`은 잠그고 `quote_fresh family` 장중 잠금 근거를 확정 |
+| `2026-04-24` | `quote_fresh family` 장중 잠금 + 다음 독립축 결정 | `other_danger/ws_jitter/spread/ws_age/quote_stale` 전부 제출 회복 근거 부족. `dynamic_strength_canary`는 이미 baseline live `107건`, `entry_filter_quality`는 parking 유지, `gatekeeper_decisions=23`, `gatekeeper_fast_reuse_ratio=0.0%`, `gatekeeper_eval_ms_p95=19871ms`, `reuse window expired=25`, `signature changed=22` | 다음 독립축은 `gatekeeper_fast_reuse signature/window`. same-day live replacement는 미승인, `2026-04-27 PREOPEN` 승인 판정으로 이관 |
+| `2026-04-24` | `gatekeeper_fast_reuse signature-only` same-day 반영 | raw `gatekeeper_fast_reuse_bypass` 재집계 기준 `after_other_danger_switch=31`, `age_expired_only=1`, `sig_only=1`, `age_expired+sig_changed=8`; 상위 `sig_delta`는 `curr_price 21`, `v_pw_now 17`, `spread_tick 15`, `score 13`, `buy_ratio_ws 13`, `prog_delta_qty 10`. `prog_net_qty/prog_delta_qty`에 deadband를 넣는 `signature-only` 형상 변경 적용, 테스트 `15 passed`, `restart.flag` 후 PID `207081` 시작시각 `14:25:15 KST` | `window`보다 `signature`가 우선. 장후 판정은 `14:25:15 KST` 이후 post-change 코호트로 유지/롤백/익일 carry-over를 닫음 |
 | `2026-04-22` | Plan Rebase 중심 문서 감리 반영 | S-1~S-3, B-1~B-4 반영 | 조건부 승인 시정 완료 |
 
 ## 11. 하위 참조문서

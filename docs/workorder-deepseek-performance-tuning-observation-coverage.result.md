@@ -218,6 +218,20 @@ src/tests/test_performance_tuning_report.py::test_observation_axis_coverage_exte
 
 - **지적**: 작업지시서 §186에 따라 `gatekeeper_fast_reuse` axis는 `breakdowns.gatekeeper_sig_deltas`를 `required_keys`에 포함해야 함
 - **조치**: 코드 line 419에 `"breakdowns.gatekeeper_sig_deltas"` 추가
+
+### 6-6. Dashboard Bug Fix: `since` 포함 성능튜닝 화면의 Internal Server Error 완화
+
+- **증상**: `/dashboard?tab=performance-tuning&date=2026-04-24&since=10:08:29` 진입 시 iframe 대상인 `/performance-tuning?...&since=...` 경로가 간헐적으로 Internal Server Error 또는 timeout
+- **원인**:
+  1. `build_performance_tuning_report()`가 당일 `pipeline_events` 전체를 매번 `datetime` 파싱 + `strptime` 정렬로 재처리
+  2. 동일 화면에서 `trade_review`를 스냅샷이 있어도 재빌드
+- **조치**:
+  1. `emitted_at`를 문자열 timestamp로 정규화하고, 정렬/`since` 필터를 lexicographic 비교로 변경
+  2. `performance_tuning` 내부의 current trade rows는 `trade_review` monitor snapshot이 있으면 우선 재사용하고, 없을 때만 `build_trade_review_report()` fallback
+- **검증**:
+  1. `src/tests/test_performance_tuning_report.py` 20 passed
+  2. 로컬 실측: `build_performance_tuning_report(target_date='2026-04-24', since_time='10:08:29')` `24.64s -> 12.46s`
+  3. 서버 프로세스 재시작은 현재 세션 권한 부족으로 미실행 (`systemctl restart korstockscan-gunicorn.service` interactive authentication required)
 - **테스트**: `test_observation_axis_coverage_gatekeeper_sig_deltas_required_key`에서 sig_deltas 존재/부재 두 케이스 검증
 
 ### 6-6. [감리] UI/API 회귀 테스트 추가
