@@ -1,16 +1,31 @@
 import threading
 
-from src.engine.ai_engine_openai_v2 import GPTSniperEngine
+from src.engine.ai_engine_openai import GPTSniperEngine
 from src.engine.scalping_feature_packet import SCALP_FEATURE_PACKET_VERSION
 
 
 def _build_engine():
     engine = GPTSniperEngine.__new__(GPTSniperEngine)
     engine.lock = threading.Lock()
+    engine.cache_lock = threading.RLock()
+    engine._analysis_cache = {}
+    engine._gatekeeper_cache = {}
+    engine.analysis_cache_ttl = 30.0
+    engine.holding_analysis_cache_ttl = 60.0
+    engine.gatekeeper_cache_ttl = 30.0
+    engine.ai_disabled = False
+    engine.consecutive_failures = 0
+    engine.max_consecutive_failures = 5
+    engine.current_api_key_index = 0
     engine.last_call_time = 0.0
     engine.min_interval = 0.0
-    engine.fast_model_name = "gpt-fast"
-    engine.deep_model_name = "gpt-fast"
+    engine.model_tier1_fast = "gpt-fast"
+    engine.model_tier2_balanced = "gpt-report"
+    engine.model_tier3_deep = "gpt-deep"
+    engine.current_model_name = engine.model_tier1_fast
+    engine.fast_model_name = engine.model_tier1_fast
+    engine.report_model_name = engine.model_tier2_balanced
+    engine.deep_model_name = engine.model_tier3_deep
     return engine
 
 
@@ -69,9 +84,11 @@ def test_openai_scalping_analyze_target_returns_feature_audit_fields(monkeypatch
         "_call_openai_safe",
         lambda *args, **kwargs: {"action": "BUY", "score": 84, "reason": "momentum"},
     )
-    monkeypatch.setattr(engine, "_should_run_deep_recheck", lambda features, result: False)
-    monkeypatch.setattr(engine, "_apply_main_entry_bias_relief", lambda features, result, prompt_type: result)
-
+    monkeypatch.setattr(
+        engine,
+        "_apply_remote_entry_guard",
+        lambda result, **kwargs: result,
+    )
     result = engine.analyze_target(
         "테스트",
         _sample_ws_data(),
@@ -83,12 +100,12 @@ def test_openai_scalping_analyze_target_returns_feature_audit_fields(monkeypatch
 
     assert result["action"] == "BUY"
     assert result["ai_prompt_type"] == "scalping_entry"
-    assert result["ai_prompt_version"] == "openai_v2_structured_v1"
+    assert result["ai_prompt_version"] == "split_v2"
     assert result["ai_parse_ok"] is True
     assert result["ai_parse_fail"] is False
     assert result["ai_fallback_score_50"] is False
     assert result["ai_response_ms"] >= 0
-    assert result["ai_result_source"] == "openai_live"
+    assert result["ai_result_source"] == "live"
     assert result["scalp_feature_packet_version"] == SCALP_FEATURE_PACKET_VERSION
     assert result["tick_acceleration_ratio_sent"] is True
     assert result["same_price_buy_absorption_sent"] is True
@@ -103,9 +120,6 @@ def test_openai_scalping_analyze_target_returns_parse_fallback_meta(monkeypatch)
         raise RuntimeError("json parse failed")
 
     monkeypatch.setattr(engine, "_call_openai_safe", _raise)
-    monkeypatch.setattr(engine, "_should_run_deep_recheck", lambda features, result: False)
-    monkeypatch.setattr(engine, "_apply_main_entry_bias_relief", lambda features, result, prompt_type: result)
-
     result = engine.analyze_target(
         "테스트",
         _sample_ws_data(),
@@ -121,8 +135,7 @@ def test_openai_scalping_analyze_target_returns_parse_fallback_meta(monkeypatch)
     assert result["ai_parse_fail"] is True
     assert result["ai_fallback_score_50"] is True
     assert result["ai_response_ms"] >= 0
-    assert result["ai_result_source"] == "openai_parse_fallback"
-    assert result["scalp_feature_packet_version"] == SCALP_FEATURE_PACKET_VERSION
+    assert result["ai_result_source"] == "exception"
 
 
 def test_openai_parse_json_response_text_accepts_code_fence():

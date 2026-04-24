@@ -1,9 +1,8 @@
-# src/engine/ai_engine_deepseek.py
+# src/engine/ai_engine_openai.py
 """
-DeepSeek API 기반 Sniper Engine (DeepSeekSniperEngine)
-- OpenAI 호환 REST 엔드포인트 사용 (openai SDK)
-- GeminiSniperEngine(ai_engine.py)과 100% 동일한 퍼블릭 인터페이스
-- Google Search 도구 미지원 (use_google_search 무시)
+OpenAI API 기반 Sniper Engine (GPTSniperEngine)
+- OpenAI SDK 사용
+- GeminiSniperEngine(ai_engine.py)과 동일한 퍼블릭 인터페이스
 """
 
 import sys
@@ -18,6 +17,7 @@ import threading
 import json
 import re
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from itertools import cycle
 from openai import OpenAI, RateLimitError
@@ -49,12 +49,70 @@ from src.engine.ai_engine import (
 )
 
 
-class DeepSeekSniperEngine:
+DUAL_PERSONA_AGGRESSIVE_PROMPT = """
+너는 기회비용을 크게 보는 공격적 투자자다.
+입력된 정량 컨텍스트를 보고, 너무 늦기 전에 타야 하는지 판단한다.
+
+[성향]
+- 돌파 초입, 수급 가속, 프로그램 순매수, 고가 재도전을 높게 평가한다.
+- 다만 명백한 리스크 신호는 무시하지 않는다.
+- 애매한 장면에서는 WAIT보다 기회 포착 쪽으로 약간 기울 수 있다.
+
+[출력 규칙]
+- 반드시 JSON만 반환한다.
+- decision_type이 GATEKEEPER면 action은 ALLOW_ENTRY | WAIT | REJECT 중 하나만 사용한다.
+- decision_type이 OVERNIGHT면 action은 HOLD_OVERNIGHT | SELL_TODAY 중 하나만 사용한다.
+- confidence는 0~1 float, score는 0~100 int로 반환한다.
+- risk_flags는 문자열 배열로 반환한다.
+
+반드시 아래 형식만 반환:
+{
+  "action": "ALLOW_ENTRY | WAIT | REJECT | HOLD_OVERNIGHT | SELL_TODAY",
+  "score": 0,
+  "confidence": 0.0,
+  "risk_flags": ["FLAG"],
+  "size_bias": -2,
+  "veto": false,
+  "thesis": "핵심 논거 한 줄",
+  "invalidator": "무효 조건 한 줄"
+}
+"""
+
+DUAL_PERSONA_CONSERVATIVE_PROMPT = """
+너는 손실 회피와 생존을 최우선으로 보는 보수적 투자자다.
+입력된 정량 컨텍스트를 보고, 지금은 피해야 하는지 엄격하게 판단한다.
+
+[성향]
+- VWAP 하회, 대량 매도틱, 공급 우위, 갭 부담, 유동성 저하, 돌파 실패를 강하게 본다.
+- 애매한 장면에서는 공격 진입보다 WAIT 또는 회피를 선호한다.
+- 하드 리스크가 겹치면 veto=true를 사용할 수 있다.
+
+[출력 규칙]
+- 반드시 JSON만 반환한다.
+- decision_type이 GATEKEEPER면 action은 ALLOW_ENTRY | WAIT | REJECT 중 하나만 사용한다.
+- decision_type이 OVERNIGHT면 action은 HOLD_OVERNIGHT | SELL_TODAY 중 하나만 사용한다.
+- confidence는 0~1 float, score는 0~100 int로 반환한다.
+- risk_flags는 문자열 배열로 반환한다.
+
+반드시 아래 형식만 반환:
+{
+  "action": "ALLOW_ENTRY | WAIT | REJECT | HOLD_OVERNIGHT | SELL_TODAY",
+  "score": 0,
+  "confidence": 0.0,
+  "risk_flags": ["FLAG"],
+  "size_bias": -2,
+  "veto": false,
+  "thesis": "핵심 논거 한 줄",
+  "invalidator": "무효 조건 한 줄"
+}
+"""
+
+
+class GPTSniperEngine:
     """
-    DeepSeek API 기반 스나이퍼 엔진.
+    OpenAI API 기반 스나이퍼 엔진.
     GeminiSniperEngine(ai_engine.py)과 동일한 퍼블릭 인터페이스를 제공한다.
-    내부적으로 OpenAI 호환 REST API(api.deepseek.com)를 호출한다.
-    Google Search 도구는 지원하지 않는다.
+    내부적으로 OpenAI REST API를 호출한다.
     """
 
     def __init__(self, api_keys, announce_startup=True):
@@ -65,22 +123,20 @@ class DeepSeekSniperEngine:
         self.key_cycle = cycle(self.api_keys)
         self._rotate_client()
 
-        # 모델 티어: DeepSeek 모델명 (constants.py 오버라이드 가능)
-        self.model_tier1_fast = getattr(
-            TRADING_RULES, 'DEEPSEEK_MODEL_TIER1', 'deepseek-v4-flash'
-        )
-        self.model_tier2_balanced = getattr(
-            TRADING_RULES, 'DEEPSEEK_MODEL_TIER2', 'deepseek-v4-flash'
-        )
-        self.model_tier3_deep = getattr(
-            TRADING_RULES, 'DEEPSEEK_MODEL_TIER3', 'deepseek-v4-Pro'
-        )
+        # OpenAI 엔진도 Gemini/DeepSeek과 동일한 tier 구조를 사용한다.
+        self.model_tier1_fast = getattr(TRADING_RULES, 'GPT_FAST_MODEL', 'gpt-5.4-nano')
+        self.model_tier2_balanced = getattr(TRADING_RULES, 'GPT_REPORT_MODEL', self.model_tier1_fast)
+        self.model_tier3_deep = getattr(TRADING_RULES, 'GPT_DEEP_MODEL', self.model_tier2_balanced)
         self.current_model_name = self.model_tier1_fast
+        # 기존 호출부 호환을 위한 alias
+        self.fast_model_name = self.model_tier1_fast
+        self.report_model_name = self.model_tier2_balanced
+        self.deep_model_name = self.model_tier3_deep
 
         self.lock = threading.Lock()
         self.api_call_lock = threading.Lock()
         self.last_call_time = 0.0
-        self.min_interval = getattr(TRADING_RULES, 'DEEPSEEK_ENGINE_MIN_INTERVAL', 0.5)
+        self.min_interval = getattr(TRADING_RULES, 'GPT_ENGINE_MIN_INTERVAL', 0.5)
         self.consecutive_failures = 0
         self.ai_disabled = False
         self.max_consecutive_failures = getattr(TRADING_RULES, 'AI_MAX_CONSECUTIVE_FAILURES', 5)
@@ -99,7 +155,7 @@ class DeepSeekSniperEngine:
 
         if announce_startup:
             print(
-                f"🧠 [DeepSeek 엔진] {len(self.api_keys)}개 키 로테이션 가동! "
+                f"🧠 [OpenAI 엔진] {len(self.api_keys)}개 키 로테이션 가동! "
                 f"(T1: {self.model_tier1_fast} / T2: {self.model_tier2_balanced} / T3: {self.model_tier3_deep})"
             )
 
@@ -108,22 +164,36 @@ class DeepSeekSniperEngine:
     # ==========================================
 
     def _rotate_client(self):
-        """DeepSeek API 클라이언트 교체 (OpenAI SDK + base_url 변경)"""
+        """OpenAI API 클라이언트 교체"""
         self.current_key = next(self.key_cycle)
-        self.client = OpenAI(
-            api_key=self.current_key,
-            base_url="https://api.deepseek.com",
-        )
+        self.client = OpenAI(api_key=self.current_key)
         try:
             self.current_api_key_index = self.api_keys.index(self.current_key)
         except ValueError:
             self.current_api_key_index = 0
 
+    def set_model_names(self, *, fast_model=None, deep_model=None, report_model=None, announce=True):
+        if fast_model:
+            self.model_tier1_fast = str(fast_model)
+            self.fast_model_name = self.model_tier1_fast
+        if report_model:
+            self.model_tier2_balanced = str(report_model)
+            self.report_model_name = self.model_tier2_balanced
+        if deep_model:
+            self.model_tier3_deep = str(deep_model)
+            self.deep_model_name = self.model_tier3_deep
+        self.current_model_name = self.model_tier1_fast
+        if announce:
+            print(
+                f"🧠 [OpenAI 엔진] {len(self.api_keys)}개 키 로테이션 가동! "
+                f"(T1: {self.model_tier1_fast} / T2: {self.model_tier2_balanced} / T3: {self.model_tier3_deep})"
+            )
+
     def _get_tier1_model(self):
         return getattr(
             self,
             "model_tier1_fast",
-            getattr(self, "current_model_name", "deepseek-v4-flash"),
+            getattr(self, "current_model_name", "gpt-5.4-nano"),
         )
 
     def _get_tier2_model(self):
@@ -493,13 +563,13 @@ class DeepSeekSniperEngine:
         return result
 
     # ==========================================
-    # JSON 파싱 (ai_engine_openai.py 동일 복사)
+    # JSON 파싱
     # ==========================================
 
     def _parse_json_response_text(self, raw_text):
         text = str(raw_text or "").strip()
         if not text:
-            raise ValueError("DeepSeek 응답 텍스트가 비어 있음")
+            raise ValueError("OpenAI 응답 텍스트가 비어 있음")
 
         candidates = [text]
         fence_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
@@ -526,10 +596,10 @@ class DeepSeekSniperEngine:
         raise ValueError(f"JSON 형식을 찾을 수 없음: {text[:500]}...")
 
     # ==========================================
-    # 핵심 API 호출기: _call_deepseek_safe
+    # 핵심 API 호출기: _call_openai_safe
     # ==========================================
 
-    def _call_deepseek_safe(
+    def _call_openai_safe(
         self,
         prompt,
         user_input,
@@ -576,7 +646,7 @@ class DeepSeekSniperEngine:
                     old_key = self.current_key[-5:]
                     self._rotate_client()
 
-                    warn_msg = f"⚠️ [DeepSeek 한도 초과] {context_name} | {old_key} 교체 -> {self.current_key[-5:]} ({attempt+1}/{len(self.api_keys)})"
+                    warn_msg = f"⚠️ [OpenAI 한도 초과] {context_name} | {old_key} 교체 -> {self.current_key[-5:]} ({attempt+1}/{len(self.api_keys)})"
                     print(warn_msg)
                     log_error(warn_msg)
                     time.sleep(0.8)
@@ -587,13 +657,13 @@ class DeepSeekSniperEngine:
                     if any(x in last_error for x in ["429", "quota", "503", "unavailable", "timeout", "server", "too_many_requests"]):
                         old_key = self.current_key[-5:]
                         self._rotate_client()
-                        print(f"⚠️ [DeepSeek 서버 에러] {context_name} | {old_key} 교체 -> {self.current_key[-5:]} ({attempt+1}/{len(self.api_keys)})")
+                        print(f"⚠️ [OpenAI 서버 에러] {context_name} | {old_key} 교체 -> {self.current_key[-5:]} ({attempt+1}/{len(self.api_keys)})")
                         time.sleep(0.8)
                         continue
                     else:
-                        raise RuntimeError(f"DeepSeek API 응답/파싱 실패: {e}")
+                        raise RuntimeError(f"OpenAI API 응답/파싱 실패: {e}")
 
-            fatal_msg = f"🚨 [AI 고갈] 모든 DeepSeek API 키 사용 불가. 마지막 에러: {last_error}"
+            fatal_msg = f"🚨 [AI 고갈] 모든 OpenAI API 키 사용 불가. 마지막 에러: {last_error}"
             log_error(fatal_msg)
             raise RuntimeError(fatal_msg)
 
@@ -1085,7 +1155,7 @@ class DeepSeekSniperEngine:
             model_started_at = time.perf_counter()
             report_error = ""
             try:
-                report = self._call_deepseek_safe(
+                report = self._call_openai_safe(
                     request["prompt"],
                     request["user_input"],
                     require_json=False,
@@ -1094,7 +1164,7 @@ class DeepSeekSniperEngine:
                 )
             except Exception as e:
                 report_error = str(e)
-                log_error(f"🚨 [{request['context_name']}] DeepSeek 에러: {e}")
+                log_error(f"🚨 [{request['context_name']}] OpenAI 에러: {e}")
                 report = f"⚠️ AI 실시간 분석 생성 중 에러 발생: {e}"
             model_call_ms = int((time.perf_counter() - model_started_at) * 1000)
 
@@ -1228,8 +1298,7 @@ class DeepSeekSniperEngine:
                     extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
                 )
 
-            # DeepSeek API 호출 (use_google_search 제거)
-            result = self._call_deepseek_safe(
+            result = self._call_openai_safe(
                 prompt,
                 formatted_data,
                 require_json=True,
@@ -1271,11 +1340,11 @@ class DeepSeekSniperEngine:
 
         except Exception as e:
             self.consecutive_failures += 1
-            log_error(f"🚨 [{target_name}][{strategy}] DeepSeek 실시간 분석 에러 (연속 실패 {self.consecutive_failures}회, API키 인덱스 {self.current_api_key_index}): {e}")
+            log_error(f"🚨 [{target_name}][{strategy}] OpenAI 실시간 분석 에러 (연속 실패 {self.consecutive_failures}회, API키 인덱스 {self.current_api_key_index}): {e}")
 
             if self.consecutive_failures >= self.max_consecutive_failures:
                 self.ai_disabled = True
-                log_error(f"🚨 DeepSeek 엔진 비활성화 (연속 실패 {self.consecutive_failures}회 초과, API키 인덱스 {self.current_api_key_index})")
+                log_error(f"🚨 OpenAI 엔진 비활성화 (연속 실패 {self.consecutive_failures}회 초과, API키 인덱스 {self.current_api_key_index})")
 
             return self._annotate_analysis_result(
                 {"action": "WAIT", "score": 50, "reason": f"에러: {e}"},
@@ -1380,7 +1449,7 @@ class DeepSeekSniperEngine:
             formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
             active_prompt = prompt_override if prompt_override else SCALPING_SYSTEM_PROMPT_75_CANARY
 
-            result = self._call_deepseek_safe(
+            result = self._call_openai_safe(
                 active_prompt,
                 formatted_data,
                 require_json=True,
@@ -1407,7 +1476,7 @@ class DeepSeekSniperEngine:
                 result_source="shadow_live",
             )
         except Exception as e:
-            log_error(f"🚨 [{target_name}] DeepSeek shadow 분석 에러: {e}")
+            log_error(f"🚨 [{target_name}] OpenAI shadow 분석 에러: {e}")
             return self._annotate_analysis_result(
                 {"action": "WAIT", "score": 50, "reason": f"shadow 에러: {e}"},
                 prompt_type=prompt_type,
@@ -1428,7 +1497,7 @@ class DeepSeekSniperEngine:
     # ==========================================
 
     def analyze_scanner_results(self, total_count, survived_count, stats_text, macro_text=""):
-        """텔레그램 아침 브리핑 (Macro + Scanner 통합) - DeepSeek Tier3 사용"""
+        """텔레그램 아침 브리핑 (Macro + Scanner 통합) - OpenAI Tier3 사용"""
         with self.lock:
             data_input = build_scanner_data_input(
                 total_count=total_count,
@@ -1443,8 +1512,7 @@ class DeepSeekSniperEngine:
     {data_input}"""
 
             try:
-                # DeepSeek은 Google Search 미지원 → use_google_search 제거
-                return self._call_deepseek_safe(
+                return self._call_openai_safe(
                     ENHANCED_MARKET_ANALYSIS_PROMPT,
                     enriched_input,
                     require_json=False,
@@ -1452,7 +1520,7 @@ class DeepSeekSniperEngine:
                     model_override=self._get_tier3_model(),
                 )
             except Exception as e:
-                log_error(f"🚨 [시장 브리핑] DeepSeek 에러: {e}")
+                log_error(f"🚨 [시장 브리핑] OpenAI 에러: {e}")
                 return f"⚠️ AI 시장 진단 생성 중 에러 발생: {e}"
 
     # ==========================================
@@ -1559,7 +1627,7 @@ class DeepSeekSniperEngine:
                 f"📊 [판정 입력 데이터]\n{self._format_scalping_overnight_context(realtime_ctx)}"
             )
             try:
-                result = self._call_deepseek_safe(
+                result = self._call_openai_safe(
                     SCALPING_OVERNIGHT_DECISION_PROMPT,
                     user_input,
                     require_json=True,
@@ -1577,7 +1645,7 @@ class DeepSeekSniperEngine:
                     'raw': result,
                 }
             except Exception as e:
-                log_error(f"🚨 [SCALPING 오버나이트 판정] DeepSeek 에러: {e}")
+                log_error(f"🚨 [SCALPING 오버나이트 판정] OpenAI 에러: {e}")
                 return {
                     'action': 'SELL_TODAY',
                     'confidence': 0,
@@ -1597,7 +1665,7 @@ class DeepSeekSniperEngine:
             profile_text = f"조건검색식 프로필: {condition_profile}"
             user_input = f"{stock_name}({stock_code}) - 조건검색식 진입 판단 요청\n{profile_text}\n\n{formatted_data}"
             try:
-                result = self._call_deepseek_safe(
+                result = self._call_openai_safe(
                     CONDITION_ENTRY_PROMPT,
                     user_input,
                     require_json=True,
@@ -1606,7 +1674,7 @@ class DeepSeekSniperEngine:
                 )
                 return result
             except Exception as e:
-                log_error(f"🚨 [조건검색식 진입 판단] DeepSeek 에러: {e}")
+                log_error(f"🚨 [조건검색식 진입 판단] OpenAI 에러: {e}")
                 return {
                     "decision": "SKIP",
                     "confidence": 0,
@@ -1624,7 +1692,7 @@ class DeepSeekSniperEngine:
             profile_text = f"조건검색식 프로필: {condition_profile}, 수익률: {profit_rate:.2f}%, 최고수익률: {peak_profit:.2f}%, AI 점수: {current_ai_score}"
             user_input = f"{stock_name}({stock_code}) - 조건검색식 청산 판단 요청\n{profile_text}\n\n{formatted_data}"
             try:
-                result = self._call_deepseek_safe(
+                result = self._call_openai_safe(
                     CONDITION_EXIT_PROMPT,
                     user_input,
                     require_json=True,
@@ -1633,7 +1701,7 @@ class DeepSeekSniperEngine:
                 )
                 return result
             except Exception as e:
-                log_error(f"🚨 [조건검색식 청산 판단] DeepSeek 에러: {e}")
+                log_error(f"🚨 [조건검색식 청산 판단] OpenAI 에러: {e}")
                 return {
                     "decision": "HOLD",
                     "confidence": 0,
@@ -1698,8 +1766,7 @@ class DeepSeekSniperEngine:
                 f"{candidates_text}"
             )
             try:
-                # DeepSeek은 Google Search 미지원 → use_google_search 제거
-                result = self._call_deepseek_safe(
+                result = self._call_openai_safe(
                     EOD_TOMORROW_LEADER_JSON_PROMPT,
                     user_input,
                     require_json=True,
@@ -1759,7 +1826,7 @@ class DeepSeekSniperEngine:
                 }
 
             except Exception as e:
-                log_error(f"🚨 [종가베팅 번들] DeepSeek 에러: {e}")
+                log_error(f"🚨 [종가베팅 번들] OpenAI 에러: {e}")
                 return {
                     "market_summary": "",
                     "one_point_lesson": "",
@@ -1771,3 +1838,411 @@ class DeepSeekSniperEngine:
         """장 마감 후 내일의 주도주 TOP 5 리포트 생성 (호환용)"""
         bundle = self.generate_eod_tomorrow_bundle(candidates_text)
         return bundle.get("report", "⚠️ EOD 리포트 생성 실패")
+
+
+class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
+    """Shadow-only dual persona engine for gatekeeper / overnight calibration."""
+
+    HARD_RISK_FLAGS = {
+        "VWAP_BELOW",
+        "LARGE_SELL_PRINT",
+        "GAP_TOO_HIGH",
+        "THIN_LIQUIDITY",
+        "WEAK_PROGRAM_FLOW",
+        "FAILED_BREAKOUT",
+    }
+
+    def __init__(self, api_keys):
+        super().__init__(api_keys)
+        worker_count = max(1, int(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_WORKERS", 2) or 2))
+        self.shadow_executor = ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="openai-dual-shadow",
+        )
+        self.shadow_enabled = bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_ENABLED", True))
+        self.shadow_mode = bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_SHADOW_MODE", True))
+        print(
+            f"🧠 [OpenAI 듀얼 페르소나] shadow={'ON' if self.shadow_mode else 'OFF'} "
+            f"/ workers={worker_count}"
+        )
+
+    def _coerce_bool(self, value):
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        return text in {"1", "true", "yes", "y", "on"}
+
+    def _normalize_confidence(self, value):
+        try:
+            conf = float(value)
+        except Exception:
+            conf = 0.0
+        if conf > 1.0:
+            conf = conf / 100.0
+        return max(0.0, min(1.0, conf))
+
+    def _normalize_risk_flags(self, value):
+        if isinstance(value, list):
+            raw_items = value
+        elif value in (None, "", "None"):
+            raw_items = []
+        else:
+            raw_items = str(value).replace("|", ",").split(",")
+        flags = []
+        for item in raw_items:
+            text = str(item or "").strip().upper().replace(" ", "_")
+            if text:
+                flags.append(text)
+        return flags[:8]
+
+    def _normalize_shadow_result(self, result, decision_type):
+        allowed_actions = {
+            "gatekeeper": {"ALLOW_ENTRY", "WAIT", "REJECT"},
+            "overnight": {"HOLD_OVERNIGHT", "SELL_TODAY"},
+        }[decision_type]
+
+        if not isinstance(result, dict):
+            result = {}
+
+        action = str(result.get("action", "WAIT" if decision_type == "gatekeeper" else "SELL_TODAY")).upper().strip()
+        if action not in allowed_actions:
+            action = "WAIT" if decision_type == "gatekeeper" else "SELL_TODAY"
+
+        try:
+            score = int(float(result.get("score", 50)))
+        except Exception:
+            score = 50
+        score = max(0, min(100, score))
+
+        try:
+            size_bias = int(float(result.get("size_bias", 0)))
+        except Exception:
+            size_bias = 0
+        size_bias = max(-2, min(2, size_bias))
+
+        return {
+            "action": action,
+            "score": score,
+            "confidence": self._normalize_confidence(result.get("confidence", 0.0)),
+            "risk_flags": self._normalize_risk_flags(result.get("risk_flags", [])),
+            "size_bias": size_bias,
+            "veto": self._coerce_bool(result.get("veto", False)),
+            "thesis": str(result.get("thesis", "") or "").replace("\n", " ").strip()[:160],
+            "invalidator": str(result.get("invalidator", "") or "").replace("\n", " ").strip()[:160],
+        }
+
+    def _build_shadow_payload(self, decision_type, stock_name, stock_code, strategy, realtime_ctx):
+        return {
+            "decision_type": decision_type.upper(),
+            "stock_name": stock_name,
+            "stock_code": stock_code,
+            "strategy": str(strategy or "").upper(),
+            "shadow_mode": "SHADOW",
+            "context": realtime_ctx or {},
+        }
+
+    def _call_persona(self, decision_type, persona_prompt, payload, context_name):
+        raw_result = self._call_openai_safe(
+            persona_prompt,
+            json.dumps(payload, ensure_ascii=False, indent=2, default=str),
+            require_json=True,
+            context_name=context_name,
+            model_override=self.fast_model_name,
+            temperature_override=0.05,
+        )
+        return self._normalize_shadow_result(raw_result, decision_type)
+
+    def _gemini_baseline(self, decision_type, gemini_result):
+        gemini_result = gemini_result or {}
+        if decision_type == "gatekeeper":
+            action_label = str(gemini_result.get("action_label", "UNKNOWN") or "UNKNOWN")
+            allow_entry = bool(gemini_result.get("allow_entry", False))
+            if allow_entry:
+                return {"action": "ALLOW_ENTRY", "score": 85, "confidence": 0.85, "action_label": action_label}
+            if action_label in {"전량 회피", "둘 다 아님"}:
+                return {"action": "REJECT", "score": 20, "confidence": 0.75, "action_label": action_label}
+            return {"action": "WAIT", "score": 55, "confidence": 0.6, "action_label": action_label}
+
+        action = str(gemini_result.get("action", "SELL_TODAY") or "SELL_TODAY").upper()
+        confidence = self._normalize_confidence(gemini_result.get("confidence", 0))
+        if action not in {"HOLD_OVERNIGHT", "SELL_TODAY"}:
+            action = "SELL_TODAY"
+        return {
+            "action": action,
+            "score": 75 if action == "HOLD_OVERNIGHT" else 25,
+            "confidence": confidence,
+            "action_label": action,
+        }
+
+    def _resolve_weights(self, decision_type):
+        if decision_type == "gatekeeper":
+            return (
+                float(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_GATEKEEPER_G_WEIGHT", 0.50) or 0.50),
+                float(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_GATEKEEPER_A_WEIGHT", 0.20) or 0.20),
+                float(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_GATEKEEPER_C_WEIGHT", 0.30) or 0.30),
+            )
+        return (
+            float(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_OVERNIGHT_G_WEIGHT", 0.45) or 0.45),
+            float(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_OVERNIGHT_A_WEIGHT", 0.10) or 0.10),
+            float(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_OVERNIGHT_C_WEIGHT", 0.45) or 0.45),
+        )
+
+    def _agreement_bucket(self, gemini_action, aggr_action, cons_action):
+        actions = {gemini_action, aggr_action, cons_action}
+        if len(actions) == 1:
+            return "all_agree"
+        if len(actions) == 3:
+            return "all_conflict"
+        if gemini_action == aggr_action and gemini_action != cons_action:
+            return "gemini_vs_cons_conflict"
+        if gemini_action == cons_action and gemini_action != aggr_action:
+            return "aggr_vs_pair_conflict"
+        if aggr_action == cons_action and gemini_action != aggr_action:
+            return "gemini_vs_openai_conflict"
+        return "partial_conflict"
+
+    def _fuse_results(self, decision_type, gemini, aggressive, conservative):
+        w_gemini, w_aggr, w_cons = self._resolve_weights(decision_type)
+        hard_flags = sorted(flag for flag in conservative.get("risk_flags", []) if flag in self.HARD_RISK_FLAGS)
+        cons_veto = bool(conservative.get("veto")) and bool(hard_flags)
+        fused_score = (
+            float(gemini.get("score", 0)) * w_gemini
+            + float(aggressive.get("score", 0)) * w_aggr
+            + float(conservative.get("score", 0)) * w_cons
+        )
+        if cons_veto:
+            fused_score = max(0.0, fused_score - 15.0)
+
+        if decision_type == "gatekeeper":
+            if cons_veto:
+                fused_action = "WAIT"
+            elif fused_score >= 70.0:
+                fused_action = "ALLOW_ENTRY"
+            elif fused_score <= 35.0:
+                fused_action = "REJECT"
+            else:
+                fused_action = "WAIT"
+        else:
+            if cons_veto:
+                fused_action = "SELL_TODAY"
+            elif fused_score >= 60.0:
+                fused_action = "HOLD_OVERNIGHT"
+            else:
+                fused_action = "SELL_TODAY"
+
+        agreement_bucket = self._agreement_bucket(
+            gemini.get("action", ""),
+            aggressive.get("action", ""),
+            conservative.get("action", ""),
+        )
+        if cons_veto and fused_action != gemini.get("action"):
+            winner = "conservative_veto"
+        elif fused_action == aggressive.get("action") and fused_action != gemini.get("action"):
+            winner = "aggressive_promote"
+        elif fused_action == gemini.get("action"):
+            winner = "gemini_hold"
+        else:
+            winner = "blended"
+
+        return {
+            "fused_action": fused_action,
+            "fused_score": int(round(max(0.0, min(100.0, fused_score)))),
+            "agreement_bucket": agreement_bucket,
+            "winner": winner,
+            "cons_veto": cons_veto,
+            "hard_flags": hard_flags,
+        }
+
+    def _is_enabled_for(self, decision_type):
+        if not self.shadow_enabled or not self.shadow_mode:
+            return False
+        if decision_type == "gatekeeper":
+            return bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_APPLY_GATEKEEPER", True))
+        if decision_type == "overnight":
+            return bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_APPLY_OVERNIGHT", True))
+        return False
+
+    def _evaluate_shadow(self, decision_type, stock_name, stock_code, strategy, realtime_ctx, gemini_result):
+        started_at = time.perf_counter()
+        try:
+            payload = self._build_shadow_payload(
+                decision_type=decision_type,
+                stock_name=stock_name,
+                stock_code=stock_code,
+                strategy=strategy,
+                realtime_ctx=realtime_ctx,
+            )
+            aggressive = self._call_persona(
+                decision_type,
+                DUAL_PERSONA_AGGRESSIVE_PROMPT,
+                payload,
+                context_name=f"DUAL-{decision_type.upper()}-A:{stock_name}",
+            )
+            conservative = self._call_persona(
+                decision_type,
+                DUAL_PERSONA_CONSERVATIVE_PROMPT,
+                payload,
+                context_name=f"DUAL-{decision_type.upper()}-C:{stock_name}",
+            )
+            gemini = self._gemini_baseline(decision_type, gemini_result)
+            fused = self._fuse_results(decision_type, gemini, aggressive, conservative)
+            return {
+                "mode": "shadow",
+                "decision_type": decision_type,
+                "strategy": str(strategy or "").upper(),
+                "gemini_action": gemini.get("action"),
+                "gemini_score": gemini.get("score"),
+                "gemini_action_label": gemini.get("action_label", ""),
+                "aggr_action": aggressive.get("action"),
+                "aggr_score": aggressive.get("score"),
+                "cons_action": conservative.get("action"),
+                "cons_score": conservative.get("score"),
+                "cons_veto": fused.get("cons_veto", False),
+                "fused_action": fused.get("fused_action"),
+                "fused_score": fused.get("fused_score"),
+                "winner": fused.get("winner"),
+                "agreement_bucket": fused.get("agreement_bucket"),
+                "hard_flags": fused.get("hard_flags", []),
+                "shadow_extra_ms": int((time.perf_counter() - started_at) * 1000),
+            }
+        except Exception as e:
+            return {
+                "mode": "shadow",
+                "decision_type": decision_type,
+                "strategy": str(strategy or "").upper(),
+                "error": str(e),
+                "shadow_extra_ms": int((time.perf_counter() - started_at) * 1000),
+            }
+
+    def _submit_shadow(self, decision_type, stock_name, stock_code, strategy, realtime_ctx, gemini_result, callback=None):
+        if not self._is_enabled_for(decision_type):
+            return None
+        future = self.shadow_executor.submit(
+            self._evaluate_shadow,
+            decision_type,
+            stock_name,
+            stock_code,
+            strategy,
+            realtime_ctx,
+            gemini_result,
+        )
+        if callback is not None:
+            def _emit_result(done_future):
+                try:
+                    callback(done_future.result())
+                except Exception as exc:
+                    log_error(f"🚨 [OpenAI 듀얼 페르소나 callback] {decision_type}:{stock_name} 실패: {exc}")
+            future.add_done_callback(_emit_result)
+        return future
+
+    def submit_gatekeeper_shadow(self, *, stock_name, stock_code, strategy, realtime_ctx, gemini_result, callback=None):
+        return self._submit_shadow(
+            "gatekeeper",
+            stock_name,
+            stock_code,
+            strategy,
+            realtime_ctx,
+            gemini_result,
+            callback=callback,
+        )
+
+    def submit_overnight_shadow(self, *, stock_name, stock_code, strategy, realtime_ctx, gemini_result, callback=None):
+        return self._submit_shadow(
+            "overnight",
+            stock_name,
+            stock_code,
+            strategy,
+            realtime_ctx,
+            gemini_result,
+            callback=callback,
+        )
+
+    def _normalize_shared_prompt_result(self, result):
+        if not isinstance(result, dict):
+            result = {}
+        action = str(result.get("action", "WAIT") or "WAIT").upper().strip()
+        if action not in {"BUY", "WAIT", "DROP"}:
+            action = "WAIT"
+        try:
+            score = int(float(result.get("score", 50)))
+        except Exception:
+            score = 50
+        return {
+            "action": action,
+            "score": max(0, min(100, score)),
+            "reason": str(result.get("reason", "") or "").replace("\n", " ").strip()[:160],
+        }
+
+    def _evaluate_watching_shared_prompt_shadow(
+        self,
+        stock_name,
+        stock_code,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        gemini_result,
+    ):
+        started_at = time.perf_counter()
+        try:
+            formatted = self._format_market_data(ws_data, recent_ticks, recent_candles)
+            result = self._call_openai_safe(
+                SCALPING_SYSTEM_PROMPT,
+                formatted,
+                require_json=True,
+                context_name=f"WATCHING-SHARED:{stock_name}",
+                model_override=self.fast_model_name,
+                temperature_override=0.1,
+            )
+            normalized = self._normalize_shared_prompt_result(result)
+            gemini_action = str((gemini_result or {}).get("action", "WAIT") or "WAIT").upper()
+            gemini_score = int(float((gemini_result or {}).get("score", 50) or 50))
+            return {
+                "mode": "shadow",
+                "strategy": "SCALPING",
+                "gemini_action": gemini_action,
+                "gemini_score": gemini_score,
+                "gpt_action": normalized.get("action", "WAIT"),
+                "gpt_score": normalized.get("score", 50),
+                "gpt_reason": normalized.get("reason", ""),
+                "action_diverged": gemini_action != normalized.get("action", "WAIT"),
+                "score_gap": int(normalized.get("score", 50)) - gemini_score,
+                "gpt_model": self.fast_model_name,
+                "shadow_extra_ms": int((time.perf_counter() - started_at) * 1000),
+            }
+        except Exception as e:
+            return {
+                "mode": "shadow",
+                "strategy": "SCALPING",
+                "error": str(e),
+                "gpt_model": self.fast_model_name,
+                "shadow_extra_ms": int((time.perf_counter() - started_at) * 1000),
+            }
+
+    def submit_watching_shared_prompt_shadow(
+        self,
+        *,
+        stock_name,
+        stock_code,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        gemini_result,
+        callback=None,
+    ):
+        future = self.shadow_executor.submit(
+            self._evaluate_watching_shared_prompt_shadow,
+            stock_name,
+            stock_code,
+            ws_data,
+            recent_ticks,
+            recent_candles,
+            gemini_result,
+        )
+        if callback is not None:
+            def _emit_result(done_future):
+                try:
+                    callback(done_future.result())
+                except Exception as exc:
+                    log_error(f"🚨 [WATCHING shared prompt shadow callback] {stock_name}({stock_code}) 실패: {exc}")
+            future.add_done_callback(_emit_result)
+        return future

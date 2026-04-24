@@ -54,14 +54,14 @@ def test_router_uses_deepseek_only_when_explicitly_selected():
     assert router._extract_scalping_features()["engine"] == "deepseek"
 
 
-def test_router_keeps_holding_profile_on_gemini_even_when_openai_selected():
+def test_router_keeps_openai_on_holding_profile_when_selected():
     router = RuntimeAIEngineRouter(
         gemini_engine=_Engine("gemini"),
         openai_scalping_engine=_Engine("openai"),
         runtime_role="main",
         scalping_ai_route="openai",
     )
-    assert router.analyze_target("x", {}, [], [], prompt_profile="holding")["engine"] == "gemini"
+    assert router.analyze_target("x", {}, [], [], prompt_profile="holding")["engine"] == "openai"
 
 
 def test_router_keeps_deepseek_on_holding_profile_when_selected():

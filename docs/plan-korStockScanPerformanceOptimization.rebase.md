@@ -43,6 +43,8 @@
 8. `counterfactual` 수치는 직접 실현손익과 합산하지 않고 우선순위 판단 자료로만 쓴다.
 9. 향후 A/B 테스트의 목적은 단일 모델 우열 확인이 아니라 진입/보유/청산 각 단계에서 `EV`를 높여 기준 조합 대비 `최소 +10%` 개선되는 엔진 조합을 찾는 것이다.
 
+10. AI `fast -> deep` 재판정 트리거는 엔진별 하드코딩 점수대가 아니라 `feature conflict predicates + 최근 실거래 EV 근거`로 분리해 관리한다.
+11. 재판정 구조를 공통축으로 승격할 때는 `submitted/full_fill/partial_fill/COMPLETED + valid profit_rate` 기준으로 `재판정 코호트 vs 비재판정 코호트`를 먼저 비교하고, EV 개선이 확인될 때만 live 공통구조로 올린다.
 ## 4. 작업 규칙
 
 | 규칙 | 기준 | 위반 시 처리 |

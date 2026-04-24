@@ -126,7 +126,7 @@ from src.engine import kiwoom_orders
 from src.engine.kiwoom_websocket import KiwoomWSManager
 from src.engine.signal_radar import SniperRadar
 from src.engine.ai_engine import GeminiSniperEngine
-from src.engine.ai_engine_openai_v2 import GPTSniperEngine, OpenAIDualPersonaShadowEngine
+from src.engine.ai_engine_openai import GPTSniperEngine, OpenAIDualPersonaShadowEngine
 from src.engine.ai_engine_deepseek import DeepSeekSniperEngine
 from src.engine.runtime_ai_router import RuntimeAIEngineRouter, resolve_runtime_role, resolve_scalping_ai_route
 

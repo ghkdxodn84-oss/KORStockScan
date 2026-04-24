@@ -89,22 +89,12 @@ class RuntimeAIEngineRouter:
     def _is_scalping_strategy(self, strategy: Any) -> bool:
         return str(strategy or "SCALPING").strip().upper() in {"SCALPING", "SCALP"}
 
-    def _supports_openai_scalping_profile(self, prompt_profile: Any) -> bool:
-        """
-        OpenAI scalping route is currently entry-oriented only.
-        Gemini owns holding/exit prompt/schema parity, so keep those profiles
-        on Gemini until OpenAI gets dedicated prompt + action-schema support.
-        """
-        profile = str(prompt_profile or "shared").strip().lower()
-        return profile in {"shared", "watching", "entry"}
-
-    def _should_use_openai_scalping(self, *, strategy: Any, prompt_profile: Any) -> bool:
+    def _should_use_openai_scalping(self, *, strategy: Any) -> bool:
         return (
             self.scalping_ai_route == "openai"
             and self.runtime_role == "main"
             and self.openai_scalping_engine is not None
             and self._is_scalping_strategy(strategy)
-            and self._supports_openai_scalping_profile(prompt_profile)
         )
 
     def _should_use_deepseek_scalping(self, *, strategy: Any) -> bool:
@@ -114,6 +104,13 @@ class RuntimeAIEngineRouter:
             and self.deepseek_scalping_engine is not None
             and self._is_scalping_strategy(strategy)
         )
+
+    def _selected_scalping_engine(self, strategy: Any):
+        if self._should_use_deepseek_scalping(strategy=strategy):
+            return self.deepseek_scalping_engine
+        if self._should_use_openai_scalping(strategy=strategy):
+            return self.openai_scalping_engine
+        return self.gemini_engine
 
     def analyze_target(
         self,
@@ -126,31 +123,8 @@ class RuntimeAIEngineRouter:
         cache_profile="default",
         prompt_profile="shared",
     ):
-        if self._should_use_deepseek_scalping(strategy=strategy):
-            return self.deepseek_scalping_engine.analyze_target(
-                target_name,
-                ws_data,
-                recent_ticks,
-                recent_candles,
-                strategy=strategy,
-                program_net_qty=program_net_qty,
-                cache_profile=cache_profile,
-                prompt_profile=prompt_profile,
-            )
-
-        if self._should_use_openai_scalping(strategy=strategy, prompt_profile=prompt_profile):
-            return self.openai_scalping_engine.analyze_target(
-                target_name,
-                ws_data,
-                recent_ticks,
-                recent_candles,
-                strategy=strategy,
-                program_net_qty=program_net_qty,
-                cache_profile=cache_profile,
-                prompt_profile=prompt_profile,
-            )
-
-        return self.gemini_engine.analyze_target(
+        engine = self._selected_scalping_engine(strategy=strategy)
+        return engine.analyze_target(
             target_name,
             ws_data,
             recent_ticks,
@@ -162,31 +136,26 @@ class RuntimeAIEngineRouter:
         )
 
     def generate_realtime_report(self, *args, **kwargs):
-        return self.gemini_engine.generate_realtime_report(*args, **kwargs)
+        return self._selected_scalping_engine(strategy="SCALPING").generate_realtime_report(*args, **kwargs)
 
     def analyze_target_shadow_prompt(self, *args, **kwargs):
+        engine = self._selected_scalping_engine(strategy="SCALPING")
+        if hasattr(engine, "analyze_target_shadow_prompt"):
+            return engine.analyze_target_shadow_prompt(*args, **kwargs)
         if hasattr(self.gemini_engine, "analyze_target_shadow_prompt"):
             return self.gemini_engine.analyze_target_shadow_prompt(*args, **kwargs)
         return {"action": "WAIT", "score": 50, "reason": "shadow unsupported"}
 
     def _extract_scalping_features(self, *args, **kwargs):
-        if (
-            self.scalping_ai_route == "deepseek"
-            and self.runtime_role == "main"
-            and self.deepseek_scalping_engine is not None
-        ):
-            return self.deepseek_scalping_engine._extract_scalping_features(*args, **kwargs)
-        if (
-            self.scalping_ai_route == "openai"
-            and self.runtime_role == "main"
-            and self.openai_scalping_engine is not None
-        ):
-            return self.openai_scalping_engine._extract_scalping_features(*args, **kwargs)
-        if hasattr(self.gemini_engine, "_extract_scalping_features"):
-            return self.gemini_engine._extract_scalping_features(*args, **kwargs)
+        engine = self._selected_scalping_engine(strategy="SCALPING")
+        if hasattr(engine, "_extract_scalping_features"):
+            return engine._extract_scalping_features(*args, **kwargs)
         return {}
 
     def __getattr__(self, name: str):
+        selected = self._selected_scalping_engine(strategy="SCALPING")
+        if hasattr(selected, name):
+            return getattr(selected, name)
         if hasattr(self.gemini_engine, name):
             return getattr(self.gemini_engine, name)
         if self.deepseek_scalping_engine is not None and hasattr(self.deepseek_scalping_engine, name):
