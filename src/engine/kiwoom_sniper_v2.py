@@ -127,6 +127,7 @@ from src.engine.kiwoom_websocket import KiwoomWSManager
 from src.engine.signal_radar import SniperRadar
 from src.engine.ai_engine import GeminiSniperEngine
 from src.engine.ai_engine_openai_v2 import GPTSniperEngine, OpenAIDualPersonaShadowEngine
+from src.engine.ai_engine_deepseek import DeepSeekSniperEngine
 from src.engine.runtime_ai_router import RuntimeAIEngineRouter, resolve_runtime_role, resolve_scalping_ai_route
 
 # 💡 VIX, 유가지표 임포트
@@ -1037,6 +1038,7 @@ def run_sniper(is_test_mode=False):
     ai_engine = None
     gemini_engine = None
     openai_scalping_engine = None
+    deepseek_scalping_engine = None
     AI_ENGINE = None
     dual_persona_engine = None
     global DUAL_PERSONA_ENGINE
@@ -1056,6 +1058,7 @@ def run_sniper(is_test_mode=False):
     openai_dual_enabled = bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_ENABLED", True))
     openai_shadow_mode = bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_SHADOW_MODE", True))
     openai_api_keys = [v for k, v in CONF.items() if k.startswith("OPENAI_API_KEY") and v]
+    deepseek_api_keys = [v for k, v in CONF.items() if k.startswith("DEEPSEEK_API_KEY") and v]
     if scalping_ai_route == "openai" and runtime_role == "main" and openai_api_keys:
         try:
             openai_scalping_engine = GPTSniperEngine(api_keys=openai_api_keys, announce_startup=False)
@@ -1075,8 +1078,27 @@ def run_sniper(is_test_mode=False):
         except Exception as e:
             log_error(f"🚨 OpenAI 스캘핑 엔진 초기화 실패: {e}")
             openai_scalping_engine = None
+    elif scalping_ai_route == "deepseek" and runtime_role == "main" and deepseek_api_keys:
+        try:
+            deepseek_scalping_engine = DeepSeekSniperEngine(
+                api_keys=deepseek_api_keys,
+                announce_startup=False,
+            )
+            print(
+                "🧠 메인 스캘핑 DeepSeek 엔진 고정 완료 "
+                f"(T1: {deepseek_scalping_engine._get_tier1_model()} / "
+                f"T2: {deepseek_scalping_engine._get_tier2_model()} / "
+                f"T3: {deepseek_scalping_engine._get_tier3_model()})"
+            )
+        except Exception as e:
+            log_error(f"🚨 DeepSeek 스캘핑 엔진 초기화 실패: {e}")
+            deepseek_scalping_engine = None
     elif scalping_ai_route == "gemini":
         log_info("ℹ️ Plan Rebase: 스캘핑 live AI 라우팅을 Gemini로 고정하고 OpenAI 스캘핑 엔진 초기화를 건너뜁니다.")
+    elif scalping_ai_route == "openai" and runtime_role == "main" and not openai_api_keys:
+        log_error("🚨 KORSTOCKSCAN_SCALPING_AI_ROUTE=openai 이지만 OPENAI_API_KEY가 없어 Gemini 기본 라우트로 유지합니다.")
+    elif scalping_ai_route == "deepseek" and runtime_role == "main" and not deepseek_api_keys:
+        log_error("🚨 KORSTOCKSCAN_SCALPING_AI_ROUTE=deepseek 이지만 DEEPSEEK_API_KEY가 없어 Gemini 기본 라우트로 유지합니다.")
 
     if openai_dual_enabled and openai_shadow_mode and openai_api_keys:
         try:
@@ -1094,6 +1116,7 @@ def run_sniper(is_test_mode=False):
         ai_engine = RuntimeAIEngineRouter(
             gemini_engine=gemini_engine,
             openai_scalping_engine=openai_scalping_engine,
+            deepseek_scalping_engine=deepseek_scalping_engine,
             runtime_role=runtime_role,
             scalping_ai_route=scalping_ai_route,
         )
@@ -1101,7 +1124,8 @@ def run_sniper(is_test_mode=False):
         print(
             f"🧭 AI 라우팅 활성화: role={runtime_role} "
             f"route={scalping_ai_route} "
-            f"(main_scalping_openai={'ON' if scalping_ai_route == 'openai' and runtime_role == 'main' and openai_scalping_engine else 'OFF'})"
+            f"(main_scalping_openai={'ON' if scalping_ai_route == 'openai' and runtime_role == 'main' and openai_scalping_engine else 'OFF'} / "
+            f"main_scalping_deepseek={'ON' if scalping_ai_route == 'deepseek' and runtime_role == 'main' and deepseek_scalping_engine else 'OFF'})"
         )
 
     bind_analysis_dependencies(ai_engine=AI_ENGINE)

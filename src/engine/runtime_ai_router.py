@@ -36,9 +36,9 @@ def resolve_runtime_role() -> str:
 
 
 def resolve_scalping_ai_route() -> str:
-    """Return live scalping AI route: gemini (default) or openai."""
+    """Return live scalping AI route: gemini (default), openai, or deepseek."""
     explicit = str(os.getenv("KORSTOCKSCAN_SCALPING_AI_ROUTE", "") or "").strip().lower()
-    if explicit in {"gemini", "openai"}:
+    if explicit in {"gemini", "openai", "deepseek"}:
         return explicit
 
     # Plan Rebase default: keep live decisions on Gemini until the core
@@ -51,6 +51,7 @@ class RuntimeAIEngineRouter:
     Runtime router:
     - gemini route: scalping analyze_target -> Gemini engine
     - openai route + main role: scalping analyze_target -> OpenAI engine
+    - deepseek route + main role: scalping analyze_target -> DeepSeek engine
     """
 
     def __init__(
@@ -58,11 +59,13 @@ class RuntimeAIEngineRouter:
         *,
         gemini_engine: Any,
         openai_scalping_engine: Any = None,
+        deepseek_scalping_engine: Any = None,
         runtime_role: str = "main",
         scalping_ai_route: str = "gemini",
     ):
         self.gemini_engine = gemini_engine
         self.openai_scalping_engine = openai_scalping_engine
+        self.deepseek_scalping_engine = deepseek_scalping_engine
         self.runtime_role = str(runtime_role or "main").strip().lower()
         self.scalping_ai_route = str(scalping_ai_route or "gemini").strip().lower()
 
@@ -71,10 +74,16 @@ class RuntimeAIEngineRouter:
             and self.runtime_role == "main"
             and self.openai_scalping_engine is not None
         )
+        deepseek_enabled = (
+            self.scalping_ai_route == "deepseek"
+            and self.runtime_role == "main"
+            and self.deepseek_scalping_engine is not None
+        )
         log_info(
             f"[AI_ROUTER] role={self.runtime_role} "
             f"scalping_route={self.scalping_ai_route} "
-            f"scalping_openai={'on' if openai_enabled else 'off'}"
+            f"scalping_openai={'on' if openai_enabled else 'off'} "
+            f"scalping_deepseek={'on' if deepseek_enabled else 'off'}"
         )
 
     def _is_scalping_strategy(self, strategy: Any) -> bool:
@@ -98,6 +107,14 @@ class RuntimeAIEngineRouter:
             and self._supports_openai_scalping_profile(prompt_profile)
         )
 
+    def _should_use_deepseek_scalping(self, *, strategy: Any) -> bool:
+        return (
+            self.scalping_ai_route == "deepseek"
+            and self.runtime_role == "main"
+            and self.deepseek_scalping_engine is not None
+            and self._is_scalping_strategy(strategy)
+        )
+
     def analyze_target(
         self,
         target_name,
@@ -109,6 +126,18 @@ class RuntimeAIEngineRouter:
         cache_profile="default",
         prompt_profile="shared",
     ):
+        if self._should_use_deepseek_scalping(strategy=strategy):
+            return self.deepseek_scalping_engine.analyze_target(
+                target_name,
+                ws_data,
+                recent_ticks,
+                recent_candles,
+                strategy=strategy,
+                program_net_qty=program_net_qty,
+                cache_profile=cache_profile,
+                prompt_profile=prompt_profile,
+            )
+
         if self._should_use_openai_scalping(strategy=strategy, prompt_profile=prompt_profile):
             return self.openai_scalping_engine.analyze_target(
                 target_name,
@@ -142,6 +171,12 @@ class RuntimeAIEngineRouter:
 
     def _extract_scalping_features(self, *args, **kwargs):
         if (
+            self.scalping_ai_route == "deepseek"
+            and self.runtime_role == "main"
+            and self.deepseek_scalping_engine is not None
+        ):
+            return self.deepseek_scalping_engine._extract_scalping_features(*args, **kwargs)
+        if (
             self.scalping_ai_route == "openai"
             and self.runtime_role == "main"
             and self.openai_scalping_engine is not None
@@ -154,6 +189,8 @@ class RuntimeAIEngineRouter:
     def __getattr__(self, name: str):
         if hasattr(self.gemini_engine, name):
             return getattr(self.gemini_engine, name)
+        if self.deepseek_scalping_engine is not None and hasattr(self.deepseek_scalping_engine, name):
+            return getattr(self.deepseek_scalping_engine, name)
         if self.openai_scalping_engine is not None and hasattr(self.openai_scalping_engine, name):
             return getattr(self.openai_scalping_engine, name)
         raise AttributeError(name)
