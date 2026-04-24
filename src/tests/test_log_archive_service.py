@@ -4,6 +4,7 @@ import sys
 import types
 
 from src.engine import log_archive_service as service
+from src.engine import monitor_snapshot_runtime as runtime
 from src.engine.notify_monitor_snapshot_admin import _build_message, _load_json_line
 
 
@@ -47,6 +48,7 @@ def test_notify_monitor_snapshot_admin_builds_cutoff_message(tmp_path):
     assert "trend_max_dates: 12" in message
     assert "max_date_basis: 2026-04-22" in message
     assert "server_comparison: policy_disabled" in message
+    assert "next_prompt_hint:" in message
 
 
 def test_notify_monitor_snapshot_admin_builds_skipped_message():
@@ -65,6 +67,33 @@ def test_notify_monitor_snapshot_admin_builds_skipped_message():
     assert "monitor snapshot skipped" in message
     assert "reason: lock_busy" in message
     assert "lock_file: tmp/run_monitor_snapshot.lock" in message
+
+
+def test_normalize_result_payload_detects_cooldown_skip():
+    payload = runtime.normalize_result_payload(
+        target_date="2026-04-24",
+        profile="intraday_light",
+        output_text="[SKIP] snapshot cooldown active for intraday_light (remaining=30s) target_date=2026-04-24",
+    )
+
+    assert payload["status"] == "skipped"
+    assert payload["reason"] == "cooldown_active"
+    assert "중복 실행" in payload["next_prompt_hint"] or "기존 결과" in payload["next_prompt_hint"]
+
+
+def test_completion_artifact_roundtrip(tmp_path):
+    artifact_path = tmp_path / "monitor_snapshot_completion_2026-04-24_full.json"
+    payload = {
+        "status": "dispatched",
+        "target_date": "2026-04-24",
+        "profile": "full",
+        "next_prompt_hint": "완료 통보를 기다리세요.",
+    }
+    runtime.write_completion_artifact(artifact_path, payload)
+
+    loaded = json.loads(artifact_path.read_text(encoding="utf-8"))
+    assert loaded["status"] == "dispatched"
+    assert loaded["next_prompt_hint"] == "완료 통보를 기다리세요."
 
 
 def test_archive_and_replay_daily_log_slice(tmp_path, monkeypatch):

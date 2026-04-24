@@ -10,7 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from src.engine.trade_profit import calculate_net_realized_pnl
-from src.engine.log_archive_service import iter_target_log_lines
+from src.engine.log_archive_service import iter_target_log_lines, load_monitor_snapshot
+from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
 from src.utils.constants import LOGS_DIR, POSTGRES_URL
 from src.engine.sniper_gatekeeper_replay import find_gatekeeper_snapshot_for_trade
 
@@ -996,6 +997,20 @@ def build_trade_review_report(
     top_n: int = 10,
     scope: str = "entered",
 ) -> dict:
+    guarded = guard_stdin_heavy_build(
+        snapshot_kind="trade_review",
+        target_date=target_date,
+        fallback_snapshot=load_monitor_snapshot("trade_review", target_date),
+        request_details={
+            "code": code,
+            "since_time": since_time,
+            "top_n": top_n,
+            "scope": scope,
+        },
+    )
+    if guarded is not None:
+        return guarded
+
     normalized_code = str(code).strip()[:6] if code else None
     since_dt = _parse_since_datetime(target_date, since_time)
     scope = str(scope or "entered").strip().lower()

@@ -202,6 +202,22 @@
 - 현재 플로우는 여전히 `entry_armed -> budget_pass -> latency_block -> submitted` 구간(플로우차트 단계 7~8)에 고정돼 있다.
 - upstream 단계인 `감시종목/AI 판정`(`DF-ENTRY-001`, `DF-ENTRY-002`)은 `보류`가 아니라 `선결 조건 충족` 상태다. 지금 흔들면 안 되는 것은 upstream이 아니라 downstream 세부축 선택이다.
 - 오늘 오전 기준 다음 단일 조작점 후보는 `quote_fresh/spread_only_required` 하위원인을 직접 겨누는 replacement였다. 이후 same-day 결정으로 `spread_relief`는 parking으로 내리고, `ws_jitter-only relief`를 독립 replacement 축으로 올려 live 교체를 마쳤다. `entry_filter_quality`는 이 흐름 밖의 후순위 parking이다.
+- 같은 날 후속 재분해에서 `ws_jitter-only relief`와 `other_danger residual`도 제출 회복 근거를 만들지 못해 `quote_fresh family` 전체를 장중 잠갔다. 이 시점부터 다음 독립축은 `gatekeeper_fast_reuse`로 넘어간다.
+
+### DF-ENTRY-005 `gatekeeper_fast_reuse` window vs signature 재판정
+
+| 항목 | 내용 |
+| --- | --- |
+| ID | `DF-ENTRY-005` |
+| 판정항목 | `gatekeeper_fast_reuse` 병목이 `window`인지 `signature`인지 재분해하고, 다음 승인축을 무엇으로 잠글지 결정 |
+| 초기 가설 | 장중 중간까지는 `fast_reuse`가 거의 안 보이니 `reuse window`가 너무 짧아서 age 만료가 주원인일 수 있다고 봤다. 즉 `window`를 늘리면 bypass가 줄지부터 확인하려 했다. |
+| same-day 재분해 결과 | `2026-04-24 14:25:15 KST` 직전 raw 분해 기준 `age_expired_only=1`, `sig_only=1`, `age_expired+sig_changed=8`이었다. `window만 늘리면 해결`되는 표본은 극히 적고, 실제 주력 blocker는 `signature_changed` 결합 경로였다. |
+| 오늘 결론 | 초기 가설은 `window`였지만, 오늘 판정은 `signature` 쪽이 더 큰 원인으로 잠겼다. 따라서 다음 승인축은 `gatekeeper_fast_reuse signature-only`다. |
+| 왜 signature인가 | `window-only`가 아니라 `sig_changed`가 붙는 순간 재사용이 깨지는 표본이 더 많았고, `curr_price`, `v_pw_now`, `spread_tick`, `score`, `buy_ratio_ws`, `prog_delta_qty` 같은 미세 변화가 signature를 쉽게 흔들고 있었다. `window`를 먼저 만지면 `signature_changed`와 섞여 원인귀속이 다시 흐려진다. |
+| 코드 반영 상태 | same-day에 `signature-only deadband`는 이미 코드에 넣었다. `prog_net_qty`, `prog_delta_qty`는 작은 signed flow 노이즈 구간을 0 bucket으로 정규화하도록 반영했고, 관련 테스트도 통과했다. |
+| 아직 안 한 것 | 아직 `live 승인`은 안 했다. 즉 코드는 적재됐지만, 다음 거래일 PREOPEN에서 `기존 축 OFF -> restart.flag -> 새 축 ON` 순서로 실제 1축 live 승인만 남아 있다. 장전에 다시 코딩하는 게 아니라 승인/보류를 닫는 절차다. |
+| 현재 해석 | `entry_armed -> budget_pass`는 병목이 아니고, `budget_pass -> latency_block -> submitted`가 여전히 주병목이다. `gatekeeper_fast_reuse signature-only`는 `quote_fresh family` 잠금 이후의 다음 독립축 후보일 뿐, 아직 주병목이 해결됐다는 뜻은 아니다. |
+| 다음 액션 | PREOPEN에서는 `signature-only` 축을 live 승인할지, 아니면 보류 사유와 다음 절대시각을 남길지만 본다. 장전 작업의 의미는 코드 작성이 아니라 `1축 live 승인`이다. |
 
 ## 제출축 판정 후 다음 단계
 
@@ -211,13 +227,13 @@
 | --- | --- |
 | ID | `DF-HOLDING-001` |
 | 시작 조건 | `ws_jitter-only relief` replacement 또는 후속 downstream 1축에서 `submitted` 회복이 확인된 뒤에만 시작한다. |
-| 현재 상태 | 장중 반복 관찰 중. `ws_jitter` replacement는 live 반영됐고, `11:30 KST` 1차 스모크 기준 `ai_confirmed=70`, `entry_armed=17`, `budget_pass_events=131`으로 표본량은 충족했다. 그러나 `order_bundle_submitted_events=0`, `quote_fresh_latency_pass_rate=0.0%`, `latency_canary_applied=True=0`, `latency_canary_reason_top4=[ws_jitter_only_required 93, low_signal 19, quote_stale 13, - 6]`라서 현재 잠금은 `효과 확인`이 아니라 `비활성/비도달 의심`이다. 따라서 `12:00`은 `budget_pass_events >= 100`에서 `submitted >= 3` 또는 `quote_fresh_latency_pass_rate >= 2.0%`의 방향성 단계, `13:20`은 `submitted >= 5`와 `fallback_regression=0`을 확보해 다음 단계 진입 여부를 잠그는 단계로 이어간다. |
+| 현재 상태 | `13:07 KST` 선행 누적 기준 `budget_pass_events=1390`, `submitted=1`, `latency_pass_events=1`, `quote_fresh_latency_pass_rate=0.09%`, `latency_canary_applied=True=0`라서 `ws_jitter-only relief`는 공식 슬롯을 기다리지 않아도 `다음 단계 진입 불가`로 잠근다. 이제 same-day 초점은 `HOLDING/청산 품질`이 아니라 `quote_fresh` 하위원인 재분해다. raw `latency_block` 1400건에서 `latency_danger_reason_top5=[other_danger 534, ws_age_too_high 423, ws_jitter_too_high 388, spread_too_wide 379, quote_stale 245]`였고, fresh quote 하위원인 재분해는 `other_quote_fresh 534`, `ws_jitter 230`, `spread 168`, `ws_age 79`, `ws_age+spread 52`, `ws_jitter+spread 45`, `ws_jitter+ws_age 30`, `ws_jitter+ws_age+spread 17`이다. 즉 4요인 밖 residual(`other_danger`)이 explicit 단일요인보다 더 크다. |
 | 다음 단계 목적 | 제출량 증가가 실제 기대값 개선으로 이어지는지 `HOLDING/청산 품질`로 검증한다. 단, 진입 조건은 `submitted` 회복이 먼저다. |
 | 핵심 검증축 | `soft_stop/trailing/good_exit`, `holding_action_applied`, `holding_force_exit_triggered`, `exit_rule` 분포, `full/partial` 분리, `COMPLETED + valid profit_rate` |
 | 분리 원칙 | `initial-only`와 `pyramid-activated` 표본을 섞지 않는다. `full fill`과 `partial fill`도 합치지 않는다. |
 | 성공 판정 | 제출 증가와 함께 체결 품질/청산 품질 악화가 없고 `COMPLETED + valid profit_rate`가 유지 또는 개선 |
 | 실패 판정 | 제출 증가 대비 `soft_stop` 급증, `full_fill` 악화, `COMPLETED + valid profit_rate` 악화 동반 |
-| 다음 액션 | `post-restart submitted >= 5`와 `fallback_regression=0`이 확보되면 `HOLDING/청산 품질` 관찰을 연다. `submitted >= 10` 또는 `full_fill + partial_fill >= 5`면 same-day 다음 단계로 넘긴다. 반대로 `budget_pass_events >= 150`인데 `submitted <= 2`면 HOLDING 축으로 가지 않고 다시 제출축 하위원인 재분해로 되돌린다. 장후에는 장중 checkpoint에서 이미 잠근 결론만 종합하며, 장후 `첫 제출/체결 품질 확인만`으로 다음 단계를 여는 해석은 금지한다. |
+| 다음 액션 | 이번 턴의 next live 후보 재선정은 `quote_fresh 4요인`만이 아니라 `quote_fresh residual(other_danger)`까지 포함한 5분기로 본다. 여기서 끝내지 않고 `ws_jitter` 축을 닫는 즉시 `other_danger residual` 1축을 같은 장중에 바로 연다. 이번에는 [sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/engine/sniper_entry_latency.py)의 `other_danger-only normal override` 코드가 먼저 들어간 뒤 관찰을 시작한다. 새 관찰창은 코드 적재 시점부터 다시 시작하되, `13:40` 중간점검 없이 `14:00 KST`에 바로 최종판정을 내린다. `14:00`까지 `other_danger residual`도 `submitted <= 2`로 잠기면 `quote_fresh family` 전체를 닫고, 준비된 다음 독립축 1개를 `기존 축 OFF -> restart.flag -> 새 축 ON` 순서로 same-day replacement 할 수 있다. 여기서 `1축 원칙`은 `동시 live 1축`만 금지한다. `submitted >= 5`가 새 축에서 다시 확보되기 전까지 `HOLDING/청산 품질`은 열지 않는다. |
 | Source | [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
 
 ## 항목 간 연결 관계
@@ -227,4 +243,5 @@
 | `DF-ENTRY-001` | 독립 개선축 폐기 | `DF-ENTRY-002` | `blocked_ai_score_share`는 관찰지표로 남기고, 실제 실행은 `buy_recovery_canary prompt` 재교정으로 전환 |
 | `DF-ENTRY-002` | upstream 표본 생성 유효, 유지/고정 | `DF-ENTRY-003` | `BUY 부족`보다는 `entry_armed -> submitted` 제출 병목이 다음 공식 판정축으로 넘어갔음을 의미 |
 | `DF-ENTRY-003` | 제출축 live 검증 진행 후 원인 위치 고정 | `DF-ENTRY-004` | `spread relief canary`는 downstream 병목 위치 확인까지는 완료했고, 실효성 승인 실패 후 `quote_fresh` replacement 후보로 연결됐다는 의미 |
-| `DF-ENTRY-004` | same-day 보조축을 `quote_fresh`로 고정 후 `ws_jitter` replacement live 교체 | `DF-HOLDING-001` | HOLDING/청산 품질 판정은 `ws_jitter-only relief` 이후 실제 제출 회복이 확인된 뒤에만 다음 단계로 넘어간다는 의미 |
+| `DF-ENTRY-004` | same-day 보조축을 `quote_fresh`로 고정 후 `ws_jitter` replacement live 교체 | `DF-ENTRY-005` | `quote_fresh family` 잠금 이후 다음 독립축을 `gatekeeper_fast_reuse`로 넘겨 `window vs signature`를 다시 분해했다는 의미 |
+| `DF-ENTRY-005` | `window`보다 `signature`가 주원인으로 재판정, code-load 완료/live 승인 대기 | `DF-HOLDING-001` | HOLDING/청산 품질 판정은 여전히 제출 회복 이후 단계이며, `gatekeeper_fast_reuse signature-only` live 결과가 먼저 필요하다는 의미 |

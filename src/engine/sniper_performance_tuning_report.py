@@ -11,7 +11,8 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
-from src.engine.log_archive_service import iter_target_log_lines
+from src.engine.log_archive_service import iter_target_log_lines, load_monitor_snapshot
+from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
 from src.engine.sniper_trade_review_report import build_trade_review_report
 from src.market_regime import summarize_market_regime
 from src.utils.constants import DATA_DIR, LOGS_DIR, POSTGRES_URL, TRADING_RULES
@@ -117,6 +118,15 @@ def _jsonl_path(target_date: str) -> Path:
     return DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
 
 
+def _normalize_emitted_timestamp(emitted_at: str) -> str:
+    raw = str(emitted_at or "").strip()
+    if not raw:
+        return ""
+    if len(raw) >= 19:
+        return raw[:19].replace("T", " ")
+    return raw.replace("T", " ")
+
+
 def _stringify_field_value(value) -> str:
     if value is None:
         return ""
@@ -148,11 +158,8 @@ def _load_pipeline_events_from_jsonl(*, target_date: str) -> tuple[list[PerfEven
         if not stock_name or not stock_code or not stage or not emitted_at:
             continue
 
-        try:
-            emitted_dt = datetime.fromisoformat(emitted_at)
-        except Exception:
-            continue
-        if emitted_dt.strftime("%Y-%m-%d") != target_date:
+        timestamp = _normalize_emitted_timestamp(emitted_at)
+        if len(timestamp) < 19 or timestamp[:10] != target_date:
             continue
 
         fields_payload = payload.get("fields") or {}
@@ -167,7 +174,7 @@ def _load_pipeline_events_from_jsonl(*, target_date: str) -> tuple[list[PerfEven
             fields.setdefault("id", str(record_id))
 
         event = PerfEvent(
-            timestamp=emitted_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            timestamp=timestamp,
             name=stock_name,
             code=stock_code,
             stage=stage,
@@ -179,12 +186,8 @@ def _load_pipeline_events_from_jsonl(*, target_date: str) -> tuple[list[PerfEven
         else:
             holding_events.append(event)
 
-    def _sort_key(event: PerfEvent) -> tuple[datetime, str, str]:
-        try:
-            parsed = datetime.strptime(event.timestamp, "%Y-%m-%d %H:%M:%S")
-        except Exception:
-            parsed = datetime.min
-        return parsed, event.code, event.stage
+    def _sort_key(event: PerfEvent) -> tuple[str, str, str]:
+        return event.timestamp, event.code, event.stage
 
     entry_events.sort(key=_sort_key)
     holding_events.sort(key=_sort_key)
@@ -716,6 +719,15 @@ def _build_flow_bottleneck_lane(
 
 
 def _build_current_trade_rows(target_date: str) -> tuple[list[dict], list[str]]:
+    snapshot = load_monitor_snapshot("trade_review", target_date)
+    if snapshot:
+        sections = snapshot.get("sections", {}) or {}
+        meta = snapshot.get("meta", {}) or {}
+        rows = list(sections.get("recent_trades", []) or [])
+        if rows:
+            warnings = list(meta.get("warnings", []) or [])
+            return rows, warnings
+
     report = build_trade_review_report(
         target_date=target_date,
         since_time=None,
@@ -1664,6 +1676,18 @@ def build_performance_tuning_report(
     since_time: str | None = None,
     trend_max_dates: int | None = None,
 ) -> dict:
+    guarded = guard_stdin_heavy_build(
+        snapshot_kind="performance_tuning",
+        target_date=target_date,
+        fallback_snapshot=load_monitor_snapshot("performance_tuning", target_date),
+        request_details={
+            "since_time": since_time,
+            "trend_max_dates": trend_max_dates,
+        },
+    )
+    if guarded is not None:
+        return guarded
+
     entry_events, holding_events = _load_pipeline_events_from_jsonl(target_date=target_date)
     if not entry_events and not holding_events:
         log_path = LOGS_DIR / "sniper_state_handlers_info.log"
@@ -1674,8 +1698,9 @@ def build_performance_tuning_report(
 
     since_dt = _parse_since_datetime(target_date, since_time)
     if since_dt is not None:
-        entry_events = [e for e in entry_events if datetime.strptime(e.timestamp, "%Y-%m-%d %H:%M:%S") >= since_dt]
-        holding_events = [e for e in holding_events if datetime.strptime(e.timestamp, "%Y-%m-%d %H:%M:%S") >= since_dt]
+        since_key = since_dt.strftime("%Y-%m-%d %H:%M:%S")
+        entry_events = [e for e in entry_events if e.timestamp >= since_key]
+        holding_events = [e for e in holding_events if e.timestamp >= since_key]
 
     holding_reviews = [e for e in holding_events if e.stage == "ai_holding_review"]
     holding_skips = [e for e in holding_events if e.stage == "ai_holding_skip_unchanged"]

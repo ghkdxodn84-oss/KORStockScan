@@ -1,4 +1,5 @@
 from flask import Flask, jsonify, render_template_string, request
+import copy
 import os
 import sys
 from datetime import datetime, timedelta
@@ -11,14 +12,11 @@ if PROJECT_ROOT not in sys.path:
 
 from src.engine.sniper_strength_observation_report import build_strength_momentum_report
 from src.engine.sniper_entry_pipeline_report import build_entry_pipeline_flow_report
-from src.engine.sniper_trade_review_report import build_trade_review_report
 from src.engine.sniper_performance_tuning_report import (
     PERFORMANCE_TUNING_SCHEMA_VERSION,
-    build_performance_tuning_report,
 )
 from src.engine.sniper_post_sell_feedback import (
     POST_SELL_REPORT_SCHEMA_VERSION,
-    build_post_sell_feedback_report,
 )
 from src.engine.strategy_position_performance_report import build_strategy_position_performance_report
 from src.engine.sniper_gatekeeper_replay import (
@@ -27,6 +25,11 @@ from src.engine.sniper_gatekeeper_replay import (
     rerun_gatekeeper_snapshot,
 )
 from src.engine.log_archive_service import load_monitor_snapshot
+from src.engine.monitor_snapshot_runtime import (
+    completion_artifact_path,
+    dispatch_monitor_snapshot_job,
+    load_completion_artifact,
+)
 from src.engine.sniper_config import CONF
 from src.engine.daily_report_service import (
     list_available_report_dates,
@@ -35,6 +38,11 @@ from src.engine.daily_report_service import (
 
 _DEFAULT_DASHBOARD_LOOKBACK_MINUTES = 120
 _TRUTHY_QUERY_VALUES = {"1", "true", "yes", "y"}
+_HEAVY_SNAPSHOT_PROFILE_BY_KIND = {
+    "performance_tuning": "intraday_light",
+    "trade_review": "intraday_light",
+    "post_sell_feedback": "full",
+}
 
 
 def _today_string() -> str:
@@ -152,22 +160,19 @@ def _load_or_build_performance_tuning_report(
 ) -> dict:
     report = _load_saved_performance_tuning_snapshot(target_date, since, refresh, trend_max_dates)
     if report is None:
-        report = build_performance_tuning_report(
+        fallback_snapshot = load_monitor_snapshot("performance_tuning", target_date)
+        return _build_or_dispatch_heavy_snapshot_report(
+            snapshot_kind="performance_tuning",
             target_date=target_date,
-            since_time=since,
-            trend_max_dates=trend_max_dates,
+            refresh=refresh,
+            fallback_snapshot=fallback_snapshot,
+            request_details={
+                "since": since,
+                "trend_max_dates": trend_max_dates,
+            },
         )
-        # 빌드된 리포트에 meta.source 추가
-        if "meta" not in report:
-            report["meta"] = {}
-        report["meta"]["source"] = "built"
     else:
-        # 스냅샷에서 로드된 리포트는 이미 meta.source를 가질 수 있음 (db/file)
-        # 없으면 추가
-        if "meta" not in report:
-            report["meta"] = {}
-        if "source" not in report["meta"]:
-            report["meta"]["source"] = "unknown"
+        _ensure_report_meta(report, source_default="snapshot")
     return report
 
 
@@ -192,22 +197,19 @@ def _load_or_build_post_sell_feedback_report(
 ) -> dict:
     report = _load_saved_post_sell_feedback_snapshot(target_date, refresh)
     if report is None:
-        report = build_post_sell_feedback_report(
+        fallback_snapshot = load_monitor_snapshot("post_sell_feedback", target_date)
+        return _build_or_dispatch_heavy_snapshot_report(
+            snapshot_kind="post_sell_feedback",
             target_date=target_date,
-            top_n=max(1, int(top or 10)),
-            evaluate_now=bool(evaluate_now_when_build),
+            refresh=refresh,
+            fallback_snapshot=fallback_snapshot,
+            request_details={
+                "top": max(1, int(top or 10)),
+                "evaluate_now_when_build": bool(evaluate_now_when_build),
+            },
         )
-        # 빌드된 리포트에 meta.source 추가
-        if "meta" not in report:
-            report["meta"] = {}
-        report["meta"]["source"] = "built"
     else:
-        # 스냅샷에서 로드된 리포트는 이미 meta.source를 가질 수 있음 (db/file)
-        # 없으면 추가
-        if "meta" not in report:
-            report["meta"] = {}
-        if "source" not in report["meta"]:
-            report["meta"]["source"] = "unknown"
+        _ensure_report_meta(report, source_default="snapshot")
     return report
 
 
@@ -229,24 +231,140 @@ def _load_or_build_trade_review_report(
         refresh=refresh,
     )
     if report is None:
-        report = build_trade_review_report(
+        fallback_snapshot = load_monitor_snapshot("trade_review", target_date)
+        if isinstance(fallback_snapshot, dict):
+            fallback_snapshot["recent_trades"] = list(fallback_snapshot.get("recent_trades") or [])[: max(1, int(top or 10))]
+        return _build_or_dispatch_heavy_snapshot_report(
+            snapshot_kind="trade_review",
             target_date=target_date,
-            code=code,
-            since_time=since,
-            top_n=max(1, int(top or 10)),
-            scope=scope,
+            refresh=refresh,
+            fallback_snapshot=fallback_snapshot,
+            request_details={
+                "since": since,
+                "code": code,
+                "scope": scope,
+                "top": max(1, int(top or 10)),
+            },
         )
-        # 빌드된 리포트에 meta.source 추가
-        if "meta" not in report:
-            report["meta"] = {}
-        report["meta"]["source"] = "built"
     else:
-        # 스냅샷에서 로드된 리포트는 이미 meta.source를 가질 수 있음 (db/file)
-        # 없으면 추가
-        if "meta" not in report:
-            report["meta"] = {}
-        if "source" not in report["meta"]:
-            report["meta"]["source"] = "unknown"
+        _ensure_report_meta(report, source_default="snapshot")
+    return report
+
+
+def _ensure_report_meta(report: dict, *, source_default: str) -> dict:
+    if "meta" not in report or not isinstance(report.get("meta"), dict):
+        report["meta"] = {}
+    report["meta"].setdefault("source", source_default)
+    return report
+
+
+def _build_pending_report_shell(snapshot_kind: str, target_date: str) -> dict:
+    if snapshot_kind == "performance_tuning":
+        return {
+            "date": target_date,
+            "metrics": {},
+            "cards": [],
+            "watch_items": [],
+            "strategy_rows": [],
+            "auto_comments": [],
+            "breakdowns": {},
+            "sections": {
+                "swing_daily_summary": {},
+                "judgment_gate": {},
+                "holding_axis": {},
+                "flow_bottleneck_lane": {},
+                "observation_axis_coverage": [],
+                "top_holding_slow": [],
+                "top_gatekeeper_slow": [],
+                "top_dual_persona_slow": [],
+            },
+            "meta": {},
+        }
+    if snapshot_kind == "post_sell_feedback":
+        return {
+            "date": target_date,
+            "summary": {},
+            "metrics": {},
+            "insight": {},
+            "exit_rule_tuning": [],
+            "tag_tuning": [],
+            "priority_actions": [],
+            "soft_stop_forensics": {},
+            "top_missed_upside": [],
+            "top_good_exit": [],
+            "meta": {},
+        }
+    if snapshot_kind == "trade_review":
+        return {
+            "date": target_date,
+            "code": None,
+            "scope": "entered",
+            "since": None,
+            "has_data": False,
+            "metrics": {},
+            "event_breakdown": [],
+            "sections": {
+                "recent_trades": [],
+                "fill_quality_summary": {},
+                "hard_stop_taxonomy": {},
+            },
+            "meta": {"warnings": [], "available_stocks": []},
+        }
+    return {"date": target_date, "meta": {}}
+
+
+def _build_or_dispatch_heavy_snapshot_report(
+    *,
+    snapshot_kind: str,
+    target_date: str,
+    refresh: bool,
+    fallback_snapshot: dict | None,
+    request_details: dict | None = None,
+) -> dict:
+    report = copy.deepcopy(fallback_snapshot or _build_pending_report_shell(snapshot_kind, target_date))
+    _ensure_report_meta(report, source_default="snapshot" if fallback_snapshot else "pending")
+
+    profile = _HEAVY_SNAPSHOT_PROFILE_BY_KIND.get(snapshot_kind, "full")
+    existing_artifact = load_completion_artifact(target_date, profile)
+    dispatch_info = dispatch_monitor_snapshot_job(
+        target_date=target_date,
+        profile=profile,
+        notify_admin=True,
+    )
+    artifact_path = completion_artifact_path(target_date, profile)
+
+    warnings = report["meta"].get("warnings")
+    if not isinstance(warnings, list):
+        warnings = []
+    warnings.append(
+        f"{snapshot_kind} direct build is guarded. safe wrapper async dispatch status={dispatch_info.get('status','-')} profile={profile}"
+    )
+    if request_details:
+        warnings.append(f"requested_filters={request_details}")
+
+    report["meta"].update(
+        {
+            "source": "snapshot" if fallback_snapshot else "pending",
+            "guarded_heavy_builder": True,
+            "guard_status": "pending",
+            "refresh_requested": bool(refresh),
+            "warnings": warnings,
+            "async_dispatch": {
+                "snapshot_kind": snapshot_kind,
+                "profile": profile,
+                "status": dispatch_info.get("status"),
+                "worker_pid": dispatch_info.get("worker_pid"),
+                "result_file": dispatch_info.get("result_file"),
+                "completion_artifact": str(artifact_path),
+                "next_prompt_hint": dispatch_info.get("next_prompt_hint"),
+            },
+        }
+    )
+    if existing_artifact and not fallback_snapshot:
+        report["meta"]["previous_completion"] = existing_artifact
+    if fallback_snapshot:
+        report["meta"]["guard_status"] = "stale_snapshot_pending_refresh"
+    report["pending"] = True
     return report
 
 

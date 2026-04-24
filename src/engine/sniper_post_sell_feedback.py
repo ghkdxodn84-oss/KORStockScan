@@ -11,6 +11,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from src.engine.log_archive_service import load_monitor_snapshot
+from src.engine.monitor_snapshot_runtime import guard_stdin_heavy_build
 from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.logger import log_error, log_info
 
@@ -925,6 +927,18 @@ def build_post_sell_feedback_report(
     evaluate_now: bool = True,
     token: str | None = None,
 ) -> dict:
+    guarded = guard_stdin_heavy_build(
+        snapshot_kind="post_sell_feedback",
+        target_date=target_date,
+        fallback_snapshot=load_monitor_snapshot("post_sell_feedback", target_date),
+        request_details={
+            "top_n": top_n,
+            "evaluate_now": evaluate_now,
+        },
+    )
+    if guarded is not None:
+        return guarded
+
     safe_date = str(target_date or datetime.now().strftime("%Y-%m-%d")).strip()
     if evaluate_now:
         summary = evaluate_post_sell_candidates(safe_date, token=token)

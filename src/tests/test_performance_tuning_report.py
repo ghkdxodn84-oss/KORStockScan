@@ -68,6 +68,118 @@ def test_performance_tuning_report_prefers_jsonl_events(monkeypatch, tmp_path):
     assert report["metrics"]["holding_skips"] == 0
 
 
+def test_performance_tuning_report_filters_since_without_datetime_reparse(monkeypatch, tmp_path):
+    data_dir = tmp_path / "data"
+    pipeline_dir = data_dir / "pipeline_events"
+    pipeline_dir.mkdir(parents=True, exist_ok=True)
+
+    payloads = [
+        {
+            "event_type": "pipeline_event",
+            "pipeline": "ENTRY_PIPELINE",
+            "stock_name": "테스트A",
+            "stock_code": "000001",
+            "stage": "market_regime_pass",
+            "emitted_at": "2026-04-03T09:59:59+09:00",
+            "fields": {"gatekeeper_eval_ms": 420, "gatekeeper_cache": "miss", "strategy": "SCALPING"},
+            "record_id": 101,
+        },
+        {
+            "event_type": "pipeline_event",
+            "pipeline": "ENTRY_PIPELINE",
+            "stock_name": "테스트B",
+            "stock_code": "000002",
+            "stage": "market_regime_pass",
+            "emitted_at": "2026-04-03T10:00:00+09:00",
+            "fields": {"gatekeeper_eval_ms": 380, "gatekeeper_cache": "fast_reuse", "strategy": "SCALPING"},
+            "record_id": 102,
+        },
+        {
+            "event_type": "pipeline_event",
+            "pipeline": "HOLDING_PIPELINE",
+            "stock_name": "테스트B",
+            "stock_code": "000002",
+            "stage": "ai_holding_review",
+            "emitted_at": "2026-04-03T10:00:01.123456+09:00",
+            "fields": {"review_ms": 510, "ai_cache": "miss"},
+            "record_id": 102,
+        },
+    ]
+    with open(pipeline_dir / "pipeline_events_2026-04-03.jsonl", "w", encoding="utf-8") as handle:
+        for payload in payloads:
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+    monkeypatch.setattr(report_mod, "DATA_DIR", data_dir)
+    import src.engine.dashboard_data_repository as dash_repo
+    monkeypatch.setattr(dash_repo, "DATA_DIR", data_dir)
+    monkeypatch.setattr(dash_repo, "PIPELINE_EVENTS_DIR", data_dir / "pipeline_events")
+    monkeypatch.setattr(dash_repo, "MONITOR_SNAPSHOT_DIR", data_dir / "report" / "monitor_snapshots")
+    monkeypatch.setattr(report_mod, "_iter_target_lines", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        report_mod,
+        "build_trade_review_report",
+        lambda target_date, since_time=None, top_n=10000, scope="all": {
+            "meta": {"warnings": []},
+            "sections": {"recent_trades": []},
+        },
+    )
+    monkeypatch.setattr(report_mod, "_fetch_trade_history_rows", lambda target_date: ([], [], []))
+
+    report = report_mod.build_performance_tuning_report(target_date="2026-04-03", since_time="10:00:00")
+
+    assert report["metrics"]["gatekeeper_decisions"] == 1
+    assert report["metrics"]["holding_reviews"] == 1
+
+
+def test_performance_tuning_report_prefers_trade_review_snapshot(monkeypatch):
+    entry_lines = [
+        "[2026-04-03 10:00:00] [ENTRY_PIPELINE] 테스트A(000001) stage=market_regime_pass gatekeeper_eval_ms=420 gatekeeper_cache=miss strategy=SCALPING",
+    ]
+
+    def _fake_iter(log_path, *, target_date, marker):
+        return entry_lines if marker == "[ENTRY_PIPELINE]" else []
+
+    monkeypatch.setattr(report_mod, "_iter_target_lines", _fake_iter)
+    monkeypatch.setattr(
+        report_mod,
+        "load_monitor_snapshot",
+        lambda kind, target_date: {
+            "sections": {
+                "recent_trades": [
+                    {
+                        "id": 1,
+                        "rec_date": target_date,
+                        "code": "000001",
+                        "name": "테스트A",
+                        "status": "COMPLETED",
+                        "strategy": "SCALPING",
+                        "position_tag": "SCANNER",
+                        "buy_price": 10000.0,
+                        "buy_qty": 1,
+                        "buy_time": "2026-04-03 10:00:00",
+                        "sell_price": 10100,
+                        "sell_time": "2026-04-03 10:05:00",
+                        "profit_rate": 1.0,
+                        "realized_pnl_krw": 100,
+                    }
+                ],
+            },
+            "meta": {"warnings": ["snapshot-warning"]},
+        } if kind == "trade_review" else None,
+    )
+
+    def _unexpected_build(*args, **kwargs):
+        raise AssertionError("trade review build should not run when snapshot exists")
+
+    monkeypatch.setattr(report_mod, "build_trade_review_report", _unexpected_build)
+    monkeypatch.setattr(report_mod, "_fetch_trade_history_rows", lambda target_date: ([], [], []))
+
+    report = report_mod.build_performance_tuning_report(target_date="2026-04-03", since_time=None)
+
+    assert report["meta"]["warnings"] == ["snapshot-warning"]
+    assert report["strategy_rows"][0]["outcomes"]["completed_rows"] >= 1
+
+
 def test_performance_tuning_report_builds_metrics(monkeypatch):
     entry_lines = [
         "[2026-04-03 10:00:00] [ENTRY_PIPELINE] 테스트A(000001) stage=market_regime_pass gatekeeper_eval_ms=420 gatekeeper_cache=miss gatekeeper=즉시|매수",
@@ -870,6 +982,94 @@ def test_performance_tuning_html_renders_new_sections(monkeypatch):
     assert "외부 리포트 연결" in html
     # 감리: collected_not_displayed available=false → "수집/증적 유지" 표시
     assert "수집/증적 유지" in html
+
+
+def test_performance_tuning_api_refresh_dispatches_async_and_returns_pending(monkeypatch):
+    import src.web.app as web_app
+
+    monkeypatch.setattr(web_app, "_load_saved_performance_tuning_snapshot", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        web_app,
+        "load_monitor_snapshot",
+        lambda kind, target_date: {
+            "date": target_date,
+            "metrics": {"gatekeeper_decisions": 3},
+            "breakdowns": {},
+            "sections": {},
+            "meta": {"schema_version": web_app.PERFORMANCE_TUNING_SCHEMA_VERSION},
+        } if kind == "performance_tuning" else None,
+    )
+    monkeypatch.setattr(web_app, "load_completion_artifact", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        web_app,
+        "dispatch_monitor_snapshot_job",
+        lambda **kwargs: {
+            "status": "dispatched",
+            "worker_pid": "321",
+            "result_file": "/tmp/run_snapshot_intraday_light.result",
+            "next_prompt_hint": "완료 후 다음 프롬프트를 입력하세요.",
+        },
+    )
+
+    with web_app.app.test_client() as client:
+        resp = client.get("/api/performance-tuning?date=2026-04-24&refresh=1")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["pending"] is True
+    assert data["metrics"]["gatekeeper_decisions"] == 3
+    assert data["meta"]["guard_status"] == "stale_snapshot_pending_refresh"
+    assert data["meta"]["async_dispatch"]["status"] == "dispatched"
+
+
+def test_post_sell_feedback_api_returns_pending_when_snapshot_missing(monkeypatch):
+    import src.web.app as web_app
+
+    monkeypatch.setattr(web_app, "load_monitor_snapshot", lambda *args, **kwargs: None)
+    monkeypatch.setattr(web_app, "load_completion_artifact", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        web_app,
+        "dispatch_monitor_snapshot_job",
+        lambda **kwargs: {
+            "status": "already_running",
+            "worker_pid": "654",
+            "result_file": "/tmp/run_snapshot_full.result",
+            "next_prompt_hint": "기존 완료 통보를 기다리세요.",
+        },
+    )
+
+    with web_app.app.test_client() as client:
+        resp = client.get("/api/post-sell-feedback?date=2026-04-24&refresh=1")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["pending"] is True
+    assert data["meta"]["guard_status"] == "pending"
+    assert data["meta"]["async_dispatch"]["status"] == "already_running"
+    assert data["summary"] == {}
+
+
+def test_trade_review_api_returns_pending_when_filtered_request_needs_async(monkeypatch):
+    import src.web.app as web_app
+
+    monkeypatch.setattr(web_app, "load_monitor_snapshot", lambda *args, **kwargs: None)
+    monkeypatch.setattr(web_app, "load_completion_artifact", lambda *args, **kwargs: {})
+    monkeypatch.setattr(
+        web_app,
+        "dispatch_monitor_snapshot_job",
+        lambda **kwargs: {
+            "status": "dispatched",
+            "worker_pid": "777",
+            "result_file": "/tmp/run_snapshot_intraday_light_trade_review.result",
+            "next_prompt_hint": "완료 후 다시 조회하세요.",
+        },
+    )
+
+    with web_app.app.test_client() as client:
+        resp = client.get("/api/trade-review?date=2026-04-24&refresh=1&code=000001&scope=all")
+    assert resp.status_code == 200
+    data = resp.get_json()
+    assert data["pending"] is True
+    assert data["meta"]["guard_status"] == "pending"
+    assert data["meta"]["async_dispatch"]["profile"] == "intraday_light"
 
 
 def test_flow_bottleneck_lane_scale_in_branch_zero_qty_bottleneck():

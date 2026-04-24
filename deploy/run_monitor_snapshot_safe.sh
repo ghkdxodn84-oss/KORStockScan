@@ -56,6 +56,7 @@ if [[ -z "$COOLDOWN_STATE_FILE" ]]; then
 fi
 ASYNC_PID_FILE="${MONITOR_SNAPSHOT_ASYNC_PID_FILE:-$PROJECT_DIR/tmp/run_monitor_snapshot_${SAFE_PROFILE}_${TARGET_DATE}.pid}"
 ASYNC_RESULT_HINT="${MONITOR_SNAPSHOT_ASYNC_RESULT_HINT:-$PROJECT_DIR/tmp/run_monitor_snapshot_${SAFE_PROFILE}_${TARGET_DATE}.result}"
+COMPLETION_ARTIFACT_FILE="${MONITOR_SNAPSHOT_COMPLETION_ARTIFACT_FILE:-$PROJECT_DIR/tmp/monitor_snapshot_completion_${TARGET_DATE}_${SAFE_PROFILE}.json}"
 
 # PREOPEN(08:00~09:00 KST)에는 bot_main 동작 중 full build를 막는다.
 KST_HM="$(TZ=Asia/Seoul date +%H%M)"
@@ -297,6 +298,44 @@ print_standard_async_response() {
   else
     echo "[HINT] 완료 알림이 들어오기 전까지 동일 작업은 중복 실행하지 마세요."
   fi
+  write_completion_artifact "$status" "${output_file:-}" "${worker_pid:-}"
+}
+
+write_completion_artifact() {
+  local status="$1"
+  local output_file="${2:-}"
+  local worker_pid="${3:-}"
+  local result_file=""
+  if [[ -n "$output_file" && "$output_file" != "-" ]]; then
+    result_file="$output_file"
+  elif [[ -f "$ASYNC_RESULT_HINT" ]]; then
+    result_file="$(cat "$ASYNC_RESULT_HINT" 2>/dev/null || true)"
+  fi
+
+  env PYTHONPATH=. "$VENV_PY" - "$TARGET_DATE" "$PROFILE" "$COMPLETION_ARTIFACT_FILE" "$result_file" "$status" "$worker_pid" "$LOG_FILE" <<'PY'
+from pathlib import Path
+import sys
+
+from src.engine.monitor_snapshot_runtime import normalize_result_payload, write_completion_artifact
+
+target_date, profile, artifact_file, result_file, status, worker_pid, log_file = sys.argv[1:8]
+result_text = ""
+if result_file:
+    result_path = Path(result_file)
+    if result_path.exists():
+        result_text = result_path.read_text(encoding="utf-8", errors="replace")
+normalized = normalize_result_payload(
+    target_date=target_date,
+    profile=profile,
+    result_file=result_file or None,
+    output_text=result_text,
+    status_override=status or None,
+    worker_pid=worker_pid or None,
+    output_file=result_file or None,
+    log_file=log_file or None,
+)
+write_completion_artifact(Path(artifact_file), normalized)
+PY
 }
 
 run_snapshot_once() {
@@ -423,8 +462,16 @@ if [[ "$WORKER_MODE" == "1" ]]; then
   if [[ -n "${MONITOR_SNAPSHOT_ASYNC_RESULT_HINT:-}" ]]; then
     echo "$RUN_OUTPUT_FILE" > "$MONITOR_SNAPSHOT_ASYNC_RESULT_HINT"
   fi
+  set +e
   run_snapshot_once "$RUN_OUTPUT_FILE"
-  exit $?
+  WORKER_STATUS=$?
+  set -e
+  if [[ -f "$RUN_OUTPUT_FILE" ]]; then
+    write_completion_artifact "" "$RUN_OUTPUT_FILE" "$$"
+  else
+    write_completion_artifact "unknown" "" "$$"
+  fi
+  exit $WORKER_STATUS
 fi
 
 if [[ "$ASYNC_MODE" == "1" ]]; then
@@ -457,5 +504,11 @@ if [[ "$ASYNC_MODE" == "1" ]]; then
 fi
 
 RUN_OUTPUT_FILE="$(mktemp "$PROJECT_DIR/tmp/run_monitor_snapshot.XXXXXX")"
+set +e
 run_snapshot_once "$RUN_OUTPUT_FILE"
-exit $?
+RUN_STATUS=$?
+set -e
+if [[ -f "$RUN_OUTPUT_FILE" ]]; then
+  write_completion_artifact "" "$RUN_OUTPUT_FILE" "$$"
+fi
+exit $RUN_STATUS
