@@ -291,6 +291,12 @@ Codex 일일 작업지시서 자동 생성:
 - 값이 `1` 이상이면 스크립트가 같은 관리 제목의 중복 Project 항목을 정리한 것이다
 - 값이 계속 증가하면 수동 실행과 Actions 실행이 겹치는지 확인하고, Actions concurrency 설정이 배포됐는지 확인한다
 
+### GitHub GraphQL이 `Something went wrong while executing your query`로 실패함
+
+- GitHub Project GraphQL의 일시적 내부오류일 수 있다
+- 최신 스크립트는 이 메시지를 받으면 짧은 backoff로 자동 재시도한다
+- 같은 reference id로 3회 연속 실패하면 그때는 일시오류가 아니라 필드/권한/Project 상태 자체를 의심하고 재시도 로그와 reference id를 함께 남긴다
+
 ### 시간이 아니라 종일 이벤트로 생김
 
 - `Slot` 값이 비어있지 않은지 확인

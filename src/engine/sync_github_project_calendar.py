@@ -287,7 +287,6 @@ def _graphql_request(token: str, query: str, variables: dict[str, Any]) -> dict[
         try:
             with request.urlopen(req, timeout=30) as resp:
                 body = resp.read().decode("utf-8")
-            break
         except (HTTPError, URLError) as exc:
             last_err = exc
             status_code = getattr(exc, "code", None)
@@ -300,24 +299,35 @@ def _graphql_request(token: str, query: str, variables: dict[str, Any]) -> dict[
                 time.sleep(delay)
                 continue
             raise
-    else:
-        raise last_err if last_err is not None else RuntimeError("github graphql request failed")
+        parsed = json.loads(body)
+        errors = parsed.get("errors") or []
+        fatal_errors: list[dict[str, Any]] = []
+        for err in errors:
+            err_type = str(err.get("type") or "")
+            err_path = err.get("path") or []
+            # This query asks both organization and user project nodes to support
+            # either owner type. One side may return NOT_FOUND and should not fail.
+            if err_type == "NOT_FOUND" and err_path in (["organization"], ["user"]):
+                continue
+            fatal_errors.append(err)
 
-    parsed = json.loads(body)
-    errors = parsed.get("errors") or []
-    fatal_errors: list[dict[str, Any]] = []
-    for err in errors:
-        err_type = str(err.get("type") or "")
-        err_path = err.get("path") or []
-        # This query asks both organization and user project nodes to support
-        # either owner type. One side may return NOT_FOUND and should not fail.
-        if err_type == "NOT_FOUND" and err_path in (["organization"], ["user"]):
-            continue
-        fatal_errors.append(err)
+        if fatal_errors:
+            retryable_internal = all(
+                "something went wrong while executing your query" in str(err.get("message") or "").lower()
+                for err in fatal_errors
+            )
+            if retryable_internal and attempt < 2:
+                delay = 0.8 * (2 ** attempt)
+                print(
+                    f"[CAL_GRAPHQL_RETRY] graphql_internal_error attempt={attempt + 1} retry_after={delay:.1f}s",
+                    file=sys.stderr,
+                )
+                time.sleep(delay)
+                continue
+            raise RuntimeError(f"github graphql errors: {fatal_errors}")
+        return parsed["data"]
 
-    if fatal_errors:
-        raise RuntimeError(f"github graphql errors: {fatal_errors}")
-    return parsed["data"]
+    raise last_err if last_err is not None else RuntimeError("github graphql request failed")
 
 
 def _project_node(data: dict[str, Any]) -> dict[str, Any]:

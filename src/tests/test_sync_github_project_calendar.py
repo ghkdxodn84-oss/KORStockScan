@@ -1,4 +1,7 @@
+from io import BytesIO
+
 from src.engine.sync_github_project_calendar import (
+    _graphql_request,
     _event_body,
     _parse_project_item,
     _status_allowed,
@@ -323,6 +326,38 @@ def test_fetch_project_items_keeps_managed_titles_when_docs_parse_fails(monkeypa
     )
 
     assert [item.title for item in items] == ["[Checklist0414] fallback keep on parse failure"]
+
+
+def test_calendar_graphql_request_retries_transient_graphql_internal_error(monkeypatch):
+    calls = {"count": 0}
+
+    class _FakeResponse:
+        def __init__(self, payload: bytes):
+            self._payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return BytesIO(self._payload).read()
+
+    def _fake_urlopen(req, timeout=30):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return _FakeResponse(
+                b'{"errors":[{"message":"Something went wrong while executing your query on 2026-04-24T02:40:09Z. Please include `ABC` when reporting this issue."}]}'
+            )
+        return _FakeResponse(b'{"data":{"organization":{"projectV2":null},"user":{"projectV2":null}}}')
+
+    monkeypatch.setattr("src.engine.sync_github_project_calendar.request.urlopen", _fake_urlopen)
+    monkeypatch.setattr("src.engine.sync_github_project_calendar.time.sleep", lambda _: None)
+
+    data = _graphql_request("token", "query Test { viewer { login } }", {})
+    assert data == {"organization": {"projectV2": None}, "user": {"projectV2": None}}
+    assert calls["count"] == 2
 
 
 def test_fetch_project_items_keeps_checklist_title_when_only_mmdd_differs(monkeypatch):

@@ -510,3 +510,35 @@ def test_graphql_request_retries_remote_disconnected(monkeypatch):
     data = _graphql_request("token", "query Test { viewer { login } }", {})
     assert data == {"ok": True}
     assert calls["count"] == 2
+
+
+def test_graphql_request_retries_transient_graphql_internal_error(monkeypatch):
+    calls = {"count": 0}
+
+    class _FakeResponse:
+        def __init__(self, payload: bytes):
+            self._payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return BytesIO(self._payload).read()
+
+    def _fake_urlopen(req, timeout=30):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return _FakeResponse(
+                b'{"errors":[{"message":"Something went wrong while executing your query on 2026-04-24T02:40:09Z. Please include `ABC` when reporting this issue."}]}'
+            )
+        return _FakeResponse(b'{"data":{"ok":true}}')
+
+    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project.request.urlopen", _fake_urlopen)
+    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project.time.sleep", lambda _: None)
+
+    data = _graphql_request("token", "query Test { viewer { login } }", {})
+    assert data == {"ok": True}
+    assert calls["count"] == 2

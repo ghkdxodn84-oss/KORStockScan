@@ -1,8 +1,8 @@
 # 판정항목별 개선 흐름 정리
 
-주의: 이 문서는 개인 정리용이며 다른 문서에서 참조하지 않는다.
+주의: 이 문서는 개인 정리용이며 다른 문서에서 참조하지 않는다. 개인문서는 다른 문서를 참조할 수 있다.
 
-## 감시종목 -> BUY 신호 도달 흐름
+## 감시종목 -> 보유/청산 완료 흐름
 
 ### 단계 요약표
 
@@ -15,7 +15,12 @@
 | 5 | gatekeeper 통과 | AI가 `allow_entry=true`, `action_label=즉시 매수`로 판단 | `blocked_gatekeeper_reject`, `blocked_gatekeeper_error`, `blocked_gatekeeper_missing` |
 | 6 | BUY 신호 | 텔레그램/런타임 기준 BUY 신호로 해석 가능한 상태. 주문 직전 후보 | 이후 `entry_armed`, 예산/수량, `submitted_orders`는 다음 단계 |
 | 7 | 주문 자격 확보 | `entry_armed`, `budget_pass`까지 도달해 실제 주문 제출을 재시도할 수 있는 상태 | `latency_block`, `entry_armed_expired`, `entry_armed_expired_after_wait` |
-| 8 | 주문 제출/체결 | `submitted` 이후 `full/partial` 체결로 이어지는 상태 | `submitted` 미도달, `partial fill`, `full fill`, `completed` |
+| 8 | 주문 제출/체결 | `submitted` 이후 `full/partial` 체결로 넘어가는 상태 | `submitted` 미도달, `partial fill`, `full fill` |
+| 9 | HOLDING 시작 | 체결 수량 기준 보유 상태로 진입, 보호주문/상태동기화 시작 | `holding_started`, `preset_exit_setup`, `preset_exit_sync_*` |
+| 10 | HOLDING AI 리뷰 루프 | 가격/시간 변화에 따라 보유 AI 재평가 또는 스킵 수행 | `ai_holding_review`, `ai_holding_skip_unchanged`, `ai_holding_reuse_bypass` |
+| 11 | 보유 중 분기 판단 | 추가매수 후보 또는 청산 신호로 분기 | `reversal_add_candidate`, `scale_in_executed`, `exit_signal` |
+| 12 | 매도 주문/복구 | 청산 주문 전송 성공 또는 실패 후 HOLDING 복구 재시도 | `sell_order_sent`, `sell_order_failed` |
+| 13 | 청산 완료 | 매도 체결 완료 후 포지션 종료 | `sell_completed`, `completed` |
 
 ### 플로우차트
 
@@ -55,7 +60,21 @@
     |- 일부 체결 -> partial fill
     |- 전량 체결 -> full fill
     v
-[completed]
+[HOLDING 시작]
+    |- holding_started / preset_exit_setup
+    v
+[HOLDING AI 리뷰 루프]
+    |- 변화 미미 -> ai_holding_skip_unchanged
+    |- 변화 감지 -> ai_holding_review
+    v
+[보유 중 의사결정]
+    |- 추가매수 후보 -> reversal_add_candidate -> scale_in_executed -> HOLDING AI 리뷰 루프
+    |- 청산 신호 -> exit_signal
+    |               (scalp_soft_stop_pct / scalp_hard_stop_pct / scalp_trailing_take_profit / scalp_ai_early_exit / scalp_ai_momentum_decay)
+    v
+[매도 주문]
+    |- 성공 -> sell_order_sent -> sell_completed -> completed
+    |- 실패 -> sell_order_failed -> HOLDING 복구 후 재시도
 ```
 
 ### 해석 메모
@@ -68,21 +87,8 @@
 - `gatekeeper_fast_reuse`는 같은 종목의 직전 gatekeeper 판단을 매우 짧은 시간창에서 재사용한 경우다. fast signature, 재사용 가능 시간, websocket freshness, score 경계값, 직전 action/allow_entry 기록이 모두 맞아야 성립한다.
 - 의미는 `새 AI gatekeeper 호출을 생략하고 직전 판단을 그대로 재사용했다`는 것이다. 따라서 `gatekeeper_fast_reuse`가 찍히면 gatekeeper 구간에는 도달한 것이 맞지만, 새로운 모델 평가가 매번 다시 돈 것은 아니다.
 - 왜 중요하나: BUY 회복이 안 보일 때 `gatekeeper_fast_reuse` 비중이 높으면 실제 병목이 모델 호출 지연이 아니라 `같은 장면 재사용`, `score boundary`, `ws freshness`, `signature 변화` 쪽일 수 있다.
-- 이후 튜닝 메모는 이 섹션 아래에 `append`하면서 제출 전 blocker와 체결 품질 해석을 더 세분화한다.
-
-### AI 프롬프트 라벨 정합성 (`shared`만)
-
-- `shared`는 현재 실전 런타임에서 독립적으로 엔진을 바꾸는 “보조 라벨”이 아니다.  
-- `shared`는 **원칙적으로 `watching`/`holding`/`exit` 외의 입력에서 기본 폴백**으로만 나온다.  
-- 실무상 공유점:
-  - `prompt_profile="watching"` → `prompt_type=scalping_entry`
-  - `prompt_profile="holding"` → `prompt_type=scalping_holding`
-  - `prompt_profile="exit"` → `prompt_type=scalping_exit`
-  - 위 3개 외(`prompt_profile` 미지정/기본값 포함) → `prompt_type=scalping_shared`
-- `scalping_shared`가 **실제 판단 호출 기록이라기보다 입력 프로파일 미지정/기본 분기 흔적**으로 해석한다.
-- 혼선을 없애는 규칙:
-  - `scalping_watch_cooldown_blocked`는 `AI_WATCHING_COOLDOWN` 구간에서 **실제 호출 없이 보류만 기록**한 상태.
-  - `scalping_shared`와 `watching_cooldown` 조합이면, 기본 분기 또는 폴백 성격으로 보는 것이 맞다.
+- HOLDING 단계에서는 `is_sell_signal`이 생기기 전까지 `ai_holding_review`와 `scale_in` 후보평가가 반복된다. 즉 제출축이 살아나면 다음 병목은 보유 중 `soft stop/trailing/ai exit` 품질로 넘어간다.
+- 이후 보완도 `append`가 아니라 기존 판정 섹션을 최신 스냅샷 기준으로 갱신하는 방식으로 유지한다.
 
 ## ID 명명 규칙
 
@@ -163,7 +169,7 @@
 | 정의 기준 4 | 금지 조건이 명시돼야 한다. `fallback_scout/main`, `fallback_single`, `ALLOW_FALLBACK` 재유입, 전역 threshold 하향, 다축 동시 변경은 정의 단계에서 제외한다. |
 | 지금 바로 할 수 있는 일 | blocker 분해뿐 아니라 `spread-only + quote fresh` 케이스 전용 `fallback 비결합 canary`를 코드에 넣고, 테스트까지 통과시킨 뒤 남은 장에서 live 검증할 수 있다. |
 | 지금 바로 못 하는 일 | 다축 동시 ON 상태에서 downstream 효과를 검증할 수는 없다. same-day live는 `기존 축 OFF -> restart.flag -> 새 축 ON` 교체 규칙을 지켜야 하고, fallback 관련 플래그는 재사용하면 안 된다. |
-| 결정 결과 | 다음 공식 판정축으로 등록했고, 장중에 `fallback 비결합 spread relief canary` 구현까지 완료했다. 이제 남은 단계는 `잔여장 live 검증 -> 유지/확대/롤백` 판정이다. |
+| 결정 결과 | 다음 공식 판정축으로 등록했고, 장중에 `fallback 비결합 spread relief canary` 구현까지 완료했다. 남은 단계도 `장중 정량 checkpoint -> same-day 유지/확대/롤백` 판정이어야 하며, `POSTCLOSE에서 첫 제출/체결 품질만 보고 닫는 방식`은 허용하지 않는다. |
 | 장중 1차 분해 결과 | `2026-04-23 11:21:13 KST` snapshot 기준 `budget_pass_events=2091`, `order_bundle_submitted_events=2`, `latency_block_events=2089`, `quote_fresh_latency_blocks=1882`, `quote_fresh_latency_pass_rate=0.1%`다. raw log 228건 집계에서는 `quote_stale=False 203건`, `quote_stale=True 25건`으로 fresh quote 차단이 우세했고, danger reason overlap은 `spread_too_wide 177`, `ws_age_too_high 42`, `ws_jitter_too_high 36`, `quote_stale 25`, `other_danger 22`였다. |
 | gatekeeper 해석 보정 | gatekeeper reject 실표본은 오늘 `2건`뿐이며 `gatekeeper_lock_wait_ms=0`, `gatekeeper_model_call_ms≈total_internal_ms`, `gatekeeper_cache=miss`였다. 즉 느린 것은 맞지만, 현재 `entry_armed -> submitted` 대량 단절의 1차 설명력은 `fresh quote spread 지배`보다 약하다. |
 | 단일 조작점 후보 1 | 첫 `fallback 비결합 downstream 1축` 후보는 `quote_stale=False + spread_too_wide 지배 구간 분리`다. 핵심은 전역 latency 완화가 아니라 fresh quote spread 구간을 별도 cohort로 떼어 `budget_pass_to_submitted_rate` 개선 가능성을 보는 것이다. |
@@ -171,68 +177,48 @@
 | 테스트 상태 | [test_sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/tests/test_sniper_entry_latency.py) 기준 `spread-only danger -> ALLOW_NORMAL`, `mixed danger -> 차단 유지`를 포함해 `10 passed`다. |
 | 후속 액션 | 남은 장에서는 기존 live 축을 끈 뒤 `spread relief canary`만 켜서 `budget_pass_to_submitted_rate`, `quote_fresh_latency_pass_rate`, `submitted/full/partial fill quality`, `fallback_regression=0`를 본다. 장후 checklist의 `LatencyOps0423 gatekeeper latency 경로 분해(lock/cache/quote_fresh)`는 새 구현의 live 결과까지 포함해 `유지/확대/롤백`을 닫는 단계로 쓴다. |
 
-### DF-ENTRY-004 `DF-ENTRY-003 spread relief canary 유지/실효성 확인`
+### DF-ENTRY-004 `spread relief canary` 오전 판정 결과
 
 | 항목 | 내용 |
 | --- | --- |
 | ID | `DF-ENTRY-004` |
-| 판정항목 | `2026-04-24 PREOPEN~10:00 KST` 검증축 고정 |
-| 검증축 이름 | `DF-ENTRY-003 spread relief canary 유지/실효성 확인` |
-| 왜 이 축인가 | `DF-ENTRY-002`는 이미 upstream 표본 생성 유효로 잠겼다. 따라서 내일 오전 10시까지 새로 검증할 축은 `BUY를 더 만들까`가 아니라 `entry_armed -> submitted` 제출축에서 `spread relief canary`가 실제로 blocker를 줄이는지 여부다. |
-| 검증 목적 | `spread-only + quote fresh` 완화가 `budget_pass_to_submitted_rate`, `quote_fresh_latency_pass_rate`, `submitted/full/partial fill quality`를 개선하는지 확인한다. |
-| 검증 대상 지표 | `ai_confirmed`, `entry_armed`, `budget_pass`, `submitted`, `latency_block`, `quote_fresh_latency_blocks`, `quote_fresh_latency_pass_rate`, `full_fill`, `partial_fill`, `COMPLETED + valid profit_rate` |
-| 해석 원칙 | 오전 10시까지는 `DF-ENTRY-003`의 실효성만 본다. `entry_filter_quality`, `score/promote`, `HOLDING`, `EOD/NXT`는 같은 창에서 주병목 축으로 재판정하지 않는다. |
-| 통과 의미 | `ai_confirmed/entry_armed`가 유지되는 상태에서 `submitted` 또는 `quote_fresh_latency_pass_rate`가 개선되면 제출축 개선 방향이 맞다는 뜻이다. |
-| 실패 의미 | `ai_confirmed/entry_armed`가 유지되는데 `submitted`가 계속 낮고 `latency_block`이 그대로면 `DF-ENTRY-003` 축의 효과 미확인으로 본다. 이 경우 장후에는 제출축 내부 재분해 또는 롤백 여부를 본다. |
-| 금지 | 오전 10시 전에는 `DF-ENTRY-002`를 끄고 다른 upstream 축으로 갈아타지 않는다. `score/promote` 전역 완화, fallback 재개, 다축 동시 ON도 금지다. |
-| 후속 연결 | 오전 10시 checkpoint 결과는 장후의 `승격 1축 실행 승인 또는 보류`, `후순위 축 parking` 판정 입력으로만 쓴다. |
-
-### DF-ENTRY-004 진행 가이드 (내일 오전 기준)
-
-| 항목 | 기준 |
-| --- | --- |
-| 현재 단계 | `DF-ENTRY-004` 검증 수행 준비 단계 |
-| 직전 선행조건 | `[FastReuseVerify0424]` PREOPEN fast_reuse 확인과 스냅샷 생성 상태가 체크되어야 함 |
-| 내일 오전 검증 대상 | `09:00~09:10`, `09:50~10:00` |
-| 공통 판정군 | `ai_confirmed`, `entry_armed`, `budget_pass`, `submitted`, `latency_block`, `quote_fresh_latency_blocks`, `quote_fresh_latency_pass_rate`, `full_fill`, `partial_fill`, `COMPLETED + valid profit_rate` |
-
-### 내일 오전 판정/액션
-
-1) `09:00~09:10` `[LatencyOps0424] DF-ENTRY-004 오전 검증축 고정 확인`
-- 판정: PREOPEN 선행조건(스냅샷 존재, `[FastReuseVerify0424]` fast_reuse 확인)이 충족되면 `DF-ENTRY-004` 단일축 고정 모드로 진행한다.
-- 근거: 장전에서 `entry_filter_quality/score-promote/HOLDING/EOD-NXT`를 이미 분리했으므로 시간축이 뒤섞이면 오판정 위험이 커진다.
-- 다음 액션: 선행조건 미충족이면 장중 판정 중단 후 1) 재실행 시각 지정, 2) 원인 로그 수집 우선.
-
-2) `09:50~10:00` `[LatencyOps0424] DF-ENTRY-004 10시 제출축 잠금`
-- 판정 A: `submitted` 또는 `quote_fresh_latency_pass_rate`가 전일 대비 개선되고 `fallback_regression=0`.
-- 근거: `ai_confirmed/entry_armed` 유지 전제가 깨지지 않았고 제출축 지표가 개선되면 canary 실효성 증거가 된다.
-- 다음 액션: `DF-ENTRY-004 유지/확대 후보`로 장후 15:10~15:20 확정 판단 준비.
-
-- 판정 B: `latency_block`가 동일하거나 증가하고 `submitted`·`quote_fresh_latency_pass_rate` 정체.
-- 근거: spread relief canary의 실효성이 없거나 반응이 약함.
-- 다음 액션: 장후 15:10~15:20에서 `DF-ENTRY-004 미효과`로 분류, 제출축 재분해 또는 롤백 검토.
-
-- 판정 C: `partial_fill` 상승 + `full_fill` 급락 + `COMPLETED + valid profit_rate` 악화 동반.
-- 근거: 제출량 지표만 아니라 체결 품질과 기대값(완성거래)도 훼손되는 상태.
-- 다음 액션: 즉시 `보류/롤백` 경로로 전환하고 대체축 평가 보류.
-
-3) 장후 연계 (`15:10~15:20` 결과 잠금)
-- 판정 A: `DF-ENTRY-004` 개선 확인.
-- 근거: 10시 checkpoint에서 제출축 개선 조건 충족.
-- 다음 액션: `[VisibleResult0424] 승격 1축 실행 승인` 후보로 연계.
-
-- 판정 B: 개선 미확인.
-- 근거: 제출축 개선 조건 미충족.
-- 다음 액션: `entry_filter_quality`, `AIPrompt`, HOLDING, EOD/NXT를 parking으로 유지하고 재실험 대기.
-
-- 판정 C: `fast_reuse` 재사용률 0 확인, 원인분해에서 코드 경로 미도달.
-- 근거: 제출축 단절의 1차 원인이 `fast_reuse` 미도달일 가능성 큼.
-- 다음 액션: `[FastReuseVerify0424]` 선행조치 우선 후 `quote_fresh` canary는 보류.
+| 판정항목 | `2026-04-24 09:00~10:30 KST` `spread relief canary` 실효성 판정 |
+| 검증축 이름 | `spread relief canary` 오전 판정 |
+| 왜 이 축인가 | `DF-ENTRY-002`가 upstream 표본 생성은 이미 확보했기 때문에, 오늘 오전의 핵심은 `BUY를 더 만들까`가 아니라 `entry_armed -> submitted` 제출축에서 `spread relief canary`가 실제 blocker를 줄였는지 확인하는 것이었다. |
+| 검증 목적 | `spread-only + quote fresh` 완화가 `budget_pass_to_submitted_rate`, `quote_fresh_latency_pass_rate`, `submitted/full/partial fill quality`를 개선하는지 same-day로 닫는다. |
+| 검증 대상 지표 | `ai_confirmed`, `entry_armed`, `budget_pass`, `submitted`, `latency_block`, `quote_fresh_latency_blocks`, `quote_fresh_latency_pass_rate`, `full_fill`, `partial_fill`, `gatekeeper_fast_reuse`, `gatekeeper_eval_ms_p95` |
+| 선행조건 결과 | PREOPEN에서 `gatekeeper_fast_reuse=0`, `gatekeeper_fast_reuse_bypass=0`인 표본 공백 상태를 먼저 확인했고, 장중 누적에서는 `gatekeeper_fast_reuse=18`, `gatekeeper_fast_reuse_bypass=58`까지 관측돼 `fast_reuse 코드 미도달` 가설은 해소됐다. |
+| 10:00 KST 판정 | `09:00~10:00` 누적 `ai_confirmed=77`, `entry_armed=31`, `submitted=4`, `budget_pass_events=863`, `latency_block_events=859`, `quote_fresh_latency_blocks=777`, `quote_fresh_latency_pass_rate=0.5%`, `full_fill=0`, `partial_fill=0`, `gatekeeper_eval_ms_p95=12543.0ms`였다. 따라서 원인 축은 `upstream BUY 부족`이 아니라 `budget_pass -> latency_block/submitted` downstream 단절로 고정했다. |
+| 10:30 KST 재판정 | `09:00~10:30` 누적 `ai_confirmed=91`, `entry_armed=39`, `submitted=8`, `budget_pass_events=1220`, `latency_block_events=1212`, `quote_fresh_latency_blocks=1092`, `quote_fresh_latency_pass_rate=0.7%`, `full_fill=0`, `partial_fill=0`, `gatekeeper_eval_ms_p95=12485.0ms`였다. `10:20~10:30` 증분에서도 `spread_only_required=82`가 차단사유 대부분이었다. |
+| 오늘 판정 | `spread relief canary`는 원인 위치를 downstream으로 잠그는 데는 성공했지만, 실효성 승인에는 실패했다. 즉 `제출축 병목 위치 확인`은 됐고, `실제 제출 회복 효과`는 오전 표본에서 입증하지 못했다. |
+| why 1 | `submitted_orders=8`로 Plan Rebase §6 `N_min` 최소치 `20`에 `+12`가 부족하다. 따라서 hard pass/fail을 줄 표본은 없다. |
+| why 2 | 표본 미달과 별개로 `budget_pass_events=1220` 대비 `submitted=8`, `latency_block_events=1212`, `quote_fresh_latency_blocks=1092`라서 downstream 차단이 지배적이라는 방향성은 충분히 강하다. |
+| why 3 | `gatekeeper_eval_ms_p95`는 `12.5s` 수준으로 높지만 rollback guard(`>15,900ms`, sample>=50)까지는 아니다. 따라서 immediate rollback 사유도 아니다. |
+| 금지 유지 | 이 결과만으로 `entry_filter_quality`, `score/promote`, `HOLDING`, `EOD/NXT`를 같은 오전 창의 주병목 축으로 올리면 안 된다. 원인귀속이 다시 upstream으로 흔들리기 때문이다. |
+| 후속 연결 | same-day 보조축은 `quote_fresh` downstream 1축으로 고정했고, `entry_filter_quality`는 parking 유지로 남겼다. 이후 `quote_fresh` 4요인 중 `ws_jitter`를 독립 조작점으로 고정해 same-day live replacement까지 반영했다. |
 
 ### 플로우차트 진행 위치
 
-- 현재 플로우는 `DF-ENTRY-004` 기준 `entry_armed -> budget_pass -> latency_block -> submitted` 구간(플로우차트 단계 7~8) 위주로 고정 추적한다.
-- upstream 단계인 `감시종목/AI 판정`(`DF-ENTRY-001`, `DF-ENTRY-002`)은 `보류 상태`가 아니라 `다음 단계 선결 조건 충족`으로 판정되어, 현재는 제출 전 단락 해소가 핵심 검증 목표다.
+- 현재 플로우는 여전히 `entry_armed -> budget_pass -> latency_block -> submitted` 구간(플로우차트 단계 7~8)에 고정돼 있다.
+- upstream 단계인 `감시종목/AI 판정`(`DF-ENTRY-001`, `DF-ENTRY-002`)은 `보류`가 아니라 `선결 조건 충족` 상태다. 지금 흔들면 안 되는 것은 upstream이 아니라 downstream 세부축 선택이다.
+- 오늘 오전 기준 다음 단일 조작점 후보는 `quote_fresh/spread_only_required` 하위원인을 직접 겨누는 replacement였다. 이후 same-day 결정으로 `spread_relief`는 parking으로 내리고, `ws_jitter-only relief`를 독립 replacement 축으로 올려 live 교체를 마쳤다. `entry_filter_quality`는 이 흐름 밖의 후순위 parking이다.
+
+## 제출축 판정 후 다음 단계
+
+### DF-HOLDING-001 `submitted 증가 이후 HOLDING/청산 품질 판정`
+
+| 항목 | 내용 |
+| --- | --- |
+| ID | `DF-HOLDING-001` |
+| 시작 조건 | `ws_jitter-only relief` replacement 또는 후속 downstream 1축에서 `submitted` 회복이 확인된 뒤에만 시작한다. |
+| 현재 상태 | 장중 반복 관찰 중. `ws_jitter` replacement는 live 반영됐고, `11:30 KST` 1차 스모크 기준 `ai_confirmed=70`, `entry_armed=17`, `budget_pass_events=131`으로 표본량은 충족했다. 그러나 `order_bundle_submitted_events=0`, `quote_fresh_latency_pass_rate=0.0%`, `latency_canary_applied=True=0`, `latency_canary_reason_top4=[ws_jitter_only_required 93, low_signal 19, quote_stale 13, - 6]`라서 현재 잠금은 `효과 확인`이 아니라 `비활성/비도달 의심`이다. 따라서 `12:00`은 `budget_pass_events >= 100`에서 `submitted >= 3` 또는 `quote_fresh_latency_pass_rate >= 2.0%`의 방향성 단계, `13:20`은 `submitted >= 5`와 `fallback_regression=0`을 확보해 다음 단계 진입 여부를 잠그는 단계로 이어간다. |
+| 다음 단계 목적 | 제출량 증가가 실제 기대값 개선으로 이어지는지 `HOLDING/청산 품질`로 검증한다. 단, 진입 조건은 `submitted` 회복이 먼저다. |
+| 핵심 검증축 | `soft_stop/trailing/good_exit`, `holding_action_applied`, `holding_force_exit_triggered`, `exit_rule` 분포, `full/partial` 분리, `COMPLETED + valid profit_rate` |
+| 분리 원칙 | `initial-only`와 `pyramid-activated` 표본을 섞지 않는다. `full fill`과 `partial fill`도 합치지 않는다. |
+| 성공 판정 | 제출 증가와 함께 체결 품질/청산 품질 악화가 없고 `COMPLETED + valid profit_rate`가 유지 또는 개선 |
+| 실패 판정 | 제출 증가 대비 `soft_stop` 급증, `full_fill` 악화, `COMPLETED + valid profit_rate` 악화 동반 |
+| 다음 액션 | `post-restart submitted >= 5`와 `fallback_regression=0`이 확보되면 `HOLDING/청산 품질` 관찰을 연다. `submitted >= 10` 또는 `full_fill + partial_fill >= 5`면 same-day 다음 단계로 넘긴다. 반대로 `budget_pass_events >= 150`인데 `submitted <= 2`면 HOLDING 축으로 가지 않고 다시 제출축 하위원인 재분해로 되돌린다. 장후에는 장중 checkpoint에서 이미 잠근 결론만 종합하며, 장후 `첫 제출/체결 품질 확인만`으로 다음 단계를 여는 해석은 금지한다. |
+| Source | [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
 
 ## 항목 간 연결 관계
 
@@ -240,4 +226,5 @@
 | --- | --- | --- | --- |
 | `DF-ENTRY-001` | 독립 개선축 폐기 | `DF-ENTRY-002` | `blocked_ai_score_share`는 관찰지표로 남기고, 실제 실행은 `buy_recovery_canary prompt` 재교정으로 전환 |
 | `DF-ENTRY-002` | upstream 표본 생성 유효, 유지/고정 | `DF-ENTRY-003` | `BUY 부족`보다는 `entry_armed -> submitted` 제출 병목이 다음 공식 판정축으로 넘어갔음을 의미 |
-| `DF-ENTRY-003` | 제출축 live 검증 진행 중 | `DF-ENTRY-004` | 내일 오전 10시까지 검증축은 `spread relief canary` 하나로 고정하고, 그 결과만 장후 승격/보류 판단에 사용한다는 의미 |
+| `DF-ENTRY-003` | 제출축 live 검증 진행 후 원인 위치 고정 | `DF-ENTRY-004` | `spread relief canary`는 downstream 병목 위치 확인까지는 완료했고, 실효성 승인 실패 후 `quote_fresh` replacement 후보로 연결됐다는 의미 |
+| `DF-ENTRY-004` | same-day 보조축을 `quote_fresh`로 고정 후 `ws_jitter` replacement live 교체 | `DF-HOLDING-001` | HOLDING/청산 품질 판정은 `ws_jitter-only relief` 이후 실제 제출 회복이 확인된 뒤에만 다음 단계로 넘어간다는 의미 |
