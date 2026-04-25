@@ -76,3 +76,32 @@
   - 판정 기준: `deploy/run_tuning_monitoring_postclose.sh` 기준 실제 로그 경로를 `logs/tuning_monitoring_postclose_cron.log`로 통일해 확인하고, Gemini pattern lab의 `trade_id` dtype merge 오류를 해소한 뒤 `analysis/gemini_scalping_pattern_lab/outputs/*`, `analysis/claude_scalping_pattern_lab/outputs/*` 최신 산출물이 `2026-04-27 POSTCLOSE` 시각으로 갱신되어야 한다.
   - why: `2026-04-24` 점검에서 전용 cron log 두 개는 더 이상 생성되지 않았고, 통합 로그에는 Gemini 분석이 `trade_id str/float64 merge` 예외로 실패한 흔적이 남았다.
   - 다음 액션: 보수 완료 시 same-day 결과를 checklist와 execution delta에 함께 반영한다.
+
+- [x] `[LoopMetrics0427] LOOP_METRICS 실로그 분포 확인` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:20~18:30`, `Track: ScalpingLogic`)
+  - Source: [workorder-kiwoom-sniper-v2-loop-performance-improvement.md](/home/ubuntu/KORStockScan/docs/workorder-kiwoom-sniper-v2-loop-performance-improvement.md)
+  - 판정 기준: 장중/장후 생성된 `[LOOP_METRICS]` 실로그에서 `loop_elapsed_ms`, `db_active_targets_ms`, `account_sync_ms`, `target_count`, `watching`, `holding`이 최소 1회 이상 기록되고, 값 누락/파싱불가 없이 운영 해석 가능한지 확인한다.
+  - why: 이번 P0/P1은 테스트 통과만으로 닫을 수 없고, 실제 장중 로그에서 루프 지연과 동기 I/O 시간이 기대한 형식으로 남는지 확인해야 후속 `sleep` canary와 주문/AI worker 판단 근거가 생긴다.
+  - 다음 액션: `loop_elapsed_ms` 상위 구간, `db_active_targets_ms`/`account_sync_ms` 이상치, 샘플 수 부족 여부를 same-day 메모로 잠그고, 후속 P2 착수 전 기준선으로 재사용한다.
+
+- [x] `[GatekeeperAsync0427] sniper_gatekeeper_replay.py 비동기 writer + dedup 롤백 구현 완료` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:20~18:30`, `Track: ScalpingLogic`)
+  - Source: [workorder-sniper-codebase-performance-audit-followup.md](/home/ubuntu/KORStockScan/docs/workorder-sniper-codebase-performance-audit-followup.md)
+  - 완료 내역:
+    - 축 A: `_ensure_state_handler_deps()`를 6개 wrapper에서 제거하고 `run_sniper()` loop 상단(1224)으로 이동
+    - 축 B: `_RECENT_SNAPSHOT_SIGNATURES` TTL prune (`_prune_stale_signatures`, 5분 간격)
+    - 축 B: `_append_jsonl_async()` — single-thread ThreadPoolExecutor writer
+    - 축 B: `atexit.register(_flush_jsonl_writer)` — process-exit flush
+    - 축 B: `submit()` done callback + `_rollback_signature` dedup 롤백 (worker write 실패 시)
+    - 축 B: enqueue 실패 → 동기 fallback write 실패 시 dedup 롤백 (내부 try/except)
+    - 축 B: 모든 `_RECENT_SNAPSHOT_SIGNATURES` 접근을 `_WRITE_LOCK` 아래 통일
+    - 축 B: dedup 시그니처를 main thread에서 즉시 기록 (중복 enqueue 방지)
+    - 축 B: `_replay_dir()`의 `mkdir` 실패를 try/except로 감싸서 `_WRITE_LOCK` 블록 내 예외 방지
+  - 검증: 29개 테스트 전부 PASSED
+  - 리스크 해소: `enqueue 실패 -> fallback write 실패 -> 성공처럼 반환`, `callback dedup 갱신 중 concurrent mutation`, `동일 payload 중복 enqueue`, `worker/fallback write 실패 후 dedup 오염`을 모두 차단했다.
+  - 잔여 운영 리스크: `record_gatekeeper_snapshot()`의 성공 반환은 `persist confirmed`가 아니라 `enqueue accepted 또는 동기 fallback write 성공` 의미다. worker thread의 후행 write 실패는 callback `log_error + dedup rollback`으로만 관측된다.
+  - 다음 액션: 실제 장중 `[GATEKEEPER_SNAPSHOT]` 로그와 replay jsonl 파일을 대조해 `enqueue accepted`와 `persist confirmed`가 어긋나는 사례가 있는지 운영 acceptance로 확인한다.
+
+- [ ] `[GatekeeperAsyncOps0427] GATEKEEPER_SNAPSHOT async persist 운영 acceptance 확인` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:30~18:40`, `Track: ScalpingLogic`)
+  - Source: [workorder-sniper-codebase-performance-audit-followup.md](/home/ubuntu/KORStockScan/docs/workorder-sniper-codebase-performance-audit-followup.md)
+  - 판정 기준: 장중/장후 `[GATEKEEPER_SNAPSHOT]` 성공 로그와 `data/gatekeeper/gatekeeper_snapshots_2026-04-27.jsonl` 실제 line 증가를 대조해, `enqueue accepted` 후 worker write 실패가 있었다면 callback `log_error`와 dedup rollback이 같은 구간에 남는지 확인한다.
+  - why: 현재 구현은 동기 fallback 실패는 `None`으로 닫지만, async worker 실패는 best-effort 규약상 후행 rollback으로만 관측된다. 따라서 코드 테스트 통과와 별개로 실로그 기준 persist 정합성 확인이 필요하다.
+  - 다음 액션: mismatch가 없으면 async writer 규약을 운영 기준선으로 잠그고, mismatch가 있으면 `persist confirmed` 필요 구간을 동기 write 또는 명시적 ack 구조로 재분해한다.

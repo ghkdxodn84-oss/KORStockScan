@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import atexit
 import json
 import threading
 import time
 import hashlib
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
@@ -16,10 +18,65 @@ from src.utils.logger import log_error, log_info
 _WRITE_LOCK = threading.RLock()
 _RECENT_SNAPSHOT_SIGNATURES: dict[str, float] = {}
 
+# ── 비동기 JSONL writer (single-thread, best-effort, process-exit flush) ─────
+_JSONL_WRITER: ThreadPoolExecutor | None = None
+_JSONL_WRITER_LOCK = threading.Lock()
+
+
+def _get_jsonl_writer() -> ThreadPoolExecutor:
+    global _JSONL_WRITER
+    if _JSONL_WRITER is None:
+        with _JSONL_WRITER_LOCK:
+            if _JSONL_WRITER is None:
+                _JSONL_WRITER = ThreadPoolExecutor(
+                    max_workers=1,
+                    thread_name_prefix="jsonl_writer",
+                )
+    return _JSONL_WRITER
+
+
+def _flush_jsonl_writer() -> None:
+    """process exit 시 flush. best-effort."""
+    global _JSONL_WRITER
+    writer = _JSONL_WRITER
+    if writer is not None:
+        writer.shutdown(wait=True)
+        _JSONL_WRITER = None
+
+
+# process-exit flush 등록 (best-effort)
+atexit.register(_flush_jsonl_writer)
+
+
+# ── TTL prune helpers ────────────────────────────────────────────────────────
+_SNAPSHOT_PRUNE_INTERVAL_SEC = 300  # 5분마다 prune
+_LAST_SNAPSHOT_PRUNE_TS: float = 0.0
+
+
+def _prune_stale_signatures(now_ts: float) -> None:
+    """GATEKEEPER_SNAPSHOT_DEDUP_TTL_SEC보다 충분히 긴 보존 구간으로 prune.
+
+    반드시 _WRITE_LOCK을 획득한 상태에서 호출해야 한다.
+    """
+    global _LAST_SNAPSHOT_PRUNE_TS
+    if now_ts - _LAST_SNAPSHOT_PRUNE_TS < _SNAPSHOT_PRUNE_INTERVAL_SEC:
+        return
+    dedup_ttl = float(getattr(TRADING_RULES, "GATEKEEPER_SNAPSHOT_DEDUP_TTL_SEC", 20.0))
+    # dedup TTL의 10배 이상 경과한 시그니처는 제거 (최소 200초, 기본 200초)
+    keep_ttl = max(dedup_ttl * 10, 200.0)
+    stale_keys = [k for k, ts in list(_RECENT_SNAPSHOT_SIGNATURES.items()) if now_ts - ts > keep_ttl]
+    for k in stale_keys:
+        _RECENT_SNAPSHOT_SIGNATURES.pop(k, None)
+    _LAST_SNAPSHOT_PRUNE_TS = now_ts
+
 
 def _replay_dir() -> Path:
     path = DATA_DIR / "gatekeeper"
-    path.mkdir(parents=True, exist_ok=True)
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # mkdir 실패 시에도 Path 객체 반환 (실제 write 실패는 _append_jsonl/_append_jsonl_async에서 처리)
+        pass
     return path
 
 
@@ -45,8 +102,61 @@ def _json_safe(value):
 
 
 def _append_jsonl(path: Path, payload: dict) -> None:
+    """동기 JSONL append. 비동기 writer의 fallback으로 유지."""
     with open(path, "a", encoding="utf-8") as handle:
         handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+
+def _append_jsonl_async(
+    path: Path,
+    payload: dict,
+    *,
+    _rollback_signature: str = "",
+) -> bool:
+    """비동기 JSONL append (single-thread, best-effort, same-process ordering 보장).
+
+    Returns:
+        True  — enqueue 성공 (worker write는 비동기, 실패 시 callback에서 log_error + dedup 롤백)
+        True  — enqueue 실패 후 동기 fallback write 성공
+        False — enqueue 실패 + 동기 fallback write도 실패 (dedup 롤백 완료)
+
+    규약:
+    1. single-thread writer (ThreadPoolExecutor max_workers=1)
+    2. best-effort enqueue (실패 시 동기 fallback)
+    3. process exit 시 flush (atexit 등록)
+    4. write 실패는 예외 전파 대신 log_error + False 반환
+    5. same-process ordering 보장 (single worker thread)
+
+    _rollback_signature가 전달되면, worker write 실패 시 _WRITE_LOCK 아래에서
+    해당 시그니처를 _RECENT_SNAPSHOT_SIGNATURES에서 제거한다 (dedup 롤백).
+    dedup 시그니처 자체는 호출자가 이미 _WRITE_LOCK 아래에서 즉시 기록했음을
+    전제로 한다.
+    """
+    def _on_write_done(future):
+        exc = future.exception()
+        if exc is not None:
+            log_error(f"[GATEKEEPER_SNAPSHOT] async write 실패 (dedup 롤백): {exc}")
+            if _rollback_signature:
+                with _WRITE_LOCK:
+                    _RECENT_SNAPSHOT_SIGNATURES.pop(_rollback_signature, None)
+
+    try:
+        writer = _get_jsonl_writer()
+        future = writer.submit(_append_jsonl, path, payload)
+        future.add_done_callback(_on_write_done)
+        return True
+    except Exception as exc:
+        log_error(f"[GATEKEEPER_SNAPSHOT] async enqueue 실패, 동기 fallback: {exc}")
+        try:
+            _append_jsonl(path, payload)
+            # 동기 fallback 성공 → 롤백 불필요 (이미 기록된 dedup 유지)
+            return True
+        except Exception as fallback_exc:
+            log_error(f"[GATEKEEPER_SNAPSHOT] 동기 fallback write도 실패 (dedup 롤백): {fallback_exc}")
+            if _rollback_signature:
+                with _WRITE_LOCK:
+                    _RECENT_SNAPSHOT_SIGNATURES.pop(_rollback_signature, None)
+            return False
 
 
 def _snapshot_signature(payload: dict) -> str:
@@ -139,8 +249,26 @@ def record_gatekeeper_snapshot(
             if dedup_ttl > 0 and (now_ts - last_saved_at) < dedup_ttl:
                 return payload
 
-            _append_jsonl(_snapshot_path(payload["signal_date"]), payload)
+            # TTL prune (5분 주기, dedup TTL의 10배 이상 경과 시그니처 제거)
+            _prune_stale_signatures(now_ts)
+
+            # dedup 시그니처를 main thread에서 즉시 기록 (중복 enqueue 방지)
             _RECENT_SNAPSHOT_SIGNATURES[signature] = now_ts
+
+            # 비동기 write (single-thread, best-effort, same-process ordering)
+            # write 실패 시 _rollback_signature로 dedup 롤백
+            ok = _append_jsonl_async(
+                _snapshot_path(payload["signal_date"]), payload,
+                _rollback_signature=signature,
+            )
+            if not ok:
+                # enqueue 실패 + 동기 fallback write도 실패 → persist 실패
+                log_error(
+                    f"[GATEKEEPER_SNAPSHOT] {payload['stock_name']}({payload['stock_code']}) "
+                    f"action={payload['action_label']} allow={payload['allow_entry']} "
+                    f"— persist 실패 (enqueue+fallback 모두 실패)"
+                )
+                return None
         log_info(
             f"[GATEKEEPER_SNAPSHOT] {payload['stock_name']}({payload['stock_code']}) "
             f"action={payload['action_label']} allow={payload['allow_entry']}"

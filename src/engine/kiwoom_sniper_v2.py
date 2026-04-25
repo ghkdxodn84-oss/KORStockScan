@@ -30,7 +30,8 @@ if str(PROJECT_ROOT) not in sys.path:
 import os
 import time
 from datetime import datetime
-import threading   
+import threading
+from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 import json
 
@@ -168,6 +169,33 @@ global ACTIVE_TARGETS
 ACTIVE_TARGETS = []
 LAST_AI_CALL_TIMES = {}
 LAST_LOG_TIMES = {}
+
+# ── P0/P1 성능 계측 및 캐시 ─────────────────────────────────────
+_MARCAP_CACHE: dict[str, tuple[int, float]] = {}  # code -> (marcap, expiry_ts)
+_MARCAP_CACHE_TTL: int = 300  # 5분
+_ACCOUNT_SYNC_EXECUTOR: ThreadPoolExecutor | None = None
+_ACCOUNT_SYNC_IN_FLIGHT: bool = False
+_LOOP_METRICS_LAST_LOG_TS: float = 0.0
+
+
+def _run_account_sync_with_cleanup():
+    """periodic_account_sync를 감싸서 예외 발생 시에도 in-flight 플래그를 해제합니다."""
+    try:
+        periodic_account_sync()
+    except Exception:
+        import traceback
+        traceback.print_exc()
+    finally:
+        global _ACCOUNT_SYNC_IN_FLIGHT
+        _ACCOUNT_SYNC_IN_FLIGHT = False
+
+
+def _clear_account_sync_in_flight():
+    """add_done_callback에서 in-flight 플래그를 해제합니다."""
+    global _ACCOUNT_SYNC_IN_FLIGHT
+    _ACCOUNT_SYNC_IN_FLIGHT = False
+
+
 MARKET_REGIME = MarketRegimeService(refresh_minutes=15)
 bind_market_regime_dependencies(market_regime=MARKET_REGIME)
 bind_condition_dependencies(db=DB, event_bus=event_bus, active_targets=ACTIVE_TARGETS)
@@ -190,17 +218,28 @@ def _get_swing_gap_threshold(strategy: str) -> float:
 
 
 def _resolve_stock_marcap(stock, code) -> int:
+    """시가총액 조회 (프로세스 레벨 TTL 캐시 + stock 캐시)."""
     try:
         existing = int(float(stock.get('marcap', 0) or 0))
     except Exception:
         existing = 0
     if existing > 0:
         return existing
+    now_ts = time.time()
+    norm_code = str(code or "").strip()[:6]
+    if norm_code:
+        cached = _MARCAP_CACHE.get(norm_code)
+        if cached is not None:
+            val, exp_ts = cached
+            if now_ts < exp_ts and val > 0:
+                stock['marcap'] = val
+                return val
     try:
         marcap = int(DB.get_latest_marcap(code) or 0)
     except Exception:
         marcap = 0
-    if marcap > 0:
+    if marcap > 0 and norm_code:
+        _MARCAP_CACHE[norm_code] = (marcap, now_ts + _MARCAP_CACHE_TTL)
         stock['marcap'] = marcap
     return marcap
 
@@ -291,35 +330,31 @@ def _ensure_state_handler_deps():
         _STATE_HANDLER_DEPS = snapshot
 
 
-def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=None):
-    _ensure_state_handler_deps()
-    return sniper_state_handlers.handle_watching_state(stock, code, ws_data, admin_id, radar=radar, ai_engine=ai_engine)
+def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=None, now_ts=None, now_dt=None):
+    return sniper_state_handlers.handle_watching_state(
+        stock, code, ws_data, admin_id, radar=radar, ai_engine=ai_engine, now_ts=now_ts, now_dt=now_dt
+    )
 
 
-def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=None, ai_engine=None):
-    _ensure_state_handler_deps()
+def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=None, ai_engine=None, now_ts=None, now_dt=None):
     return sniper_state_handlers.handle_holding_state(
-        stock, code, ws_data, admin_id, market_regime, radar=radar, ai_engine=ai_engine
+        stock, code, ws_data, admin_id, market_regime, radar=radar, ai_engine=ai_engine, now_ts=now_ts, now_dt=now_dt
     )
 
 
 def handle_buy_ordered_state(stock, code):
-    _ensure_state_handler_deps()
     return sniper_state_handlers.handle_buy_ordered_state(stock, code)
 
 
 def handle_sell_ordered_state(stock, code):
-    _ensure_state_handler_deps()
     return sniper_state_handlers.handle_sell_ordered_state(stock, code)
 
 
 def process_sell_cancellation(stock, code, orig_ord_no, db):
-    _ensure_state_handler_deps()
     return sniper_state_handlers.process_sell_cancellation(stock, code, orig_ord_no, db)
 
 
 def process_order_cancellation(stock, code, orig_ord_no, db, strategy):
-    _ensure_state_handler_deps()
     return sniper_state_handlers.process_order_cancellation(stock, code, orig_ord_no, db, strategy)
 
 
@@ -1175,16 +1210,18 @@ def run_sniper(is_test_mode=False):
 
     try:
         while True:
+            now_ts = time.time()
+            now = datetime.now()
+            now_t = now.time()
+            run_sniper.runtime_pause_state = is_buy_side_paused()
+            current_market_regime = _current_market_regime_code()
+            _ensure_state_handler_deps()
+
             if RESTART_FLAG_PATH.exists():
                 print("🔄 [우아한 종료] 재시작 깃발을 확인했습니다. 시스템을 안전하게 정지합니다.")
                 event_bus.publish('TELEGRAM_BROADCAST', {'message': "🛑 스나이퍼 엔진이 하던 작업을 마치고 우아하게 재시작됩니다."})
                 RESTART_FLAG_PATH.unlink()
                 break
-
-            now = datetime.now()
-            now_t = now.time()
-            run_sniper.runtime_pause_state = is_buy_side_paused()
-            current_market_regime = _current_market_regime_code()
 
             if not is_test_mode and now_t >= TIME_20_00:
                 print("🌙 장 마감 시간이 다가와 감시를 종료합니다.")
@@ -1196,9 +1233,10 @@ def run_sniper(is_test_mode=False):
                 break
 
             # =====================================================
-            # 신규 DB 타겟 polling
+            # 신규 DB 타겟 polling (P0 계측 포함)
             # =====================================================
-            if time.time() - last_db_poll_time > 5:
+            _t0_db = time.perf_counter()
+            if now_ts - last_db_poll_time > 5:
                 db_targets = DB.get_active_targets() or []
                 for dt in db_targets:
                     dt['strategy'] = normalize_strategy(dt.get('strategy'))
@@ -1206,15 +1244,16 @@ def run_sniper(is_test_mode=False):
                     code = str(dt.get('code', '')).strip()[:6]
                     identity = target_identity(code, dt['strategy'])
                     if not any(target_identity(t.get('code', ''), t.get('strategy', '')) == identity for t in targets):
-                        dt['added_time'] = time.time()
+                        dt['added_time'] = now_ts
                         targets.append(dt)
                         event_bus.publish("COMMAND_WS_REG", {"codes": [code]})
-                last_db_poll_time = time.time()
+                last_db_poll_time = now_ts
+            _db_elapsed_ms = (time.perf_counter() - _t0_db) * 1000
 
             # =====================================================
             # WATCHING TTL / FIFO
             # =====================================================
-            if time.time() - getattr(run_sniper, 'last_fifo_time', 0) > 10:
+            if now_ts - getattr(run_sniper, 'last_fifo_time', 0) > 10:
                 watching_stocks = [t for t in targets if t.get('status') == 'WATCHING']
                 expired_ids = []
                 expired_names = []
@@ -1225,7 +1264,7 @@ def run_sniper(is_test_mode=False):
                     if t.get('strategy') in ['SCALPING', 'SCALP']:
                         if t.get('position_tag') in ['VCP_CANDID', 'VCP_SHOOTING', 'VCP_NEXT']:
                             continue
-                        if time.time() - t.get('added_time', time.time()) > 7200:
+                        if now_ts - t.get('added_time', now_ts) > 7200:
                             expired_ids.append(t['id'])
                             expired_names.append(t['name'])
 
@@ -1257,16 +1296,22 @@ def run_sniper(is_test_mode=False):
                     if len(expired_names) <= 10:
                         print(f"   └ 만료 종목: {', '.join(expired_names)}")
 
-                run_sniper.last_fifo_time = time.time()
+                run_sniper.last_fifo_time = now_ts
 
             # =====================================================
-            # 90초 주기 계좌 동기화
+            # 90초 주기 계좌 동기화 (P1: ThreadPoolExecutor)
             # =====================================================
-            if time.time() - getattr(run_sniper, 'last_account_sync_time', 0) > 90:
-                # from src.utils.logger import log_error, log_info
-                # log_error(f"[DEBUG] 90초 조건 만족, periodic_account_sync 시작")
-                threading.Thread(target=periodic_account_sync, daemon=True).start()
-                run_sniper.last_account_sync_time = time.time()
+            _t0_acct = time.perf_counter()
+            global _ACCOUNT_SYNC_EXECUTOR, _ACCOUNT_SYNC_IN_FLIGHT
+            if _ACCOUNT_SYNC_EXECUTOR is None:
+                _ACCOUNT_SYNC_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="acct_sync")
+            if now_ts - getattr(run_sniper, 'last_account_sync_time', 0) > 90:
+                if not _ACCOUNT_SYNC_IN_FLIGHT:
+                    _ACCOUNT_SYNC_IN_FLIGHT = True
+                    future = _ACCOUNT_SYNC_EXECUTOR.submit(_run_account_sync_with_cleanup)
+                    future.add_done_callback(lambda _f: _clear_account_sync_in_flight())
+                    run_sniper.last_account_sync_time = now_ts
+            _acct_elapsed_ms = (time.perf_counter() - _t0_acct) * 1000
 
 
             # =====================================================
@@ -1276,8 +1321,8 @@ def run_sniper(is_test_mode=False):
             last_eod_done = getattr(run_sniper, 'scalping_eod_done_date', None)
             last_eod_try = getattr(run_sniper, 'last_scalping_eod_try', 0)
             if now_t >= TIME_SCALPING_OVERNIGHT_DECISION and last_eod_done != today_key:
-                if time.time() - last_eod_try >= 60:
-                    run_sniper.last_scalping_eod_try = time.time()
+                if now_ts - last_eod_try >= 60:
+                    run_sniper.last_scalping_eod_try = now_ts
                     if run_scalping_overnight_gatekeeper(ai_engine=ai_engine):
                         run_sniper.scalping_eod_done_date = today_key
                         last_eod_done = today_key
@@ -1322,6 +1367,8 @@ def run_sniper(is_test_mode=False):
                         code,
                         ws_data,
                         admin_id,
+                        now_ts=now_ts,
+                        now_dt=now,
                         radar=radar,
                         ai_engine=ai_engine
                     )
@@ -1333,14 +1380,37 @@ def run_sniper(is_test_mode=False):
                         ws_data,
                         admin_id,
                         current_market_regime,
+                        now_ts=now_ts,
+                        now_dt=now,
                         radar=radar,
                         ai_engine=holding_ai_engine
                     )
 
             targets[:] = [t for t in targets if t.get('status') not in ['COMPLETED', 'EXPIRED']]
-            if time.time() - getattr(run_sniper, "last_ws_prune_time", 0) >= 5:
+            if now_ts - getattr(run_sniper, "last_ws_prune_time", 0) >= 5:
                 _prune_ws_subscriptions_for_inactive_targets(targets)
-                run_sniper.last_ws_prune_time = time.time()
+                run_sniper.last_ws_prune_time = now_ts
+
+            # ── P0: 루프 계측 로그 (60초마다) ─────────────────────
+            _loop_elapsed_ms = (time.time() - now_ts) * 1000
+            _sleep_ms = 1000  # 현재 고정값, 후속 canary에서 변경
+            _target_count = len(targets)
+            _watching_count = len([t for t in targets if t.get('status') == 'WATCHING'])
+            _holding_count = len([t for t in targets if t.get('status') == 'HOLDING'])
+            global _LOOP_METRICS_LAST_LOG_TS
+            if now_ts - _LOOP_METRICS_LAST_LOG_TS >= 60:
+                log_info(
+                    f"[LOOP_METRICS] "
+                    f"loop_elapsed_ms={_loop_elapsed_ms:.1f} "
+                    f"sleep_ms={_sleep_ms} "
+                    f"db_active_targets_ms={_db_elapsed_ms:.1f} "
+                    f"account_sync_ms={_acct_elapsed_ms:.1f} "
+                    f"target_count={_target_count} "
+                    f"watching={_watching_count} "
+                    f"holding={_holding_count}"
+                )
+                _LOOP_METRICS_LAST_LOG_TS = now_ts
+
             time.sleep(1)
 
     except Exception as e:

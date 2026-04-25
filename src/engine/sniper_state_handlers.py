@@ -62,6 +62,10 @@ ACTIVE_TARGETS = None
 COOLDOWNS = None
 ALERTED_STOCKS = None
 
+# ── 프로세스 레벨 marcap TTL 캐시 (hot path용) ──
+_MARCAP_CACHE: dict[str, tuple[int, float]] = {}
+_MARCAP_CACHE_TTL: int = 300  # 5분
+
 
 def _resolve_zero_qty_cooldown_sec(deposit: int) -> int:
     """주문가능금액 0원은 일시 조회 실패일 수 있어 짧게 재조회합니다."""
@@ -876,19 +880,30 @@ def _resolve_gatekeeper_reject_cooldown(action_label: str) -> tuple[int, str]:
 
 
 def _resolve_stock_marcap(stock, code) -> int:
+    """시가총액 조회 (프로세스 레벨 TTL 캐시 + stock 캐시)."""
     try:
         existing = int(float(stock.get('marcap', 0) or 0))
     except Exception:
         existing = 0
     if existing > 0:
         return existing
+    now_ts = time.time()
+    norm_code = str(code or "").strip()[:6]
+    if norm_code:
+        cached = _MARCAP_CACHE.get(norm_code)
+        if cached is not None:
+            val, exp_ts = cached
+            if now_ts < exp_ts and val > 0:
+                stock['marcap'] = val
+                return val
     if DB is None:
         return 0
     try:
         marcap = int(DB.get_latest_marcap(code) or 0)
     except Exception:
         marcap = 0
-    if marcap > 0:
+    if marcap > 0 and norm_code:
+        _MARCAP_CACHE[norm_code] = (marcap, now_ts + _MARCAP_CACHE_TTL)
         stock['marcap'] = marcap
     return marcap
 
@@ -1812,7 +1827,7 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
 # 🧠 상태 머신 (State Machine) 핸들러
 # =====================================================================
 
-def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=None):
+def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt=None, radar=None, ai_engine=None):
     """
     [WATCHING 상태] 진입 타점 감시 및 AI 교차 검증
     """
@@ -1822,6 +1837,13 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
     alerted_stocks = ALERTED_STOCKS
     event_bus = EVENT_BUS
 
+    # P1: 메인 루프에서 전달받은 시간값 재사용, 없으면 자체 측정
+    if now_ts is None:
+        now_ts = time.time()
+    if now_dt is None:
+        now_dt = datetime.now()
+    now_t = now_dt.time()
+
     log_info(
         f"[DEBUG] handle_watching_state 시작: {stock.get('name')} ({code}), 전략={stock.get('strategy')}, "
         f"위치태그={stock.get('position_tag')}, radar={'있음' if radar else '없음'}, "
@@ -1829,7 +1851,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
     )
 
     if is_buy_side_paused():
-        now_ts = time.time()
         last_log = float(stock.get('last_pause_block_log_ts', 0) or 0)
         if (now_ts - last_log) >= 60:
             log_info(
@@ -1872,16 +1893,13 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
     strategy = normalize_strategy(stock.get('strategy'))
     pos_tag = normalize_position_tag(strategy, stock.get('position_tag'))
 
-    now = datetime.now()
-    now_t = now.time()
-
     if strategy == 'SCALPING':
         strategy_start = TIME_09_00 if pos_tag == 'VCP_NEXT' else TIME_09_03
     else:
         strategy_start = TIME_09_05
 
     if now_t < strategy_start:
-        if now.second % 30 == 0:
+        if now_dt.second % 30 == 0:
             print(f"📡 [관찰/블라인드 모드] 차트 데이터(VWAP) 형성 대기 중... (목표: {strategy_start})")
         log_info(f"[DEBUG] {code} 시간 조건 불충족 (현재 {now_t}, 시작 {strategy_start})")
         return
@@ -1889,8 +1907,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
     MAX_SURGE = MAX_SCALP_SURGE_PCT
     MAX_INTRADAY_SURGE = MAX_INTRADAY_SURGE
     MIN_LIQUIDITY = MIN_SCALP_LIQUIDITY
-
-    now_ts = time.time()
     if code in cooldowns and now_ts < cooldowns[code]:
         _emit_same_symbol_soft_stop_cooldown_shadow(
             stock=stock,
@@ -2201,7 +2217,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                     if gap_pct >= 1.5:
                         if code not in cooldowns:
                             print(f"⚠️ [{stock['name']}] 포착가 대비 너무 오름 (갭 +{gap_pct:.1f}%). 추격매수 포기.")
-                            cooldowns[code] = time.time() + 1200
+                            cooldowns[code] = now_ts + 1200
                         log_info(f"[DEBUG] {code} 포착가 대비 갭 상승 (gap_pct={gap_pct:.1f}% >= 1.5%)")
                         _log_entry_pipeline(
                             stock,
@@ -2223,7 +2239,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 )
 
                 last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
-                time_elapsed = time.time() - last_ai_time
+                time_elapsed = now_ts - last_ai_time
                 is_vip_target = (target_buy_price > 0) and (curr_price <= target_buy_price * 1.015)
 
                 if is_vip_target and last_ai_time == 0:
@@ -2454,7 +2470,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                         current_ai_score = 50
 
                     if ai_call_executed:
-                        LAST_AI_CALL_TIMES[code] = time.time()
+                        LAST_AI_CALL_TIMES[code] = now_ts
 
                     if ai_call_executed and last_ai_time == 0:
                         if not big_bite_confirmed:
@@ -2515,13 +2531,13 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                     )
 
                 if current_ai_score < 75 and current_ai_score != 50:
-                    if time.time() - last_ai_time < 1.0:
+                    if now_ts - last_ai_time < 1.0:
                         action_str = "WAIT(진입 보류)" if current_ai_score > 40 else "DROP(진입 차단)"
                         print(f"🚫 [AI 매수 거부] {stock['name']} {action_str} (AI 점수: {current_ai_score}점)")
 
                     cooldown_time = AI_WAIT_DROP_COOLDOWN
 
-                    cooldowns[code] = time.time() + cooldown_time
+                    cooldowns[code] = now_ts + cooldown_time
                     log_info(f"[DEBUG] {code} AI 점수 불충족 (current_ai_score={current_ai_score} < 75)")
                     _log_entry_pipeline(
                         stock,
@@ -2655,13 +2671,12 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
 
             if not ai_engine:
                 log_error(f"🚨 [{strategy} Gatekeeper 미초기화] {stock['name']}({code})")
-                cooldowns[code] = time.time() + gatekeeper_error_cd
+                cooldowns[code] = now_ts + gatekeeper_error_cd
                 _log_entry_pipeline(stock, code, "blocked_gatekeeper_missing", strategy=strategy)
                 return
 
             try:
                 realtime_ctx = None
-                now_ts = time.time()
                 gatekeeper_fast_sig = _build_gatekeeper_fast_signature(stock, ws_data, strategy, score)
                 gatekeeper_fast_snapshot = _build_gatekeeper_fast_snapshot(stock, ws_data, strategy, score)
                 gatekeeper_fast_reuse_sec = _resolve_gatekeeper_fast_reuse_sec()
@@ -2785,13 +2800,12 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                     )
                     # 신규 평가 결과는 저장하고 timestamp 갱신 (fast_reuse는 갱신 안 함)
                     is_new_evaluation = True
-                    current_time = time.time()
-                    stock['last_gatekeeper_action_at'] = current_time
-                    stock['last_gatekeeper_allow_entry_at'] = current_time
+                    stock['last_gatekeeper_action_at'] = now_ts
+                    stock['last_gatekeeper_allow_entry_at'] = now_ts
                     stock['last_gatekeeper_fast_snapshot'] = gatekeeper_fast_snapshot
-                    stock['last_gatekeeper_fast_at'] = current_time
+                    stock['last_gatekeeper_fast_at'] = now_ts
                     
-                LAST_AI_CALL_TIMES[code] = time.time()
+                LAST_AI_CALL_TIMES[code] = now_ts
                 action_label = gatekeeper.get('action_label', 'UNKNOWN')
                 gatekeeper_allow = bool(gatekeeper.get('allow_entry', False))
                 gatekeeper_cache_mode = str(gatekeeper.get('cache_mode', 'hit' if gatekeeper.get('cache_hit') else 'miss'))
@@ -2816,7 +2830,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                     )
             except Exception as e:
                 log_error(f"🚨 [{strategy} Gatekeeper 오류] {stock['name']}({code}): {e}")
-                cooldowns[code] = time.time() + gatekeeper_error_cd
+                cooldowns[code] = now_ts + gatekeeper_error_cd
                 _log_entry_pipeline(
                     stock,
                     code,
@@ -2834,7 +2848,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
             if not gatekeeper_allow:
                 gatekeeper_reject_cd, gatekeeper_cd_policy = _resolve_gatekeeper_reject_cooldown(action_label)
                 print(f"🚫 [{strategy} Gatekeeper 거부] {stock['name']} ({action_label})")
-                cooldowns[code] = time.time() + gatekeeper_reject_cd
+                cooldowns[code] = now_ts + gatekeeper_reject_cd
                 _log_entry_pipeline(
                     stock,
                     code,
@@ -2933,7 +2947,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 f"safe_budget={safe_budget}, safety_ratio={used_safety_ratio:.4f}, curr_price={curr_price}, "
                 f"retry_cooldown_sec={zero_qty_cooldown_sec})"
             )
-            cooldowns[code] = time.time() + zero_qty_cooldown_sec
+            cooldowns[code] = now_ts + zero_qty_cooldown_sec
             _log_entry_pipeline(
                 stock,
                 code,
@@ -3271,7 +3285,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
                 'order_type': request['order_type_code'],
                 'status': 'OPEN',
                 'filled_qty': 0,
-                'sent_at': time.time(),
+                'sent_at': now_ts,
             })
             _stage_buy_order_submission(
                 stock=stock,
@@ -3350,11 +3364,18 @@ def handle_watching_state(stock, code, ws_data, admin_id, radar=None, ai_engine=
 
 
 
-def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=None, ai_engine=None):
+def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_ts=None, now_dt=None, radar=None, ai_engine=None):
     """
     [HOLDING 상태] 보유 종목 익절/손절 감시 및 AI 조기 개입
     """
     global LAST_AI_CALL_TIMES
+
+    # P1: 메인 루프에서 전달받은 시간값 재사용
+    if now_ts is None:
+        now_ts = time.time()
+    if now_dt is None:
+        now_dt = datetime.now()
+    now_t = now_dt.time()
 
     cooldowns = COOLDOWNS
     alerted_stocks = ALERTED_STOCKS
@@ -3396,13 +3417,13 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
 
     if strategy in ('KOSPI_ML', 'KOSDAQ_ML'):
         last_log = LAST_LOG_TIMES.get(code, 0)
-        if time.time() - last_log >= 600:
+        if now_ts - last_log >= 600:
             current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
             log_info(
                 f"[{strategy}] 보유 종목 감시 중: {stock['name']}({code}) 수익률 {profit_rate:+.2f}%, "
                 f"AI 점수 {current_ai_score:.0f}점"
             )
-            LAST_LOG_TIMES[code] = time.time()
+            LAST_LOG_TIMES[code] = now_ts
 
     def _dispatch_scalp_preset_exit(*, sell_reason_type, reason, exit_rule):
         target_id = stock.get('id')
@@ -3412,7 +3433,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
         preset_held_sec = 0
         try:
             if stock.get('order_time'):
-                preset_held_sec = max(0, int(time.time() - float(stock.get('order_time') or 0)))
+                preset_held_sec = max(0, int(now_ts - float(stock.get('order_time') or 0)))
         except Exception:
             preset_held_sec = 0
 
@@ -3453,11 +3474,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             sell_res = _send_exit_best_ioc(code, rem_qty, KIWOOM_TOKEN)
             stock['exit_requested'] = True
             stock['exit_order_type'] = '16'
-            stock['exit_order_time'] = time.time()
+            stock['exit_order_time'] = now_ts
             ord_no = str(sell_res.get('ord_no', '') or '') if isinstance(sell_res, dict) else ''
             if ord_no:
                 stock['sell_ord_no'] = ord_no
-            stock['sell_order_time'] = time.time()
+            stock['sell_order_time'] = now_ts
             sign = _resolve_sell_order_sign(sell_reason_type, profit_rate)
             stock['pending_sell_msg'] = (
                 f"{sign} **{stock['name']} 매도 전송 ({strategy})**\n"
@@ -3644,9 +3665,6 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
     reason = ""
     exit_rule = ""
 
-    now = datetime.now()
-    now_t = now.time()
-
     last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
     current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
     ai_low_score_hits = int(stock.get('ai_low_score_loss_hits', 0) or 0)
@@ -3665,7 +3683,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
 
     last_ai_profit = stock.get('last_ai_profit', profit_rate)
     price_change = abs(profit_rate - last_ai_profit)
-    time_elapsed = time.time() - last_ai_time
+    time_elapsed = now_ts - last_ai_time
     held_sec = _resolve_holding_elapsed_sec(stock)
     held_time_min = held_sec / 60.0
     if strategy == "SCALPING":
@@ -3702,7 +3720,6 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
         if time_elapsed > dynamic_min_cd and (price_change >= dynamic_price_trigger or time_elapsed > dynamic_max_cd):
             holding_ai_review_started = time.perf_counter()
             try:
-                now_ts = time.time()
                 market_snapshot = _build_holding_ai_fast_snapshot(ws_data)
                 market_signature = tuple(market_snapshot.values())
                 reuse_sec = _resolve_holding_ai_fast_reuse_sec(is_critical_zone, dynamic_max_cd)
@@ -3823,11 +3840,10 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                             ai_low_score_hits = 0
 
                         stock['ai_low_score_loss_hits'] = ai_low_score_hits
-                        review_completed_ts = time.time()
-                        stock['last_ai_reviewed_at'] = review_completed_ts
+                        stock['last_ai_reviewed_at'] = now_ts
                         stock['last_ai_market_signature'] = market_signature
                         stock['last_ai_market_snapshot'] = market_snapshot
-                        stock['last_ai_market_signature_at'] = review_completed_ts
+                        stock['last_ai_market_signature_at'] = now_ts
 
                         # reversal_add: 수급 피처 저장 및 STAGNATION 상태 갱신
                         if getattr(TRADING_RULES, 'REVERSAL_ADD_ENABLED', False):
@@ -3955,13 +3971,13 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             except Exception as e:
                 log_info(f"🚨 [보유 AI 감시 에러] {stock['name']}({code}): {e}")
             finally:
-                LAST_AI_CALL_TIMES[code] = time.time()
+                LAST_AI_CALL_TIMES[code] = now_ts
 
     # ── reversal_add POST_ADD_EVAL 집중 감시 ──────────────────
     if not is_sell_signal and stock.get('reversal_add_state') == 'POST_ADD_EVAL':
         _ra_executed_at = float(stock.get('reversal_add_executed_at', 0))
         _ra_eval_sec = int(getattr(TRADING_RULES, 'REVERSAL_ADD_POST_EVAL_SEC', 25))
-        _ra_elapsed = time.time() - _ra_executed_at
+        _ra_elapsed = now_ts - _ra_executed_at
         _ra_feat = stock.get('last_reversal_features', {})
         _ra_floor = float(stock.get('reversal_add_profit_floor', -1.0))
         _ra_post_fail = (
@@ -4027,7 +4043,6 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             dynamic_stop_pct = soft_stop_pct
             dynamic_trailing_limit = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_WEAK', 0.4)
 
-        now_ts = time.time()
         open_reclaim_near_ai_exit = (
             profit_rate <= ai_exit_min_loss_pct
             and current_ai_score <= (ai_exit_score_limit + open_reclaim_score_buffer)
@@ -4402,7 +4417,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                 return
 
         if strategy == "SCALPING" and str(exit_rule or "").strip() == "scalp_soft_stop_pct":
-            _mark_same_symbol_soft_stop(code, now_ts=time.time())
+            _mark_same_symbol_soft_stop(code, now_ts=now_ts)
 
         sign = _resolve_sell_order_sign(sell_reason_type, profit_rate)
         msg = (
@@ -4488,7 +4503,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
         if is_success:
             print(f"✅ [{stock['name']}] 매도 주문 전송 완료. 체결 영수증 처리 대기 중...")
             stock['pending_sell_msg'] = msg
-            stock['sell_order_time'] = time.time()
+            stock['sell_order_time'] = now_ts
             if ord_no:
                 stock['sell_odno'] = ord_no
             _log_holding_pipeline(
@@ -4504,7 +4519,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             )
 
             if strategy == 'SCALPING' and now_t < TIME_15_30:
-                cooldowns[code] = time.time() + 1200
+                cooldowns[code] = now_ts + 1200
                 alerted_stocks.discard(code)
                 print(f"♻️ [{stock['name']}] 스캘핑 청산 완료 후 20분 쿨타임 진입.")
         else:
@@ -4597,7 +4612,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             if add_result and scale_in_action.get("reason") == "reversal_add_ok":
                 stock['reversal_add_used'] = True
                 stock['reversal_add_state'] = "POST_ADD_EVAL"
-                stock['reversal_add_executed_at'] = time.time()
+                stock['reversal_add_executed_at'] = now_ts
             elif (not add_result) and scale_in_action.get("reason") == "reversal_add_ok":
                 stock['reversal_add_state'] = "REVERSAL_CANDIDATE"
                 _log_holding_pipeline(
@@ -4612,7 +4627,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
             return
         if strategy == 'SCALPING' and getattr(TRADING_RULES, 'REVERSAL_ADD_ENABLED', False):
             _last_ra_probe_log = float(stock.get('last_reversal_add_probe_log_ts', 0) or 0)
-            if time.time() - _last_ra_probe_log >= 30:
+            if now_ts - _last_ra_probe_log >= 30:
                 _ra_probe = evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_sec)
                 _ra_probe_reason = str(_ra_probe.get("reason") or "")
                 if _ra_probe_reason and _ra_probe_reason != "reversal_add_ok":
@@ -4625,11 +4640,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                         profit_rate=f"{profit_rate:+.2f}",
                         ai_score=f"{current_ai_score:.0f}",
                     )
-                stock['last_reversal_add_probe_log_ts'] = time.time()
+                stock['last_reversal_add_probe_log_ts'] = now_ts
             return
     else:
         last_block = float(stock.get('last_add_block_log_ts', 0) or 0)
-        if time.time() - last_block >= 30:
+        if now_ts - last_block >= 30:
             if gate.get('reason') == 'buy_side_paused':
                 log_info(
                     f"[TRADING_PAUSED_BLOCK] HOLDING add skipped "
@@ -4642,7 +4657,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, radar=No
                     f"{stock.get('name')}({code}) "
                     f"strategy={strategy} reason={gate.get('reason')}"
                 )
-            stock['last_add_block_log_ts'] = time.time()
+            stock['last_add_block_log_ts'] = now_ts
 
 
 def can_consider_scale_in(
