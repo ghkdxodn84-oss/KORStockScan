@@ -21,6 +21,7 @@ HEAVY_SNAPSHOT_PROFILE_BY_KIND = {
     "performance_tuning": "intraday_light",
     "trade_review": "intraday_light",
     "post_sell_feedback": "full",
+    "holding_exit_observation": "full",
 }
 
 ASYNC_RESPONSE_RE = re.compile(
@@ -295,6 +296,20 @@ def pending_report_shell(snapshot_kind: str, target_date: str) -> dict[str, Any]
                 "hard_stop_taxonomy": {},
             },
             "meta": {"warnings": [], "available_stocks": []},
+        }
+    if snapshot_kind == "holding_exit_observation":
+        return {
+            "date": target_date,
+            "month_start": f"{target_date[:7]}-01" if target_date else "",
+            "readiness": {},
+            "cohorts": {},
+            "exit_rule_quality": [],
+            "trailing_continuation": {},
+            "soft_stop_rebound": {},
+            "same_symbol_reentry": {},
+            "opportunity_cost": {},
+            "load_distribution_evidence": {},
+            "meta": {},
         }
     return {"date": target_date, "meta": {}}
 

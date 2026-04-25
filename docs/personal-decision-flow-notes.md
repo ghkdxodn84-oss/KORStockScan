@@ -93,6 +93,15 @@
 - HOLDING 단계에서는 `is_sell_signal`이 생기기 전까지 `ai_holding_review`와 `scale_in` 후보평가가 반복된다. 즉 제출축이 살아나면 다음 병목은 보유 중 `soft stop/trailing/ai exit` 품질로 넘어간다.
 - 이후 보완도 `append`가 아니라 기존 판정 섹션을 최신 스냅샷 기준으로 갱신하는 방식으로 유지한다.
 
+### 보유/청산 보조 관찰 메모
+
+| 항목 | 내용 |
+| --- | --- |
+| soft_stop 휩쏘 가설 | 소프트손절 후 `1m/3m/5m/10m/20m` 반등을 `rebound_above_sell`, `rebound_above_buy`, `mfe_ge_0_5`, `mfe_ge_1_0`로 분리한다. 매도가만 재상회하면 micro grace/확인유예 후보이고, 매수가까지 회복하면 cooldown live가 아니라 threshold/AI 재판정 후보로 본다. |
+| 하드스탑 위치 | `scalp_preset_hard_stop_pct`, `scalp_hard_stop_pct`, `protect_hard_stop`은 soft_stop보다 완화 우선순위를 낮춘다. 하드스탑은 극단 손실 방어선이므로 반등 사례가 있어도 `hard_stop_whipsaw_aux` 보조 관찰로만 두고, 바로 완화 canary로 올리지 않는다. |
+| 하방카운트 위치 | `ai_low_score_hits`는 가격 휩쏘 필터가 아니라 `AI<=35`, `손실<=-0.7%`, `보유>=180초`, 연속 `3회` 조건의 AI 조기손절 트리거다. 스캘핑 exit 순서상 hard/soft stop이 먼저 평가되므로, soft_stop에 먼저 닿는 휩쏘는 하방카운트가 쌓이기 전에 청산될 수 있다. |
+| 4월 로그 해석 | 4월 `AI 보유감시` 로그에서 하방카운트는 `0/3` 또는 `0/4`가 대부분이고, `3/3` 도달은 매우 적다. 따라서 27일에는 soft_stop 직전 `low_score_hits`, `held_sec`, `ai_score`, `profit_rate`를 같이 잠가 “하방카운트가 작동하지 않은 휩쏘”인지 분리한다. |
+
 ## ID 명명 규칙
 
 | 항목 | 규칙 |
@@ -239,6 +248,29 @@
 | 다음 액션 | 이번 턴의 next live 후보 재선정은 `quote_fresh 4요인`만이 아니라 `quote_fresh residual(other_danger)`까지 포함한 5분기로 본다. 여기서 끝내지 않고 `ws_jitter` 축을 닫는 즉시 `other_danger residual` 1축을 같은 장중에 바로 연다. 이번에는 [sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/engine/sniper_entry_latency.py)의 `other_danger-only normal override` 코드가 먼저 들어간 뒤 관찰을 시작한다. 새 관찰창은 코드 적재 시점부터 다시 시작하되, `13:40` 중간점검 없이 `14:00 KST`에 바로 최종판정을 내린다. `14:00`까지 `other_danger residual`도 `submitted <= 2`로 잠기면 `quote_fresh family` 전체를 닫고, 준비된 다음 독립축 1개를 `기존 축 OFF -> restart.flag -> 새 축 ON` 순서로 same-day replacement 할 수 있다. 여기서 `1축 원칙`은 `동시 live 1축`만 금지한다. `submitted >= 5`가 새 축에서 다시 확보되기 전까지 `HOLDING/청산 품질`은 열지 않는다. |
 | Source | [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
 
+### DF-HOLDING-002 `soft_stop 1차 live canary` 판정 흐름
+
+| 항목 | 내용 |
+| --- | --- |
+| ID | `DF-HOLDING-002` |
+| 판정항목 | `2026-04-27` 보유/청산 1차 live canary를 `soft_stop_rebound_split` 중심으로 볼지 여부 |
+| 문제 인식 | 4월 누적 기준 손익 훼손은 trailing 조기익절보다 soft stop 손실축이 더 직접적이다. `2026-04-24` 생성 리포트 기준 `scalp_soft_stop_pct completed_valid=53`, 평균 `-1.669%`, 실현손익 `-651,680원`이고, `scalp_trailing_take_profit completed_valid=54`, 평균 `+1.041%`, 실현손익 `+280,742원`이다. |
+| 추가 가설 | soft stop이 정상 손절이 아니라 휩쏘에 걸리는 케이스가 많을 수 있다. 즉 soft stop 시점에는 손절가를 찍었지만, 이후 1~10분 안에 매도가를 재상회하거나 +0.5~1.0% 이상 되돌리는 표본이 많으면 soft stop을 단순 유지하기보다 confirmation/micro grace 후보로 봐야 한다. |
+| 기존 로그 재집계 | 4월 post-sell 평가의 `scalp_soft_stop_pct` 61건 기준, 10분 내 매도가 재상회는 57건(`93.4%`), 10분 내 +0.5% 이상 반등은 43건(`70.5%`), +1.0% 이상 반등은 23건(`37.7%`), 매수가 회복은 16건(`26.2%`)이다. 이는 `soft_stop whipsaw` 가설을 별도 검증축으로 둘 근거가 된다. |
+| 왜 1순위인가 | trailing은 놓친 추가상승을 줄이는 upside capture 축이고, soft stop은 이미 실현된 손실을 줄이는 downside leakage 축이다. 기대값 관점에서는 우선 손실 기대값이 큰 soft stop을 먼저 좁혀야 한다. |
+| 동시 canary 해석 | `gatekeeper_fast_reuse`는 진입병목 축이고 soft stop은 보유/청산 축이다. 조작점, 적용 시점, cohort tag, rollback guard가 완전히 분리되면 stage-disjoint concurrent canary로 병렬 검토할 수 있다. 단, 두 축이 같은 주문 흐름을 공유하므로 성과판정은 hard pass/fail이 아니라 provisional로 둔다. |
+| 1차 canary에서 얻고 싶은 것 | soft stop 자체를 무조건 늦추는 것이 아니라, “진짜 손절해야 할 하락”과 “짧은 V-shape/휩쏘 반등을 잘라버리는 손절”을 분리할 수 있는지 확인한다. |
+| 기대효과 1 | soft stop 손실 평균과 실현손익 하방 tail을 줄인다. 즉 제출이 회복될 때 손실 표본이 같이 늘어나는 것을 조기에 막는다. |
+| 기대효과 2 | `rebound_above_buy_10m`가 높은 경우에는 cooldown live를 금지하고 threshold/AI 재판정 후보로 넘겨, 반등을 놓치는 역효과를 피한다. |
+| 기대효과 3 | `same_symbol_reentry_loss_count`가 높은 경우에는 같은 종목 저품질 재진입을 줄이는 후보를 만들 수 있다. 이 경우 기대효과는 손실 회피와 재진입 비용 절감이다. |
+| 기대효과 4 | 10시 중간점검과 11시 1차 판정으로 오염을 조기에 잡는다. cohort tag 혼선, fallback 회귀, soft stop 전환율 급증, 매도 실패가 보이면 장후까지 끌지 않고 OFF 후보로 올린다. |
+| 기대효과 5 | 휩쏘 표본이 live에서도 유지되면 `soft_stop confirmation/micro grace`라는 더 직접적인 조작점으로 좁힐 수 있다. 반대로 반등 없이 계속 하락하는 표본이 우세하면 soft stop 완화가 아니라 진입 품질/손절 threshold 재판정으로 넘긴다. |
+| 금지 조건 | `partial fill`, `pyramid-activated`, `EOD/NXT`, `fallback` 경로와 합산하지 않는다. soft stop cooldown을 전역 적용하지 않고 qualifying cohort 1개로만 제한한다. |
+| 10시 중간점검 | `2026-04-27 10:00~10:10 KST`에는 pass/fail이 아니라 조기 오염을 본다. `soft_stop qualifying cohort`, `submitted/full/partial/completed_valid`, `fallback_regression=0`, 진입 canary와 cohort tag 분리 여부, `rebound_above_sell_1m/3m`, `mfe_ge_0_5`를 먼저 잠근다. |
+| 11시 1차 판정 | `2026-04-27 11:00~11:15 KST`에는 `유지/축소/OFF/판정유예` 중 하나로 잠근다. `COMPLETED + valid profit_rate >= 10` 전에는 hard pass/fail이 아니라 방향성 판정으로만 두며, `rebound_above_sell_10m`, `rebound_above_buy_10m`, `mfe_ge_0_5`, `mfe_ge_1_0`로 휩쏘 여부를 같이 본다. |
+| trailing과의 관계 | `trailing_continuation_micro_canary`는 2순위다. `MISSED_UPSIDE rate >= 60%`, `GOOD_EXIT rate <= 30%`를 충족하고 soft stop 축이 오염되지 않을 때만 다음 후보로 다시 연다. |
+| Source | [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
+
 ## 항목 간 연결 관계
 
 | 선행 ID | 결정 결과 | 후속 ID | 연결 의미 |
@@ -247,4 +279,5 @@
 | `DF-ENTRY-002` | upstream 표본 생성 유효, 유지/고정 | `DF-ENTRY-003` | `BUY 부족`보다는 `entry_armed -> submitted` 제출 병목이 다음 공식 판정축으로 넘어갔음을 의미 |
 | `DF-ENTRY-003` | 제출축 live 검증 진행 후 원인 위치 고정 | `DF-ENTRY-004` | `spread relief canary`는 downstream 병목 위치 확인까지는 완료했고, 실효성 승인 실패 후 `quote_fresh` replacement 후보로 연결됐다는 의미 |
 | `DF-ENTRY-004` | same-day 보조축을 `quote_fresh`로 고정 후 `ws_jitter` replacement live 교체 | `DF-ENTRY-005` | `quote_fresh family` 잠금 이후 다음 독립축을 `gatekeeper_fast_reuse`로 넘겨 `window vs signature`를 다시 분해했다는 의미 |
-| `DF-ENTRY-005` | `window`보다 `signature`가 주원인으로 재판정, code-load 완료/live 승인 대기 | `DF-HOLDING-001` | HOLDING/청산 품질 판정은 여전히 제출 회복 이후 단계이며, `gatekeeper_fast_reuse signature-only` live 결과가 먼저 필요하다는 의미 |
+| `DF-ENTRY-005` | `window`보다 `signature`가 주원인으로 재판정, code-load 완료/live 승인 대기 | `DF-HOLDING-001` | HOLDING/청산 품질 판정은 제출 회복 이후 단계로 유지하되, stage-disjoint 예외가 성립하면 보유/청산 live canary를 병렬 검토할 수 있다는 의미 |
+| `DF-HOLDING-001` | 제출 회복 이후 HOLDING/청산 품질 판정 축 유지 | `DF-HOLDING-002` | 4월 손익 훼손 기준으로 soft stop을 1순위 live 후보로 분리하고, 10시 중간점검/11시 1차 판정으로 조기 오염을 잡는다는 의미 |

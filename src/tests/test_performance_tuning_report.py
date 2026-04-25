@@ -764,8 +764,8 @@ def test_check_dotted_path_validates_nested_keys():
     assert exists and missing is None
 
 
-def test_observation_axis_coverage_returns_all_14_axes():
-    """_build_observation_axis_coverage가 14개 axis row를 반환하고 direct/indirect축은 available=True"""
+def test_observation_axis_coverage_returns_all_15_axes():
+    """_build_observation_axis_coverage가 15개 axis row를 반환하고 direct/indirect축은 available=True"""
     metrics = {
         "budget_pass_events": 10, "order_bundle_submitted_events": 5, "budget_pass_to_submitted_rate": 50.0,
         "latency_block_events": 2, "latency_pass_events": 8, "quote_fresh_latency_pass_rate": 80.0,
@@ -788,7 +788,7 @@ def test_observation_axis_coverage_returns_all_14_axes():
     }
     sections = {"holding_axis": {"holding_action_applied": 1}}
     rows = report_mod._build_observation_axis_coverage(metrics, breakdowns, sections)
-    assert len(rows) == 14
+    assert len(rows) == 15
     direct_axes = {r["axis_id"] for r in rows if r["coverage_status"] == "direct"}
     assert len(direct_axes) == 7
     for r in rows:

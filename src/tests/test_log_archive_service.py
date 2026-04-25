@@ -180,6 +180,11 @@ def test_save_monitor_snapshots_for_date_includes_missed_entry_counterfactual(tm
     )
     monkeypatch.setitem(
         sys.modules,
+        "src.engine.holding_exit_observation_report",
+        types.SimpleNamespace(build_holding_exit_observation_report=lambda **kwargs: {"date": kwargs["target_date"], "meta": {}}),
+    )
+    monkeypatch.setitem(
+        sys.modules,
         "src.engine.wait6579_ev_cohort_report",
         types.SimpleNamespace(build_wait6579_ev_cohort_report=lambda **kwargs: {"date": kwargs["target_date"], "meta": {}}),
     )
@@ -225,6 +230,7 @@ def test_save_monitor_snapshots_for_date_includes_missed_entry_counterfactual(tm
     result = service.save_monitor_snapshots_for_date("2026-04-09")
 
     assert "missed_entry_counterfactual" in result
+    assert "holding_exit_observation" in result
     assert "wait6579_ev_cohort" in result
     assert "snapshot_manifest" in result
     assert "server_comparison_snapshot" in result
@@ -233,6 +239,10 @@ def test_save_monitor_snapshots_for_date_includes_missed_entry_counterfactual(tm
     assert saved is not None
     assert saved["meta"]["snapshot_kind"] == "missed_entry_counterfactual"
     assert saved["meta"]["buy_pause_guard"] == {"status": "ok"}
+    holding_exit_saved = service.load_monitor_snapshot("holding_exit_observation", "2026-04-09")
+    assert holding_exit_saved is not None
+    assert holding_exit_saved["meta"]["snapshot_kind"] == "holding_exit_observation"
+    assert holding_exit_saved["meta"]["buy_pause_guard"] == {"status": "ok"}
     wait6579_saved = service.load_monitor_snapshot("wait6579_ev_cohort", "2026-04-09")
     assert wait6579_saved is not None
     assert wait6579_saved["meta"]["snapshot_kind"] == "wait6579_ev_cohort"

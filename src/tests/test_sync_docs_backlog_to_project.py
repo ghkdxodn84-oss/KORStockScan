@@ -82,8 +82,36 @@ def test_parse_checklist_fallback_when_primary_missing(monkeypatch):
     assert any("-stage2-todo-checklist.md" in t.source for t in tasks)
 
 
-def test_parse_checklist_collects_multiple_stage2_files(monkeypatch):
+def test_parse_checklist_collects_multiple_stage2_files(monkeypatch, tmp_path):
+    checklist_24 = tmp_path / "2026-04-24-stage2-todo-checklist.md"
+    checklist_24.write_text(
+        "\n".join(
+            [
+                "# Checklist",
+                "",
+                "## 장중 체크리스트",
+                "- [ ] `[ParserTest0424] 열린 항목` (`Due: 2026-04-24`, `Slot: INTRADAY`, `TimeWindow: 14:00~14:10`, `Track: Plan`)",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    checklist_22 = tmp_path / "2026-04-22-stage2-todo-checklist.md"
+    checklist_22.write_text(
+        "\n".join(
+            [
+                "# Checklist",
+                "",
+                "## 장중 체크리스트",
+                "- [ ] `[ParserTest0422] 과거 항목` (`Due: 2026-04-22`, `Slot: INTRADAY`, `TimeWindow: 14:00~14:10`, `Track: Plan`)",
+            ]
+        ),
+        encoding="utf-8",
+    )
     monkeypatch.setenv("DOC_BACKLOG_TODAY", "2026-04-23")
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project._checklist_doc_candidates",
+        lambda: [checklist_24, checklist_22],
+    )
     tasks = parse_checklist_tasks()
     due_dates = {t.due_date for t in tasks}
     assert "2026-04-24" in due_dates
