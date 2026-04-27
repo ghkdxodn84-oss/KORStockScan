@@ -50,8 +50,20 @@
 
 - [ ] `[QuoteFreshReview0428] quote_fresh composite 다음 판정 규칙 고정` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 18:00~18:15`, `Track: ScalpingLogic`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [audit-reports/2026-04-27-entry-latency-composite-canary-audit-review.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-27-entry-latency-composite-canary-audit-review.md)
-  - 판정 기준: `latency_quote_fresh_composite`는 `signal/ws_age/ws_jitter/spread/quote_stale` 5개를 개별 축으로 해석하지 않고 묶음 ON/OFF로만 판정한다. 비교 baseline은 같은 bundle 내 `quote_fresh_composite_canary_applied=False` 표본으로 고정하고, baseline이 `N_min` 미달이면 방향성 판정으로 격하한다.
+  - 판정 기준: `latency_quote_fresh_composite`는 `signal/ws_age/ws_jitter/spread/quote_stale` 5개를 개별 축으로 해석하지 않고 묶음 ON/OFF로만 판정한다. `ws_age만 유지` 같은 부분 적용은 금지한다. primary baseline은 같은 bundle 내 `quote_fresh_composite_canary_applied=False`, `normal_only`, `post_fallback_deprecation` 표본으로 고정하고, baseline이 `N_min` 미달이거나 `submitted_orders < 20`이거나 `ShadowDiff0428` 미해소면 방향성 판정으로 격하한다. `ShadowDiff0428`은 submitted/full/partial 집계의 live runtime 경로와 offline bundle 경로 간 차이가 `1건 이내`로 좁혀진 상태를 뜻한다.
   - why: 복합축 이름으로 동일 단계 다중축 실험을 우회하면 원인귀속과 rollback 판단이 깨진다.
+  - hard pass/fail 전제조건:
+    - `submitted_orders >= 20`
+    - baseline 표본 `>= N_min`
+    - `ShadowDiff0428` 해소
+  - 도달목표:
+    - primary: `budget_pass_to_submitted_rate >= baseline +1.0%p`
+    - secondary: `latency_state_danger / budget_pass` 비율 `-5.0%p` 이상 개선 and `full_fill + partial_fill`의 `submitted` 대비 전환율이 baseline 대비 `-2.0%p` 이내
+  - 감리 검토 포인트:
+    - 비교 baseline이 `same bundle + canary_applied=False`로 잠겼는지
+    - `2026-04-27 15:00 offline bundle`은 참고선이고 hard pass/fail 기준선이 아니라는 점이 분리됐는지
+    - `composite_no_recovery`, `loss_cap`, `partial_fill_ratio`, `normal_slippage_exceeded`, `fallback_regression` guard가 성공 기준과 섞이지 않고 분리 기재됐는지
+    - baseline 부족, `submitted_orders < 20`, 또는 `ShadowDiff0428` 미해소 시 `direction-only` 판정으로 격하하고 `2영업일` 내 재판정, 미재판정 시 자동 OFF 규칙이 남아 있는지
   - 다음 액션: 다음 판정 메모에는 임계값별 `분포 기준`, `예상 기각률`, `효과 부족 시 fallback 임계값`, `composite_no_recovery` guard를 함께 남긴다.
 
 - [ ] `[ShadowDiff0428] postclose submitted/full/partial mismatch 재분해` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 18:15~18:30`, `Track: ScalpingLogic`)

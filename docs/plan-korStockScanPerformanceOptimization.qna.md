@@ -156,6 +156,62 @@
 2. 어떤 문서가 수정됐는지
 3. 사용자가 실행할 명령 `1개`
 
+### Q11. 왜 `latency_quote_fresh_composite`의 baseline을 `same bundle + canary_applied=False`로 고정하나?
+
+답변:
+
+1. 같은 bundle 안의 `canary_applied=False` 표본이 가장 가까운 비교군이기 때문이다.
+2. 이 기준을 쓰면 장중 장세 변화와 snapshot 시각 차이를 최소화할 수 있다.
+3. 같은 날 다른 bundle이나 과거 일자의 수치를 baseline으로 쓰면 `canary 효과`와 `시장 상태 변화`가 섞인다.
+
+운영 기준:
+
+1. primary baseline은 `same bundle + quote_fresh_composite_canary_applied=False + normal_only + post_fallback_deprecation`이다.
+2. 이 baseline이 `N_min` 미달이면 hard pass/fail을 닫지 않는다.
+3. 이 경우 판정은 `direction-only`로 격하한다.
+
+### Q12. 왜 `2026-04-27 15:00 offline bundle`은 hard baseline이 아니라 참고선인가?
+
+답변:
+
+1. 해당 bundle은 주병목 확인과 방향성 확인에는 유용하지만, 같은 bundle 내 `canary_applied=False` 대조군보다 우선할 수는 없다.
+2. 또 `submitted/full/partial` mismatch가 남아 있어 hard pass/fail 기준선으로 쓰면 감리상 약하다.
+3. 따라서 이 값은 `어느 정도로 나빴는가`를 보여주는 reference이고, 승격/종료를 닫는 1차 근거는 아니다.
+
+운영 기준:
+
+1. `2026-04-27 15:00 offline bundle`은 direction reference만 제공한다.
+2. baseline과 reference를 문서에서 섞어 쓰지 않는다.
+3. baseline 부족 또는 data-quality gate 미해소 시 `reference 기반 방향성 판정`까지만 허용한다.
+
+### Q13. `direction-only`와 `hard pass/fail`은 어떻게 다르나?
+
+답변:
+
+1. `hard pass/fail`은 baseline, 표본수, data-quality gate가 모두 충족된 상태의 판정이다.
+2. `direction-only`는 효과의 방향은 읽히지만 승격/종료를 확정할 정도로 증거가 잠기지 않은 상태다.
+3. 둘을 섞으면 `표본 부족인데도 승격`하거나 `집계 불일치인데도 종료`하는 오류가 생긴다.
+
+운영 기준:
+
+1. `trade_count < 50`이고 `submitted_orders < 20`이면 hard pass/fail 금지다.
+2. `ShadowDiff0428` 미해소면 hard baseline 승격 금지다.
+3. `direction-only` 판정에는 반드시 추가 확인 항목과 다음 절대시각이 따라야 한다.
+
+### Q14. 감리인이 이번 entry composite 축에서 먼저 볼 핵심 4개는 무엇인가?
+
+답변:
+
+1. baseline이 `same bundle + canary_applied=False + normal_only + post_fallback_deprecation`로 고정됐는가
+2. `2026-04-27 15:00 offline bundle`이 hard baseline이 아니라 참고선으로만 쓰이는가
+3. 성공 기준과 rollback guard가 한 문장으로 섞이지 않고 분리됐는가
+4. baseline 부족 또는 `ShadowDiff0428` 미해소 시 `direction-only`로 격하하는 규칙이 살아 있는가
+
+운영 기준:
+
+1. 위 4개는 외부 반출용 감리 문서와 checklist에 모두 일치해야 한다.
+2. 셋 중 하나라도 깨지면 composite 판정 문구를 다시 연다.
+
 ## 참고 문서
 
 - [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)

@@ -69,6 +69,28 @@
 4. 성과판정 시점이 이동할 때
 5. broad relax 재오픈 조건이 변경될 때
 
+## 5. Rebase 슬림화 분리 기준 (`2026-04-27`)
+
+`plan-korStockScanPerformanceOptimization.rebase.md`가 비대해지지 않도록, 아래 내용은 이 문서 또는 Q&A로 내린다.
+
+| 분리 대상 | 이동 문서 | 이유 |
+| --- | --- | --- |
+| 날짜형 과제 레지스터 | 이 문서 | active/open 원칙보다 과거 진행 로그가 더 커지면 중심 문서의 판독성이 떨어진다 |
+| 지나간 일정표 | 이 문서 또는 날짜별 checklist | 절대시각이 지난 일정은 현재 규칙이 아니라 이력이다 |
+| same-day pivot / 종료 / 폐기 기록 | 이 문서 | `왜 바뀌었는가`는 delta의 역할이다 |
+| 반복 해석 질문 | [Q&A](./plan-korStockScanPerformanceOptimization.qna.md) | 본문 규칙을 장문 해설로 오염시키지 않기 위함 |
+
+## 6. 최근 날짜형 이력 요약
+
+| 날짜 | 변화 | 현재 의미 |
+| --- | --- | --- |
+| `2026-04-24` | `quote_fresh family` 단일 완화축들이 제출 회복에 실패했고, `gatekeeper_fast_reuse signature/window`가 다음 후보로 올라왔음 | 이후 `gatekeeper_fast_reuse`는 live 제출 회복축이 아니라 보조 진단축으로 격하됐다 |
+| `2026-04-27 11:31 KST` | `latency_block=3196`, `latency_state_danger=3000` 재집계로 주병목이 `gatekeeper_fast_reuse`가 아니라 `latency_state_danger`임을 확정 | entry 주병목 해석이 `signature/window`에서 `other_danger/ws_jitter/spread`를 포함한 residual 분해로 되돌아갔다 |
+| `2026-04-27 same-day` | `SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_SIGNAL_SCORE 90.0 -> 85.0` pivot 적용 | `other_danger-only residual`을 direct blocker 관점에서 다시 열었다 |
+| `2026-04-27 same-day` | `fallback_scout/main`, `fallback_single`, `latency fallback split-entry`를 live/observe candidate에서 제거하고 historical-only로 정렬 | fallback 관련 운영/감리/후속 개발 혼선을 닫았다 |
+| `2026-04-27~2026-04-28` | `latency_quote_fresh_composite`를 active entry canary로 고정하고 `same bundle + canary_applied=False` baseline, `direction-only` downgrade 규칙을 문서화 | entry 복합축은 개별 파라미터 attribution이 아니라 묶음 ON/OFF로만 판정한다 |
+| `2026-04-27~2026-04-28` | `soft_stop_micro_grace`를 holding/exit live 축으로 고정 | entry와 holding/exit는 stage-disjoint 예외로 병렬 live 가능하되, 성과 판정은 단계별 분리다 |
+
 ## 참고 문서
 
 - [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)
