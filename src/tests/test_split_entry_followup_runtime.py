@@ -1,11 +1,43 @@
 from datetime import datetime
+from types import SimpleNamespace
 
 import src.engine.sniper_execution_receipts as receipts
 
 
-def test_emit_split_entry_followup_shadows_logs_integrity_and_recheck(monkeypatch):
+def test_emit_split_entry_followup_shadows_is_off_by_default(monkeypatch):
     logged = []
     monkeypatch.setattr(receipts, "_log_holding_pipeline", lambda *args, **kwargs: logged.append((args, kwargs)))
+
+    target_stock = {"name": "테스트A"}
+
+    receipts._emit_split_entry_followup_shadows(
+        target_stock=target_stock,
+        code="123456",
+        target_id=1,
+        now=datetime(2026, 4, 17, 12, 0, 0),
+        entry_mode="fallback",
+        fill_quality="PARTIAL_FILL",
+        requested_entry_qty=9,
+        cum_filled_qty=1,
+        remaining_qty=8,
+        new_qty=1,
+    )
+
+    assert logged == []
+
+
+def test_emit_split_entry_followup_shadows_logs_integrity_and_recheck_when_enabled(monkeypatch):
+    logged = []
+    monkeypatch.setattr(receipts, "_log_holding_pipeline", lambda *args, **kwargs: logged.append((args, kwargs)))
+    monkeypatch.setattr(
+        receipts,
+        "TRADING_RULES",
+        SimpleNamespace(
+            SPLIT_ENTRY_REBASE_INTEGRITY_SHADOW_ENABLED=True,
+            SPLIT_ENTRY_IMMEDIATE_RECHECK_SHADOW_ENABLED=True,
+            SPLIT_ENTRY_IMMEDIATE_RECHECK_SHADOW_WINDOW_SEC=90,
+        ),
+    )
 
     target_stock = {"name": "테스트A"}
 

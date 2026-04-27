@@ -92,7 +92,7 @@ def test_latency_entry_caution_rejects_deprecated_fallback():
 
     assert result["allowed"] is False
     assert result["decision"] == "REJECT_MARKET_CONDITION"
-    assert result["reason"] == "latency_fallback_disabled"
+    assert result["reason"] == "latency_fallback_deprecated"
     assert result["mode"] == "reject"
     clear_signal_reference(stock)
 
@@ -103,6 +103,7 @@ def test_latency_entry_canary_overrides_reject_danger_for_scanner(monkeypatch):
         "TRADING_RULES",
         replace(
             CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
@@ -149,6 +150,7 @@ def test_latency_entry_canary_normalizes_probability_signal_strength(monkeypatch
         "TRADING_RULES",
         replace(
             CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
@@ -193,6 +195,7 @@ def test_latency_entry_canary_does_not_apply_when_signal_score_low(monkeypatch):
         "TRADING_RULES",
         replace(
             CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
@@ -235,6 +238,7 @@ def test_latency_spread_relief_canary_overrides_reject_danger_to_normal(monkeypa
         "TRADING_RULES",
         replace(
             CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=True,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
@@ -278,6 +282,7 @@ def test_latency_spread_relief_canary_requires_spread_only_danger(monkeypatch):
         "TRADING_RULES",
         replace(
             CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=True,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
@@ -319,6 +324,7 @@ def test_latency_ws_jitter_relief_canary_overrides_reject_danger_to_normal(monke
         "TRADING_RULES",
         replace(
             CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=True,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
@@ -375,6 +381,7 @@ def test_latency_ws_jitter_relief_canary_requires_jitter_only_danger(monkeypatch
         "TRADING_RULES",
         replace(
             CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=True,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
@@ -429,6 +436,7 @@ def test_latency_other_danger_relief_canary_overrides_reject_danger_to_normal(mo
         "TRADING_RULES",
         replace(
             CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=True,
@@ -485,6 +493,7 @@ def test_latency_other_danger_relief_canary_enforces_stricter_residual_limits(mo
         "TRADING_RULES",
         replace(
             CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=True,
@@ -538,6 +547,7 @@ def test_latency_other_danger_relief_canary_blocks_below_85_signal(monkeypatch):
         "TRADING_RULES",
         replace(
             CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=True,
@@ -585,12 +595,123 @@ def test_latency_other_danger_relief_canary_blocks_below_85_signal(monkeypatch):
     assert result["latency_danger_reasons"] == "other_danger"
 
 
+def test_latency_quote_fresh_composite_canary_overrides_mixed_danger_to_normal(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=True,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_TAGS=("SCANNER",),
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MIN_SIGNAL_SCORE=88.0,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_AGE_MS=950,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_JITTER_MS=450,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_SPREAD_RATIO=0.0075,
+        ),
+    )
+    monkeypatch.setattr(entry_latency_module._CACHE, "update", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        entry_latency_module._CACHE,
+        "get_quote_health",
+        lambda code: SimpleNamespace(
+            ws_age_ms=820,
+            ws_jitter_ms=380,
+            quote_stale=False,
+            spread_ratio=0.0062,
+        ),
+    )
+
+    stock = {"name": "TEST", "position_tag": "SCANNER"}
+    result = evaluate_live_buy_entry(
+        stock=stock,
+        code="123456_quote_fresh_composite_pass",
+        ws_data={
+            "curr": 10_020,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_030, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=2,
+        signal_price=10_000,
+        signal_strength=88.0,
+    )
+
+    assert result["latency_state"] == "DANGER"
+    assert result["latency_canary_applied"] is True
+    assert result["latency_canary_reason"] == "quote_fresh_composite_canary_applied"
+    assert result["allowed"] is True
+    assert result["decision"] == "ALLOW_NORMAL"
+    assert result["reason"] == "latency_quote_fresh_composite_normal_override"
+    assert result["mode"] == "normal"
+    assert result["latency_danger_reasons"] == "ws_age_too_high,ws_jitter_too_high"
+
+
+def test_latency_quote_fresh_composite_canary_blocks_below_88_signal(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=True,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_TAGS=("SCANNER",),
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MIN_SIGNAL_SCORE=88.0,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_AGE_MS=950,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_JITTER_MS=450,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_SPREAD_RATIO=0.0075,
+        ),
+    )
+    monkeypatch.setattr(entry_latency_module._CACHE, "update", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        entry_latency_module._CACHE,
+        "get_quote_health",
+        lambda code: SimpleNamespace(
+            ws_age_ms=820,
+            ws_jitter_ms=380,
+            quote_stale=False,
+            spread_ratio=0.0062,
+        ),
+    )
+
+    stock = {"name": "TEST", "position_tag": "SCANNER"}
+    result = evaluate_live_buy_entry(
+        stock=stock,
+        code="123456_quote_fresh_composite_low_signal",
+        ws_data={
+            "curr": 10_020,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_030, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=2,
+        signal_price=10_000,
+        signal_strength=87.9,
+    )
+
+    assert result["latency_state"] == "DANGER"
+    assert result["latency_canary_applied"] is False
+    assert result["latency_canary_reason"] == "low_signal"
+    assert result["decision"] == "REJECT_DANGER"
+
+
 def test_latency_danger_reasons_are_allowlist_controllable(monkeypatch):
     monkeypatch.setattr(
         entry_latency_module,
         "TRADING_RULES",
         replace(
             CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
@@ -635,6 +756,7 @@ def test_latency_danger_reason_helper_uses_thresholds(monkeypatch):
         "TRADING_RULES",
         replace(
             CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
             SCALP_LATENCY_GUARD_CANARY_MAX_WS_AGE_MS=450,
             SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS=300,
             SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO=0.0100,

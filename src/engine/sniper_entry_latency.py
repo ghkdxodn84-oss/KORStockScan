@@ -9,7 +9,6 @@ from typing import Any
 from src.trading.config.entry_config import EntryConfig
 from src.trading.entry.entry_policy import EntryPolicy
 from src.trading.entry.entry_types import EntryDecision
-from src.trading.entry.fallback_strategy import FallbackStrategy
 from src.trading.entry.latency_monitor import LatencyMonitor
 from src.trading.entry.normal_entry_builder import NormalEntryBuilder
 from src.trading.entry.signal_snapshot import build_signal_snapshot
@@ -24,7 +23,6 @@ _CACHE_LOCK = threading.RLock()
 _LATENCY_MONITOR = LatencyMonitor(_CONFIG)
 _ENTRY_POLICY = EntryPolicy(_CONFIG)
 _NORMAL_BUILDER = NormalEntryBuilder(_CONFIG)
-_FALLBACK_BUILDER = FallbackStrategy(_CONFIG)
 
 
 def _best_ask_bid_from_ws(ws_data: dict[str, Any] | None) -> tuple[int, int]:
@@ -98,7 +96,7 @@ def _should_apply_latency_guard_canary(
     latest_price: int,
     danger_reasons: list[str] | None = None,
 ) -> tuple[bool, str]:
-    if not bool(getattr(TRADING_RULES, "SCALP_LATENCY_FALLBACK_ENABLED", True)):
+    if not bool(getattr(TRADING_RULES, "SCALP_LATENCY_FALLBACK_ENABLED", False)):
         return False, "latency_fallback_disabled"
     if not bool(getattr(TRADING_RULES, "SCALP_LATENCY_GUARD_CANARY_ENABLED", False)):
         return False, "disabled"
@@ -202,6 +200,74 @@ def _should_apply_latency_spread_relief_canary(
         return False, "normal_slippage_exceeded"
 
     return True, "spread_relief_canary_applied"
+
+
+def _should_apply_latency_quote_fresh_composite_canary(
+    *,
+    strategy_id: str,
+    position_tag: str,
+    signal_strength: float,
+    latency_status,
+    signal_price: int,
+    latest_price: int,
+    danger_reasons: list[str] | None = None,
+) -> tuple[bool, str]:
+    if not bool(getattr(TRADING_RULES, "SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED", False)):
+        return False, "disabled"
+    if str(strategy_id or "").upper() != "SCALPING":
+        return False, "non_scalping"
+    if getattr(latency_status, "quote_stale", False):
+        return False, "quote_stale"
+
+    normalized_reasons = _normalized_reason_set(danger_reasons or _latency_danger_reasons(latency_status))
+    quote_fresh_reasons = {"other_danger", "ws_age_too_high", "ws_jitter_too_high", "spread_too_wide"}
+    if not normalized_reasons or not normalized_reasons.issubset(quote_fresh_reasons):
+        return False, "quote_fresh_family_required"
+
+    allow_tags = {
+        str(tag).strip().upper()
+        for tag in (getattr(TRADING_RULES, "SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_TAGS", ()) or ())
+        if str(tag).strip()
+    }
+    normalized_tag = str(position_tag or "").strip().upper()
+    if allow_tags and normalized_tag not in allow_tags:
+        return False, "tag_not_allowed"
+
+    min_signal = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MIN_SIGNAL_SCORE", 88.0),
+        88.0,
+    )
+    signal_score = _normalize_signal_score(signal_strength)
+    if signal_score < min_signal:
+        return False, "low_signal"
+
+    max_ws_age_ms = int(getattr(TRADING_RULES, "SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_AGE_MS", 950) or 950)
+    if int(getattr(latency_status, "ws_age_ms", 0) or 0) > max_ws_age_ms:
+        return False, "ws_age_composite_limit_exceeded"
+
+    max_ws_jitter_ms = int(
+        getattr(TRADING_RULES, "SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_JITTER_MS", 450) or 450
+    )
+    if int(getattr(latency_status, "ws_jitter_ms", 0) or 0) > max_ws_jitter_ms:
+        return False, "ws_jitter_composite_limit_exceeded"
+
+    max_spread_ratio = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_SPREAD_RATIO", 0.0075),
+        0.0075,
+    )
+    if _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0) > max_spread_ratio:
+        return False, "spread_composite_limit_exceeded"
+
+    allowed_slippage = _ENTRY_POLICY._allowed_slippage(
+        signal_price=signal_price,
+        latest_price=latest_price,
+        tick_limit=_CONFIG.normal_allowed_slippage_ticks,
+        pct_limit=_CONFIG.normal_allowed_slippage_pct,
+    )
+    if not _ENTRY_POLICY._slippage_ok(signal_price, latest_price, allowed_slippage, "BUY"):
+        return False, "normal_slippage_exceeded"
+
+    return True, "quote_fresh_composite_canary_applied"
 
 
 def _should_apply_latency_ws_jitter_relief_canary(
@@ -445,6 +511,31 @@ def evaluate_live_buy_entry(
     latency_canary_reason = ""
     latency_danger_reasons = ",".join(_latency_danger_reasons(latency))
     if policy.decision == EntryDecision.REJECT_DANGER:
+        quote_fresh_composite_ok, quote_fresh_composite_reason = _should_apply_latency_quote_fresh_composite_canary(
+            strategy_id=strategy_id,
+            position_tag=str(stock.get("position_tag") or ""),
+            signal_strength=float(signal_strength or 0.0),
+            latency_status=latency,
+            signal_price=frozen_price,
+            latest_price=latest_price,
+            danger_reasons=latency_danger_reasons.split(","),
+        )
+        if quote_fresh_composite_ok:
+            latency_canary_applied = True
+            latency_canary_reason = quote_fresh_composite_reason
+            effective_decision = EntryDecision.ALLOW_NORMAL
+            effective_reason = "latency_quote_fresh_composite_normal_override"
+            log_info(
+                f"[LATENCY_QUOTE_FRESH_COMPOSITE_CANARY] {stock.get('name')}({code}) "
+                f"tag={stock.get('position_tag')} signal_score={_normalize_signal_score(signal_strength):.1f} "
+                f"ws_age_ms={latency.ws_age_ms} ws_jitter_ms={latency.ws_jitter_ms} "
+                f"spread_ratio={latency.spread_ratio:.6f} "
+                f"danger_reasons={latency_danger_reasons}"
+            )
+        else:
+            latency_canary_reason = quote_fresh_composite_reason
+
+    if policy.decision == EntryDecision.REJECT_DANGER and effective_decision == EntryDecision.REJECT_DANGER:
         other_danger_relief_ok, other_danger_relief_reason = _should_apply_latency_other_danger_relief_canary(
             strategy_id=strategy_id,
             position_tag=str(stock.get("position_tag") or ""),
@@ -467,7 +558,8 @@ def evaluate_live_buy_entry(
                 f"danger_reasons={latency_danger_reasons}"
             )
         else:
-            latency_canary_reason = other_danger_relief_reason
+            if not latency_canary_reason or latency_canary_reason == "disabled":
+                latency_canary_reason = other_danger_relief_reason
 
     if policy.decision == EntryDecision.REJECT_DANGER and effective_decision == EntryDecision.REJECT_DANGER:
         ws_jitter_relief_ok, ws_jitter_relief_reason = _should_apply_latency_ws_jitter_relief_canary(
@@ -534,8 +626,8 @@ def evaluate_live_buy_entry(
         if canary_ok:
             latency_canary_applied = True
             latency_canary_reason = canary_reason
-            effective_decision = EntryDecision.ALLOW_FALLBACK
-            effective_reason = "latency_guard_canary_override"
+            effective_decision = EntryDecision.REJECT_MARKET_CONDITION
+            effective_reason = "latency_fallback_deprecated"
             log_info(
                 f"[LATENCY_GUARD_CANARY] {stock.get('name')}({code}) "
                 f"tag={stock.get('position_tag')} signal_score={_normalize_signal_score(signal_strength):.1f} "
@@ -599,42 +691,6 @@ def evaluate_live_buy_entry(
             }
         ]
         return result
-
-    if effective_decision == EntryDecision.ALLOW_FALLBACK and bool(
-        getattr(TRADING_RULES, "SCALP_LATENCY_FALLBACK_ENABLED", True)
-    ):
-        fallback_orders = _FALLBACK_BUILDER.build(
-            snapshot=snapshot,
-            latest_price=latest_price,
-            best_ask=best_ask,
-        )
-        if not fallback_orders:
-            result["decision"] = EntryDecision.REJECT_MARKET_CONDITION.value
-            result["reason"] = "latency_fallback_deprecated"
-            result["mode"] = "reject"
-            return result
-        result["allowed"] = True
-        result["mode"] = "fallback"
-        result["orders"] = [
-            {
-                "tag": order.tag,
-                "qty": int(order.qty),
-                "price": int(order.price),
-                "order_type": order.order_type,
-                "tif": order.tif,
-            }
-            for order in fallback_orders
-            if int(order.qty) > 0
-        ]
-        log_info(
-            f"[LATENCY_ENTRY_CAUTION] {stock.get('name')}({code}) "
-            f"fallback_bundle_ready orders={len(result['orders'])}"
-        )
-        return result
-
-    if effective_decision == EntryDecision.ALLOW_FALLBACK:
-        result["decision"] = EntryDecision.REJECT_MARKET_CONDITION.value
-        result["reason"] = "latency_fallback_disabled"
 
     result["mode"] = "reject"
     return result

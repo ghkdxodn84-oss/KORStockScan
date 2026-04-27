@@ -107,7 +107,7 @@ def _emit_split_entry_followup_shadows(
     remaining_qty: int,
     new_qty: int,
 ) -> None:
-    if not bool(getattr(TRADING_RULES, "SPLIT_ENTRY_REBASE_INTEGRITY_SHADOW_ENABLED", True)):
+    if not bool(getattr(TRADING_RULES, "SPLIT_ENTRY_REBASE_INTEGRITY_SHADOW_ENABLED", False)):
         return
 
     rebase_count = int(target_stock.get("_split_entry_rebase_shadow_count", 0) or 0) + 1
@@ -157,7 +157,7 @@ def _emit_split_entry_followup_shadows(
         integrity_flags=integrity_flag_text,
     )
 
-    if not bool(getattr(TRADING_RULES, "SPLIT_ENTRY_IMMEDIATE_RECHECK_SHADOW_ENABLED", True)):
+    if not bool(getattr(TRADING_RULES, "SPLIT_ENTRY_IMMEDIATE_RECHECK_SHADOW_ENABLED", False)):
         return
 
     expanded_after_partial = first_partial_qty > 0 and int(new_qty or 0) > first_partial_qty

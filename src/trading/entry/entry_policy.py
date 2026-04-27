@@ -11,9 +11,6 @@ from src.trading.entry.entry_types import (
     SignalSnapshot,
 )
 from src.trading.order.tick_utils import move_price_by_ticks
-from src.utils.constants import TRADING_RULES
-
-
 class EntryPolicy:
     """Hard policy filter for latency-aware entry acceptance."""
 
@@ -81,15 +78,6 @@ class EntryPolicy:
             tick_limit=self.config.fallback_allowed_slippage_ticks,
             pct_limit=self.config.fallback_allowed_slippage_pct,
         )
-        if not bool(getattr(TRADING_RULES, "SCALP_LATENCY_FALLBACK_ENABLED", True)):
-            return PolicyResult(
-                decision=EntryDecision.REJECT_MARKET_CONDITION,
-                reason="latency_fallback_disabled",
-                fallback_allowed=False,
-                computed_allowed_slippage=allowed,
-                computed_deadline_ms=self.config.entry_deadline_ms,
-                latest_price=int(latest_price),
-            )
         if not self._slippage_ok(snapshot.signal_price, latest_price, allowed, snapshot.side):
             return PolicyResult(
                 decision=EntryDecision.REJECT_SLIPPAGE,
@@ -100,9 +88,9 @@ class EntryPolicy:
                 latest_price=int(latest_price),
             )
         return PolicyResult(
-            decision=EntryDecision.ALLOW_FALLBACK,
-            reason="caution_fallback_allowed",
-            fallback_allowed=True,
+            decision=EntryDecision.REJECT_MARKET_CONDITION,
+            reason="latency_fallback_deprecated",
+            fallback_allowed=False,
             computed_allowed_slippage=allowed,
             computed_deadline_ms=self.config.entry_deadline_ms,
             latest_price=int(latest_price),

@@ -40,13 +40,13 @@
 - [x] `[EmergencyStop0421B] fallback_scout/main 생성 로직 폐기` (`Due: 2026-04-21`, `Slot: INTRADAY`, `TimeWindow: 09:39~09:45`, `Track: ScalpingLogic`) (`실행: 2026-04-21 09:45 KST`)
   - 판정: `fallback_scout/main`은 scout이라는 이름과 달리 관찰 후 추가/중단 판단이 없는 동시 2-leg 주문이므로 폐기한다.
   - 근거: 기대 구조는 `소량 탐색 -> 충분히 낮은 가격이면 추가 -> 달아나면 중단`이어야 했지만, 실제 구현은 `CAUTION/override -> scout+main 동시 제출`이라 partial/rebase/soft_stop 손실 노출을 먼저 열었다.
-  - 조치: [fallback_strategy.py](/home/ubuntu/KORStockScan/src/trading/entry/fallback_strategy.py)는 빈 주문 리스트를 반환하는 deprecated null-object로 변경했다. [sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/engine/sniper_entry_latency.py)와 [entry_orchestrator.py](/home/ubuntu/KORStockScan/src/trading/entry/entry_orchestrator.py)는 빈 fallback 주문을 `latency_fallback_deprecated` reject로 처리한다.
+  - 조치: 당시 `src/trading/entry/fallback_strategy.py`는 빈 주문 리스트를 반환하는 deprecated null-object로 변경했고, 현재는 코드베이스에서 제거됐다. [sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/engine/sniper_entry_latency.py)와 [entry_orchestrator.py](/home/ubuntu/KORStockScan/src/trading/entry/entry_orchestrator.py)는 빈 fallback 주문을 `latency_fallback_deprecated` reject로 처리한다.
   - 운영 규칙: `fallback_scout/main`, `fallback_single` 모두 영구 폐기. 재도입/승격/재평가 canary 대상이 아니며, 향후 유사 설계는 AI 생성 코드 체크게이트와 운영자 수동 승인을 통과해야 한다.
 - [x] `[PlanRebase0421] fallback 관련 축 영구 폐기 + 신규 축 canary 전환 선언` (`Due: 2026-04-21`, `Slot: INTRADAY`, `TimeWindow: 10:40~10:50`, `Track: Plan`) (`실행: 2026-04-21 11:44 KST`)
   - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/workorder-0421-tuning-plan-rebase.md)
   - 판정 기준: fallback/split-entry/legacy shadow 승격 후보를 닫고, 다음 신규 1축은 `canary 즉시 적용 + 당일 rollback guard`로 전환한다.
   - 판정: 완료. `fallback_scout/main`, `fallback_single`, latency fallback split-entry는 영구 폐기 상태로 잠그고 재평가/승격/canary 대상에서 제외한다.
-  - 근거: [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py)의 `SCALP_LATENCY_FALLBACK_ENABLED=False`, `SCALP_SPLIT_ENTRY_ENABLED=False`, `SCALP_LATENCY_GUARD_CANARY_ENABLED=False`; [fallback_strategy.py](/home/ubuntu/KORStockScan/src/trading/entry/fallback_strategy.py)의 deprecated null-object; [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/workorder-0421-tuning-plan-rebase.md) §5/§7.
+  - 근거: [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py)의 `SCALP_LATENCY_FALLBACK_ENABLED=False`, `SCALP_SPLIT_ENTRY_ENABLED=False`, `SCALP_LATENCY_GUARD_CANARY_ENABLED=False`; 당시 `src/trading/entry/fallback_strategy.py` deprecated null-object; [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/workorder-0421-tuning-plan-rebase.md) §5/§7.
   - 검증: `2026-04-21 09:45 KST` 이후 live 로그 기준 `fallback_bundle_ready=0`, `ALLOW_FALLBACK=0`. `LATENCY_GUARD_CANARY=2`건은 `11:40 KST` pytest fixture 로그로 live 회귀가 아니다.
   - 다음 액션: 신규 정식 canary는 감사인 정의의 `entry_filter_quality` 1축만 유지한다. 오늘 실전 적용분은 별도 `buy_recovery_canary`로 추적한다.
 - [x] `[PlanRebase0421] AI 엔진 A/B 보류 + Gemini 라우팅 고정` (`Due: 2026-04-21`, `Slot: INTRADAY`, `TimeWindow: 10:55~11:05`, `Track: AIPrompt`) (`실행: 2026-04-21 11:44 KST`)
@@ -54,7 +54,7 @@
   - 판정 기준: live 스캘핑 AI 라우팅을 Gemini로 고정하고 `OpenAI/Gemini A/B` 및 dual-persona shadow는 `entry_filter_quality` canary 1차 판정 완료 후 재개 여부를 별도 판정한다. 최대 기한은 `2026-04-24 POSTCLOSE`다.
   - 판정: 완료. 기본 스캘핑 route는 Gemini로 고정하고, OpenAI/Gemini A/B와 dual-persona shadow는 `entry_filter_quality` canary 1차 판정 전까지 보류한다.
   - 근거: [runtime_ai_router.py](/home/ubuntu/KORStockScan/src/engine/runtime_ai_router.py)의 기본 route `gemini`, [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py)의 `OPENAI_DUAL_PERSONA_ENABLED=False`, [kiwoom_sniper_v2.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_sniper_v2.py)의 Plan Rebase OpenAI 스캘핑 초기화 skip 경로.
-  - 검증 증거: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_runtime_ai_router.py src/trading/tests/test_fallback_strategy.py src/trading/tests/test_entry_policy.py src/trading/tests/test_entry_orchestrator.py src/tests/test_sniper_entry_latency.py` 결과 `25 passed`.
+  - 검증 증거: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_runtime_ai_router.py src/trading/tests/test_entry_policy.py src/trading/tests/test_entry_orchestrator.py src/tests/test_sniper_entry_latency.py` 결과 `25 passed`.
   - 주의: `logs/runtime_ai_router_info.log`에는 pytest가 의도적으로 생성한 `scalping_route=openai` 케이스도 남는다. 이 로그는 A/B 재개 증거가 아니라 라우터 분기 테스트 증거로만 해석한다.
   - 운영 원칙: `songstock` 원격 비교, remote canary, 서버 간 차이 해석은 현재 의사결정 입력에서 제외한다.
 - [x] `[PlanRebase0421] 진입/보유/청산 로직표 확정` (`Due: 2026-04-21`, `Slot: INTRADAY`, `TimeWindow: 10:50~11:30`, `Track: ScalpingLogic`) (`실행: 2026-04-21 11:44 KST`)

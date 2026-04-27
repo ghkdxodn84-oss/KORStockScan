@@ -11,9 +11,9 @@
 1. 현재 단계는 손실 억제형 미세조정이 아니라 `기대값/순이익 극대화`를 위한 `Plan Rebase`다.
 2. 현재 기준선은 `main-only`, `normal_only`, `post_fallback_deprecation`이다.
 3. 현재 폐기 확정 축은 `fallback_scout/main`, `fallback_single`, `latency fallback split-entry`다.
-4. 현재 live 운용 상태는 `하루 1축 canary`이며, 실전 유지축은 `main-only buy_recovery_canary`다.
-5. 현재 entry live 축은 `latency_state_danger -> ws_jitter-only relief replacement`다. `2026-04-27 13:00`에 `other_danger-only residual relief`가 미개선으로 종료된 뒤, 같은 날 `15:00` 전 관찰 가능한 다음 독립축으로 교체했다.
-6. 현재 `gatekeeper_fast_reuse signature/window`는 same-day `종료된 보조 진단축`이며, active 후보가 아니다. `2026-04-27 15:00 INTRADAY`에는 `ws_jitter-only relief replacement`를 먼저 닫고, 그 뒤에만 `holding_exit_observation` 재분해로 이동한다.
+4. 현재 live 운용 원칙은 `동일 단계 내 1축 canary`다. 진입병목축과 보유/청산축은 서로 다른 단계이므로 양쪽 canary 동시 존재가 가능하지만, 같은 단계 안에서 canary 중복은 금지한다.
+5. 현재 entry live 축은 `latency_quote_fresh_composite`다. `gatekeeper_fast_reuse`, `other_danger`, `ws_jitter` 단일축은 모두 same-day 종료로 잠겼고, 복합 `quote_fresh family`만 1차 canary로 연다. 이 축은 개별 파라미터 attribution이 아니라 `묶음 ON/OFF`로만 판정한다.
+6. 현재 보유/청산 live 축은 `soft_stop_micro_grace`다. `gatekeeper_fast_reuse signature/window`는 same-day `종료된 보조 진단축`이며 active 후보가 아니다.
 
 ## 2. 용어 범례
 
@@ -26,11 +26,12 @@
 | `main-only` | `songstock`/remote 비교를 제외하고 메인서버 실전 로그만 기준으로 보는 방식 | Plan Rebase 기간의 기준선 |
 | `normal_only` | fallback 태그와 예외 진입이 섞이지 않은 정상 진입 표본 | 손익/성과 비교의 우선 기준 |
 | `post_fallback_deprecation` | `2026-04-21 09:45 KST` fallback 폐기 이후 새로 쌓인 표본 | 폐기 이후 효과 확인 기준 |
-| `canary` | 작은 범위로 실전에 적용해 성과와 리스크를 검증하는 1축 변경 | 하루 1축만 허용 |
-| `stage-disjoint concurrent canary` | 진입병목과 보유/청산처럼 조작점/적용시점/cohort tag/rollback guard가 분리되는 예외적 병렬 canary | 원인귀속은 provisional로만 해석. 두 축 중 하나라도 cohort 혼선이 생기면 즉시 단일축 원칙으로 복귀 |
+| `canary` | 작은 범위로 실전에 적용해 성과와 리스크를 검증하는 1축 변경 | 동일 단계 안에서는 1축만 허용 |
+| `stage-disjoint concurrent canary` | 진입병목과 보유/청산처럼 단계, 조작점, 적용시점, cohort tag, rollback guard가 분리되는 병렬 canary | 단계가 다르면 동시 존재 가능. 단, 동일 단계 내 canary 중복은 금지하고, 두 축 중 하나라도 cohort 혼선이 생기면 해당 단계 단일축 원칙으로 복귀 |
 | `shadow` | 실전 주문에는 반영하지 않고 병렬 계산만 하던 검증 방식 | 신규/보완축에서는 금지 |
 | `buy_recovery_canary` | Gemini `WAIT 65~79` 과밀 구간을 2차 재평가해 BUY 회복 여부를 보는 실전 1축 | 현재 유지축 |
 | `entry_filter_quality` | 불량 진입을 줄이고 제출/체결 품질을 높이는 다음 정식 튜닝 후보 | `buy_recovery_canary` 1차 판정 후 재판정 |
+| `latency_quote_fresh_composite` | `ws_age`, `ws_jitter`, `spread`, `other_danger`가 단일 사유가 아니라 quote freshness family로 겹쳐 제출을 막는 복합축 | active entry canary. `signal>=88`, `ws_age<=950ms`, `ws_jitter<=450ms`, `spread<=0.0075`, `quote_stale=False`를 한 묶음으로만 적용하고, 개별 파라미터 기여도는 분리 판정하지 않는다 |
 | `holding_exit_observation` | 보유/청산 후보를 saved snapshot, post-sell, pipeline event로 분해하는 리포트 축 | live canary가 아니라 관찰/후보 고정용. `partial/full`, `initial/pyramid` 합산 결론 금지 |
 
 ## 3. 튜닝 원칙
@@ -48,13 +49,17 @@
 11. 재판정 구조를 공통축으로 승격할 때는 `submitted/full_fill/partial_fill/COMPLETED + valid profit_rate` 기준으로 `재판정 코호트 vs 비재판정 코호트`를 먼저 비교하고, EV 개선이 확인될 때만 live 공통구조로 올린다.
 12. `gatekeeper_fast_reuse_ratio`, `gatekeeper_eval_ms_p95`, `signature/window blocker`는 제출병목의 보조 진단 지표다. `submitted/full/partial` 회복 또는 `latency_state_danger` 감소 없이 이 지표만으로 entry live 후보를 승격하지 않는다.
 13. 장중 판정 시각에 fresh 로그가 작업환경에 아직 없으면 판정을 빈칸으로 남기지 않는다. 같은 시각 기준 `offline bundle 생성 -> 사용자 로컬 analyzer 실행 -> 결과값 전달`을 요청하고, 그 산출물로 same-slot 판정을 닫는다.
+14. `fallback_scout/main`, `fallback_single`, `latency fallback split-entry`는 폐기 축으로만 남긴다. 실전 경로 재개, replacement 후보, observe-only runtime shadow 재가동은 새 workorder와 새 rollback guard 없이 허용하지 않는다.
+15. 복합 entry canary는 `단일축 원칙의 예외`가 아니라 `단일 가설을 구성하는 묶음 축`이다. 따라서 `latency_quote_fresh_composite`는 개별 파라미터가 아니라 묶음 전체의 ON/OFF 효과만 판정한다.
+16. active canary 임계값은 문서에 `분포 기준`, `예상 기각률`, `효과 부족 시 다음 fallback 임계값`을 함께 남긴다. 숫자만 단독으로 승격하지 않는다.
+17. active canary의 다음 판정 baseline은 가능하면 같은 bundle 내 `canary_applied=False` 표본으로 고정한다. 해당 baseline이 `N_min` 미달이면 hard pass/fail 대신 방향성 판정으로 격하한다.
 
 ## 4. 작업 규칙
 
 | 규칙 | 기준 | 위반 시 처리 |
 | --- | --- | --- |
-| 단일 live canary | 하루에 동시 live 변경축은 1개만 허용한다. 단, 같은 거래일 안에서 live 축 교체가 필요하면 `기존 축 OFF -> restart.flag -> 새 축 ON`의 replacement 전환만 허용한다. | 동시 2축 live 금지. 교체 전환 시 기존 축 OFF -> `restart.flag` -> 새 축 ON 순서를 강제한다. |
-| stage-disjoint 예외 | 진입병목 canary와 보유/청산 canary는 조작점, 적용 시점, cohort tag, rollback guard가 완전히 분리될 때만 병렬 live 예외를 검토할 수 있다. 이 경우 성과 판정은 hard pass/fail이 아니라 provisional로만 둔다. | entry canary가 유입 cohort를 크게 바꿔 보유/청산 판정이 오염되거나 rollback guard가 공유되면 예외 무효, 즉시 단일축 원칙으로 복귀 |
+| 동일 단계 단일 live canary | 단일 live canary 원칙은 동일 단계 안에서만 적용한다. 진입병목축과 보유/청산축은 별개 단계이므로 양측에 canary가 동시에 존재할 수 있다. | 동일 단계 안에서 동시 2축 live 금지. 같은 단계 안에서 교체가 필요하면 `기존 축 OFF -> restart.flag -> 새 축 ON` 순서를 강제한다. |
+| stage-disjoint 병렬 canary | 진입병목 canary와 보유/청산 canary는 조작점, 적용 시점, cohort tag, rollback guard가 완전히 분리되면 병렬 live가 가능하다. 이 경우 전체 성과 합산 판정은 금지하고 단계별로 분리 판정한다. | entry canary가 유입 cohort를 크게 바꿔 보유/청산 판정이 오염되거나 rollback guard가 공유되면 병렬 판정 무효. 해당 단계의 단일축 원칙으로 복귀한다. |
 | shadow 금지 | 신규/보완축은 shadow 없이 canary-only | shadow 항목은 폐기 또는 코드정리로 격하 |
 | 문서 참조 방향 | `docs/personal-decision-flow-notes.md`는 개인판단 정합성 기록용 노트다. 다른 문서에서 `Source` 또는 판정 근거 링크로 사용하지 않는다. 개인문서는 checklist/report/plan 문서나 코드 레퍼런스를 참조해도 된다. | 개인문서가 판정 근거 링크로 쓰이면 링크를 checklist에서 제거하고 기준문서/감사문서 근거로 대체한다. |
 | 원격 비교 제외 | Plan Rebase 기간은 main-only 기준 | songstock/remote 비교는 의사결정 입력에서 제외 |
@@ -75,7 +80,7 @@
 | Kiwoom REST 인증 장애 | `8005 Token이 유효하지 않습니다`처럼 런타임 토큰 무효화가 발생하면 실전 중 토큰 rebind/hot-refresh를 시도하지 않고, `restart.flag` 기반 우아한 봇 재시작만 표준 복구 경로로 쓴다. | 주문가능금액 0원 fail-closed 상태가 반복되면 인증 장애로 분리하고 즉시 우아한 재시작을 수행한다. 장중 hot-patch/re-auth 실험은 canary 판정과 원인귀속을 깨므로 금지한다. |
 | runtime env 증적 | canary 판정/재교정/롤백 전후에는 main bot PID의 `/proc/<pid>/environ`에서 핵심 `KORSTOCKSCAN_*` 값을 확인하고 checklist 또는 report에 남긴다. 최소 대상은 해당 축 enable flag, threshold/prompt split, runtime route다. | `/proc/<pid>/environ` 증적 없이 "env 혼선 없음"을 가정해 판정한 항목은 조건부로 취급하고, 다음 판정 전에 provenance 점검을 보강한다. |
 | 운영 자동화 증적 분리 | cron/runbook/parquet/manifest/동기화 정상화는 운영 증적이다. 이는 튜닝 효과나 전략 승인 근거와 분리한다. | 운영 정상화 항목을 `§8 과제 레지스터`와 `§10 실제 효과 기록`의 EV/전략 판정으로 승격하지 않는다. 필요 시 audit/report 또는 별도 운영문서에만 남긴다. |
-| 문서/동기화 | 문서 변경 후 parser 검증은 AI가 실행하고, Project/Calendar 동기화는 토큰 존재 여부를 AI가 확인하지 말고 사용자에게 실행 요청을 남긴다 | 사용자 요청 명령 1개를 남기고, AI는 토큰/캘린더 자격증명 확인을 시도하지 않는다 |
+| 문서/동기화 | 문서 변경 후 parser 검증은 AI가 실행한다. GitHub Project / Google Calendar 동기화는 AI가 직접 실행하지 않고, 반드시 사용자가 수동 실행한다. | AI는 토큰/캘린더 자격증명 확인과 실제 Project/Calendar 동기화를 시도하지 않는다. 변경 후 사용자에게 실행 명령 `PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar` 1개를 남긴다. |
 | 환경 변경 | 패키지 설치/업그레이드/제거 전 사용자 승인 | 승인 전 대안 경로 사용 |
 
 ## 5. 완료 기준
@@ -102,6 +107,7 @@
 | `latency_p95` | `gatekeeper_eval_ms_p95 > 15,900ms`, 샘플 `>=50` | entry/latency | canary OFF, latency 경로 재점검 |
 | `partial_fill_ratio` | baseline 대비 `+10.0%p` 이상 증가 | entry canary | 경고. `loss_cap` 또는 soft-stop 악화 동반 시 OFF |
 | `fallback_regression` | `fallback_scout/main`(탐색/본 주문 동시 fallback) 또는 `fallback_single`(단일 fallback) 신규 1건 이상 | 전체 | 즉시 OFF, 회귀 조사 |
+| `composite_no_recovery` | `latency_quote_fresh_composite` 적용 표본의 `budget_pass_to_submitted_rate`가 같은 bundle 내 `canary_applied=False` baseline 대비 `+1.0%p` 이상 개선하지 못함 | entry composite canary | canary OFF, 다음 독립축 또는 새 묶음축으로 교체 |
 | `trailing_exit_rollback` | trailing canary cohort `avg_profit_rate <= 0`, soft_stop 전환율 baseline 대비 `+5.0%p`, 또는 GOOD_EXIT rate 추가 악화 `+15.0%p` 중 하나 충족 | 보유/청산 canary | canary OFF, 전일 설정 복귀 |
 | `buy_drought_persist` | canary 후에도 BUY count가 baseline 하위 3분위수 미만이고 `blocked_ai_score_share` 개선 없음 | `buy_recovery_canary` | canary 유지 금지, score/prompt 재교정 |
 | `recovery_false_positive_rate` | canary로 회복된 BUY 중 soft_stop 비율이 `normal_only` baseline 대비 `+5.0%p` 이상 증가 | `buy_recovery_canary` | canary OFF, score/prompt 재교정 |
@@ -113,11 +119,11 @@
 | --- | --- | --- | --- | --- |
 | 진입 | Gemini 전환 후 BUY drought, WAIT65~79 과밀 | 04-22 12시 기준 `WAIT65~79 total_candidates=121`, `recovery_check=21`, `promoted=0`, `submitted=0`, `blocked_ai_score=97건(80.2%)` | 미진입 기회비용 증가, 표본 고갈 | 현재 확정: `buy_recovery_canary` 유지, `prompt` 재교정 1축 적용 |
 | 진입 | BUY 신호 자체 부재 시 전체 일정 지연 | `04-22` 종합 기준 `recovery_check=40`, `promoted=6`, `submitted=0`, `completed_trades=0`; BUY 후보가 없거나 너무 적으면 `entry_filter_quality`, `threshold`, HOLDING/EOD까지 모두 표본 부족으로 밀린다 | 후속 축 판정과 보유/청산 개선 일정이 기약 없이 밀림 | 대기 판정: `2026-04-23 INTRADAY BUY sufficiency checkpoint`, 부족 지속 시 same-day next-axis live 교체 |
-| 진입 | BUY 후 제출 전 latency/budget 병목 | 04-21 preflight `latency_block=40`, `submitted=0` | threshold 완화만으로 거래 회복 불가 | 현재 확정: `recheck -> submitted` 연결성 우선 |
+| 진입 | BUY 후 제출 전 latency/budget 병목 | 04-27 `15:00` offline bundle 기준 `budget_pass=7568`, `submitted=11`, `budget_pass_to_submitted_rate=0.1%`, `latency_state_danger=7178`. 단일 `other_danger`, `ws_jitter`, `gatekeeper_fast_reuse`는 제출 회복 실패. | threshold 단일 완화만으로 거래 회복 불가. `ws_age/ws_jitter/spread/other_danger`가 quote freshness family로 겹치는 복합 병목 가능성이 가장 높다. | 현재 확정: `latency_quote_fresh_composite` active entry canary. 단일축 중복 없이 `signal>=88`, `ws_age<=950ms`, `ws_jitter<=450ms`, `spread<=0.0075`, `quote_stale=False`만 normal override |
 | 진입 | prompt 재교정 후 신규 BUY 급증 리스크 | prompt 보정 직후 제출/체결은 늘 수 있으나, soft stop tail이 함께 커질 수 있다 | holding/exit 튜닝 판정 전에 초기 진입 손실 tail이 퍼지면 원인귀속이 흐려진다 | 현재 확정: 스캘핑 신규 BUY는 임시 `1주 cap`, `PYRAMID`는 유지하되 분석/판정은 분리 |
 | 진입 | `shared` 호출 혼입 가능성 | 04-22 오전 실전 로그 `PROMPT_COUNTS={"scalping_shared":39,"scalping_buy_recovery_canary":19,"scalping_entry":357,"-":47}`, `SHARED_STAGE_COUNTS={"ai_cooldown_blocked":39}` | shared를 신규 행동 canary로 볼 근거는 없고, 원인귀속 보존을 위해 코드정리 대상으로만 유지 | 현재 확정: 종료, live canary 아님 |
 | 보유 | 포지션 맥락 부족 | 보유 AI가 수익률/고점/보유시간을 직접 입력으로 받는지 미완. `2026-04-23` 덕산하이메탈(`077360`)은 `ID 3331`이 `10:11:09 KST` `scalp_trailing_take_profit`으로 `+0.67%` 완료된 뒤, `ID 3404`가 `10:39:13 KST` 더 높은 가격대에서 `entry_armed -> budget_pass`, `10:39:15 KST` `+매수` 접수로 다시 열렸다. 이어 `ID 3419`는 `12:00:24 KST` `17,520원` 3차 진입 후 `12:02:42 KST` `LOSS soft stop`으로 `-1.6%` 종료됐고, 사용자 관찰 기준으론 그 직후 가격이 다시 `17,520원` 위로 반등했다. | 트레일링 익절 직후 동일종목 고가 재진입과 soft stop 직후 V-shape 반등을 분리하지 못하면, upside를 너무 일찍 끊고 더 나쁜 가격으로 재진입한 뒤 저점 청산하는 이중 기대값 훼손이 반복될 수 있다. | 현재 확정: `position_context` 스키마 설계 유지 + trailing 익절 후 동일종목 재진입 사례와 `soft stop 직후 rebound` 사례를 HOLDING 재판정 입력에 포함 |
-| 보유/청산 | 4월 trailing/soft_stop 관찰축 공백 | 4월 `COMPLETED + valid profit_rate` 225건, 실현손익 `-429,425원`, `partial_trade` 평균 `-0.347%`, `full_trade` 평균 `-0.013%`. post-fallback normal 표본은 11건, 전부 full fill, 평균 `-0.069%`. post-sell 4월 191건 중 `MISSED_UPSIDE 54`, `GOOD_EXIT 72`; `2026-04-24` 생성 리포트 기준 `scalp_soft_stop_pct completed_valid=53`, 평균 `-1.669%`, 실현손익 `-651,680원`, `scalp_trailing_take_profit completed_valid=54`, 평균 `+1.041%`, 실현손익 `+280,742원`. 4월 soft_stop post-sell 61건은 10분 내 매도가 재상회 57건(`93.4%`), +0.5% 이상 반등 43건(`70.5%`), +1.0% 이상 반등 23건(`37.7%`), 매수가 회복 16건(`26.2%`)이다. hard stop 계열은 `scalp_preset_hard_stop_pct` post-sell 28건(`MISSED_UPSIDE 4`, `GOOD_EXIT 8`, `NEUTRAL 16`)으로 보조 관찰에 둔다. 4월 보유감시 로그의 하방카운트는 `0/3` 또는 `0/4`가 12,623/12,673건이고 `3/3` 도달은 9건뿐이다. | soft_stop은 직접 손익 훼손 1순위이고, 휩쏘 가능성이 높다. trailing은 upside capture 개선 후보지만 월간 기준 live 우선순위가 낮다. 하드스탑은 severe-loss guard라 완화 우선순위를 낮추며, 하방카운트는 가격 휩쏘 필터가 아니라 AI 조기손절 후행 신호로 본다. submitted가 회복되면 `soft_stop_rebound/whipsaw_windows`, `down_count_evidence`, `hard_stop_auxiliary`, `same_symbol_reentry`, `trailing_continuation`, `EOD/NXT`를 독립 후보로 고정해야 한다. | 현재 확정: `soft_stop_rebound_split` 1순위, 단일 조작점은 cooldown보다 `whipsaw confirmation/micro grace`를 우선 검토. `trailing_continuation_micro_canary`는 2순위. `hard_stop_whipsaw_aux`는 parking. stage-disjoint 예외가 성립해도 현재 병렬 검토 대상 entry 축은 `latency_state_danger -> other_danger relief`이며, `gatekeeper_fast_reuse`는 보조 진단 지표로만 둔다 |
+| 보유/청산 | 4월 trailing/soft_stop 관찰축 공백 | 4월 `COMPLETED + valid profit_rate` 225건, 실현손익 `-429,425원`, `partial_trade` 평균 `-0.347%`, `full_trade` 평균 `-0.013%`. post-fallback normal 표본은 11건, 전부 full fill, 평균 `-0.069%`. post-sell 4월 191건 중 `MISSED_UPSIDE 54`, `GOOD_EXIT 72`; `2026-04-24` 생성 리포트 기준 `scalp_soft_stop_pct completed_valid=53`, 평균 `-1.669%`, 실현손익 `-651,680원`, `scalp_trailing_take_profit completed_valid=54`, 평균 `+1.041%`, 실현손익 `+280,742원`. 4월 soft_stop post-sell 61건은 10분 내 매도가 재상회 57건(`93.4%`), +0.5% 이상 반등 43건(`70.5%`), +1.0% 이상 반등 23건(`37.7%`), 매수가 회복 16건(`26.2%`)이다. hard stop 계열은 `scalp_preset_hard_stop_pct` post-sell 28건(`MISSED_UPSIDE 4`, `GOOD_EXIT 8`, `NEUTRAL 16`)으로 보조 관찰에 둔다. 4월 보유감시 로그의 하방카운트는 `0/3` 또는 `0/4`가 12,623/12,673건이고 `3/3` 도달은 9건뿐이다. | soft_stop은 직접 손익 훼손 1순위이고, 휩쏘 가능성이 높다. trailing은 upside capture 개선 후보지만 월간 기준 live 우선순위가 낮다. 하드스탑은 severe-loss guard라 완화 우선순위를 낮추며, 하방카운트는 가격 휩쏘 필터가 아니라 AI 조기손절 후행 신호로 본다. submitted가 회복되면 `soft_stop_rebound/whipsaw_windows`, `down_count_evidence`, `hard_stop_auxiliary`, `same_symbol_reentry`, `trailing_continuation`, `EOD/NXT`를 독립 후보로 고정해야 한다. | 현재 확정: `soft_stop_rebound_split` 1순위, 단일 조작점은 `soft_stop micro grace`로 승인. `SCALP_SOFT_STOP_MICRO_GRACE_ENABLED=True`, `SEC=20`, `EMERGENCY_PCT=-2.0`을 적용하고 hard stop `-2.5%`는 유지한다. `trailing_continuation_micro_canary`는 2순위. `hard_stop_whipsaw_aux`는 parking. `gatekeeper_fast_reuse`, `other_danger`, `ws_jitter`는 same-day latency residual 평가축으로 종료했지만, 진입병목 자체는 미해소 상태로 둔다 |
 | 청산 | EOD/NXT 및 exit_rule 혼선 | NXT 가능/불가능 종목의 EOD 판단 분리 필요 | 청산 원인별 기대값 개선 지점 불명확 | 현재 확정: 후순위 설계 |
 | 포지션 증감 | 물타기/불타기/분할진입 축 혼재 | 불타기 수익 확대 관찰, fallback 오염 존재 | 추가진입 기대값 판단 오염 | 현재 확정: `position_addition_policy` 후순위 |
 | 운영/데이터 | 리포트 basis 혼선 | 문서 파생값과 DB 실필드 혼용 위험 | 잘못된 승격/롤백 위험 | 현재 확정: DB 우선, 체크리스트 동기화 |
@@ -175,7 +181,8 @@
 | `2026-04-24` | `quote_fresh family` 장중 잠금 + 다음 독립축 결정 | `other_danger/ws_jitter/spread/ws_age/quote_stale` 전부 제출 회복 근거 부족. `dynamic_strength_relief`는 이미 baseline live `107건`, `entry_filter_quality`는 parking 유지, `gatekeeper_decisions=23`, `gatekeeper_fast_reuse_ratio=0.0%`, `gatekeeper_eval_ms_p95=19871ms`, `reuse window expired=25`, `signature changed=22` | 당시 다음 후보를 `gatekeeper_fast_reuse signature/window`로 잡았으나, 04-27 재판정에서 직접 blocker가 아니라 보조 진단축으로 격하했다. 이후 entry 주병목은 `latency_state_danger` 기준으로 판정한다 |
 | `2026-04-24` | `gatekeeper_fast_reuse signature-only` same-day 반영 | raw `gatekeeper_fast_reuse_bypass` 재집계 기준 `after_other_danger_switch=31`, `age_expired_only=1`, `sig_only=1`, `age_expired+sig_changed=8`; 상위 `sig_delta`는 `curr_price 21`, `v_pw_now 17`, `spread_tick 15`, `score 13`, `buy_ratio_ws 13`, `prog_delta_qty 10`. `prog_net_qty/prog_delta_qty`에 deadband를 넣는 `signature-only` 형상 변경 적용, 테스트 `15 passed`, `restart.flag` 후 PID `207081` 시작시각 `14:25:15 KST` | 04-27 결과 기준 live 제출 회복축으로는 승격하지 않는다. 해당 변경은 runtime 회귀 방지/진단 참고로만 남기고, 향후 후보 승격은 `submitted/full/partial` 회복 또는 `latency_state_danger` 감소가 동반될 때만 검토 |
 | `2026-04-27` | `gatekeeper_fast_reuse` same-day 종료 + `latency_state_danger` pivot | raw 재집계 `11:31 KST` 기준 `latency_block=3196`, `latency_state_danger=3000`; 내부 분해 `other_danger=1218`, `ws_jitter-only=869`, `spread-only=257`; `other_danger` 단일 케이스 1427건 중 `latency_canary_reason=low_signal 1079건`. `gatekeeper_fast_reuse_ratio=0.0%`, `budget_pass_to_submitted_rate=0.2%` 유지 | `gatekeeper_fast_reuse`는 active 후보가 아닌 `종료된 보조 진단축`으로 닫고, entry 주병목을 `latency_state_danger -> other_danger relief`로 복귀. `SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_SIGNAL_SCORE 90.0 -> 85.0` 완화와 회귀테스트로 same-day pivot 완료 |
-| `2026-04-25` | 보유/청산 관찰축 분해 계획 및 리포트 축 신설 | 4월 기준 `COMPLETED + valid profit_rate=225`, 실현손익 `-429,425원`, `partial_trade avg=-0.347%`, `full_trade avg=-0.013%`; post-fallback normal 표본은 `11건`, 전부 full fill, 평균 `-0.069%`. `2026-04-24` 생성 리포트 기준 `scalp_soft_stop_pct completed_valid=53`, 평균 `-1.669%`, 실현손익 `-651,680원`; `scalp_trailing_take_profit completed_valid=54`, 평균 `+1.041%`, 실현손익 `+280,742원`, `MISSED_UPSIDE rate=34.4%`, `GOOD_EXIT rate=45.3%`로 trailing live 승인 조건 미충족. soft_stop post-sell 61건은 10분 내 매도가 재상회 `93.4%`, +0.5% 이상 반등 `70.5%`, 매수가 회복 `26.2%`로 휩쏘 가설이 강하다. hard stop 계열은 preset 기준 post-sell 28건이라 보조 관찰에 두고, 하방카운트는 4월 로그에서 대부분 0회에 머물러 soft_stop 휩쏘 방지장치로는 거의 작동하지 않았다. | `soft_stop_rebound_split`을 손익 훼손 1순위로 격상하고, 조작점은 cooldown보다 `whipsaw confirmation/micro grace`를 우선 검토한다. `trailing_continuation_micro_canary`는 2순위로 내림. `hard_stop_whipsaw_aux`와 `down_count_evidence`를 27일 관찰 스냅샷에 포함한다. stage-disjoint 예외는 별도 cohort tag/rollback/provisional 판정 조건에서만 병렬 검토 |
+| `2026-04-27` | fallback/split-entry 폐기 정합화 | `CAUTION -> ALLOW_FALLBACK` 정책 경로를 `latency_fallback_deprecated` reject로 hard-off 고정하고, split-entry follow-up runtime shadow 기본값을 OFF로 전환 | fallback/split-entry는 live/observe candidate가 아니라 historical-only 잔존물로 정렬. 향후 재개는 새 workorder + 새 rollback guard 없이는 불가 |
+| `2026-04-25` | 보유/청산 관찰축 분해 계획 및 리포트 축 신설 | 4월 기준 `COMPLETED + valid profit_rate=225`, 실현손익 `-429,425원`, `partial_trade avg=-0.347%`, `full_trade avg=-0.013%`; post-fallback normal 표본은 `11건`, 전부 full fill, 평균 `-0.069%`. `2026-04-24` 생성 리포트 기준 `scalp_soft_stop_pct completed_valid=53`, 평균 `-1.669%`, 실현손익 `-651,680원`; `scalp_trailing_take_profit completed_valid=54`, 평균 `+1.041%`, 실현손익 `+280,742원`, `MISSED_UPSIDE rate=34.4%`, `GOOD_EXIT rate=45.3%`로 trailing live 승인 조건 미충족. soft_stop post-sell 61건은 10분 내 매도가 재상회 `93.4%`, +0.5% 이상 반등 `70.5%`, 매수가 회복 `26.2%`로 휩쏘 가설이 강하다. hard stop 계열은 preset 기준 post-sell 28건이라 보조 관찰에 두고, 하방카운트는 4월 로그에서 대부분 0회에 머물러 soft_stop 휩쏘 방지장치로는 거의 작동하지 않았다. | `soft_stop_rebound_split`을 손익 훼손 1순위로 격상하고, 조작점은 `micro grace`로 승인한다. `whipsaw confirmation`은 AI/호가 확인을 추가해 다시 지연/누락을 만들 수 있어 1차 live 조작점에서 제외한다. `trailing_continuation_micro_canary`는 2순위로 내림. `hard_stop_whipsaw_aux`와 `down_count_evidence`를 관찰 스냅샷에 포함한다. stage-disjoint 예외는 별도 cohort tag/rollback/provisional 판정 조건에서만 병렬 검토 |
 | `2026-04-22` | Plan Rebase 중심 문서 감리 반영 | S-1~S-3, B-1~B-4 반영 | 조건부 승인 시정 완료 |
 
 ## 11. 하위 참조문서

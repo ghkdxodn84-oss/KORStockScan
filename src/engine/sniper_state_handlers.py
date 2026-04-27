@@ -199,7 +199,6 @@ def _translate_latency_state(value):
 def _translate_entry_decision(value):
     return {
         "ALLOW_NORMAL": "기본 진입 허용",
-        "ALLOW_FALLBACK": "폐기된 fallback 경로",
         "REJECT_DANGER": "진입 보류",
         "REJECT": "진입 보류",
     }.get(str(value or "").upper(), value or "-")
@@ -227,29 +226,6 @@ def _format_entry_order_line(order):
         f"{_format_entry_price_text(order.get('price'))} / "
         f"{_translate_tif(order.get('tif'))}"
     )
-
-
-def _publish_entry_mode_summary(stock, code, *, entry_mode, latency_gate):
-    if EVENT_BUS is None:
-        return
-    if entry_mode not in {'fallback'}:
-        return
-
-    orders = latency_gate.get('orders') or []
-    order_lines = [_format_entry_order_line(order) for order in orders]
-    order_summary = "\n".join(order_lines) if order_lines else "- 주문 계획 없음"
-    msg = (
-        f"🧭 **[{stock.get('name')} ({code})] 폐기된 지연 fallback 경로 감지**\n"
-        f"- 지연 상태: `{_translate_latency_state(latency_gate.get('latency_state'))}`\n"
-        f"- 판정: `{_translate_entry_decision(latency_gate.get('decision'))}`\n"
-        f"- 기준 가격: 신호가 `{_format_entry_price_text(latency_gate.get('signal_price'))}` / "
-        f"현재가 `{_format_entry_price_text(latency_gate.get('latest_price'))}`\n"
-        f"- 주문 계획:\n{order_summary}"
-    )
-    EVENT_BUS.publish(
-        'TELEGRAM_BROADCAST',
-        {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'},
-        )
 
 
 def _resolve_buy_signal_audience(*, liquidity_value=0, ai_score=0):
@@ -516,52 +492,6 @@ def _emit_partial_only_timeout_shadow(
         shadow_only=True,
     )
     stock["_partial_only_timeout_shadow_logged_key"] = logged_key
-
-
-def _apply_fallback_qty_canary(
-    planned_orders: list[dict],
-    *,
-    qty_multiplier: float,
-) -> tuple[list[dict], int, int]:
-    if not planned_orders:
-        return [], 0, 0
-
-    safe_multiplier = max(0.1, min(1.0, float(qty_multiplier or 1.0)))
-    updated_orders: list[dict] = []
-    original_total = 0
-    scaled_total = 0
-
-    for order in planned_orders:
-        item = dict(order or {})
-        qty = max(0, int(item.get("qty") or 0))
-        original_total += qty
-
-        if qty <= 0:
-            item["qty"] = 0
-            updated_orders.append(item)
-            continue
-
-        scaled_qty = int(round(qty * safe_multiplier))
-        if str(item.get("tag") or "") == "fallback_scout":
-            scaled_qty = max(1, scaled_qty)
-        else:
-            scaled_qty = max(0, scaled_qty)
-        scaled_qty = min(qty, scaled_qty)
-        item["qty"] = scaled_qty
-        scaled_total += scaled_qty
-        updated_orders.append(item)
-
-    if scaled_total <= 0:
-        for item in updated_orders:
-            if int(item.get("qty") or 0) > 0:
-                item["qty"] = 1
-                scaled_total = 1
-                break
-        if scaled_total <= 0 and updated_orders:
-            updated_orders[0]["qty"] = 1
-            scaled_total = 1
-
-    return updated_orders, original_total, scaled_total
 
 
 def _apply_initial_entry_qty_cap(
@@ -3005,33 +2935,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
             stock.pop('wait6579_probe_canary_source', None)
             stock.pop('wait6579_probe_canary_score', None)
 
-        if entry_mode == "fallback":
-            fallback_qty_multiplier = float(getattr(TRADING_RULES, "SCALP_FALLBACK_ENTRY_QTY_MULTIPLIER", 1.0) or 1.0)
-            adjusted_orders, original_qty, scaled_qty = _apply_fallback_qty_canary(
-                planned_orders,
-                qty_multiplier=fallback_qty_multiplier,
-            )
-            if adjusted_orders:
-                planned_orders = adjusted_orders
-                latency_gate["orders"] = planned_orders
-            if scaled_qty > 0:
-                requested_qty = scaled_qty
-            if scaled_qty > 0 and scaled_qty < original_qty:
-                _log_entry_pipeline(
-                    stock,
-                    code,
-                    "fallback_qty_guard_applied",
-                    qty_multiplier=f"{max(0.1, min(1.0, fallback_qty_multiplier)):.2f}",
-                    original_qty=original_qty,
-                    scaled_qty=scaled_qty,
-                    legs=len(planned_orders),
-                )
-                log_info(
-                    f"[FALLBACK_QTY_GUARD] {stock.get('name')}({code}) "
-                    f"multiplier={max(0.1, min(1.0, fallback_qty_multiplier)):.2f} "
-                    f"qty={original_qty}->{scaled_qty}"
-                )
-
         if strategy == "SCALPING" and bool(
             getattr(TRADING_RULES, "SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED", False)
         ):
@@ -3250,13 +3153,6 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
             alerted_stocks.add(code)
         else:
             stock['msg_audience'] = 'VIP_ALL'
-
-        _publish_entry_mode_summary(
-            stock,
-            code,
-            entry_mode=entry_mode,
-            latency_gate=latency_gate,
-        )
 
         try:
             with DB.get_session() as session:
@@ -3952,6 +3848,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         else:
             dynamic_stop_pct = soft_stop_pct
             dynamic_trailing_limit = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_WEAK', 0.4)
+        if profit_rate > dynamic_stop_pct:
+            stock.pop('soft_stop_micro_grace_started_at', None)
 
         open_reclaim_near_ai_exit = (
             profit_rate <= ai_exit_min_loss_pct
@@ -3993,10 +3891,53 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             exit_rule = "scalp_hard_stop_pct"
 
         elif profit_rate <= dynamic_stop_pct:
-            is_sell_signal = True
-            sell_reason_type = "LOSS"
-            reason = f"🔪 소프트 손절 ({dynamic_stop_pct}%) [AI: {current_ai_score:.0f}]"
-            exit_rule = "scalp_soft_stop_pct"
+            soft_stop_grace_enabled = bool(
+                getattr(TRADING_RULES, 'SCALP_SOFT_STOP_MICRO_GRACE_ENABLED', False)
+            )
+            soft_stop_grace_sec = int(
+                getattr(TRADING_RULES, 'SCALP_SOFT_STOP_MICRO_GRACE_SEC', 0) or 0
+            )
+            soft_stop_emergency_pct = min(
+                float(
+                    getattr(
+                        TRADING_RULES,
+                        'SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT',
+                        dynamic_stop_pct - 0.5,
+                    )
+                    or (dynamic_stop_pct - 0.5)
+                ),
+                float(dynamic_stop_pct),
+            )
+            soft_stop_grace_started_at = float(stock.get('soft_stop_micro_grace_started_at', 0.0) or 0.0)
+            if soft_stop_grace_started_at <= 0:
+                soft_stop_grace_started_at = now_ts
+                stock['soft_stop_micro_grace_started_at'] = soft_stop_grace_started_at
+            soft_stop_grace_elapsed_sec = max(0, int(now_ts - soft_stop_grace_started_at))
+            soft_stop_within_grace = (
+                soft_stop_grace_enabled
+                and soft_stop_grace_sec > 0
+                and soft_stop_grace_elapsed_sec < soft_stop_grace_sec
+                and profit_rate > soft_stop_emergency_pct
+            )
+            if soft_stop_within_grace:
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "soft_stop_micro_grace",
+                    profit_rate=f"{profit_rate:+.2f}",
+                    soft_stop_pct=f"{dynamic_stop_pct:+.2f}",
+                    emergency_pct=f"{soft_stop_emergency_pct:+.2f}",
+                    elapsed_sec=soft_stop_grace_elapsed_sec,
+                    grace_sec=soft_stop_grace_sec,
+                    current_ai_score=f"{current_ai_score:.0f}",
+                    held_sec=int(held_time_min * 60),
+                    exit_rule_candidate="scalp_soft_stop_pct",
+                )
+            else:
+                is_sell_signal = True
+                sell_reason_type = "LOSS"
+                reason = f"🔪 소프트 손절 ({dynamic_stop_pct}%) [AI: {current_ai_score:.0f}]"
+                exit_rule = "scalp_soft_stop_pct"
 
         elif profit_rate >= 0 and ai_low_score_hits:
             stock['ai_low_score_loss_hits'] = 0

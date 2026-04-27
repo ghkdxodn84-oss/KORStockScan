@@ -10,8 +10,9 @@
 ## 오늘 강제 규칙
 
 - 기준선은 `main-only`, `normal_only`, `post_fallback_deprecation`이며 상세 기준은 `Plan Rebase` §1~§6을 따른다.
-- live 변경은 `1축 canary`만 허용하고, replacement도 `기존 축 OFF -> restart.flag -> 새 축 ON` 순서만 쓴다.
-- 예외: 진입병목 canary와 보유/청산 canary는 조작점, 적용 시점, cohort tag, rollback guard가 완전히 분리되고 판정이 provisional임을 명시할 때만 `stage-disjoint concurrent canary`로 검토할 수 있다.
+- live 변경은 동일 단계 내 `1축 canary`만 허용한다. 진입병목축과 보유/청산축은 별개 단계이므로 병렬 canary가 가능하지만, 같은 단계 안에서는 canary 중복을 금지한다.
+- 동일 단계 replacement는 `기존 축 OFF -> restart.flag -> 새 축 ON` 순서만 쓴다.
+- 단계 분리: 진입병목 canary와 보유/청산 canary는 조작점, 적용 시점, cohort tag, rollback guard가 완전히 분리되고 단계별 판정을 유지할 때만 `stage-disjoint concurrent canary`로 운영할 수 있다.
 - 관찰창이 끝나면 `즉시 판정 -> 다음 축 즉시 착수`를 기본으로 한다. 이미 수집된 데이터로 닫을 수 있는 판정은 장후/익일로 미루지 않는다.
 - `장후/익일/다음 장전` 이관은 예외사유 4종(`단일 조작점 미정`, `rollback guard 미문서화`, `restart/code-load 불가`, `운영 경계상 same-day 반영 불가`) 중 하나로만 허용한다. 막힌 조건과 다음 절대시각이 없으면 이관 판정은 무효다.
 - PREOPEN은 전일에 이미 `단일 조작점 + rollback guard + 코드/테스트 + restart 절차`가 준비된 carry-over 축만 받는다.
@@ -21,6 +22,37 @@
 - 다축 동시 변경 금지, 승인 전 `main` 실주문 변경 금지 규칙을 유지한다.
 
 ## 장후 체크리스트 (18:05~19:20)
+
+- [x] `[FallbackSplit0428] fallback/split-entry 폐기 정합성 정리` (`Due: 2026-04-28`, `Slot: PREOPEN`, `TimeWindow: 08:30~08:50`, `Track: Plan`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
+  - 판정 기준: `fallback_scout/main`, `fallback_single`, `latency fallback split-entry`는 모든 실행축에서 제외 상태(`remove`)로 고정하고, `fallback_qty`는 historical guard 용어로만 남긴다.
+  - why: 기준선 문서상 영구 폐기 축인데 runtime 분류표와 작업지시서에 `observe-only` 또는 `baseline-promote` 표현이 남아 있으면 재개 후보처럼 보인다.
+  - 다음 액션: `remove / guarded-off / historical-only` 표현으로 같은 change set에서 문서 정합을 잠근다.
+
+- [x] `[FallbackSplit0428] latency fallback split-entry code path hard-off 제거` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 09:10~09:30`, `Track: ScalpingLogic`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md)
+  - 판정 기준: `CAUTION -> ALLOW_FALLBACK` 또는 scout/main fallback bundle이 실시간 주문 경로를 만들지 않아야 한다. `split_entry` follow-up runtime shadow도 기본 OFF여야 한다.
+  - why: same-day 판정으로 entry 제출 회복과 무관한 축으로 닫혔고, partial/rebase 오염만 남긴다.
+  - 다음 액션: deprecated reason/log는 historical trace로만 남기고 실전 경로는 reject로 닫는다.
+
+- [x] `[FallbackSplit0428] 테스트·감시 지표 청소` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 09:40~10:20`, `Track: ScalpingLogic`)
+  - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
+  - 판정 기준: fallback/split-entry 관련 테스트는 `deprecated reject` 또는 `historical helper`만 검증하도록 축소하고, runtime shadow 기본 OFF를 같이 검증한다.
+  - why: 재개를 전제한 테스트/분류가 남아 있으면 운영 문서와 상충한다.
+  - 검증:
+    - `PYTHONPATH=. .venv/bin/pytest -q src/trading/tests/test_entry_orchestrator.py src/trading/tests/test_entry_policy.py src/tests/test_sniper_entry_latency.py src/tests/test_sniper_entry_metrics.py src/tests/test_split_entry_followup_audit.py src/tests/test_split_entry_followup_runtime.py`
+    - `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/sniper_entry_latency.py src/engine/sniper_execution_receipts.py src/trading/entry/entry_orchestrator.py src/trading/entry/entry_policy.py`
+
+- [x] `[FallbackSplit0428] 감리/보고 반영` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 17:40~18:00`, `Track: Plan`)
+  - Source: [audit-reports/2026-04-27-entry-latency-single-axis-tuning-audit.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-27-entry-latency-single-axis-tuning-audit.md), [personal-decision-flow-notes.md](/home/ubuntu/KORStockScan/docs/personal-decision-flow-notes.md)
+  - 판정 기준: `왜 제거되는지`, `무엇이 historical-only로 남는지`, `다음 관측포인트는 무엇인지`를 checklist와 audit 기준으로 고정한다.
+  - why: 개인문서 단독 근거 사용 금지 원칙 때문에 최종 근거는 checklist/audit에 남아야 한다.
+
+- [ ] `[QuoteFreshReview0428] quote_fresh composite 다음 판정 규칙 고정` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 18:00~18:15`, `Track: ScalpingLogic`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [audit-reports/2026-04-27-entry-latency-composite-canary-audit-review.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-27-entry-latency-composite-canary-audit-review.md)
+  - 판정 기준: `latency_quote_fresh_composite`는 `signal/ws_age/ws_jitter/spread/quote_stale` 5개를 개별 축으로 해석하지 않고 묶음 ON/OFF로만 판정한다. 비교 baseline은 같은 bundle 내 `quote_fresh_composite_canary_applied=False` 표본으로 고정하고, baseline이 `N_min` 미달이면 방향성 판정으로 격하한다.
+  - why: 복합축 이름으로 동일 단계 다중축 실험을 우회하면 원인귀속과 rollback 판단이 깨진다.
+  - 다음 액션: 다음 판정 메모에는 임계값별 `분포 기준`, `예상 기각률`, `효과 부족 시 fallback 임계값`, `composite_no_recovery` guard를 함께 남긴다.
 
 - [ ] `[GeminiP1Rollout0428] main Gemini JSON system_instruction/deterministic flag 실전 승인 판정` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 18:05~18:20`, `Track: ScalpingLogic`)
   - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_gemini_engine_review.md)

@@ -18,7 +18,6 @@ class EntryDecision(str, Enum):
     """Policy output for a candidate entry."""
 
     ALLOW_NORMAL = "ALLOW_NORMAL"
-    ALLOW_FALLBACK = "ALLOW_FALLBACK"
     REJECT_TIMEOUT = "REJECT_TIMEOUT"
     REJECT_SLIPPAGE = "REJECT_SLIPPAGE"
     REJECT_DANGER = "REJECT_DANGER"

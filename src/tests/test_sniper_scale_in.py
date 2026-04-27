@@ -228,7 +228,7 @@ def test_update_db_for_add_does_not_touch_detached_record_after_commit(monkeypat
     assert record.__dict__["buy_price"] == 9800
     assert record.__dict__["buy_qty"] == 8
     assert len(receipts.event_bus.published) == 1
-    assert "add_count=2" in receipts.event_bus.published[0][1]["message"]
+    assert "누적 추가매수: 2회" in receipts.event_bus.published[0][1]["message"]
 
 
 def test_execute_scale_in_order_failure_no_pending(monkeypatch):
@@ -412,8 +412,8 @@ def test_sell_priority_blocks_add(monkeypatch):
         ai_engine=None,
     )
 
-    assert called["gate"] is False
-    assert called["eval"] is False
+    assert called["gate"] is True
+    assert called["eval"] is True
     assert called["add"] is False
 
 
@@ -612,7 +612,7 @@ def test_send_buy_order_market_maps_ioc_limit_to_best_ioc(monkeypatch):
     assert captured["payload"]["ord_uv"] == ""
 
 
-def test_watching_state_submits_fallback_entry_bundle(monkeypatch):
+def test_watching_state_rejects_deprecated_fallback_bundle(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
     class FixedDateTime(datetime):
@@ -621,7 +621,11 @@ def test_watching_state_submits_fallback_entry_bundle(monkeypatch):
             return cls(2026, 4, 2, 10, 0, 0)
 
     state_handlers.datetime = FixedDateTime
-    state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED=False,
+    )
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
     state_handlers.HIGHEST_PRICES = {}
@@ -643,15 +647,12 @@ def test_watching_state_submits_fallback_entry_bundle(monkeypatch):
         state_handlers,
         "evaluate_live_buy_entry",
         lambda **kwargs: {
-            "allowed": True,
-            "mode": "fallback",
-            "decision": "ALLOW_FALLBACK",
-            "reason": "caution_fallback_allowed",
+            "allowed": False,
+            "mode": "reject",
+            "decision": "REJECT_MARKET_CONDITION",
+            "reason": "latency_fallback_deprecated",
             "latency_state": "CAUTION",
-            "orders": [
-                {"tag": "fallback_scout", "qty": 1, "price": 10000, "order_type": "LIMIT", "tif": "IOC"},
-                {"tag": "fallback_main", "qty": 4, "price": 9990, "order_type": "LIMIT", "tif": "DAY"},
-            ],
+            "orders": [],
         },
     )
     def fake_send_buy_order(code, qty, price, order_type_code, *args, **kwargs):
@@ -670,12 +671,10 @@ def test_watching_state_submits_fallback_entry_bundle(monkeypatch):
         ai_engine=None,
     )
 
-    assert stock["status"] == "BUY_ORDERED"
-    assert len(sent_orders) == 2
-    assert sent_orders[0] == (1, 0, "16", "IOC")
-    assert sent_orders[1] == (3, 9990, "00", "DAY")
-    assert len(stock["pending_entry_orders"]) == 2
-    assert stock["entry_requested_qty"] == 4
+    assert stock.get("status") != "BUY_ORDERED"
+    assert sent_orders == []
+    assert stock.get("pending_entry_orders") is None
+    assert stock.get("entry_requested_qty") is None
 
 
 def test_entry_arm_skips_strength_recheck_after_ai_confirm(monkeypatch):
@@ -809,44 +808,6 @@ def test_entry_arm_skips_strength_recheck_after_ai_confirm(monkeypatch):
     assert "entry_armed_resume" in pipeline_stages
     assert "blocked_strength_momentum" not in pipeline_stages
     assert "latency_block" in pipeline_stages
-
-
-def test_publish_entry_mode_summary_formats_fallback_message(monkeypatch):
-    published = []
-
-    class DummyEventBus:
-        def publish(self, topic, payload):
-            published.append((topic, payload))
-
-    monkeypatch.setattr(state_handlers, "EVENT_BUS", DummyEventBus())
-
-    state_handlers._publish_entry_mode_summary(
-        {"name": "씨아이에스"},
-        "222080",
-        entry_mode="fallback",
-        latency_gate={
-            "latency_state": "CAUTION",
-            "decision": "ALLOW_FALLBACK",
-            "signal_price": 12150,
-            "latest_price": 12150,
-            "orders": [
-                {"tag": "fallback_scout", "qty": 1, "price": 12200, "tif": "IOC"},
-                {"tag": "fallback_main", "qty": 44, "price": 12130, "tif": "DAY"},
-            ],
-        },
-    )
-
-    assert len(published) == 1
-    topic, payload = published[0]
-    assert topic == "TELEGRAM_BROADCAST"
-    assert payload["audience"] == "ADMIN_ONLY"
-    assert payload["parse_mode"] == "Markdown"
-    assert "지연 대응 분할진입 활성화" in payload["message"]
-    assert "지연 상태: `주의`" in payload["message"]
-    assert "판정: `분할 진입 허용`" in payload["message"]
-    assert "신호가 `12,150원` / 현재가 `12,150원`" in payload["message"]
-    assert "탐색 주문: 1주 / 12,200원 / 즉시체결 우선" in payload["message"]
-    assert "본 주문: 44주 / 12,130원 / 장중 유지" in payload["message"]
 
 
 def test_publish_buy_signal_submission_notice_enqueues_once(monkeypatch):
@@ -1461,7 +1422,7 @@ def test_holding_sell_still_works_when_paused(monkeypatch):
     )
 
     assert called["sell"] is True
-    assert called["gate"] is False
+    assert called["gate"] is True
     assert stock["status"] == "SELL_ORDERED"
 
 
@@ -2540,6 +2501,130 @@ def test_scalp_preset_tp_hard_stop_grace_delays_exit(monkeypatch):
     grace_logs = [fields for stage, fields in pipeline_logs if stage == "preset_hard_stop_grace"]
     assert grace_logs
     assert grace_logs[-1]["grace_sec"] == 35
+
+
+def test_scalp_soft_stop_micro_grace_delays_exit(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_SOFT_STOP_MICRO_GRACE_ENABLED=True,
+        SCALP_SOFT_STOP_MICRO_GRACE_SEC=20,
+        SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT=-2.0,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 10000}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    pipeline_logs = []
+    exit_calls = []
+
+    def fake_log_holding_pipeline(stock, code, stage, **fields):
+        pipeline_logs.append((stage, fields))
+
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", fake_log_holding_pipeline)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: exit_calls.append(args) or {"return_code": "0", "ord_no": "S1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+
+    stock = {
+        "id": 16,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+        "rt_ai_prob": 0.50,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 9840, "orderbook": {"bids": [{"price": 9840, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    grace_logs = [fields for stage, fields in pipeline_logs if stage == "soft_stop_micro_grace"]
+    exit_logs = [fields for stage, fields in pipeline_logs if stage == "exit_signal"]
+    assert stock["status"] == "HOLDING"
+    assert stock["soft_stop_micro_grace_started_at"] > 0
+    assert grace_logs
+    assert grace_logs[-1]["grace_sec"] == 20
+    assert not exit_logs
+    assert not exit_calls
+
+
+def test_scalp_soft_stop_micro_grace_expires_to_soft_stop(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_SOFT_STOP_MICRO_GRACE_ENABLED=True,
+        SCALP_SOFT_STOP_MICRO_GRACE_SEC=20,
+        SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT=-2.0,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 10000}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    pipeline_logs = []
+
+    def fake_log_holding_pipeline(stock, code, stage, **fields):
+        pipeline_logs.append((stage, fields))
+
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", fake_log_holding_pipeline)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: {"return_code": "0", "ord_no": "S1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+
+    stock = {
+        "id": 17,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+        "rt_ai_prob": 0.50,
+        "soft_stop_micro_grace_started_at": state_handlers.time.time() - 21,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 9840, "orderbook": {"bids": [{"price": 9840, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    exit_logs = [fields for stage, fields in pipeline_logs if stage == "exit_signal"]
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["last_exit_rule"] == "scalp_soft_stop_pct"
+    assert exit_logs and exit_logs[-1]["exit_rule"] == "scalp_soft_stop_pct"
 
 
 def test_open_reclaim_never_green_exit_rule(monkeypatch):

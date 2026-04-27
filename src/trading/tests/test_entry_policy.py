@@ -1,6 +1,4 @@
 from datetime import UTC, datetime, timedelta
-from types import SimpleNamespace
-
 from src.trading.config.entry_config import EntryConfig
 from src.trading.entry.entry_policy import EntryPolicy
 from src.trading.entry.entry_types import EntryDecision, LatencyState, LatencyStatus, SignalSnapshot
@@ -46,21 +44,11 @@ def test_policy_rejects_slippage_in_safe():
     assert result.decision == EntryDecision.REJECT_SLIPPAGE
 
 
-def test_policy_rejects_fallback_in_caution_when_disabled():
+def test_policy_rejects_deprecated_fallback_in_caution():
     policy = EntryPolicy(EntryConfig())
     result = policy.evaluate(snapshot=_snapshot(), latency_status=_latency(LatencyState.CAUTION), latest_price=10_020)
     assert result.decision == EntryDecision.REJECT_MARKET_CONDITION
-    assert result.reason == "latency_fallback_disabled"
-
-
-def test_policy_allows_fallback_in_caution_when_enabled(monkeypatch):
-    monkeypatch.setattr(
-        "src.trading.entry.entry_policy.TRADING_RULES",
-        SimpleNamespace(SCALP_LATENCY_FALLBACK_ENABLED=True),
-    )
-    policy = EntryPolicy(EntryConfig())
-    result = policy.evaluate(snapshot=_snapshot(), latency_status=_latency(LatencyState.CAUTION), latest_price=10_020)
-    assert result.decision == EntryDecision.ALLOW_FALLBACK
+    assert result.reason == "latency_fallback_deprecated"
 
 
 def test_policy_rejects_danger():

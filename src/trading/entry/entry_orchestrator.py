@@ -6,7 +6,6 @@ from typing import Any
 
 from src.trading.entry.entry_policy import EntryPolicy
 from src.trading.entry.entry_types import EntryDecision, PlannedOrder, SignalSnapshot
-from src.trading.entry.fallback_strategy import FallbackStrategy
 from src.trading.entry.latency_monitor import LatencyMonitor
 from src.trading.entry.normal_entry_builder import NormalEntryBuilder
 from src.trading.entry.state_machine import EntryStateMachine
@@ -26,7 +25,6 @@ class EntryOrchestrator:
         latency_monitor: LatencyMonitor,
         entry_policy: EntryPolicy,
         normal_entry_builder: NormalEntryBuilder,
-        fallback_strategy: FallbackStrategy,
         order_manager: OrderManager,
         state_machine: EntryStateMachine,
         trade_logger: TradeLogger,
@@ -38,7 +36,6 @@ class EntryOrchestrator:
         self.latency_monitor = latency_monitor
         self.entry_policy = entry_policy
         self.normal_entry_builder = normal_entry_builder
-        self.fallback_strategy = fallback_strategy
         self.order_manager = order_manager
         self.state_machine = state_machine
         self.trade_logger = trade_logger
@@ -120,12 +117,8 @@ class EntryOrchestrator:
             orders = [self.normal_entry_builder.build(snapshot=snapshot, latest_price=latest_price)]
             mode = "normal"
         else:
-            orders = self.fallback_strategy.build(
-                snapshot=snapshot,
-                latest_price=latest_price,
-                best_ask=best_ask,
-            )
-            mode = "fallback"
+            orders = []
+            mode = "reject"
 
         if not orders:
             self.state_machine.transition(symbol, "REJECTED_MARKET_CONDITION", reason="latency_fallback_deprecated")
@@ -140,9 +133,6 @@ class EntryOrchestrator:
             }
             self.trade_logger.log_result(**result)
             return result
-
-        if mode == "fallback":
-            self.state_machine.transition(symbol, "FALLBACK_ORDER_SUBMITTING", reason=policy.reason)
 
         broker_results = self.order_manager.submit_orders_async(orders)
         for order, broker_result in zip(orders, broker_results):
@@ -176,9 +166,9 @@ class EntryOrchestrator:
         }
         self.trade_logger.log_result(
             normal_mode=(mode == "normal"),
-            fallback_mode=(mode == "fallback"),
-            scout_filled=any(item.order_tag == "fallback_scout" and item.accepted for item in broker_results),
-            main_filled=any(item.order_tag == "fallback_main" and item.accepted for item in broker_results),
+            fallback_mode=False,
+            scout_filled=False,
+            main_filled=False,
             partial_fill_ratio=(len(accepted) / len(broker_results)) if broker_results else 0.0,
             skipped_reason="",
             status=final_state,

@@ -11,7 +11,7 @@ def test_summarize_today_entry_metrics(tmp_path, monkeypatch):
         "\n".join(
             [
                 f"[{target_date} 10:00:00] 📢 INFO in sniper_state_handlers: [LATENCY_ENTRY_DECISION] TEST(123456) mode=normal decision=ALLOW_NORMAL latency=SAFE signal=10000 latest=10000 allowed_slippage=20 orders=1",
-                f"[{target_date} 10:01:00] 📢 INFO in sniper_state_handlers: [LATENCY_ENTRY_DECISION] TEST(123456) mode=fallback decision=ALLOW_FALLBACK latency=CAUTION signal=10000 latest=10010 allowed_slippage=30 orders=2",
+                f"[{target_date} 10:01:00] 📢 INFO in sniper_state_handlers: [LATENCY_ENTRY_DECISION] TEST(123456) mode=fallback decision=REJECT_MARKET_CONDITION latency=CAUTION signal=10000 latest=10010 allowed_slippage=30 orders=2",
                 f"[{target_date} 10:01:00] 📢 INFO in sniper_state_handlers: [ENTRY_SUBMISSION_BUNDLE] TEST(123456) mode=fallback requested_qty=5 legs=2 primary_ord_no=O1",
                 f"[{target_date} 10:01:01] 📢 INFO in sniper_state_handlers: [LATENCY_ENTRY_ORDER_SENT] TEST(123456) tag=fallback_scout qty=1 price=0 type=16 tif=IOC ord_no=O1",
                 f"[{target_date} 10:01:01] 📢 INFO in sniper_state_handlers: [LATENCY_ENTRY_ORDER_SENT] TEST(123456) tag=fallback_main qty=4 price=9990 type=00 tif=DAY ord_no=O2",
@@ -59,8 +59,8 @@ def test_format_entry_metrics_summary():
     text = entry_metrics.format_entry_metrics_summary(summary)
 
     assert "안정 구간 `SAFE`: 2건" in text
-    assert "분할 진입 `fallback`: 1건" in text
-    assert "정찰병(scout)+본대(main)" in text
+    assert "legacy fallback `fallback`: 1건" in text
+    assert "현재 live 진입 경로가 아닙니다" in text
     assert "`IOC -> 16` 승격: 1건" in text
 
 
@@ -80,4 +80,4 @@ def test_format_entry_metrics_summary_compact():
     assert "📊 장중 진입 지표 (2026-04-02)" in text
     assert "지연 판정: SAFE 2건 / CAUTION 1건 / DANGER 3건" in text
     assert "진입 방식: 일반 2건 / fallback 1건" in text
-    assert "SAFE=일반 진입 가능, CAUTION=fallback 검토, DANGER=신규 진입 차단" in text
+    assert "SAFE=일반 진입 가능, CAUTION=현재는 reject, DANGER=신규 진입 차단" in text

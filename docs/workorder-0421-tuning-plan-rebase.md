@@ -322,7 +322,6 @@ terminal 후보 기준 `total_candidates=115`, `missed_winner_rate=76.5%`, `esti
 ```bash
 PYTHONPATH=. .venv/bin/pytest -q \
   src/tests/test_runtime_ai_router.py \
-  src/trading/tests/test_fallback_strategy.py \
   src/trading/tests/test_entry_policy.py \
   src/trading/tests/test_entry_orchestrator.py \
   src/tests/test_sniper_entry_latency.py \

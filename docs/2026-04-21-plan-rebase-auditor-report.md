@@ -67,7 +67,7 @@ latency CAUTION 또는 canary override
 관련 구현 위치:
 
 - [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py): `SCALP_LATENCY_FALLBACK_ENABLED=False`, `SCALP_SPLIT_ENTRY_ENABLED=False`, `SCALP_LATENCY_GUARD_CANARY_ENABLED=False`
-- [fallback_strategy.py](/home/ubuntu/KORStockScan/src/trading/entry/fallback_strategy.py): deprecated null-object
+- `src/trading/entry/fallback_strategy.py` 당시 deprecated null-object였고, 현재는 코드베이스에서 제거됐다.
 - [sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/engine/sniper_entry_latency.py): `latency_fallback_disabled`, `latency_fallback_deprecated`
 - [entry_orchestrator.py](/home/ubuntu/KORStockScan/src/trading/entry/entry_orchestrator.py): 빈 fallback 주문 reject
 - [runtime_ai_router.py](/home/ubuntu/KORStockScan/src/engine/runtime_ai_router.py): live 스캘핑 AI 라우팅 기본값 Gemini

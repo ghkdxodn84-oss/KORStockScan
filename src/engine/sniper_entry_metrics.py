@@ -49,6 +49,7 @@ class EntryMetricsSummary:
 
     @property
     def fallback_activation_count(self) -> int:
+        """Legacy fallback bundle count from historical logs only."""
         return int(self.submission_mode_counts.get("fallback", 0))
 
     @property
@@ -139,10 +140,10 @@ def format_entry_metrics_summary_compact(summary: EntryMetricsSummary) -> str:
         f"📊 장중 진입 지표 ({summary.date})\n"
         f"- 지연 판정: SAFE {values['safe']}건 / CAUTION {values['caution']}건 / DANGER {values['danger']}건\n"
         f"- 진입 방식: 일반 {values['normal']}건 / fallback {values['fallback']}건\n"
-        f"- fallback 진행: 정찰병 전송 {values['scout_sent']}건, 본대 전송 {values['main_sent']}건\n"
-        f"- fallback 체결: 정찰병 {values['scout_fill']}건, 본대 {values['main_fill']}건, 완전체결 {values['fallback_filled']}건\n"
+        f"- legacy fallback 로그: 정찰병 전송 {values['scout_sent']}건, 본대 전송 {values['main_sent']}건\n"
+        f"- legacy fallback 체결: 정찰병 {values['scout_fill']}건, 본대 {values['main_fill']}건, 완전체결 {values['fallback_filled']}건\n"
         f"- 주문 참고: 타입 {values['order_types']} / TIF {values['tif_usage']} / IOC→16 {values['tif_promotions']}건\n"
-        "  SAFE=일반 진입 가능, CAUTION=fallback 검토, DANGER=신규 진입 차단"
+        "  SAFE=일반 진입 가능, CAUTION=현재는 reject, DANGER=신규 진입 차단"
     )
 
 
@@ -165,16 +166,16 @@ def format_entry_metrics_summary(summary: EntryMetricsSummary) -> str:
         "2. 실제 진입 방식\n"
         f"- 일반 진입 `normal`: {values['normal']}건\n"
         "  지연 상태가 안정적이라 단일 진입으로 처리한 횟수입니다.\n"
-        f"- 분할 진입 `fallback`: {values['fallback']}건\n"
-        "  정찰병(scout)+본대(main)로 나눠 보수적으로 진입한 횟수입니다.\n"
+        f"- legacy fallback `fallback`: {values['fallback']}건\n"
+        "  과거 로그에 남은 폐기 fallback 흔적이며 현재 live 진입 경로가 아닙니다.\n"
         "\n"
-        "3. fallback 주문/체결 진행\n"
+        "3. legacy fallback 주문/체결 흔적\n"
         f"- 정찰병 주문 전송: {values['scout_sent']}건\n"
         f"- 본대 주문 전송: {values['main_sent']}건\n"
         f"- 정찰병 체결: {values['scout_fill']}건\n"
         f"- 본대 체결: {values['main_fill']}건\n"
         f"- fallback 묶음 완전체결: {values['fallback_filled']}건\n"
-        "  scout/main이 모두 채워져 fallback 진입이 끝난 횟수입니다.\n"
+        "  historical contamination 탐지용 집계이며 신규 진입 허용 의미가 아닙니다.\n"
         "\n"
         "4. 주문 방식 참고\n"
         f"- 주문 타입 사용량: {values['order_types']}\n"

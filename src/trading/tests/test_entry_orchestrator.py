@@ -1,12 +1,9 @@
 import time
 from datetime import UTC, datetime
-from types import SimpleNamespace
-
 from src.trading.config.entry_config import EntryConfig
 from src.trading.entry.entry_orchestrator import EntryOrchestrator
 from src.trading.entry.entry_policy import EntryPolicy
 from src.trading.entry.entry_types import SignalSnapshot
-from src.trading.entry.fallback_strategy import FallbackStrategy
 from src.trading.entry.latency_monitor import LatencyMonitor
 from src.trading.entry.normal_entry_builder import NormalEntryBuilder
 from src.trading.entry.state_machine import EntryStateMachine
@@ -36,7 +33,6 @@ def _build_orchestrator(config: EntryConfig, *, order_rtt_avg_ms: int = 100):
         latency_monitor=LatencyMonitor(config),
         entry_policy=EntryPolicy(config),
         normal_entry_builder=NormalEntryBuilder(config),
-        fallback_strategy=FallbackStrategy(config),
         order_manager=OrderManager(InMemoryBrokerGateway()),
         state_machine=EntryStateMachine(),
         trade_logger=TradeLogger(),
@@ -53,23 +49,7 @@ def test_orchestrator_safe_path_returns_normal():
     assert result["status"] == "ORDER_FILLED"
 
 
-def test_orchestrator_caution_path_rejects_when_fallback_disabled():
-    config = EntryConfig(
-        max_order_rtt_avg_ms_for_safe=50,
-        max_order_rtt_avg_ms_for_caution=300,
-    )
-    orchestrator = _build_orchestrator(config, order_rtt_avg_ms=120)
-    result = orchestrator.process(_snapshot())
-    assert result["mode"] == "reject"
-    assert result["status"] == "REJECTED_MARKET_CONDITION"
-    assert result["reason"] == "latency_fallback_disabled"
-
-
-def test_orchestrator_caution_path_returns_fallback_when_enabled(monkeypatch):
-    monkeypatch.setattr(
-        "src.trading.entry.entry_policy.TRADING_RULES",
-        SimpleNamespace(SCALP_LATENCY_FALLBACK_ENABLED=True),
-    )
+def test_orchestrator_caution_path_rejects_deprecated_fallback():
     config = EntryConfig(
         max_order_rtt_avg_ms_for_safe=50,
         max_order_rtt_avg_ms_for_caution=300,

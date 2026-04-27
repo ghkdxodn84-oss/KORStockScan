@@ -171,10 +171,12 @@ cohort 분류 공통 규칙은 아래로 고정한다.
 | --- | --- | --- | --- | --- |
 | `main-only + normal_only + post_fallback_deprecation` | `baseline-decision` | live 기준선 손익/퍼널/체결 품질 비교 | Plan Rebase 종료 전까지 유지. 새 기준선이 문서 승인되어 replacement되고 동일 메트릭/제외규칙이 승계될 때만 교체 가능 | `Plan Rebase`, 날짜별 checklist |
 | `wait6579_ev_cohort` | `observe-only` | BUY recovery 후보 EV/blocked_ai_score/제출 전환 관찰 | `buy_recovery_canary` 축이 remove 또는 baseline 승격으로 닫히고, `recovery_check -> promoted -> submitted` 설명력이 다른 live/report 축으로 완전히 대체될 때 제거 가능 | `2026-04-21~22 checklist` |
-| `buy_recovery_canary applied cohort` | `active-canary-decision` | `WAIT65~79` live canary 효과/rollback 판정 | 승격 조건 또는 OFF/parking 판정이 닫히는 시점까지 유지. `submitted/full/partial/COMPLETED + valid profit_rate` 기준으로 승격 또는 종료가 확정되면 제거 | `2026-04-21~23 checklist` |
-| `wait6579_probe_canary_applied` | `active-canary-decision` | 소량 probe 적용 표본 분리 | probe가 종료되거나 본 canary에 통합되어 별도 applied tag가 사라질 때 제거 | `wait6579_ev_cohort`, `2026-04-21 checklist` |
+| `buy_recovery_canary applied cohort` | `guarded-off` | `WAIT65~79` live canary 효과/rollback 판정 | 코드 경로는 회귀/재개 가능성 때문에 유지하되, Plan Rebase 단일 live canary 기간에는 OFF로 유지. 재개 시 새 승인 항목과 rollback guard 필요 | `2026-04-21~23 checklist` |
+| `wait6579_probe_canary_applied` | `guarded-off` | 소량 probe 적용 표본 분리 | `soft_stop_micro_grace` live 관찰 중에는 OFF. 재개하려면 단일 live canary slot을 다시 확보하고 `submitted/full/partial` 회복 기준을 새로 문서화 | `wait6579_ev_cohort`, `2026-04-21 checklist` |
+| `latency_quote_fresh_composite` | `active-canary-decision` | 진입병목 quote freshness 복합 residual 완화 | `submitted/full/partial` 회복과 `latency_state_danger` 감소가 확인되어 유지/확대되거나, 미개선이면 OFF 확정될 때 종료 | `Plan Rebase`, `2026-04-27 checklist` |
 | `post-restart cohort` | `active-canary-decision` | replacement 이후 same-day 제출 회복 관찰 | replacement 당일 판정이 닫히고 후속 축이 새 `post-change` cohort로 넘어가면 종료. 익일 이후 지속 baseline으로 쓰지 않음 | `2026-04-24 checklist` |
 | `soft_stop qualifying cohort` | `provisional-stage-disjoint` | 보유/청산 live 예외 canary 후보 | `soft_stop_rebound_split` 승인 또는 보류+재시각이 닫히고, qualifying rule이 live 조작점으로 승격되거나 폐기될 때 종료 | `2026-04-27 checklist` |
+| `soft_stop_micro_grace` | `active-canary-decision` | soft_stop 최초 터치 후 짧은 휩쏘 확인유예 | `scalp_soft_stop_pct` 손실/반등 개선이 확인되어 baseline 승격되거나, emergency/hard_stop 악화 또는 soft_stop 지연 부작용으로 OFF 확정될 때 종료 | `2026-04-27 checklist` |
 | `hard_stop_whipsaw_aux` | `observe-only` | severe-loss guard 보조 관찰 | 하드스탑을 보조 관찰로만 둔다는 원칙이 유지되는 동안 유지. `MISSED_UPSIDE/GOOD_EXIT/NEUTRAL`과 반등 지표가 독립 판단가치를 잃거나 hard stop 완화 의제가 공식 폐기되면 제거 | `Plan Rebase`, `2026-04-27 checklist` |
 | `same_symbol_reentry` | `observe-only` | 동일종목 재진입 손실/guard 필요성 관찰 | `same_symbol_reentry_loss_count`가 독립 guard 후보성을 잃거나, soft stop/position context 축에 완전히 흡수되어 별도 재진입 cohort가 필요 없을 때 제거 | `holding_exit_observation`, `2026-04-27 checklist` |
 | `trailing_continuation` | `observe-only` | upside capture 개선 후보 관찰 | `MISSED_UPSIDE rate >= 60%`, `GOOD_EXIT rate <= 30%`로 2순위 live 후보 요건을 충족해 canary로 승격되거나, 반대로 upside 개선 후보성이 약해져 후순위 폐기가 확정되면 제거/재분류 | `holding_exit_observation`, `2026-04-27 checklist` |
@@ -208,16 +210,17 @@ inventory 운영 규칙은 아래로 고정한다.
 | `ai_holding_shadow_band` | `observe-only` | `none` | HOLDING review/skip 경계 관찰 |
 | `same_symbol_soft_stop_cooldown_shadow` | `observe-only` | `none` | same-symbol cooldown 가설 관찰 |
 | `partial_only_timeout_shadow` | `observe-only` | `none` | partial-only timeout 가설 관찰 |
-| `split_entry_rebase_integrity_shadow` | `observe-only` | `none` | split-entry/rebase 정합성 관찰 |
-| `split_entry_immediate_recheck_shadow` | `observe-only` | `none` | partial 후 immediate recheck 관찰 |
+| `split_entry_rebase_integrity_shadow` | `remove` | `guarded-off` | split-entry 폐기 정합화로 runtime shadow 기본 OFF |
+| `split_entry_immediate_recheck_shadow` | `remove` | `guarded-off` | split-entry 폐기 정합화로 runtime shadow 기본 OFF |
 | `strength_shadow_feedback` | `observe-only` | `none` | dynamic strength 후보 장후 평가 |
 | `buy_recovery_canary` | `active-canary` | `guarded-off` | `WAIT65~79` BUY 회복축 |
-| `wait6579_probe_canary` | `active-canary` | `limited-live` | 소량 실전 probe |
-| `fallback_qty_canary` | `baseline-promote` | `baseline-live` | current runtime/log는 `fallback_qty_guard` |
+| `wait6579_probe_canary` | `active-canary` | `guarded-off` | soft_stop live canary 관찰 중 entry probe OFF |
+| `fallback_qty_canary` | `remove` | `guarded-off` | historical label only, live fallback 경로와 함께 종료 |
 | `latency_guard_canary` | `active-canary` | `guarded-off` | broad fallback override legacy 축 |
+| `latency_quote_fresh_composite` | `active-canary` | `limited-live` | current entry live canary |
 | `spread_relief_canary` | `active-canary` | `guarded-off` | parking 상태 |
 | `ws_jitter_relief_canary` | `active-canary` | `guarded-off` | same-day 종료된 replacement 축 |
-| `other_danger_relief_canary` | `active-canary` | `limited-live` | 현재 entry live 축 |
+| `other_danger_relief_canary` | `active-canary` | `guarded-off` | 2026-04-27 13:00 미개선 종료 |
 | `dynamic_strength_canary` | `baseline-promote` | `baseline-live` | current runtime/log는 `dynamic_strength_relief` |
 | `partial_fill_ratio_canary` | `baseline-promote` | `baseline-live` | current config는 `partial_fill_ratio_guard` |
 
@@ -353,6 +356,26 @@ inventory 운영 규칙은 아래로 고정한다.
   1. 보유/청산 관찰축으로만 유지
   2. 재개 가능성이 사라지면 `remove` 재판정
 
+### 4.4A-1 `soft_stop_micro_grace`
+
+- 판정: `active-canary-decision`
+- live 영향도: `limited`
+- 튜닝 모니터링 가치: `High`
+  - 이유: 4월 `scalp_soft_stop_pct` 61건 중 10분 내 매도가 재상회 `57건(93.4%)`, +0.5% 이상 반등 `43건(70.5%)`라 soft stop 직후 휩쏘 완화의 직접 조작점이다.
+  - 상향 조건: `soft_stop_micro_grace` 적용 표본에서 `scalp_soft_stop_pct` 손실 tail이 줄고, hard stop 전환/미체결/동일종목 재진입 손실이 증가하지 않을 때
+  - 하향 조건: `scalp_hard_stop_pct` 또는 emergency break가 늘거나, grace 후 더 나쁜 가격 청산이 반복될 때
+- EV 판정 기여도: `High`
+- 대체 가능성: `Medium`
+- 운영 부하/지연 비용: `Low`
+- 코드 유지비: `Low`
+- 향후 재개 가능성: `High`
+- 근거:
+  1. `whipsaw confirmation`은 AI/호가 재확인을 추가해 entry latency와 유사한 지연/누락을 다시 만들 수 있어 1차 live 조작점에서 제외했다.
+  2. `SCALP_SOFT_STOP_MICRO_GRACE_SEC=20`, `SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT=-2.0`, hard stop `-2.5%`로 유예 폭을 제한했다.
+- 다음 액션:
+  1. `soft_stop_micro_grace`, `scalp_soft_stop_pct`, `scalp_hard_stop_pct`, `COMPLETED + valid profit_rate`, `full_fill/partial_fill`을 분리 관찰
+  2. hard stop 전환이나 grace 후 악화가 확인되면 canary OFF
+
 ### 4.4B `partial_only_timeout_shadow`
 
 - 판정: `observe-only`
@@ -375,42 +398,42 @@ inventory 운영 규칙은 아래로 고정한다.
 
 ### 4.4C `split_entry_rebase_integrity_shadow`
 
-- 판정: `observe-only`
-- live 영향도: `none`
-- 튜닝 모니터링 가치: `Medium`
-  - 이유: split-entry/rebase 경로 정합성 이상을 탐지하는 integrity shadow다.
-  - 상향 조건: split-entry 재개나 partial fill 후 rebase 오류가 의심될 때
-  - 하향 조건: split-entry 재개 계획이 없어질 때
+- 판정: `remove`
+- live 영향도: `guarded-off`
+- 튜닝 모니터링 가치: `Low`
+  - 이유: split-entry 재개 의제가 현재 기준문서에서 닫혔고, same-day 판정축에서도 복귀 후보가 아니다.
+  - 상향 조건: 없음. 재개가 필요하면 새 workorder와 새 cohort로 다시 정의해야 한다.
+  - 하향 조건: historical runtime shadow까지 완전히 삭제할 때
 - EV 판정 기여도: `Low`
-- 대체 가능성: `Low`
+- 대체 가능성: `High`
 - 운영 부하/지연 비용: `Low`
 - 코드 유지비: `Low`
-- 향후 재개 가능성: `Medium`
+- 향후 재개 가능성: `Low`
 - 근거:
-  1. `requested_qty/cum_filled_qty/rebase_count`를 holding pipeline에 별도 기록한다.
-  2. 현재는 무결성 감시지 실주문 완화가 아니다.
+  1. `latency fallback split-entry`는 `Plan Rebase`에서 영구 폐기 축으로 잠겼다.
+  2. runtime shadow는 재개 없는 상태에서 현재 판정에 기여하지 않아 기본 OFF가 맞다.
 - 다음 액션:
-  1. split-entry 재개 전까지 observability로 유지
-  2. split-entry 폐기 시 `remove` 후보 재판정
+  1. runtime emit은 기본 OFF로 두고 historical audit helper만 남긴다
+  2. 재개 검토가 다시 생기면 새 판정축으로 다시 등록한다
 
 ### 4.4D `split_entry_immediate_recheck_shadow`
 
-- 판정: `observe-only`
-- live 영향도: `none`
-- 튜닝 모니터링 가치: `Medium`
-  - 이유: partial 후 즉시 recheck가 필요했는지 보는 후속 shadow다.
-  - 상향 조건: partial 후 확장/재베이스 타이밍 문제가 실제 손익 훼손으로 연결될 때
-  - 하향 조건: split-entry 자체를 더 이상 보지 않을 때
+- 판정: `remove`
+- live 영향도: `guarded-off`
+- 튜닝 모니터링 가치: `Low`
+  - 이유: parent split-entry 축 자체가 폐기됐으므로 후속 recheck shadow도 운영 가치가 없다.
+  - 상향 조건: 없음. split-entry 재개 정의가 새로 생길 때만 별도 재등록한다.
+  - 하향 조건: historical helper까지 삭제할 때
 - EV 판정 기여도: `Low`
-- 대체 가능성: `Medium`
+- 대체 가능성: `High`
 - 운영 부하/지연 비용: `Low`
 - 코드 유지비: `Low`
-- 향후 재개 가능성: `Medium`
+- 향후 재개 가능성: `Low`
 - 근거:
-  1. `split_entry_rebase_integrity_shadow`와 짝을 이루는 후속 관찰축이다.
-  2. 현재는 recheck 필요성만 기록한다.
+  1. `split_entry_rebase_integrity_shadow`의 하위 후속 관찰축이라 독립 유지 이유가 없다.
+  2. 현재는 historical test fixture 외 live 판정 연결점이 없다.
 - 다음 액션:
-  1. integrity shadow와 묶어 유지/제거 판정
+  1. integrity shadow와 같이 기본 OFF/remove로 묶는다
 
 ### 4.5 `dynamic_strength_canary` / current runtime `dynamic_strength_relief`
 
@@ -502,42 +525,42 @@ inventory 운영 규칙은 아래로 고정한다.
 ### 4.8A `wait6579_probe_canary`
 
 - 판정: `active-canary`
-- live 영향도: `limited-live`
+- live 영향도: `guarded-off`
 - 튜닝 모니터링 가치: `High`
   - 이유: BUY recovery가 실제 주문 품질로 이어지는지 소량 실전 표본으로 닫는 하위 probe 축이다.
   - 상향 조건: `buy_recovery_canary`가 다시 live 승인되고 promoted 표본이 누적될 때
-  - 하향 조건: recovery 축 자체가 장기간 OFF거나 probe 없이도 판정이 충분할 때
+  - 하향 조건: recovery 축 자체가 장기간 OFF거나, 다른 live canary 관찰 중 단일축 원칙을 깨는 경우
 - EV 판정 기여도: `Medium`
 - 대체 가능성: `Low`
 - 운영 부하/지연 비용: `Low`
 - 코드 유지비: `Medium`
 - 향후 재개 가능성: `High`
 - 근거:
-  1. 기본값이 `AI_WAIT6579_PROBE_CANARY_ENABLED=True`이며 armed 상태에서 실제 주문수량을 축소한다.
+  1. 2026-04-27 `soft_stop_micro_grace` live 관찰 중에는 단일축 원칙 때문에 `AI_WAIT6579_PROBE_CANARY_ENABLED=False`로 잠근다.
   2. `wait6579_ev_cohort`가 `wait6579_probe_canary_applied`를 직접 집계한다.
 - 다음 액션:
-  1. `buy_recovery_canary`의 하위 probe 축으로 묶어 관리
+  1. `buy_recovery_canary`의 하위 probe 축으로 묶되 현재 live에서는 OFF 유지
   2. 장기간 promoted 표본이 없으면 parking 또는 제거 재판정
 
 ### 4.8B `fallback_qty_canary` / current runtime `fallback_qty_guard`
 
-- 판정: `baseline-promote`
-- live 영향도: `baseline-live`
-- 튜닝 모니터링 가치: `Medium`
-  - 이유: 명칭은 canary지만 현재는 fallback entry 수량 축소가 기본 런타임 동작처럼 쓰인다.
-  - 상향 조건: fallback 진입 품질 guard로 계속 운영 판정에 쓰일 때
-  - 하향 조건: fallback entry 자체를 더 이상 실전에서 쓰지 않거나 multiplier를 기본 정책으로 흡수할 때
-- EV 판정 기여도: `Medium`
-- 대체 가능성: `Low`
+- 판정: `remove`
+- live 영향도: `guarded-off`
+- 튜닝 모니터링 가치: `Low`
+  - 이유: fallback entry 자체가 폐기돼 multiplier guard는 더 이상 실전 조작점이 아니다.
+  - 상향 조건: 없음. fallback entry 재개가 새 문서/가드와 함께 승인될 때만 재정의한다.
+  - 하향 조건: historical 상수/로그 흔적까지 삭제할 때
+- EV 판정 기여도: `Low`
+- 대체 가능성: `High`
 - 운영 부하/지연 비용: `Low`
 - 코드 유지비: `Low`
-- 향후 재개 가능성: `High`
+- 향후 재개 가능성: `Low`
 - 근거:
-  1. 전용 `enabled` flag 없이 `entry_mode == fallback`에서 multiplier가 바로 적용된다.
-  2. 주문 stage는 `fallback_qty_guard_applied`로 정리했지만, 상수/문서 명칭은 아직 canary 표현이 남아 있다.
+  1. `entry_mode == fallback` 실전 경로가 hard-off면 `fallback_qty_guard`도 실행되지 않는다.
+  2. 남는 의미는 과거 로그 해석용 historical label뿐이다.
 - 다음 액션:
-  1. 현재는 runtime/log 명칭만 `guard`로 정리됐고, inventory 분류명은 historical 추적용으로 유지한다
-  2. fallback 축 자체를 접으면 함께 정리한다
+  1. 문서 분류는 remove로 고정하고, 잔존 로그는 historical-only로만 설명한다
+  2. live runtime에서는 `fallback_qty_guard` 분기 자체를 유지하지 않는다
 
 ### 4.9 `spread_relief_canary`
 
@@ -565,7 +588,7 @@ inventory 운영 규칙은 아래로 고정한다.
 ### 4.9A `ws_jitter_relief_canary`
 
 - 판정: `active-canary`
-- live 영향도: `limited-live`
+- live 영향도: `guarded-off`
 - 튜닝 모니터링 가치: `Medium`
   - 이유: `2026-04-27 13:00` 기준 `ws_jitter_too_high=1852`가 `other_danger` 다음 직접 잔여 원인이라, 오늘 `15:00` 전 관찰 가능한 다음 독립축으로 가장 빠르게 교체 가능하다.
   - 상향 조건: `submitted`, `quote_fresh_latency_pass_rate`, `latency_state_danger` 감소, `ws_jitter_relief_canary_applied`가 실제 회복을 만들 때
@@ -579,9 +602,28 @@ inventory 운영 규칙은 아래로 고정한다.
   1. 상수와 runtime branch가 이미 존재하고 회귀 테스트도 있어, same-day `기존 축 OFF -> restart.flag -> 새 축 ON` 교체가 가능하다.
   2. `2026-04-24`에는 활성화 표본 0으로 종료됐지만, `2026-04-27 13:00`에는 raw danger breakdown에서 `ws_jitter_too_high`가 다시 큰 잔여 원인으로 남았다.
 - 다음 액션:
-  1. `2026-04-27 15:00` same-day replacement 축으로 재개한다.
-  2. 성공 기준은 `submitted 회복`, `quote_fresh_latency_pass_rate 개선`, `latency_state_danger 감소`, `fallback_regression=0`으로 고정한다.
-  3. 해당 기준을 충족하지 못하면 다시 OFF로 닫고 다른 direct residual 축으로 교체한다.
+  1. `2026-04-27 15:00` 미개선으로 OFF 상태를 유지한다.
+  2. 재개는 `ws_jitter`가 다시 단일 우세 원인으로 올라오고 복합축보다 직접성이 높을 때만 허용한다.
+
+### 4.9A-1 `latency_quote_fresh_composite`
+
+- 판정: `active-canary-decision`
+- live 영향도: `limited-live`
+- 튜닝 모니터링 가치: `High`
+  - 이유: 단일 `gatekeeper_fast_reuse`, `other_danger`, `ws_jitter`가 제출 회복을 만들지 못했고, `2026-04-27 15:00` 분해에서 `other_danger=3256`, `ws_age_too_high=2224`, `ws_jitter_too_high=2203`가 동시에 커져 quote freshness family 복합 병목 가능성이 가장 높다.
+  - 상향 조건: `quote_fresh_composite_canary_applied` 표본에서 `submitted/full/partial` 회복, `budget_pass_to_submitted_rate` 개선, `latency_state_danger` 감소, `fallback_regression=0`
+  - 하향 조건: 적용 표본이 없거나 제출 회복 없이 `latency_state_danger` 비중이 유지/악화될 때
+- EV 판정 기여도: `High`
+- 대체 가능성: `Medium`
+- 운영 부하/지연 비용: `Low`
+- 코드 유지비: `Medium`
+- 향후 재개 가능성: `High`
+- 근거:
+  1. fallback/split-entry는 계속 OFF이며, `REJECT_DANGER -> ALLOW_NORMAL` normal override만 허용한다.
+  2. 조건은 `signal>=88`, `ws_age<=950ms`, `ws_jitter<=450ms`, `spread<=0.0075`, `quote_stale=False`로 제한한다.
+- 다음 액션:
+  1. 장중/번들 판정에서 `latency_canary_reason=quote_fresh_composite_canary_applied`를 별도 집계한다.
+  2. `submitted/full/partial`, `latency_state_danger`, `normal_slippage_exceeded`, `COMPLETED + valid profit_rate`를 단계별로 분리 판정한다.
 
 ### 4.9B `latency_guard_canary`
 
@@ -638,13 +680,10 @@ inventory 운영 규칙은 아래로 고정한다.
    - `ai_holding_shadow_band`
    - `same_symbol_soft_stop_cooldown_shadow`
    - `partial_only_timeout_shadow`
-   - `split_entry_rebase_integrity_shadow`
-   - `split_entry_immediate_recheck_shadow`
    - `strength_shadow_feedback`
 3. `baseline-promote historical/current 표기 유지`
    - `dynamic_strength_canary` (`dynamic_strength_relief`)
    - `partial_fill_ratio_canary` (`partial_fill_ratio_guard`)
-   - `fallback_qty_canary` (`fallback_qty_guard`)
 4. `active-canary 운영/parking 판정`
    - `buy_recovery_canary`
    - `wait6579_probe_canary`
