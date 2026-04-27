@@ -26,6 +26,14 @@ def _safe_mean(series: pd.Series) -> float:
     return float(series.mean()) if not series.empty else 0.0
 
 
+def _normalize_trade_id(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "trade_id" not in df.columns:
+        return df
+    out = df.copy()
+    out["trade_id"] = out["trade_id"].astype("string").str.strip()
+    return out
+
+
 def _valid_trades(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return df
@@ -80,7 +88,7 @@ def cohort_summary(trade_df: pd.DataFrame) -> list[dict]:
 
 
 def extract_loss_patterns(trade_df: pd.DataFrame, seq_df: pd.DataFrame) -> list[dict]:
-    valid = _valid_trades(trade_df)
+    valid = _normalize_trade_id(_valid_trades(trade_df))
     if valid.empty:
         return []
 
@@ -88,8 +96,9 @@ def extract_loss_patterns(trade_df: pd.DataFrame, seq_df: pd.DataFrame) -> list[
     if loss_df.empty:
         return []
 
-    seq_df = _normalize_sequence_flags(seq_df)
+    seq_df = _normalize_trade_id(_normalize_sequence_flags(seq_df))
     if not seq_df.empty:
+        loss_df["trade_id"] = loss_df["trade_id"].astype("string").str.strip()
         join_cols = [
             "trade_id",
             "partial_then_expand_flag",
@@ -100,6 +109,7 @@ def extract_loss_patterns(trade_df: pd.DataFrame, seq_df: pd.DataFrame) -> list[
             "rebase_count",
         ]
         seq_view = seq_df[[col for col in join_cols if col in seq_df.columns]].drop_duplicates("trade_id")
+        seq_view["trade_id"] = seq_view["trade_id"].astype("string").str.strip()
         loss_df = loss_df.merge(seq_view, on="trade_id", how="left")
 
     rows: list[dict] = []
@@ -139,7 +149,7 @@ def extract_loss_patterns(trade_df: pd.DataFrame, seq_df: pd.DataFrame) -> list[
 
 
 def extract_profit_patterns(trade_df: pd.DataFrame) -> list[dict]:
-    valid = _valid_trades(trade_df)
+    valid = _normalize_trade_id(_valid_trades(trade_df))
     if valid.empty:
         return []
 

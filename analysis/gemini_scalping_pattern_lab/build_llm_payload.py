@@ -27,10 +27,18 @@ def _load_csv(name: str) -> pd.DataFrame:
     return pd.read_csv(path, encoding="utf-8", low_memory=False)
 
 
+def _normalize_trade_id(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "trade_id" not in df.columns:
+        return df
+    out = df.copy()
+    out["trade_id"] = out["trade_id"].astype("string").str.strip()
+    return out
+
+
 def build_summary_payload(ev_result: dict, trade_df: pd.DataFrame) -> dict:
     if not trade_df.empty:
         valid_mask = trade_df["profit_valid_flag"].astype(str).str.lower().isin(["true", "1"])
-        valid_trades = trade_df[valid_mask].copy()
+        valid_trades = _normalize_trade_id(trade_df[valid_mask].copy())
     else:
         valid_trades = pd.DataFrame()
 
@@ -83,11 +91,13 @@ def build_cases_payload(trade_df: pd.DataFrame, seq_df: pd.DataFrame) -> dict:
         return cases
 
     valid_mask = trade_df["profit_valid_flag"].astype(str).str.lower().isin(["true", "1"])
-    valid_trades = trade_df[valid_mask].copy()
+    valid_trades = _normalize_trade_id(trade_df[valid_mask].copy())
     if valid_trades.empty:
         return cases
 
+    seq_df = _normalize_trade_id(seq_df)
     if not seq_df.empty:
+        valid_trades["trade_id"] = valid_trades["trade_id"].astype("string").str.strip()
         join_cols = [
             "trade_id",
             "partial_then_expand_flag",
@@ -98,6 +108,7 @@ def build_cases_payload(trade_df: pd.DataFrame, seq_df: pd.DataFrame) -> dict:
             "rebase_count",
         ]
         seq_view = seq_df[[col for col in join_cols if col in seq_df.columns]].drop_duplicates("trade_id")
+        seq_view["trade_id"] = seq_view["trade_id"].astype("string").str.strip()
         valid_trades = valid_trades.merge(seq_view, on="trade_id", how="left")
 
     valid_trades["profit_rate"] = pd.to_numeric(valid_trades["profit_rate"], errors="coerce")
@@ -121,8 +132,8 @@ def build_cases_payload(trade_df: pd.DataFrame, seq_df: pd.DataFrame) -> dict:
 
 def build_llm_payload() -> None:
     ev_result = _load_json("ev_analysis_result.json")
-    trade_df = _load_csv("trade_fact.csv")
-    seq_df = _load_csv("sequence_fact.csv")
+    trade_df = _normalize_trade_id(_load_csv("trade_fact.csv"))
+    seq_df = _normalize_trade_id(_load_csv("sequence_fact.csv"))
 
     summary_payload = build_summary_payload(ev_result, trade_df)
     with open(config.OUTPUT_DIR / "llm_payload_summary.json", "w", encoding="utf-8") as handle:

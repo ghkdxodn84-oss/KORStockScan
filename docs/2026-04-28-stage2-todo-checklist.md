@@ -54,6 +54,12 @@
   - why: 복합축 이름으로 동일 단계 다중축 실험을 우회하면 원인귀속과 rollback 판단이 깨진다.
   - 다음 액션: 다음 판정 메모에는 임계값별 `분포 기준`, `예상 기각률`, `효과 부족 시 fallback 임계값`, `composite_no_recovery` guard를 함께 남긴다.
 
+- [ ] `[ShadowDiff0428] postclose submitted/full/partial mismatch 재분해` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 18:15~18:30`, `Track: ScalpingLogic`)
+  - Source: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md)
+  - 판정 기준: `deploy/run_tuning_monitoring_postclose.sh 2026-04-27` 재실행에서 나온 `data/analytics/shadow_diff_summary.json`의 `submitted_events jsonl=19 vs duckdb=17`, `full_fill_count jsonl=37 vs duckdb=31`, `partial_fill_count jsonl=30 vs duckdb=24` 차이를 이벤트 복원/집계 품질 관점에서 재분해하고, 누락 source가 `pipeline_events`, `post_sell`, 집계 SQL 중 어디인지 닫아야 한다.
+  - why: pattern lab 재실행은 복구됐지만 funnel/fill count mismatch를 그대로 두면 다음 진입병목 판정의 baseline 품질이 흔들린다.
+  - 다음 액션: 차이 원인을 닫은 뒤 shadow diff 기준선을 다시 갱신하고, 필요하면 parquet builder 또는 compare 쿼리 수정 작업으로 승격한다.
+
 - [ ] `[GeminiP1Rollout0428] main Gemini JSON system_instruction/deterministic flag 실전 승인 판정` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 18:05~18:20`, `Track: ScalpingLogic`)
   - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_gemini_engine_review.md)
   - 판정 기준: `GEMINI_SYSTEM_INSTRUCTION_JSON_ENABLED`, `GEMINI_JSON_DETERMINISTIC_CONFIG_ENABLED`는 코드상 guard가 준비됐더라도 기본값 `OFF`를 유지한다. `main` 실전 엔진에서 이 flag를 켜려면 `BUY/WAIT/DROP`, `HOLD/TRIM/EXIT`, `condition/eod` JSON contract 유지, rollback owner, `baseline cohort / candidate live cohort / observe-only cohort / excluded cohort`, parse_fail/consecutive_failures/ai_disabled 관찰 필드가 같은 메모에 잠겨 있어야 한다.

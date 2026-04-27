@@ -55,13 +55,21 @@ def _load_csv(name: str) -> pd.DataFrame:
     return pd.read_csv(p, encoding="utf-8", low_memory=False)
 
 
+def _normalize_trade_id(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "trade_id" not in df.columns:
+        return df
+    out = df.copy()
+    out["trade_id"] = out["trade_id"].astype("string").str.strip()
+    return out
+
+
 # ── 요약 통계 payload ─────────────────────────────────────────────────────────
 
 def build_summary_payload(ev_result: dict, trade_df: pd.DataFrame) -> dict:
     # 유효 거래 필터
     if not trade_df.empty:
         valid_mask = trade_df["profit_valid_flag"].astype(str).str.lower().isin(["true", "1"])
-        vt = trade_df[valid_mask]
+        vt = _normalize_trade_id(trade_df[valid_mask].copy())
     else:
         vt = pd.DataFrame()
 
@@ -137,20 +145,23 @@ def build_cases_payload(
         return cases
 
     valid_mask = trade_df["profit_valid_flag"].astype(str).str.lower().isin(["true", "1"])
-    vt = trade_df[valid_mask].copy()
+    vt = _normalize_trade_id(trade_df[valid_mask].copy())
     if vt.empty:
         return cases
 
     # seq_df join
+    seq_df = _normalize_trade_id(seq_df)
     if not seq_df.empty:
+        vt["trade_id"] = vt["trade_id"].astype("string").str.strip()
         seq_key = seq_df[["trade_id", "multi_rebase_flag", "partial_then_expand_flag",
                            "rebase_integrity_flag", "same_symbol_repeat_flag",
                            "rebase_count"]].drop_duplicates("trade_id")
+        seq_key["trade_id"] = seq_key["trade_id"].astype("string").str.strip()
         vt = vt.merge(seq_key, on="trade_id", how="left")
 
     def _row_to_case(row: pd.Series) -> dict:
         d: dict = {
-            "trade_id":   int(row.get("trade_id", 0)),
+            "trade_id":   str(row.get("trade_id", "")),
             "symbol":     str(row.get("symbol", "")),
             "name":       str(row.get("name", "")),
             "cohort":     str(row.get("cohort", "")),

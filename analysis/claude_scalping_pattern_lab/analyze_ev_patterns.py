@@ -65,6 +65,14 @@ def _pct_str(val: float) -> str:
     return f"{val:+.2f}%"
 
 
+def _normalize_trade_id(df: pd.DataFrame) -> pd.DataFrame:
+    if df.empty or "trade_id" not in df.columns:
+        return df
+    out = df.copy()
+    out["trade_id"] = out["trade_id"].astype("string").str.strip()
+    return out
+
+
 # ── 손익 유효 행 필터 ─────────────────────────────────────────────────────────
 
 def valid_trades(df: pd.DataFrame) -> pd.DataFrame:
@@ -77,7 +85,7 @@ def valid_trades(df: pd.DataFrame) -> pd.DataFrame:
 # ── 코호트별 기본 통계 ────────────────────────────────────────────────────────
 
 def cohort_summary(df: pd.DataFrame) -> list[dict]:
-    vt = valid_trades(df)
+    vt = _normalize_trade_id(valid_trades(df))
     if vt.empty:
         return []
 
@@ -107,7 +115,7 @@ def extract_loss_patterns(df: pd.DataFrame, seq_df: pd.DataFrame) -> list[dict]:
     손실 패턴을 (cohort, exit_rule, entry_mode) 기준으로 집계해 Top N을 반환.
     코호트별 혼합 금지.
     """
-    vt = valid_trades(df)
+    vt = _normalize_trade_id(valid_trades(df))
     if vt.empty:
         return []
 
@@ -116,10 +124,13 @@ def extract_loss_patterns(df: pd.DataFrame, seq_df: pd.DataFrame) -> list[dict]:
         return []
 
     # sequence_fact join
+    seq_df = _normalize_trade_id(seq_df)
     if not seq_df.empty:
+        loss_df["trade_id"] = loss_df["trade_id"].astype("string").str.strip()
         seq_flags = seq_df[["trade_id", "multi_rebase_flag",
                              "partial_then_expand_flag", "rebase_integrity_flag",
                              "same_symbol_repeat_flag"]].drop_duplicates("trade_id")
+        seq_flags["trade_id"] = seq_flags["trade_id"].astype("string").str.strip()
         loss_df = loss_df.merge(seq_flags, on="trade_id", how="left")
         for col in ["multi_rebase_flag", "partial_then_expand_flag",
                     "rebase_integrity_flag", "same_symbol_repeat_flag"]:
@@ -162,7 +173,7 @@ def extract_loss_patterns(df: pd.DataFrame, seq_df: pd.DataFrame) -> list[dict]:
 # ── 수익 패턴 Top N ───────────────────────────────────────────────────────────
 
 def extract_profit_patterns(df: pd.DataFrame) -> list[dict]:
-    vt = valid_trades(df)
+    vt = _normalize_trade_id(valid_trades(df))
     if vt.empty:
         return []
 

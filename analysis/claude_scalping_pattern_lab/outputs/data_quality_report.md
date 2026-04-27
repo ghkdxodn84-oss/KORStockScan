@@ -1,13 +1,28 @@
 # 데이터 품질 보고서
 
-생성일: 2026-04-22 19:14:33
-분석 기간: 2026-04-22 ~ 2026-04-22
+생성일: 2026-04-27 16:45:21
+분석 기간: 2026-04-20 ~ 2026-04-20
 
 ---
 
 ## 1. trade_fact
 
-- **데이터 없음**
+| 항목 | 값 |
+|---|---|
+| 총 거래수 | 38 |
+| COMPLETED | 36 |
+| valid_profit_rate | 36 |
+| 제외 건수 | 2 |
+
+**서버별:**
+
+- `local`: 38건
+
+**코호트별:**
+
+- `full_fill`: 22건
+- `split-entry`: 16건
+
 
 ---
 
@@ -15,14 +30,26 @@
 
 - 날짜 수: 1
 - 서버: ['local']
-- 기간 합계 latency_block_events: 1187
-- 기간 합계 submitted_events: 1
+- 기간 합계 latency_block_events: 1395
+- 기간 합계 submitted_events: 38
 
 ---
 
 ## 3. sequence_fact
 
-- **데이터 없음**
+| 플래그 | 건수 |
+|---|---|
+| 총 record 수 | 41 |
+| multi_rebase (split-entry) | 16 |
+| partial_then_expand | 16 |
+| rebase_integrity 이상 | 2 |
+| same_ts_multi_rebase | 1 |
+| same_symbol_repeat_soft_stop | 26 |
+
+**정합성 플래그 분포:**
+
+- `rebase_integrity_flag`: 2건
+- `same_ts_multi_rebase_flag`: 1건
 
 ---
 

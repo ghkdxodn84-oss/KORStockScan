@@ -9,8 +9,9 @@
 ## 오늘 강제 규칙
 
 - 기준선은 `main-only`, `normal_only`, `post_fallback_deprecation`이며 상세 기준은 `Plan Rebase` §1~§6을 따른다.
-- live 변경은 `1축 canary`만 허용하고, replacement도 `기존 축 OFF -> restart.flag -> 새 축 ON` 순서만 쓴다.
-- 예외: 진입병목 canary와 보유/청산 canary는 조작점, 적용 시점, cohort tag, rollback guard가 완전히 분리되고 판정이 provisional임을 명시할 때만 `stage-disjoint concurrent canary`로 검토할 수 있다.
+- live 변경은 동일 단계 내 `1축 canary`만 허용한다. 진입병목축과 보유/청산축은 별개 단계이므로 병렬 canary가 가능하지만, 같은 단계 안에서는 canary 중복을 금지한다.
+- 동일 단계 replacement는 `기존 축 OFF -> restart.flag -> 새 축 ON` 순서만 쓴다.
+- 단계 분리: 진입병목 canary와 보유/청산 canary는 조작점, 적용 시점, cohort tag, rollback guard가 완전히 분리되고 단계별 판정을 유지할 때만 `stage-disjoint concurrent canary`로 운영할 수 있다.
 - 관찰창이 끝나면 `즉시 판정 -> 다음 축 즉시 착수`를 기본으로 한다. 이미 수집된 데이터로 닫을 수 있는 판정은 장후/익일로 미루지 않는다.
 - `장후/익일/다음 장전` 이관은 예외사유 4종(`단일 조작점 미정`, `rollback guard 미문서화`, `restart/code-load 불가`, `운영 경계상 same-day 반영 불가`) 중 하나로만 허용한다. 막힌 조건과 다음 절대시각이 없으면 이관 판정은 무효다.
 - PREOPEN은 전일에 이미 `단일 조작점 + rollback guard + 코드/테스트 + restart 절차`가 준비된 carry-over 축만 받는다.
@@ -211,7 +212,7 @@
     - `other_danger-only normal override`도 `13:00` 미개선으로 same-day entry 평가축을 종료하고, `ws_jitter-only relief replacement`를 다음 축으로 즉시 연다.
     - fresh 로그가 비어 있는 장중 판정은 앞으로도 동일하게 `offline bundle`과 로컬 analyzer 결과를 기준으로 닫는다.
 
-- [ ] `[LatencyCanary0427-3] ws_jitter-only relief replacement 15:00 즉시 재점검` (`Due: 2026-04-27`, `Slot: INTRADAY`, `TimeWindow: 14:20~15:00`, `Track: ScalpingLogic`)
+- [x] `[LatencyCanary0427-3] ws_jitter-only relief replacement 15:00 즉시 재점검` (`Due: 2026-04-27`, `Slot: INTRADAY`, `TimeWindow: 14:20~15:00`, `Track: ScalpingLogic`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md)
   - 판정 기준: `SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False`, `SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=True`로 교체한 뒤 `15:00` 전 raw 또는 offline bundle에서 `submitted/full/partial`, `quote_fresh_latency_pass_rate`, `latency_state_danger`, `ws_jitter_relief_canary_applied`, `fallback_regression=0`을 확인한다.
   - why: `13:00` bundle에서 `other_danger=2406` 다음 직접 잔여 원인이 `ws_jitter_too_high=1852`였고, `ws_jitter-only relief`는 이미 코드/테스트/enable flag가 있어 오늘 안에 가장 빠르게 교체 가능한 단일 조작점이다.
@@ -222,13 +223,38 @@
   - 검증:
     - `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_entry_latency.py`
     - `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/sniper_entry_latency.py src/utils/constants.py src/tests/test_sniper_entry_latency.py`
-  - 다음 액션: `15:00`에도 `budget_pass_to_submitted_rate` 개선이 없으면 `ws_jitter-only relief`도 same-day 종료로 닫고, 그 뒤에만 `HoldingExitObs0427` 또는 다음 direct residual 축으로 이동한다.
+  - 판정: 완료. `ws_jitter-only relief replacement`도 제출 회복을 만들지 못했다. same-day latency residual 축은 여기서 종료한다. 단, 진입병목 자체가 충분해졌다는 뜻은 아니며, 오늘 확인한 `gatekeeper_fast_reuse`, `other_danger`, `ws_jitter` 세 축이 제출 회복축으로 실패했다는 판정이다.
+  - 근거:
+    - offline bundle `ws_jitter_1500` 기준 `budget_pass_events=7568`, `order_bundle_submitted_events=11`, `budget_pass_to_submitted_rate=0.1%`, `latency_block_events=7557`, `latency_state_danger_events=7178`, `full_fill_events=7`, `partial_fill_events=0`였다.
+    - `13:00` bundle 대비 `submitted`는 `9 -> 11`, `full_fill`은 `4 -> 7`로 늘었지만, `budget_pass_to_submitted_rate`는 `0.2% -> 0.1%`로 오히려 악화됐고 `quote_fresh_latency_pass_rate`는 `0.2%`로 동일했다.
+    - danger 분해도 `other_danger=3256`, `ws_age_too_high=2224`, `ws_jitter_too_high=2203` 순으로 유지돼 `ws_jitter-only` 단일 교체가 direct 회복을 만들지 못했다.
+    - `gatekeeper_fast_reuse_ratio=0.0%`, `gatekeeper_decisions=12`라 보조 진단축도 계속 무효였다.
+  - 검증:
+    - offline analyzer output: [entry_latency_offline_summary_ws_jitter_1500.md](/home/ubuntu/KORStockScan/tmp/2026-04-27/entry_latency_offline_summary_ws_jitter_1500.md), [entry_latency_offline_summary_ws_jitter_1500.json](/home/ubuntu/KORStockScan/tmp/2026-04-27/entry_latency_offline_summary_ws_jitter_1500.json)
+    - `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_entry_latency.py` -> `15 passed`
+    - `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/sniper_entry_latency.py src/utils/constants.py src/tests/test_sniper_entry_latency.py`
+  - 다음 액션:
+    - same-day latency residual 축은 `gatekeeper_fast_reuse`, `other_danger`, `ws_jitter` 모두 종료로 잠근다.
+    - 진입병목은 미해소 상태로 유지하되, 같은 latency residual을 더 붙들지 않고 다음 독립축은 보유/청산 `soft_stop_rebound_split`으로 넘긴다.
 
-- [ ] `[HoldingExitObs0427] trailing/soft_stop/same_symbol 재분해` (`Due: 2026-04-27`, `Slot: INTRADAY`, `TimeWindow: 15:05~15:20`, `Track: Plan`)
+- [x] `[HoldingExitObs0427] trailing/soft_stop/same_symbol 재분해` (`Due: 2026-04-27`, `Slot: INTRADAY`, `TimeWindow: 15:05~15:20`, `Track: Plan`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
   - 판정 기준: `scalp_trailing_take_profit`, `scalp_soft_stop_pct`, `scalp_ai_early_exit`, `scalp_preset_hard_stop_pct`, `scalp_hard_stop_pct`, `EOD/NXT`를 분리하고 `MISSED_UPSIDE/GOOD_EXIT/NEUTRAL`, `capture_efficiency`, `avg_extra_upside_10m_pct`, `soft_stop whipsaw_windows`, `down_count_evidence`, `hard_stop_auxiliary`, `COMPLETED valid profit_rate`를 함께 기록한다.
   - why: 4월 post-sell에서는 `MISSED_UPSIDE`와 `GOOD_EXIT`가 동시에 커서, trailing 연장 후보와 soft-stop rebound 후보를 같은 청산 개선축으로 묶으면 단일 조작점이 흐려진다.
-  - 다음 액션: `soft_stop_rebound_split`을 손익 훼손 1순위로 먼저 산출하되, cooldown live는 `rebound_above_buy_10m`이 낮고 동일종목 재진입 손실이 확인될 때만 후보화한다. `low_score_hits`가 대부분 0이면 하방카운트는 휩쏘 방지장치가 아니라 미작동/후행 신호로 기록한다. `hard_stop_whipsaw_aux`는 보조 관찰로만 parking하고, `trailing_continuation_micro_canary`는 upside capture 2순위 후보로 남긴다.
+  - 판정: 완료. `soft_stop_rebound_split`을 보유/청산 1순위 후보로 유지하고, `trailing_continuation_micro_canary`는 2순위 observe 후보로 둔다. same_symbol 재진입 손실과 하방카운트 미작동은 soft_stop 승인 조건의 보조근거로만 묶는다.
+  - 근거:
+    - 현행 `holding_exit_observation_report` 재실행 기준 `readiness={submitted_orders=1, full_fill_events=3, partial_fill_events=3, completed_valid_trades=0, observation_ready=True, directional_only=True}`라 관찰 개시는 가능하지만 hard pass/fail 표본은 아직 없다.
+    - `soft_stop_rebound`는 `total_soft_stop=61`, `rebound_above_sell_10m_rate=93.4%`, `rebound_above_buy_10m_rate=26.2%`, `same_symbol_reentry_loss_count=5`, `recommendation='soft_stop whipsaw confirmation canary 후보'`, `cooldown_live_allowed=True`였다.
+    - `down_count_evidence`는 `snapshot_review_events=9900`, `low_score_hits 0/3=9695`, `0/4=183`, `reached_trigger_reviews=2`, `qualified_loss_low_score_but_zero_hit=0`라 하방카운트는 휩쏘 방지장치라기보다 미작동/후행 신호 해석이 맞다.
+    - `trailing_continuation`은 `evaluated_trailing=64`, `MISSED_UPSIDE=22(34.4%)`, `GOOD_EXIT=29(45.3%)`, `fallback_regression_count=6`, `eligible_for_live_review=False`라 2순위로 유지한다.
+    - `same_symbol_reentry`는 `total_reentries=51`, `after_soft_stop_count=12`, `after_soft_stop_next_loss_count=5`라 soft_stop 이후 동일종목 재진입 손실이 보조 리스크로 존재한다.
+  - 검증:
+    - `PYTHONPATH=. .venv/bin/python - <<'PY' ... build_holding_exit_observation_report(target_date='2026-04-25', month_start='2026-04-09') ... PY`
+    - 현행 리포트 source는 saved snapshot + raw post_sell + raw pipeline_events만 사용했고, `load_distribution_evidence.direct_foreground_build_allowed=False`를 재확인했다.
+  - 다음 액션:
+    - `HoldingExitPlan0427`에서는 단일 조작점을 `soft_stop qualifying cohort`의 `micro grace`로 제한해 승인/보류를 닫는다.
+    - `same_symbol_reentry_loss_count=5`, `rebound_above_buy_10m_rate=26.2%`, `down_count_evidence` 미작동을 soft_stop 승인 근거 묶음으로 사용한다.
+    - `trailing_continuation_micro_canary`는 `MISSED_UPSIDE rate >= 60%`, `GOOD_EXIT rate <= 30%`를 충족하기 전까지 2순위 observe-only로 유지한다.
 
 ## 장후 체크리스트 (15:40~)
 
@@ -243,19 +269,53 @@
     - 반대로 `SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED`는 명시적 설정축이고, `min_signal` 완화도 같은 축 내부에서 재현 가능하다.
   - 다음 액션: 장후 code debt 정리에서는 `gatekeeper_fast_reuse post-change` 코호트와 전용 offline bundle/codebase를 제거하고, 분류표는 `other_danger_relief_canary`를 현재 active entry 축으로 잠근다.
 
-- [ ] `[HoldingExitPlan0427] soft_stop 1순위 보유/청산 canary 승인 또는 보류+재시각 확정` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 15:40~16:10`, `Track: Plan`)
+- [x] `[HoldingExitPlan0427] soft_stop 1순위 보유/청산 canary 승인 또는 보류+재시각 확정` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 15:40~16:10`, `Track: Plan`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
   - 판정 기준: 1순위는 `soft_stop_rebound_split`이며, live 승인은 `soft_stop completed_valid 손익 훼손`, `rebound_above_sell_10m`, `rebound_above_buy_10m`, `mfe_ge_0_5`, `mfe_ge_1_0`, `same_symbol_reentry_loss_count`, `low_score_hits` 미작동 여부, `fallback_regression = 0`, stage-disjoint 예외 충족 여부를 함께 본다. 하드스탑은 `hard_stop_whipsaw_aux` 보조축으로만 해석한다.
   - why: 4월 기준 soft_stop의 realized loss 축이 trailing upside capture보다 직접 손익 훼손이 크고, 기존 로그는 soft_stop 이후 매도가 재상회/단기 반등이 많아 휩쏘 가능성이 높다. 다만 매수가 회복까지 높은 경우에는 cooldown live를 금지하고 threshold/AI 재판정 후보로 둔다.
-  - 다음 액션: 승인 후보가 열리면 단일 조작점은 soft_stop qualifying cohort의 `whipsaw confirmation/micro grace` 1개로만 고정하고, `partial fill`, `pyramid-activated`, `EOD/NXT`, `fallback` 경로 제외와 rollback guard를 함께 남긴다. trailing은 `MISSED_UPSIDE rate >= 60%`, `GOOD_EXIT rate <= 30%`를 충족할 때만 2순위 후보로 재개한다.
+  - 판정: 완료. `soft_stop qualifying cohort`의 단일 조작점은 `micro grace`로 선택하고 코드 적용까지 완료했다. `whipsaw confirmation`은 AI/호가 확인을 한 번 더 요구해 지연/누락을 만들 수 있으므로 오늘 1차 live 조작점으로 쓰지 않는다.
+  - 근거:
+    - 4월 soft_stop 61건 중 10분 내 매도가 재상회는 `57건(93.4%)`, +0.5% 이상 반등은 `43건(70.5%)`, +1.0% 이상 반등은 `23건(37.7%)`라 “즉시 손절 직후 짧은 반등” 신호가 강했다.
+    - 반면 10분 내 매수가 회복은 `16건(26.2%)`에 그쳐 동일종목 cooldown이나 매수가 회복 확인보다, 매도 직후 짧은 확인유예가 더 직접적인 조작점이다.
+    - 하방카운트는 `snapshot_review_events=9900` 중 `low_score_hits 0/3=9695`, `reached_trigger_reviews=2`라 soft_stop 직전 휩쏘 필터로 거의 작동하지 않았다.
+    - emergency guard를 `-2.0%`, hard stop을 `-2.5%`로 남겨 급락 표본은 유예하지 않는다.
+  - 코드 반영:
+    - `SCALP_SOFT_STOP_MICRO_GRACE_ENABLED=True`, `SCALP_SOFT_STOP_MICRO_GRACE_SEC=20`, `SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT=-2.0` 추가.
+    - `scalp_soft_stop_pct` 최초 터치 시 `soft_stop_micro_grace` 로그를 남기고, 20초 이내이며 emergency 미도달이면 청산을 지연한다. recovery 시 `soft_stop_micro_grace_started_at`는 제거된다.
+  - 검증:
+    - `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_scale_in.py -k "soft_stop_micro_grace or sell_reject_with_positive_sellable_qty_keeps_holding or sell_reject_with_zero_sellable_qty_marks_completed"` -> `4 passed, 78 deselected`
+    - `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_scale_in.py` -> `77 passed, 5 failed`; 실패 5개는 기존 fallback message/add_count/sell-priority 기대값 관련으로 이번 `soft_stop_micro_grace` 경로 실패가 아니다.
+  - 다음 액션: 재기동 후 관찰 KPI는 `soft_stop_micro_grace`, `scalp_soft_stop_pct`, `scalp_hard_stop_pct`, `COMPLETED + valid profit_rate`, `same_symbol_reentry_loss_count`, `full_fill/partial_fill`이다. trailing은 `MISSED_UPSIDE rate >= 60%`, `GOOD_EXIT rate <= 30%`를 충족할 때만 2순위 후보로 재개한다.
+
+- [x] `[LatencyComposite0427] quote_fresh composite entry canary 즉시 적용` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 15:30~15:45`, `Track: ScalpingLogic`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [entry_latency_offline_summary_ws_jitter_1500.json](/home/ubuntu/KORStockScan/tmp/2026-04-27/entry_latency_offline_summary_ws_jitter_1500.json)
+  - 판정 기준: 단일축 `gatekeeper_fast_reuse`, `other_danger`, `ws_jitter`가 모두 제출 회복에 실패했으므로, 동일 entry 단계 내 다음 축은 단일 사유가 아니라 `quote_fresh family` 복합축 1개만 연다.
+  - 판정: 완료. `latency_quote_fresh_composite`를 active entry canary로 적용했다. 보유/청산 `soft_stop_micro_grace`와는 단계가 달라 병렬 운용 가능하지만, entry 단계 안에서는 이 복합축 1개만 live로 둔다.
+  - 근거:
+    - `15:00` offline bundle 기준 `budget_pass=7568`, `submitted=11`, `budget_pass_to_submitted_rate=0.1%`, `latency_state_danger=7178`로 단일축 효과가 없었다.
+    - danger 분해는 `other_danger=3256`, `ws_age_too_high=2224`, `ws_jitter_too_high=2203`가 동시에 컸다. 따라서 다음 확률이 높은 후보는 `other/ws_jitter/spread` 단일축 재시도가 아니라 quote freshness family 복합축이다.
+    - 적용 조건은 `signal>=88`, `ws_age<=950ms`, `ws_jitter<=450ms`, `spread<=0.0075`, `quote_stale=False`이며 fallback/split-entry 없이 `ALLOW_NORMAL`만 허용한다.
+  - 검증:
+    - `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_entry_latency.py` -> `17 passed`
+    - `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/sniper_entry_latency.py src/utils/constants.py src/tests/test_sniper_entry_latency.py`
+  - 다음 액션: 재기동 후 `latency_canary_reason=quote_fresh_composite_canary_applied`, `submitted/full/partial`, `budget_pass_to_submitted_rate`, `latency_state_danger`, `normal_slippage_exceeded`, `COMPLETED + valid profit_rate`를 분리 관찰한다.
 
 ## 장후 체크리스트 (18:05~18:20)
 
-- [ ] `[OpsFollowup0427] pattern lab postclose 산출물/로그 보수 및 재실행 확인` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:05~18:20`, `Track: Plan`)
+- [x] `[OpsFollowup0427] pattern lab postclose 산출물/로그 보수 및 재실행 확인` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:05~18:20`, `Track: Plan`)
   - Source: [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md)
   - 판정 기준: `deploy/run_tuning_monitoring_postclose.sh` 기준 실제 로그 경로를 `logs/tuning_monitoring_postclose_cron.log`로 통일해 확인하고, Gemini pattern lab의 `trade_id` dtype merge 오류를 해소한 뒤 `analysis/gemini_scalping_pattern_lab/outputs/*`, `analysis/claude_scalping_pattern_lab/outputs/*` 최신 산출물이 `2026-04-27 POSTCLOSE` 시각으로 갱신되어야 한다.
   - why: `2026-04-24` 점검에서 전용 cron log 두 개는 더 이상 생성되지 않았고, 통합 로그에는 Gemini 분석이 `trade_id str/float64 merge` 예외로 실패한 흔적이 남았다.
-  - 다음 액션: 보수 완료 시 same-day 결과를 checklist와 execution delta에 함께 반영한다.
+  - 판정: 완료. Gemini/Claude pattern lab의 `trade_id` merge 키를 문자열로 정규화했고, postclose wrapper 재실행으로 두 output 디렉터리 산출물을 `2026-04-27 16:45 KST` 기준으로 갱신했다.
+  - 근거:
+    - `bash deploy/run_tuning_monitoring_postclose.sh 2026-04-27` 재실행이 끝까지 통과했고, Gemini `outputs/ev_analysis_result.json`, `outputs/llm_payload_summary.json`, `outputs/final_review_report_for_lead_ai.md`, Claude `outputs/ev_analysis_result.json`, `outputs/claude_payload_summary.json`, `outputs/final_review_report_for_lead_ai.md`가 모두 `2026-04-27 16:45 KST`로 갱신됐다.
+    - 기존 `logs/tuning_monitoring_postclose_cron.log`의 `trade_id` merge 예외는 과거 실패 흔적으로만 남고, 이번 same wrapper stdout 기준 Gemini/Claude pattern lab이 모두 완료됐다.
+  - 검증:
+    - `PYTHONPATH=. .venv/bin/python -m py_compile analysis/gemini_scalping_pattern_lab/analyze_patterns.py analysis/gemini_scalping_pattern_lab/build_llm_payload.py analysis/claude_scalping_pattern_lab/analyze_ev_patterns.py analysis/claude_scalping_pattern_lab/build_claude_payload.py`
+    - `analysis/gemini_scalping_pattern_lab/run.sh`
+    - `analysis/claude_scalping_pattern_lab/run_all.sh`
+    - `bash deploy/run_tuning_monitoring_postclose.sh 2026-04-27`
+  - 다음 액션: wrapper 재실행에서 `shadow_diff_summary.json`의 `submitted/full_fill/partial_fill` mismatch가 새로 노출됐으므로, 익일 checklist에 재분해 작업을 추가한다.
 
 - [x] `[LoopMetrics0427] LOOP_METRICS 실로그 분포 확인` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:20~18:30`, `Track: ScalpingLogic`)
   - Source: [workorder-kiwoom-sniper-v2-loop-performance-improvement.md](/home/ubuntu/KORStockScan/docs/workorder-kiwoom-sniper-v2-loop-performance-improvement.md)
@@ -280,11 +340,19 @@
   - 잔여 운영 리스크: `record_gatekeeper_snapshot()`의 성공 반환은 `persist confirmed`가 아니라 `enqueue accepted 또는 동기 fallback write 성공` 의미다. worker thread의 후행 write 실패는 callback `log_error + dedup rollback`으로만 관측된다.
   - 다음 액션: 실제 장중 `[GATEKEEPER_SNAPSHOT]` 로그와 replay jsonl 파일을 대조해 `enqueue accepted`와 `persist confirmed`가 어긋나는 사례가 있는지 운영 acceptance로 확인한다.
 
-- [ ] `[GatekeeperAsyncOps0427] GATEKEEPER_SNAPSHOT async persist 운영 acceptance 확인` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:30~18:40`, `Track: ScalpingLogic`)
+- [x] `[GatekeeperAsyncOps0427] GATEKEEPER_SNAPSHOT async persist 운영 acceptance 확인` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:30~18:40`, `Track: ScalpingLogic`)
   - Source: [workorder-sniper-codebase-performance-audit-followup.md](/home/ubuntu/KORStockScan/docs/workorder-sniper-codebase-performance-audit-followup.md)
   - 판정 기준: 장중/장후 `[GATEKEEPER_SNAPSHOT]` 성공 로그와 `data/gatekeeper/gatekeeper_snapshots_2026-04-27.jsonl` 실제 line 증가를 대조해, `enqueue accepted` 후 worker write 실패가 있었다면 callback `log_error`와 dedup rollback이 같은 구간에 남는지 확인한다.
   - why: 현재 구현은 동기 fallback 실패는 `None`으로 닫지만, async worker 실패는 best-effort 규약상 후행 rollback으로만 관측된다. 따라서 코드 테스트 통과와 별개로 실로그 기준 persist 정합성 확인이 필요하다.
-  - 다음 액션: mismatch가 없으면 async writer 규약을 운영 기준선으로 잠그고, mismatch가 있으면 `persist confirmed` 필요 구간을 동기 write 또는 명시적 ack 구조로 재분해한다.
+  - 판정: 운영 acceptance 통과. `2026-04-27` 기준 `[GATEKEEPER_SNAPSHOT]` 성공 로그 17건과 jsonl 적재 17건이 일치했고, same-day async persist 실패/rollback 에러는 없었다.
+  - 근거:
+    - `data/gatekeeper/gatekeeper_snapshots_2026-04-27.jsonl` non-empty line 수는 17건이었다.
+    - `logs/sniper_gatekeeper_replay_info.log`의 `2026-04-27` `[GATEKEEPER_SNAPSHOT]` 성공 로그도 17건이었다.
+    - `logs/sniper_gatekeeper_replay_error.log`, `logs/test_sniper_loop_metrics_error.log`에는 `2026-04-27` 날짜의 `[GATEKEEPER_SNAPSHOT]` enqueue 실패, callback rollback, dedup rollback 흔적이 없었다.
+  - 검증:
+    - `PYTHONPATH=. .venv/bin/python - <<'PY' ... gatekeeper_snapshots_2026-04-27.jsonl line count ... PY`
+    - `PYTHONPATH=. .venv/bin/python - <<'PY' ... 2026-04-27 GATEKEEPER_SNAPSHOT info/error log count ... PY`
+  - 다음 액션: async writer 규약은 운영 기준선으로 잠그고, `persist confirmed`가 필요한 축이 생길 때만 별도 ack 구조 workorder로 분리한다.
 
 - [x] `[CodeDebt0427] shadow/canary/cohort 런타임 분류/정리 판정` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
@@ -303,23 +371,41 @@
     - rollback owner: `entry/latency`
     - cross-contamination check: `gatekeeper_fast_reuse` candidate cohort는 종료했고, `soft_stop qualifying cohort`는 여전히 `provisional-stage-disjoint` observe 후보로만 유지한다.
 
-- [ ] `[LoggerPerf0427] logger.py caller 추적 비용 절감안 적용 판정` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:55~19:05`, `Track: ScalpingLogic`)
+- [x] `[LoggerPerf0427] logger.py caller 추적 비용 절감안 적용 판정` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:55~19:05`, `Track: ScalpingLogic`)
   - Source: [workorder-sniper-codebase-performance-audit-followup.md](/home/ubuntu/KORStockScan/docs/workorder-sniper-codebase-performance-audit-followup.md)
   - 판정 기준: `src/utils/logger.py`의 `inspect.stack()[1]` 호출을 더 싼 caller 해석 방식으로 교체하거나, hot path 호출부에서 `caller_filename`을 명시 인자로 넘겨 stack 역추적을 건너뛰도록 바꾸되, 기존 모듈별 `info/error` 로그 파일 분리 규약은 유지되어야 한다.
   - why: 오늘 `sniper_state_handlers.py`의 반복 debug log/print는 줄였지만, `log_info()`/`log_error()` 자체는 아직 호출마다 `inspect.stack()[1]`를 수행한다. 이후 hot path 잔여 `log_info`와 `pipeline_event` text log의 고정비를 낮추려면 caller 추적 비용 축을 별도 정리해야 한다.
+  - 판정: same-day 적용. `inspect.stack()[1]`는 제거하고 `inspect.currentframe().f_back` 기반 호출자 해석으로 바꿨으며, 필요 시 stack 역추적을 건너뛸 수 있게 `caller_filename` override 인자도 열어뒀다.
+  - 근거:
+    - `src/utils/logger.py`는 호출마다 전체 stack list를 만드는 경로를 쓰지 않고, `_resolve_caller_filename()`에서 현재 frame의 상위 2단계만 참조한다.
+    - 기존 `module_logger.<caller>:<level>` 파일 분리 규약과 `info/error` payload 형식은 유지된다.
   - 검증:
     - `PYTHONPATH=. .venv/bin/python -m py_compile src/utils/logger.py src/engine/sniper_state_handlers.py src/utils/pipeline_event_logger.py`
     - `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_state_handler_fast_signatures.py src/tests/test_gatekeeper_fast_reuse_age.py`
-  - 다음 액션: 승인 시 `fallback` 없는 무행동 성능보수 change set으로 same-day 반영하고, 미승인 시에는 `explicit caller_filename` 방식 vs `currentframe().f_back` 방식 중 보류 사유 1개와 다음 재판정 시각 1개를 남긴다.
+  - 다음 액션: hot path에서 caller가 고정된 호출부는 필요 시 `caller_filename=` 명시 인자로 한 번 더 최적화하고, 현재 change set은 공용 logger 비용 절감 기준선으로 잠근다.
 
-- [ ] `[DeepSeekReview0427] ai_engine_deepseek 리뷰 후속 P0/P1/P2 적용축 판정` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:55~19:10`, `Track: ScalpingLogic`)
+- [x] `[DeepSeekReview0427] ai_engine_deepseek 리뷰 후속 P0/P1/P2 적용축 판정` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:55~19:10`, `Track: ScalpingLogic`)
   - Source: [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_deepseek_engine_review.md)
   - 판정 기준: `P0`는 `_call_deepseek_safe()` JSON fast-path만 반영하는 무행동 변경으로 same-day 닫을 수 있어야 하고, `P1 retry`는 `live-sensitive 상한 + rollback guard`가 문서/코드에 함께 고정될 때만 승인한다. `P2 gatekeeper JSON`은 `flag default OFF`, `JSON 실패 시 text fallback`, `action_label/allow_entry/report` contract 유지 테스트가 준비되지 않으면 착수하지 않는다. `_compact_holding_ws_for_cache()` 버킷 축소는 holding cohort 근거 전까지 잠근다.
   - why: 현재 DeepSeek 리뷰 초안에는 유효한 지적과 과장된 지적이 섞여 있다. 실전 EV 기준으로는 `JSON fast-path`는 즉시 가능하지만, `retry/backoff`와 `gatekeeper JSON`은 live latency/호환성/rollback을 먼저 잠가야 한다.
-  - 다음 액션: 승인된 축만 별도 change set으로 분리하고, 미승인 축은 보류 사유 1개와 재판정 시각 1개를 같은 메모에 고정한다.
+  - 판정: P0 승인 및 반영 유지, P1은 guard 준비 완료 상태의 `flag default OFF` 승인, P2 `gatekeeper structured-output`과 `holding cache bucket reduction`은 same-day 실전 축에서 제외한다.
+  - 근거:
+    - `src/engine/ai_engine_deepseek.py`의 `_call_deepseek_safe()`는 `json.loads(raw_text)` fast-path 후 기존 fallback parser를 타도록 되어 있어 P0 조건을 충족한다.
+    - `DEEPSEEK_CONTEXT_AWARE_BACKOFF_ENABLED=False`, `DEEPSEEK_RETRY_LIVE_MAX_SLEEP_SEC=0.8`, `DEEPSEEK_RETRY_REPORT_MAX_SLEEP_SEC=4.0` guard가 `src/utils/constants.py`에 잠겨 있어 P1은 enable 전 판정만 남았다.
+    - structured-output과 holding cache 축은 workorder 기준으로 contract/fallback/EV 근거가 부족해 same-day 승격 대상이 아니다.
+  - 검증:
+    - `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_ai_engine_api_config.py src/tests/test_ai_engine_cache.py`
+  - 다음 액션: 익일 `[DeepSeekP1Rollout0428]`, `[DeepSeekGatekeeper0428]`, `[DeepSeekHolding0428]`에서 enable 여부와 범위를 분리 판정한다.
 
-- [ ] `[GeminiReview0427] ai_engine Gemini 호출 구조 리뷰 후속 P0/P1/P2 적용축 판정` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 19:10~19:25`, `Track: ScalpingLogic`)
+- [x] `[GeminiReview0427] ai_engine Gemini 호출 구조 리뷰 후속 P0/P1/P2 적용축 판정` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 19:10~19:25`, `Track: ScalpingLogic`)
   - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_gemini_engine_review.md)
   - 판정 기준: `P0`는 `_call_gemini_safe()` JSON fast-path만 반영하는 무행동 보강으로 same-day 닫을 수 있어야 한다. `P1 system instruction`과 `P1 deterministic JSON config`는 `flag default OFF`, `rollback guard`, `live 영향 비교 기준`이 문서/코드에 함께 있을 때만 승인한다. `P2 response schema`는 `entry/holding_exit/overnight/condition_entry/condition_exit/eod_top5` endpoint별 schema registry와 fallback, 계약 테스트가 준비되지 않으면 착수하지 않는다.
   - why: Gemini 리뷰 초안의 방향은 일부 맞지만, 현재 live 기준 엔진을 바꾸는 항목과 단순 파싱 보강 항목이 섞여 있다. EV 기준으로는 `fast-path`는 저위험이지만, `system instruction/temperature/schema`는 실제 BUY/WAIT/DROP 분포와 parse_fail 축을 함께 바꿀 수 있어 canary/rollback 전제가 먼저다.
-  - 다음 액션: 승인된 축만 독립 change set으로 분리하고, 미승인 축은 보류 사유 1개와 재판정 시각 1개를 같은 메모에 고정한다.
+  - 판정: P0 승인 및 반영 유지, P1 system_instruction/deterministic config는 guard 준비 완료 상태의 `flag default OFF` 승인, P2 response schema registry는 endpoint 계약/테스트가 잠길 때까지 보류축으로 고정한다.
+  - 근거:
+    - `src/engine/ai_engine.py`의 `_call_gemini_safe()`는 `json.loads(raw_text)` fast-path와 기존 raw-text fallback을 함께 유지해 P0 조건을 충족한다.
+    - `GEMINI_SYSTEM_INSTRUCTION_JSON_ENABLED=False`, `GEMINI_JSON_DETERMINISTIC_CONFIG_ENABLED=False`가 `src/utils/constants.py`에 잠겨 있어 P1은 코드 적용 완료 후 live 승인만 남았다.
+    - response schema registry는 workorder 기준으로 endpoint 분리 계약, fallback, 테스트 매트릭스가 아직 실전 승인 수준으로 잠기지 않았다.
+  - 검증:
+    - `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_ai_engine_api_config.py src/tests/test_ai_engine_cache.py`
+  - 다음 액션: 익일 `[GeminiP1Rollout0428]`, `[GeminiSchema0428]` 2개 항목에서 P1 enable과 P2 범위를 분리 판정한다.

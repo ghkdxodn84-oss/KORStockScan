@@ -12,6 +12,20 @@ _MODULE_LOGGERS = {}
 _MAINTENANCE_RAN_AT = 0.0
 
 
+def _resolve_caller_filename(explicit: str | None = None) -> str:
+    if explicit:
+        return explicit
+
+    frame = inspect.currentframe()
+    if frame is None or frame.f_back is None:
+        return "unknown"
+
+    caller_frame = frame.f_back.f_back
+    if caller_frame is None:
+        return "unknown"
+    return os.path.basename(caller_frame.f_code.co_filename).replace(".py", "")
+
+
 def _run_log_maintenance_if_needed():
     global _MAINTENANCE_RAN_AT
 
@@ -72,16 +86,14 @@ def _get_module_logger(caller_filename: str, level: str):
     _MODULE_LOGGERS[logger_key] = logger
     return logger
 
-def log_error(msg: str, send_telegram: bool = False):
+def log_error(msg: str, send_telegram: bool = False, caller_filename: str | None = None):
     """
     중앙 집중형 에러 관리 함수 (호출한 파일명으로 분리 & 상세 원인 자동 기록)
     """
     try:
         _run_log_maintenance_if_needed()
 
-        # 1. 누가 나를 불렀는지 역추적
-        caller_frame = inspect.stack()[1]
-        caller_filename = os.path.basename(caller_frame.filename).replace('.py', '')
+        caller_filename = _resolve_caller_filename(caller_filename)
         
         # 2. 에러 메시지 포맷팅
         timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -98,16 +110,14 @@ def log_error(msg: str, send_telegram: bool = False):
     except Exception as e:
         print(f"[FATAL] 로깅 시스템 자체 에러 발생: {e}")
 
-def log_info(msg: str, send_telegram: bool = False):
+def log_info(msg: str, send_telegram: bool = False, caller_filename: str | None = None):
     """
     중앙 집중형 정보 로깅 함수 (호출한 파일명으로 분리 & 자동 기록)
     """
     try:
         _run_log_maintenance_if_needed()
 
-        # 1. 누가 나를 불렀는지 역추적
-        caller_frame = inspect.stack()[1]
-        caller_filename = os.path.basename(caller_frame.filename).replace('.py', '')
+        caller_filename = _resolve_caller_filename(caller_filename)
         
         # 2. 정보 메시지 포맷팅
         log_payload = f"📢 INFO in {caller_filename}: {msg}"
