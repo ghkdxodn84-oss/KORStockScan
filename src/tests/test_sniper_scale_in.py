@@ -96,6 +96,36 @@ def test_scalping_initial_entry_qty_cap_config_defaults_to_one_share():
     assert CONFIG.SCALPING_INITIAL_ENTRY_MAX_QTY == 1
 
 
+def test_orderbook_stability_observation_logs_entry_pipeline(monkeypatch):
+    logs = []
+
+    def fake_log_entry_pipeline(stock, code, stage, **fields):
+        logs.append((stock, code, stage, fields))
+
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", fake_log_entry_pipeline)
+
+    state_handlers._log_orderbook_stability_observation(
+        {"id": 1, "name": "TEST"},
+        "123456",
+        {
+            "fr_10s": 6,
+            "quote_age_p50_ms": 120.0,
+            "quote_age_p90_ms": 410.0,
+            "print_quote_alignment": 0.85,
+            "unstable_quote_observed": True,
+            "unstable_reasons": "fr_10s,quote_age_p90",
+            "best_bid": 10_000,
+            "best_ask": 10_010,
+            "sample_trade_count": 3,
+            "sample_quote_count": 5,
+        },
+    )
+
+    assert logs[0][2] == "orderbook_stability_observed"
+    assert logs[0][3]["unstable_quote_observed"] is True
+    assert logs[0][3]["sample_trade_count"] == 3
+
+
 def test_add_count_increment_once_on_partial_fills(monkeypatch):
     # Prepare execution receipts environment
     receipts.ACTIVE_TARGETS = []

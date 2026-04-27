@@ -11,6 +11,7 @@ from src.trading.entry.entry_policy import EntryPolicy
 from src.trading.entry.entry_types import EntryDecision
 from src.trading.entry.latency_monitor import LatencyMonitor
 from src.trading.entry.normal_entry_builder import NormalEntryBuilder
+from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
 from src.trading.entry.signal_snapshot import build_signal_snapshot
 from src.trading.market.market_data_cache import MarketDataCache
 from src.utils.constants import TRADING_RULES
@@ -793,6 +794,7 @@ def evaluate_live_buy_entry(
         "order_price": 0,
         "latency_canary_applied": latency_canary_applied,
         "latency_canary_reason": latency_canary_reason,
+        "orderbook_stability": ORDERBOOK_STABILITY_OBSERVER.snapshot(code),
     }
 
     if effective_decision == EntryDecision.ALLOW_NORMAL:

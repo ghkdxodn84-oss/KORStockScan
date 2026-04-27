@@ -218,6 +218,7 @@ inventory 운영 규칙은 아래로 고정한다.
 | `fallback_qty_canary` | `remove` | `guarded-off` | historical label only, live fallback 경로와 함께 종료 |
 | `latency_guard_canary` | `active-canary` | `guarded-off` | broad fallback override legacy 축 |
 | `latency_quote_fresh_composite` | `active-canary` | `limited-live` | current entry live canary |
+| `orderbook_stability_observation` | `observe-only` | `none` | FR/quote-age/print-alignment 관찰. live gate 아님 |
 | `spread_relief_canary` | `active-canary` | `guarded-off` | parking 상태 |
 | `ws_jitter_relief_canary` | `active-canary` | `guarded-off` | same-day 종료된 replacement 축 |
 | `other_danger_relief_canary` | `active-canary` | `guarded-off` | 2026-04-27 13:00 미개선 종료 |
@@ -624,6 +625,27 @@ inventory 운영 규칙은 아래로 고정한다.
 - 다음 액션:
   1. 장중/번들 판정에서 `latency_canary_reason=quote_fresh_composite_canary_applied`를 별도 집계한다.
   2. `submitted/full/partial`, `latency_state_danger`, `normal_slippage_exceeded`, `COMPLETED + valid profit_rate`를 단계별로 분리 판정한다.
+
+### 4.9A-2 `orderbook_stability_observation`
+
+- 판정: `observe-only`
+- live 영향도: `none`
+- 튜닝 모니터링 가치: `Medium`
+  - 이유: `FR_10s`, `quote_age_p50/p90`, `print_quote_alignment`는 quote freshness 복합축의 세부 품질을 설명할 수 있지만, 현재 entry 병목 해소 전에는 추가 차단으로 쓰면 submitted 회복을 더 늦출 수 있다.
+  - 상향 조건: entry 병목이 해소되고, `unstable_quote_observed=True` 표본이 submitted/fill/COMPLETED + valid profit_rate에서 명확히 악화될 때
+  - 하향 조건: unstable 표본과 체결품질/손익 간 차이가 없거나 기존 `ws_age/ws_jitter/spread_ratio`로 충분히 대체될 때
+- EV 판정 기여도: `Medium`
+- 대체 가능성: `Medium`
+- 운영 부하/지연 비용: `Low`
+- 코드 유지비: `Low`
+- 향후 재개 가능성: `Medium`
+- 근거:
+  1. `orderbook_stability_observed`는 `ENTRY_PIPELINE` 관찰 이벤트로만 남기며 주문 판단, canary flag, threshold, fallback/scout 경로를 변경하지 않는다.
+  2. canary 승격은 현재 entry canary가 submitted 회복과 baseline `N_min`을 충족한 뒤 별도 checklist에서만 검토한다.
+  3. 1차 canary 후보는 `BYPASS`가 아니라 `unstable_quote_position_cap` 또는 `unstable_quote_frequency_cap`이며, `scout-only`는 폐기된 fallback/scout 원칙과 충돌하므로 제외한다.
+- 다음 액션:
+  1. offline bundle summary에서 `unstable_quote_observed_count/share`, `unstable_reason_breakdown`, `unstable_vs_submitted/fill/latency_danger`를 본다.
+  2. live gate 승격 전까지는 분석 지표로만 유지한다.
 
 ### 4.9B `latency_guard_canary`
 

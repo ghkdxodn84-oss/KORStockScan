@@ -8,6 +8,7 @@
 - 보유/청산 추가 조정 파라미터는 `soft_stop_micro_grace_extend` 하나만 준비하고, 20초 기본축의 비악화가 확인되기 전에는 live ON 하지 않는다.
 - `latency_quote_fresh_composite`와 `soft_stop_micro_grace` 장중 판정에 fresh 로그가 없으면 `offline_live_canary_bundle` 서버 export와 사용자 로컬 analyzer 산출물로 같은 시간대 판정을 닫는다.
 - `latency_quote_fresh_composite`와 `soft_stop_micro_grace`는 `09:00~15:00` 시간단위로 판정하고, 표본 부족 외의 보류 결론은 금지한다.
+- `orderbook_stability_observation`은 `FR_10s`, `quote_age_p50/p90`, `print_quote_alignment` 관찰지표만 기록한다. 현재 진입병목 해소 전에는 live gate/canary로 쓰지 않는다.
 
 ## 오늘 강제 규칙
 
@@ -22,6 +23,7 @@
 - live 승인, replacement, stage-disjoint 예외, 관찰 개시 판정에는 `cohort`를 같이 잠근다. 최소 `baseline cohort`, `candidate live cohort`, `observe-only cohort`, `excluded cohort`를 구분하고 `partial/full`, `initial/pyramid`, `fallback` 혼합 결론을 금지한다.
 - `ApplyTarget`은 문서에 명시된 값만 사용하고, parser/workorder가 `remote`를 추정하지 않도록 유지한다.
 - 다축 동시 변경 금지, 승인 전 `main` 실주문 변경 금지 규칙을 유지한다.
+- `orderbook_stability_observed`는 observe-only 이벤트다. `unstable_quote_observed=True`여도 주문 차단, scout-only 전환, position cap 변경을 하지 않는다.
 
 ## 장중 live canary offline bundle 판정 템플릿
 
@@ -31,20 +33,68 @@
   - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h1000\offline_live_canary_exports\2026-04-28\h1000" --since 09:00:00 --until 10:00:00 --label h1000`
 - 시간대 label/window는 `h0900 09:00~10:00`, `h1000 09:00~10:00`, `h1100 10:00~11:00`, `h1200 11:00~12:00`, `h1300 12:00~13:00`, `h1400 13:00~14:00`, `h1500 14:00~15:00`로 맞춘다.
 - 산출물은 `entry_quote_fresh_composite_summary_<label>.json/.md`, `soft_stop_micro_grace_summary_<label>.json/.md`, `live_canary_combined_summary_<label>.json/.md`를 기준으로 판정한다.
+- 운영 원칙:
+  - `09:10 KST` 전후 1차 점검은 가능하면 직접 로그/집계로 먼저 닫고, fresh 로그 접근이 막힐 때만 `h0900` bundle을 만든다.
+  - `10:00 KST` 이후 시간단위 점검은 offline bundle 기본으로 보고, heavy snapshot/report builder 호출 없이 cutoff export만 사용한다.
+  - `slot_label`은 `판정 시각 기준`이다. 따라서 `h1000`은 `10:00 KST`에 닫는 `09:00~10:00` 구간 bundle이다.
+
+### 시간대별 서버 export 명령
+
+- `09:10 KST` 필요시 1차 점검:
+  - `PYTHONPATH=. .venv/bin/python analysis/offline_live_canary_bundle/export_server_bundle.py --target-date 2026-04-28 --slot-label h0900 --evidence-cutoff 10:00:00`
+- `10:00 KST` 점검:
+  - `PYTHONPATH=. .venv/bin/python analysis/offline_live_canary_bundle/export_server_bundle.py --target-date 2026-04-28 --slot-label h1000 --evidence-cutoff 10:00:00`
+- `11:00 KST` 점검:
+  - `PYTHONPATH=. .venv/bin/python analysis/offline_live_canary_bundle/export_server_bundle.py --target-date 2026-04-28 --slot-label h1100 --evidence-cutoff 11:00:00`
+- `12:00 KST` 점검:
+  - `PYTHONPATH=. .venv/bin/python analysis/offline_live_canary_bundle/export_server_bundle.py --target-date 2026-04-28 --slot-label h1200 --evidence-cutoff 12:00:00`
+- `13:00 KST` 점검:
+  - `PYTHONPATH=. .venv/bin/python analysis/offline_live_canary_bundle/export_server_bundle.py --target-date 2026-04-28 --slot-label h1300 --evidence-cutoff 13:00:00`
+- `14:00 KST` 점검:
+  - `PYTHONPATH=. .venv/bin/python analysis/offline_live_canary_bundle/export_server_bundle.py --target-date 2026-04-28 --slot-label h1400 --evidence-cutoff 14:00:00`
+- `15:00 KST` 점검:
+  - `PYTHONPATH=. .venv/bin/python analysis/offline_live_canary_bundle/export_server_bundle.py --target-date 2026-04-28 --slot-label h1500 --evidence-cutoff 15:00:00`
+
+### 시간대별 로컬 analyzer 명령
+
+- `09:10 KST` 필요시 1차 점검:
+  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h0900\offline_live_canary_exports\2026-04-28\h0900" --since 09:00:00 --until 10:00:00 --label h0900`
+- `10:00 KST` 점검:
+  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h1000\offline_live_canary_exports\2026-04-28\h1000" --since 09:00:00 --until 10:00:00 --label h1000`
+- `11:00 KST` 점검:
+  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h1100\offline_live_canary_exports\2026-04-28\h1100" --since 10:00:00 --until 11:00:00 --label h1100`
+- `12:00 KST` 점검:
+  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h1200\offline_live_canary_exports\2026-04-28\h1200" --since 11:00:00 --until 12:00:00 --label h1200`
+- `13:00 KST` 점검:
+  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h1300\offline_live_canary_exports\2026-04-28\h1300" --since 12:00:00 --until 13:00:00 --label h1300`
+- `14:00 KST` 점검:
+  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h1400\offline_live_canary_exports\2026-04-28\h1400" --since 13:00:00 --until 14:00:00 --label h1400`
+- `15:00 KST` 점검:
+  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h1500\offline_live_canary_exports\2026-04-28\h1500" --since 14:00:00 --until 15:00:00 --label h1500`
 
 ## 장전 체크리스트 (08:50~09:00)
 
-- [ ] `[SoftStopGrace0428-Preopen] soft_stop_micro_grace runtime/env/log 준비 확인` (`Due: 2026-04-28`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: Plan`)
+- [x] `[SoftStopGrace0428-Preopen] soft_stop_micro_grace runtime/env/log 준비 확인` (`Due: 2026-04-28`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: Plan`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
   - 판정 기준: `SCALP_SOFT_STOP_MICRO_GRACE_ENABLED`, `restart.flag` 반영 여부, `soft_stop_micro_grace` 로그 필드 기록 가능 여부를 확인한다.
   - 완료근거: live flag/env, `restart.flag` 반영 여부, `soft_stop_micro_grace` 로그 필드 기록 가능 여부.
   - 다음 액션: 실패 시 09:00 관찰 시작 전 `OFF 유지` 또는 `재기동 필요` 중 하나로 닫는다.
+  - 실행 메모 (`2026-04-28 07:54 KST`): 후행 확인 기준 현재 main `bot_main.py` PID는 `136356`이며 시작시각은 `2026-04-28 07:40:01 KST`다. `restart.flag` 실파일은 비어 있어 미반영 재기동 요청이 남아 있지 않다.
+  - 근거: [src/utils/constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py) 에서 `SCALP_SOFT_STOP_MICRO_GRACE_ENABLED=True`, `SEC=20`, `EMERGENCY_PCT=-2.0` 기본값이 고정돼 있고, [src/engine/sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py:3878) 는 `soft_stop_micro_grace` stage에 `profit_rate`, `soft_stop_pct`, `emergency_pct`, `elapsed_sec`, `grace_sec`, `extension_used`, `exit_rule_candidate`를 기록한다.
+  - 검증:
+    - `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_scale_in.py -k "soft_stop_micro_grace"` -> `3 passed`
+  - 다음 액션: 재기동 없이 장중 판정은 `[SoftStopGrace0428-0900]` 이후 시간대 점검으로 이어가고, rollback guard 발동 시에만 `SCALP_SOFT_STOP_MICRO_GRACE_ENABLED=False -> restart.flag` 순서로 OFF 한다.
 
-- [ ] `[QuoteFreshComposite0428-Preopen] latency_quote_fresh_composite runtime/env/log 준비 확인` (`Due: 2026-04-28`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: ScalpingLogic`)
+- [x] `[QuoteFreshComposite0428-Preopen] latency_quote_fresh_composite runtime/env/log 준비 확인` (`Due: 2026-04-28`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: ScalpingLogic`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
   - 판정 기준: 5-parameter bundle rule, active flag, `canary_applied` cohort tag, `fallback_regression=0` 확인.
   - 완료근거: bundle rule/env, cohort tag 기록 가능 여부, fallback 회귀 없음.
   - 다음 액션: 실패 시 09:00 관찰 시작 전 `OFF 유지` 또는 `재기동 필요` 중 하나로 닫는다.
+  - 실행 메모 (`2026-04-28 07:54 KST`): 후행 확인 기준 현재 main `bot_main.py` PID는 `136356`이며 시작시각은 `2026-04-28 07:40:01 KST`다. `restart.flag` 실파일은 없고 `/proc/136356/environ`에도 관련 override가 없어 코드 기본값 경로로 동작한다.
+  - 근거: [src/utils/constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:174) 에서 `SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=True` 기본값이 고정돼 있다. [src/engine/sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/engine/sniper_entry_latency.py:205) 는 `signal>=88`, `quote_stale=False`, `ws_age<=950ms`, `ws_jitter<=450ms`, `spread<=0.0075`, `danger_reasons subset=quote freshness family`를 묶음으로 검사하고, 통과 시 `quote_fresh_composite_canary_applied`와 `latency_quote_fresh_composite_normal_override`를 남긴다.
+  - 검증:
+    - `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_entry_latency.py -k "quote_fresh_composite_canary"` -> `2 passed`
+  - 다음 액션: 재기동 없이 장중 판정은 `[QuoteFreshComposite0428-0900]` 이후 시간대 점검으로 이어가고, `fallback_regression` 또는 `composite_no_recovery`가 확인되면 `OFF -> restart.flag -> replacement 승인` 순서로만 교체한다.
 
 ## 장중 체크리스트 (09:00~15:20)
 
@@ -76,6 +126,13 @@
   - 완료근거: `budget_pass`, `submitted`, `budget_pass_to_submitted_rate`, `latency_state_danger`, `full_fill`, `partial_fill`, `quote_fresh_composite_canary_applied=True/False`, `ShadowDiff0428`, `fallback_regression=0`.
   - hard pass/fail 전제: `submitted_orders >= 20`, baseline 표본 `>= N_min`, `ShadowDiff0428` 해소.
   - 판정/다음 액션: 성공 기준 충족 시 `유지`, `composite_no_recovery`면 `OFF 또는 다음 독립축 교체`, 전제 미충족이면 `direction-only 보류`와 2영업일 유효기간 및 다음 점검시각을 기록한다.
+
+- [ ] `[OrderbookStability0428-1000] orderbook_stability_observation 10시 반영 확인` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 10:20~10:30`, `Track: ScalpingLogic`)
+  - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
+  - label/window: `h1000`, `09:00:00~10:00:00`
+  - 완료근거: fresh 또는 pipeline 로그에 `stage=orderbook_stability_observed`가 실제 기록되고, `entry_quote_fresh_composite_summary_h1000`에 `orderbook_stability` 섹션이 생성되며, `unstable_quote_observed_count/share`, `unstable_reason_breakdown`, `unstable_vs_submitted`, `unstable_vs_fill`, `unstable_vs_latency_danger`가 확인된다.
+  - 판정: observe-only 로그/summary가 모두 생성되면 `반영 완료`, 로그 또는 summary 둘 중 하나라도 누락이면 `재점검 필요`, 둘 다 누락이면 `재기동 후 미반영 조사`.
+  - 다음 액션: `반영 완료`여도 live gate 승격은 금지하고 관찰 표본만 누적한다. `재점검 필요` 또는 `미반영 조사`면 프로세스 재기동 시각, 첫 발생 로그 시각, bundle 경로를 함께 기록한다.
 
 - [ ] `[SoftStopGrace0428-1100] soft_stop_micro_grace 11시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 11:00~11:10`, `Track: Plan`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)

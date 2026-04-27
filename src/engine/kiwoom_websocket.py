@@ -13,6 +13,7 @@ from datetime import datetime
 from src.utils.logger import log_error
 from src.core.event_bus import EventBus
 from src.utils.constants import CONFIG_PATH, DEV_PATH, TRADING_RULES
+from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
 
 
 class _LoginAckFailure(RuntimeError):
@@ -806,6 +807,7 @@ class KiwoomWSManager:
                             if real_type == '0B':
                                 signed_qty = self._safe_signed_int(values.get('15'), 0)
                                 current_price = target.get('curr', 0)
+                                trade_price = safe_int(values.get('10'), current_price)
                                 current_vpw = target.get('v_pw', 0.0)
                                 tick_value = safe_int(values.get('1313'), 0)
                                 if tick_value <= 0 and current_price > 0 and signed_qty != 0:
@@ -817,6 +819,11 @@ class KiwoomWSManager:
                                     'ts': time.time(),
                                     'values': values,
                                 }
+                                ORDERBOOK_STABILITY_OBSERVER.record_trade(
+                                    item_code,
+                                    price=trade_price,
+                                    ts=target['last_trade_tick']['ts'],
+                                )
                                 self._append_strength_momentum(
                                     target,
                                     current_price=current_price,
@@ -844,6 +851,13 @@ class KiwoomWSManager:
                                 
                                 target['orderbook']['asks'] = asks[::-1]
                                 target['orderbook']['bids'] = bids
+                                best_ask = target['orderbook']['asks'][0].get('price', 0) if target['orderbook']['asks'] else 0
+                                best_bid = target['orderbook']['bids'][0].get('price', 0) if target['orderbook']['bids'] else 0
+                                ORDERBOOK_STABILITY_OBSERVER.record_quote(
+                                    item_code,
+                                    best_bid=best_bid,
+                                    best_ask=best_ask,
+                                )
                             
                             # '0w' 프로그램 매매 데이터 파싱
                             if real_type == '0w':

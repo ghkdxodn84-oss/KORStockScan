@@ -196,6 +196,13 @@ def _csv_counter(value: object) -> Counter[str]:
     return counter
 
 
+def _record_id(row: dict[str, Any]) -> str:
+    value = row.get("record_id")
+    if value in (None, "", 0):
+        value = _field(row, "id")
+    return str(value or "").strip()
+
+
 def _canary_applied(row: dict[str, Any]) -> bool | None:
     for key in (
         "quote_fresh_composite_canary_applied",
@@ -263,6 +270,53 @@ def _fill_counts(rows: Iterable[dict[str, Any]]) -> tuple[int, int]:
         elif quality == "PARTIAL" or "partial_fill" in blob:
             partial += 1
     return full, partial
+
+
+def _orderbook_stability_summary(
+    window_rows: list[dict[str, Any]],
+    holding_rows: list[dict[str, Any]],
+    submitted_rows: list[dict[str, Any]],
+    latency_state_danger_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    observed_rows = [row for row in window_rows if _stage(row) == "orderbook_stability_observed"]
+    unstable_rows = [row for row in observed_rows if _truthy(_field(row, "unstable_quote_observed")) is True]
+    unstable_ids = {_record_id(row) for row in unstable_rows if _record_id(row)}
+    submitted_ids = {_record_id(row) for row in submitted_rows if _record_id(row)}
+    latency_danger_ids = {_record_id(row) for row in latency_state_danger_rows if _record_id(row)}
+
+    fill_rows = []
+    for row in holding_rows:
+        blob = _text_blob(row)
+        quality = str(_field(row, "fill_quality", "fill_status") or "").strip().upper()
+        if quality in {"FULL", "PARTIAL"} or "full_fill" in blob or "partial_fill" in blob:
+            fill_rows.append(row)
+    fill_ids = {_record_id(row) for row in fill_rows if _record_id(row)}
+
+    reason_breakdown: Counter[str] = Counter()
+    for row in unstable_rows:
+        reason_breakdown.update(_csv_counter(_field(row, "unstable_reasons")))
+
+    return {
+        "orderbook_stability_observed_count": len(observed_rows),
+        "unstable_quote_observed_count": len(unstable_rows),
+        "unstable_quote_share": _percent_point(_ratio(len(unstable_rows), len(observed_rows))),
+        "unstable_reason_breakdown": dict(reason_breakdown),
+        "unstable_vs_submitted": {
+            "unstable_record_count": len(unstable_ids),
+            "submitted_count": len(unstable_ids & submitted_ids),
+            "submitted_rate": _percent_point(_ratio(len(unstable_ids & submitted_ids), len(unstable_ids))),
+        },
+        "unstable_vs_fill": {
+            "unstable_record_count": len(unstable_ids),
+            "fill_count": len(unstable_ids & fill_ids),
+            "fill_rate": _percent_point(_ratio(len(unstable_ids & fill_ids), len(unstable_ids))),
+        },
+        "unstable_vs_latency_danger": {
+            "unstable_record_count": len(unstable_ids),
+            "latency_danger_count": len(unstable_ids & latency_danger_ids),
+            "latency_danger_rate": _percent_point(_ratio(len(unstable_ids & latency_danger_ids), len(unstable_ids))),
+        },
+    }
 
 
 def _fallback_regression_count(rows: Iterable[dict[str, Any]]) -> int:
@@ -359,6 +413,12 @@ def build_entry_summary(
     full_fill_events, partial_fill_events = _fill_counts(holding_rows)
     submitted_to_fill_rate = _ratio(full_fill_events + partial_fill_events, submitted_events)
     signal_quality_quote_candidates = [row for row in latency_blocks if _signal_quality_quote_candidate(row)]
+    orderbook_stability = _orderbook_stability_summary(
+        window_rows,
+        holding_rows,
+        [row for row in window_rows if _stage(row) == "order_bundle_submitted"],
+        latency_state_danger,
+    )
 
     baseline_samples = baseline_parts["budget_pass"]
     hard_allowed = (
@@ -412,6 +472,7 @@ def build_entry_summary(
         "submitted_to_fill_rate": _percent_point(submitted_to_fill_rate),
         "fallback_regression_count": _fallback_regression_count(window_rows + holding_rows),
         "signal_quality_quote_composite_candidate_events": len(signal_quality_quote_candidates),
+        "orderbook_stability": orderbook_stability,
         "signal_quality_quote_composite_candidate_thresholds": {
             "min_signal": SIGNAL_QUALITY_QUOTE_MIN_SIGNAL,
             "min_strength": SIGNAL_QUALITY_QUOTE_MIN_STRENGTH,
@@ -556,6 +617,7 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
 
 
 def _render_entry_md(summary: dict[str, Any]) -> str:
+    orderbook = summary.get("orderbook_stability") or {}
     return "\n".join(
         [
             f"# Entry Quote Fresh Composite Summary ({summary['label']})",
@@ -576,6 +638,12 @@ def _render_entry_md(summary: dict[str, Any]) -> str:
             f"- full/partial fill: `{summary['full_fill_events']}` / `{summary['partial_fill_events']}`",
             f"- fallback_regression_count: `{summary['fallback_regression_count']}`",
             f"- signal_quality_quote_composite_candidate_events: `{summary['signal_quality_quote_composite_candidate_events']}`",
+            f"- orderbook_stability_observed_count: `{orderbook.get('orderbook_stability_observed_count', 0)}`",
+            f"- unstable_quote_observed_count/share: `{orderbook.get('unstable_quote_observed_count', 0)}` / `{orderbook.get('unstable_quote_share')}`%",
+            f"- unstable_reason_breakdown: `{orderbook.get('unstable_reason_breakdown', {})}`",
+            f"- unstable_vs_submitted: `{orderbook.get('unstable_vs_submitted', {})}`",
+            f"- unstable_vs_fill: `{orderbook.get('unstable_vs_fill', {})}`",
+            f"- unstable_vs_latency_danger: `{orderbook.get('unstable_vs_latency_danger', {})}`",
             f"- shadow_diff_status: `{summary['shadow_diff_status']}`",
             "",
             "## 다음 액션",

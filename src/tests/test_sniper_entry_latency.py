@@ -15,6 +15,13 @@ from src.utils.constants import TRADING_RULES as CONFIG
 
 def test_latency_entry_normal_mode_uses_defensive_limit_price():
     stock = {"name": "TEST", "position_tag": "MIDDLE"}
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.reset()
+    entry_latency_module.ORDERBOOK_STABILITY_OBSERVER.record_quote(
+        "123456_normal",
+        best_bid=10_000,
+        best_ask=10_010,
+        ts=time.time(),
+    )
     result = evaluate_live_buy_entry(
         stock=stock,
         code="123456_normal",
@@ -36,6 +43,8 @@ def test_latency_entry_normal_mode_uses_defensive_limit_price():
     assert result["allowed"] is True
     assert result["decision"] == "ALLOW_NORMAL"
     assert result["order_price"] == 9_990
+    assert result["orderbook_stability"]["best_bid"] == 10_000
+    assert result["orderbook_stability"]["best_ask"] == 10_010
 
 
 def test_latency_entry_blocks_stale_quote_as_danger():

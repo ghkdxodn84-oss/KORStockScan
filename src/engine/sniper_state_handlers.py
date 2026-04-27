@@ -330,6 +330,26 @@ def _log_holding_pipeline(stock, code, stage, **fields):
     )
 
 
+def _log_orderbook_stability_observation(stock, code, snapshot):
+    if not isinstance(snapshot, dict) or not snapshot:
+        return
+    _log_entry_pipeline(
+        stock,
+        code,
+        "orderbook_stability_observed",
+        fr_10s=int(snapshot.get("fr_10s", 0) or 0),
+        quote_age_p50_ms=snapshot.get("quote_age_p50_ms", "-"),
+        quote_age_p90_ms=snapshot.get("quote_age_p90_ms", "-"),
+        print_quote_alignment=snapshot.get("print_quote_alignment", "-"),
+        unstable_quote_observed=bool(snapshot.get("unstable_quote_observed")),
+        unstable_reasons=snapshot.get("unstable_reasons") or "-",
+        best_bid=int(snapshot.get("best_bid", 0) or 0),
+        best_ask=int(snapshot.get("best_ask", 0) or 0),
+        sample_trade_count=int(snapshot.get("sample_trade_count", 0) or 0),
+        sample_quote_count=int(snapshot.get("sample_quote_count", 0) or 0),
+    )
+
+
 def _update_boolean_sustain_sec(stock, *, key: str, active: bool, now_ts: float) -> int:
     if active:
         started_at = float(stock.get(key, 0) or 0)
@@ -2838,6 +2858,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
         stock['latency_entry_state'] = latency_gate.get('latency_state')
         stock['latency_entry_decision'] = latency_gate.get('decision')
         stock['latency_entry_reason'] = latency_gate.get('reason')
+        _log_orderbook_stability_observation(stock, code, latency_gate.get('orderbook_stability'))
 
         entry_mode = latency_gate.get('mode', 'reject')
         log_info(
