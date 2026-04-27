@@ -3850,6 +3850,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             dynamic_trailing_limit = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_WEAK', 0.4)
         if profit_rate > dynamic_stop_pct:
             stock.pop('soft_stop_micro_grace_started_at', None)
+            stock.pop('soft_stop_micro_grace_extension_used', None)
 
         open_reclaim_near_ai_exit = (
             profit_rate <= ai_exit_min_loss_pct
@@ -3897,6 +3898,16 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             soft_stop_grace_sec = int(
                 getattr(TRADING_RULES, 'SCALP_SOFT_STOP_MICRO_GRACE_SEC', 0) or 0
             )
+            soft_stop_grace_extend_enabled = bool(
+                getattr(TRADING_RULES, 'SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_ENABLED', False)
+            )
+            soft_stop_grace_extend_sec = int(
+                getattr(TRADING_RULES, 'SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_SEC', 0) or 0
+            )
+            soft_stop_grace_extend_buffer_pct = max(
+                0.0,
+                float(getattr(TRADING_RULES, 'SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_BUFFER_PCT', 0.0) or 0.0),
+            )
             soft_stop_emergency_pct = min(
                 float(
                     getattr(
@@ -3919,6 +3930,17 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 and soft_stop_grace_elapsed_sec < soft_stop_grace_sec
                 and profit_rate > soft_stop_emergency_pct
             )
+            soft_stop_extension_within_grace = (
+                soft_stop_grace_enabled
+                and soft_stop_grace_extend_enabled
+                and soft_stop_grace_extend_sec > 0
+                and soft_stop_grace_elapsed_sec < (soft_stop_grace_sec + soft_stop_grace_extend_sec)
+                and profit_rate > soft_stop_emergency_pct
+                and profit_rate >= (float(dynamic_stop_pct) - soft_stop_grace_extend_buffer_pct)
+            )
+            if soft_stop_extension_within_grace and soft_stop_grace_elapsed_sec >= soft_stop_grace_sec:
+                stock['soft_stop_micro_grace_extension_used'] = True
+            soft_stop_within_grace = soft_stop_within_grace or soft_stop_extension_within_grace
             if soft_stop_within_grace:
                 _log_holding_pipeline(
                     stock,
@@ -3929,6 +3951,10 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     emergency_pct=f"{soft_stop_emergency_pct:+.2f}",
                     elapsed_sec=soft_stop_grace_elapsed_sec,
                     grace_sec=soft_stop_grace_sec,
+                    extension_enabled=soft_stop_grace_extend_enabled,
+                    extension_sec=soft_stop_grace_extend_sec,
+                    extension_buffer_pct=f"{soft_stop_grace_extend_buffer_pct:+.2f}",
+                    extension_used=bool(stock.get('soft_stop_micro_grace_extension_used')),
                     current_ai_score=f"{current_ai_score:.0f}",
                     held_sec=int(held_time_min * 60),
                     exit_rule_candidate="scalp_soft_stop_pct",

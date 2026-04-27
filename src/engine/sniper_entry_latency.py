@@ -270,6 +270,98 @@ def _should_apply_latency_quote_fresh_composite_canary(
     return True, "quote_fresh_composite_canary_applied"
 
 
+def _should_apply_latency_signal_quality_quote_composite_canary(
+    *,
+    strategy_id: str,
+    position_tag: str,
+    signal_strength: float,
+    latest_strength: float,
+    buy_pressure_10t: float,
+    latency_status,
+    signal_price: int,
+    latest_price: int,
+    danger_reasons: list[str] | None = None,
+) -> tuple[bool, str]:
+    if not bool(
+        getattr(TRADING_RULES, "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED", False)
+    ):
+        return False, "disabled"
+    if str(strategy_id or "").upper() != "SCALPING":
+        return False, "non_scalping"
+    if getattr(latency_status, "quote_stale", False):
+        return False, "quote_stale"
+
+    normalized_reasons = _normalized_reason_set(danger_reasons or _latency_danger_reasons(latency_status))
+    quote_fresh_reasons = {"other_danger", "ws_age_too_high", "ws_jitter_too_high", "spread_too_wide"}
+    if not normalized_reasons or not normalized_reasons.issubset(quote_fresh_reasons):
+        return False, "quote_fresh_family_required"
+
+    allow_tags = {
+        str(tag).strip().upper()
+        for tag in (
+            getattr(TRADING_RULES, "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_TAGS", ()) or ()
+        )
+        if str(tag).strip()
+    }
+    normalized_tag = str(position_tag or "").strip().upper()
+    if allow_tags and normalized_tag not in allow_tags:
+        return False, "tag_not_allowed"
+
+    min_signal = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MIN_SIGNAL_SCORE", 90.0),
+        90.0,
+    )
+    signal_score = _normalize_signal_score(signal_strength)
+    if signal_score < min_signal:
+        return False, "low_signal"
+
+    min_strength = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MIN_STRENGTH", 110.0),
+        110.0,
+    )
+    if _to_float(latest_strength, 0.0) < min_strength:
+        return False, "low_strength"
+
+    min_buy_pressure = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MIN_BUY_PRESSURE", 65.0),
+        65.0,
+    )
+    if _to_float(buy_pressure_10t, 0.0) < min_buy_pressure:
+        return False, "low_buy_pressure"
+
+    max_ws_age_ms = int(
+        getattr(TRADING_RULES, "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MAX_WS_AGE_MS", 1200)
+        or 1200
+    )
+    if int(getattr(latency_status, "ws_age_ms", 0) or 0) > max_ws_age_ms:
+        return False, "ws_age_signal_quality_limit_exceeded"
+
+    max_ws_jitter_ms = int(
+        getattr(TRADING_RULES, "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MAX_WS_JITTER_MS", 500)
+        or 500
+    )
+    if int(getattr(latency_status, "ws_jitter_ms", 0) or 0) > max_ws_jitter_ms:
+        return False, "ws_jitter_signal_quality_limit_exceeded"
+
+    max_spread_ratio = _to_float(
+        getattr(TRADING_RULES, "SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MAX_SPREAD_RATIO", 0.0085),
+        0.0085,
+    )
+    if _to_float(getattr(latency_status, "spread_ratio", 0.0), 0.0) > max_spread_ratio:
+        return False, "spread_signal_quality_limit_exceeded"
+
+    allowed_slippage = _ENTRY_POLICY._allowed_slippage(
+        signal_price=signal_price,
+        latest_price=latest_price,
+        tick_limit=_CONFIG.normal_allowed_slippage_ticks,
+        pct_limit=_CONFIG.normal_allowed_slippage_pct,
+    )
+    if not _ENTRY_POLICY._slippage_ok(signal_price, latest_price, allowed_slippage, "BUY"):
+        return False, "normal_slippage_exceeded"
+
+    return True, "signal_quality_quote_composite_canary_applied"
+
+
 def _should_apply_latency_ws_jitter_relief_canary(
     *,
     strategy_id: str,
@@ -534,6 +626,36 @@ def evaluate_live_buy_entry(
             )
         else:
             latency_canary_reason = quote_fresh_composite_reason
+
+    if policy.decision == EntryDecision.REJECT_DANGER and effective_decision == EntryDecision.REJECT_DANGER:
+        signal_quality_ok, signal_quality_reason = _should_apply_latency_signal_quality_quote_composite_canary(
+            strategy_id=strategy_id,
+            position_tag=str(stock.get("position_tag") or ""),
+            signal_strength=float(signal_strength or 0.0),
+            latest_strength=_to_float((ws_data or {}).get("v_pw", stock.get("latest_strength", 0.0)), 0.0),
+            buy_pressure_10t=_to_float((ws_data or {}).get("buy_ratio", stock.get("buy_pressure_10t", 0.0)), 0.0),
+            latency_status=latency,
+            signal_price=frozen_price,
+            latest_price=latest_price,
+            danger_reasons=latency_danger_reasons.split(","),
+        )
+        if signal_quality_ok:
+            latency_canary_applied = True
+            latency_canary_reason = signal_quality_reason
+            effective_decision = EntryDecision.ALLOW_NORMAL
+            effective_reason = "latency_signal_quality_quote_composite_normal_override"
+            log_info(
+                f"[LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY] {stock.get('name')}({code}) "
+                f"tag={stock.get('position_tag')} signal_score={_normalize_signal_score(signal_strength):.1f} "
+                f"strength={_to_float((ws_data or {}).get('v_pw', stock.get('latest_strength', 0.0)), 0.0):.1f} "
+                f"buy_pressure={_to_float((ws_data or {}).get('buy_ratio', stock.get('buy_pressure_10t', 0.0)), 0.0):.1f} "
+                f"ws_age_ms={latency.ws_age_ms} ws_jitter_ms={latency.ws_jitter_ms} "
+                f"spread_ratio={latency.spread_ratio:.6f} "
+                f"danger_reasons={latency_danger_reasons}"
+            )
+        else:
+            if not latency_canary_reason or latency_canary_reason == "disabled":
+                latency_canary_reason = signal_quality_reason
 
     if policy.decision == EntryDecision.REJECT_DANGER and effective_decision == EntryDecision.REJECT_DANGER:
         other_danger_relief_ok, other_danger_relief_reason = _should_apply_latency_other_danger_relief_canary(

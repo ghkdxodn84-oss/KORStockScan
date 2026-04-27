@@ -32,7 +32,9 @@
 | `buy_recovery_canary` | Gemini `WAIT 65~79` 과밀 구간을 2차 재평가해 BUY 회복 여부를 보는 실전 1축 | 현재 유지축 |
 | `entry_filter_quality` | 불량 진입을 줄이고 제출/체결 품질을 높이는 다음 정식 튜닝 후보 | `buy_recovery_canary` 1차 판정 후 재판정 |
 | `latency_quote_fresh_composite` | `ws_age`, `ws_jitter`, `spread`, `other_danger`가 단일 사유가 아니라 quote freshness family로 겹쳐 제출을 막는 복합축 | active entry canary. `signal>=88`, `ws_age<=950ms`, `ws_jitter<=450ms`, `spread<=0.0075`, `quote_stale=False`를 한 묶음으로만 적용하고, 개별 파라미터 기여도는 분리 판정하지 않는다 |
+| `latency_signal_quality_quote_composite` | `latency_quote_fresh_composite` 미회복 시 검토할 예비 복합축. quote freshness 완화폭을 넓히는 대신 `signal>=90`, `latest_strength>=110`, `buy_pressure_10t>=65`를 요구한다 | standby/off. 현재 live 축이 아니며, `latency_quote_fresh_composite OFF -> restart.flag -> 새 축 ON` 승인 전까지 실주문에 적용하지 않는다 |
 | `holding_exit_observation` | 보유/청산 후보를 saved snapshot, post-sell, pipeline event로 분해하는 리포트 축 | live canary가 아니라 관찰/후보 고정용. `partial/full`, `initial/pyramid` 합산 결론 금지 |
+| `soft_stop_micro_grace_extend` | soft stop 최초 유예 20초가 너무 짧을 때 threshold 근처에서 1회 추가 유예하는 보조 파라미터 | standby/off. `soft_stop_micro_grace` 20초 축의 hard stop/동일종목 손실/미체결 비악화가 확인되고도 반등 포착이 부족할 때만 검토한다 |
 
 ## 3. 튜닝 원칙
 
@@ -54,6 +56,8 @@
 16. active canary 임계값은 문서에 `분포 기준`, `예상 기각률`, `효과 부족 시 다음 fallback 임계값`을 함께 남긴다. 숫자만 단독으로 승격하지 않는다.
 17. active canary의 다음 판정 baseline은 가능하면 같은 bundle 내 `canary_applied=False` 표본으로 고정한다. 해당 baseline이 `N_min` 미달이면 hard pass/fail 대신 방향성 판정으로 격하한다.
 18. `latency_quote_fresh_composite`의 pass/fail 기준선은 `same bundle + canary_applied=False + normal_only + post_fallback_deprecation` 표본이다. `ShadowDiff0428`이 닫히기 전까지는 이 기준선을 hard baseline으로 승격하지 않고, `2026-04-27 15:00 offline bundle`은 방향성 참고선으로만 사용한다.
+19. `offline_live_canary_bundle`은 장중 과부하 방지용 판정 입력이다. fresh 로그가 Codex 작업환경에 없으면 서버에서 lightweight export만 수행하고, 사용자가 로컬 analyzer로 `latency_quote_fresh_composite`와 `soft_stop_micro_grace` summary를 생성해 같은 슬롯 판정을 닫는다. 이 번들은 heavy snapshot/report builder를 호출하지 않으며, 산출물은 hard pass/fail 전제 충족 여부와 direction-only 사유를 확인하는 입력으로만 사용한다.
+20. `latency_signal_quality_quote_composite`와 `soft_stop_micro_grace_extend`는 예비축/예비 파라미터다. active 축이 실패 또는 표본부족 재판정 조건을 충족하기 전에는 live ON 하지 않으며, 활성화하려면 기존 동일 단계 canary OFF, rollback guard, restart 필요 여부, baseline cohort를 같은 checklist에 잠근다.
 
 ## 4. 작업 규칙
 

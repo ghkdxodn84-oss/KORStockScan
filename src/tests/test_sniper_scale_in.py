@@ -2627,6 +2627,75 @@ def test_scalp_soft_stop_micro_grace_expires_to_soft_stop(monkeypatch):
     assert exit_logs and exit_logs[-1]["exit_rule"] == "scalp_soft_stop_pct"
 
 
+def test_scalp_soft_stop_micro_grace_extension_delays_near_threshold_exit(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_SOFT_STOP_MICRO_GRACE_ENABLED=True,
+        SCALP_SOFT_STOP_MICRO_GRACE_SEC=20,
+        SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT=-2.0,
+        SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_ENABLED=True,
+        SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_SEC=10,
+        SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_BUFFER_PCT=0.20,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 10000}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    pipeline_logs = []
+    exit_calls = []
+
+    def fake_log_holding_pipeline(stock, code, stage, **fields):
+        pipeline_logs.append((stage, fields))
+
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", fake_log_holding_pipeline)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: exit_calls.append(args) or {"return_code": "0", "ord_no": "S1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+
+    stock = {
+        "id": 171,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+        "rt_ai_prob": 0.50,
+        "soft_stop_micro_grace_started_at": state_handlers.time.time() - 24,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 9860, "orderbook": {"bids": [{"price": 9860, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    grace_logs = [fields for stage, fields in pipeline_logs if stage == "soft_stop_micro_grace"]
+    exit_logs = [fields for stage, fields in pipeline_logs if stage == "exit_signal"]
+    assert stock["status"] == "HOLDING"
+    assert stock["soft_stop_micro_grace_extension_used"] is True
+    assert grace_logs
+    assert grace_logs[-1]["extension_used"] is True
+    assert grace_logs[-1]["extension_sec"] == 10
+    assert not exit_logs
+    assert not exit_calls
+
+
 def test_open_reclaim_never_green_exit_rule(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
