@@ -433,7 +433,7 @@ def test_latency_other_danger_relief_canary_overrides_reject_danger_to_normal(mo
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=True,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_TAGS=("SCANNER",),
-            SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_SIGNAL_SCORE=90.0,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_SIGNAL_SCORE=85.0,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_AGE_MS=400,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_JITTER_MS=80,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_SPREAD_RATIO=0.0080,
@@ -466,7 +466,7 @@ def test_latency_other_danger_relief_canary_overrides_reject_danger_to_normal(mo
         strategy_id="SCALPING",
         planned_qty=2,
         signal_price=10_000,
-        signal_strength=92.0,
+        signal_strength=85.0,
     )
 
     assert result["latency_state"] == "DANGER"
@@ -489,7 +489,7 @@ def test_latency_other_danger_relief_canary_enforces_stricter_residual_limits(mo
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=True,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_TAGS=("SCANNER",),
-            SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_SIGNAL_SCORE=90.0,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_SIGNAL_SCORE=85.0,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_AGE_MS=400,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_JITTER_MS=80,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_SPREAD_RATIO=0.0080,
@@ -528,6 +528,59 @@ def test_latency_other_danger_relief_canary_enforces_stricter_residual_limits(mo
     assert result["latency_state"] == "DANGER"
     assert result["latency_canary_applied"] is False
     assert result["latency_canary_reason"] == "ws_jitter_limit_exceeded"
+    assert result["decision"] == "REJECT_DANGER"
+    assert result["latency_danger_reasons"] == "other_danger"
+
+
+def test_latency_other_danger_relief_canary_blocks_below_85_signal(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=True,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_TAGS=("SCANNER",),
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_SIGNAL_SCORE=85.0,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_AGE_MS=400,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_WS_JITTER_MS=80,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_MAX_SPREAD_RATIO=0.0080,
+        ),
+    )
+    monkeypatch.setattr(entry_latency_module._CACHE, "update", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        entry_latency_module._CACHE,
+        "get_quote_health",
+        lambda code: SimpleNamespace(
+            ws_age_ms=220,
+            ws_jitter_ms=0,
+            quote_stale=False,
+            spread_ratio=0.0072,
+        ),
+    )
+
+    stock = {"name": "TEST", "position_tag": "SCANNER"}
+    result = evaluate_live_buy_entry(
+        stock=stock,
+        code="123456_other_danger_relief_low_signal",
+        ws_data={
+            "curr": 10_020,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_030, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=2,
+        signal_price=10_000,
+        signal_strength=84.9,
+    )
+
+    assert result["latency_state"] == "DANGER"
+    assert result["latency_canary_applied"] is False
+    assert result["latency_canary_reason"] == "low_signal"
     assert result["decision"] == "REJECT_DANGER"
     assert result["latency_danger_reasons"] == "other_danger"
 

@@ -1334,7 +1334,7 @@ def _build_gatekeeper_fast_signature(stock, ws_data, strategy, score):
         _floor_bucket_float(ws_data.get('fluctuation', 0.0), 0.5),
         _bucket_int(ws_data.get('volume', 0), 200_000),
         _floor_bucket_float(ws_data.get('v_pw', 0.0), 10.0),
-        _floor_bucket_float(ws_data.get('buy_ratio', 0.0), 12.0),
+        _floor_bucket_float(ws_data.get('buy_ratio', 0.0), 20.0),
         _bucket_int_with_deadband(ws_data.get('prog_net_qty', 0), 25_000),
         _bucket_int_with_deadband(ws_data.get('prog_delta_qty', 0), 5_000),
     )

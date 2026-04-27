@@ -13,6 +13,11 @@ from typing import Any
 from urllib import request
 from zoneinfo import ZoneInfo
 
+from src.engine.sync_docs_backlog_to_project import (
+    _is_managed_project_title,
+    _managed_title_key,
+    collect_backlog_tasks,
+)
 from src.utils.market_day import get_krx_trading_day_status
 
 
@@ -427,6 +432,34 @@ def dedupe_tasks(tasks: list[ProjectTask]) -> list[ProjectTask]:
     return [deduped[key] for key in order]
 
 
+def _open_managed_title_keys_for_target_date(target_date: str) -> set[str]:
+    keys: set[str] = set()
+    for task in collect_backlog_tasks():
+        if str(task.due_date or "").strip() != target_date:
+            continue
+        title = " ".join(f"[{task.track}] {task.title}".split()).strip()
+        if not _is_managed_project_title(title):
+            continue
+        keys.add(_managed_title_key(title))
+    return keys
+
+
+def _filter_stale_same_day_managed_tasks(tasks: list[ProjectTask], target_date: str) -> list[ProjectTask]:
+    if not target_date:
+        return tasks
+    open_keys = _open_managed_title_keys_for_target_date(target_date)
+    filtered: list[ProjectTask] = []
+    for task in tasks:
+        if (
+            task.due_date == target_date
+            and _is_managed_project_title(task.title)
+            and _managed_title_key(task.title) not in open_keys
+        ):
+            continue
+        filtered.append(task)
+    return filtered
+
+
 def render_markdown(
     *,
     owner: str,
@@ -619,6 +652,7 @@ def build_daily_workorder(
         target_date=resolved_target_date,
         include_overdue=resolved_include_overdue,
     )
+    tasks = _filter_stale_same_day_managed_tasks(tasks, resolved_target_date)
     generated_at = datetime.now().astimezone().isoformat(timespec="seconds")
     markdown = render_markdown(
         owner=owner,

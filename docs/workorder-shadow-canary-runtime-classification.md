@@ -149,7 +149,7 @@ cohort 분류 공통 규칙은 아래로 고정한다.
 새 live 축 승인 또는 기존 축 replacement 시 아래 형식을 checklist/report에 같이 남긴다.
 
 1. `baseline cohort`: 예) `main-only + normal_only + post_fallback_deprecation`
-2. `candidate live cohort`: 예) `gatekeeper_fast_reuse post-change`, `soft_stop qualifying cohort`
+2. `candidate live cohort`: 예) `other_danger relief applied cohort`, `soft_stop qualifying cohort`
 3. `observe-only cohort`: 예) `wait6579_ev_cohort`, `hard_stop_whipsaw_aux`, `same_symbol cooldown shadow`
 4. `excluded cohort`: 예) `fallback`, `partial/full mixed`, `initial/pyramid mixed`, `NULL or incomplete profit`
 5. `rollback trigger owner`: 진입/보유/청산 중 어느 축이 이 cohort를 끄는지
@@ -174,7 +174,6 @@ cohort 분류 공통 규칙은 아래로 고정한다.
 | `buy_recovery_canary applied cohort` | `active-canary-decision` | `WAIT65~79` live canary 효과/rollback 판정 | 승격 조건 또는 OFF/parking 판정이 닫히는 시점까지 유지. `submitted/full/partial/COMPLETED + valid profit_rate` 기준으로 승격 또는 종료가 확정되면 제거 | `2026-04-21~23 checklist` |
 | `wait6579_probe_canary_applied` | `active-canary-decision` | 소량 probe 적용 표본 분리 | probe가 종료되거나 본 canary에 통합되어 별도 applied tag가 사라질 때 제거 | `wait6579_ev_cohort`, `2026-04-21 checklist` |
 | `post-restart cohort` | `active-canary-decision` | replacement 이후 same-day 제출 회복 관찰 | replacement 당일 판정이 닫히고 후속 축이 새 `post-change` cohort로 넘어가면 종료. 익일 이후 지속 baseline으로 쓰지 않음 | `2026-04-24 checklist` |
-| `gatekeeper_fast_reuse post-change` | `active-canary-decision` | signature/window 형상 변경 이후 live 비교 | PREOPEN 승인/보류와 post-change 유지/롤백 판정이 닫힐 때까지 유지. baseline 승격 또는 OFF 확정 시 제거/재분류 | `2026-04-24`, `2026-04-27 checklist` |
 | `soft_stop qualifying cohort` | `provisional-stage-disjoint` | 보유/청산 live 예외 canary 후보 | `soft_stop_rebound_split` 승인 또는 보류+재시각이 닫히고, qualifying rule이 live 조작점으로 승격되거나 폐기될 때 종료 | `2026-04-27 checklist` |
 | `hard_stop_whipsaw_aux` | `observe-only` | severe-loss guard 보조 관찰 | 하드스탑을 보조 관찰로만 둔다는 원칙이 유지되는 동안 유지. `MISSED_UPSIDE/GOOD_EXIT/NEUTRAL`과 반등 지표가 독립 판단가치를 잃거나 hard stop 완화 의제가 공식 폐기되면 제거 | `Plan Rebase`, `2026-04-27 checklist` |
 | `same_symbol_reentry` | `observe-only` | 동일종목 재진입 손실/guard 필요성 관찰 | `same_symbol_reentry_loss_count`가 독립 guard 후보성을 잃거나, soft stop/position context 축에 완전히 흡수되어 별도 재진입 cohort가 필요 없을 때 제거 | `holding_exit_observation`, `2026-04-27 checklist` |
@@ -218,7 +217,7 @@ inventory 운영 규칙은 아래로 고정한다.
 | `latency_guard_canary` | `active-canary` | `guarded-off` | broad fallback override legacy 축 |
 | `spread_relief_canary` | `active-canary` | `guarded-off` | parking 상태 |
 | `ws_jitter_relief_canary` | `active-canary` | `guarded-off` | same-day 종료된 replacement 축 |
-| `other_danger_relief_canary` | `active-canary` | `limited-live` | residual 완화 실험축 |
+| `other_danger_relief_canary` | `active-canary` | `limited-live` | 현재 entry live 축 |
 | `dynamic_strength_canary` | `baseline-promote` | `baseline-live` | current runtime/log는 `dynamic_strength_relief` |
 | `partial_fill_ratio_canary` | `baseline-promote` | `baseline-live` | current config는 `partial_fill_ratio_guard` |
 
@@ -437,24 +436,23 @@ inventory 운영 규칙은 아래로 고정한다.
 ### 4.6 `other_danger_relief_canary`
 
 - 판정: `active-canary`
-- live 영향도: `limited-live`
+- live 영향도: `guarded-off`
 - 튜닝 모니터링 가치: `Medium`
-  - 이유: 현재 flag는 남아 있지만 same-day 효과는 약했고, baseline 승격 근거도 닫히지 않았다.
-  - 상향 조건: `submitted`, `quote_fresh_latency_pass_rate`, `canary_applied`가 실제 회복을 만들 때
-  - 하향 조건: 반복 관찰에도 효과가 없고 `gatekeeper_fast_reuse` 등 다음 축으로 완전히 대체될 때
+  - 이유: `2026-04-27 11:31 KST` raw 분해에서는 가장 직접적인 same-day pivot이었지만, `13:00` offline 판정에서 제출 회복 비율 개선을 만들지 못해 현재는 OFF 상태다.
+  - 상향 조건: `submitted`, `quote_fresh_latency_pass_rate`, `latency_state_danger` 감소, `canary_applied`가 실제 회복을 만들 때
+  - 하향 조건: 반복 관찰에도 효과가 없고 `entry_filter_quality` 또는 다른 명시적 latency 하위원인 축으로 완전히 대체될 때
 - EV 판정 기여도: `Low`
 - 대체 가능성: `Medium`
 - 운영 부하/지연 비용: `Medium`
 - 코드 유지비: `Medium`
 - 향후 재개 가능성: `Medium`
 - 근거:
-  1. 문서 기준 `same-day 효과 미약`이며 장중 잠금 근거가 남아 있다.
-  2. 상수는 `True`지만 baseline 승격으로 해석되지는 않았다.
-  3. 현재는 운영 기본축보다 `실험 상태가 덜 닫힌 축`에 가깝다.
+  1. `2026-04-27 11:31 KST` raw 재집계 기준 `latency_block=3196`, `latency_state_danger=3000`, `other_danger=1218`, `low_signal=1079/1427`라 병목 직접성이 높다.
+  2. `SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_SIGNAL_SCORE`를 `90.0 -> 85.0`으로 낮춰 same-day pivot 했지만, `13:00` 기준 `budget_pass_to_submitted_rate=0.2%`가 그대로여서 축을 종료했다.
+  3. 현재는 `latency_block` 직접 사유를 건드린 이력이 남아 있어 inventory에는 유지하지만, live owner는 아니다.
 - 다음 액션:
-  1. 성공 기준은 `submitted 회복`, `quote_fresh_latency_pass_rate 개선`, `fallback_regression=0`으로 고정
-  2. 해당 기준을 충족하지 못하면 `OFF 또는 parking`으로 닫는다
-  3. 충족 시에만 `baseline-promote` 재판정한다
+  1. 현재 상태는 `13:00 미개선 종료 후 OFF`로 잠근다.
+  2. 재개는 `other_danger`가 다시 1순위 direct residual로 올라오고 새 rollback guard가 문서화될 때만 허용한다.
 
 ### 4.7 `partial_fill_ratio_canary` / current config `partial_fill_ratio_guard`
 
@@ -567,10 +565,10 @@ inventory 운영 규칙은 아래로 고정한다.
 ### 4.9A `ws_jitter_relief_canary`
 
 - 판정: `active-canary`
-- live 영향도: `guarded-off`
+- live 영향도: `limited-live`
 - 튜닝 모니터링 가치: `Medium`
-  - 이유: `2026-04-24` same-day replacement의 실제 1축이었고 why-failed 기록을 남기는 데 필요하다.
-  - 상향 조건: `ws_jitter_only_required`가 다시 우세 원인으로 올라올 때
+  - 이유: `2026-04-27 13:00` 기준 `ws_jitter_too_high=1852`가 `other_danger` 다음 직접 잔여 원인이라, 오늘 `15:00` 전 관찰 가능한 다음 독립축으로 가장 빠르게 교체 가능하다.
+  - 상향 조건: `submitted`, `quote_fresh_latency_pass_rate`, `latency_state_danger` 감소, `ws_jitter_relief_canary_applied`가 실제 회복을 만들 때
   - 하향 조건: residual 분해상 `ws_jitter`가 후순위로 밀릴 때
 - EV 판정 기여도: `Medium`
 - 대체 가능성: `Medium`
@@ -578,11 +576,12 @@ inventory 운영 규칙은 아래로 고정한다.
 - 코드 유지비: `Medium`
 - 향후 재개 가능성: `Medium`
 - 근거:
-  1. 상수와 runtime branch는 남아 있지만 현재 `False`로 parking 상태다.
-  2. same-day에 활성화 표본 0으로 종료된 이력이 있다.
+  1. 상수와 runtime branch가 이미 존재하고 회귀 테스트도 있어, same-day `기존 축 OFF -> restart.flag -> 새 축 ON` 교체가 가능하다.
+  2. `2026-04-24`에는 활성화 표본 0으로 종료됐지만, `2026-04-27 13:00`에는 raw danger breakdown에서 `ws_jitter_too_high`가 다시 큰 잔여 원인으로 남았다.
 - 다음 액션:
-  1. parking 상태를 문서에 유지
-  2. 재개는 residual 근거가 다시 나올 때만 허용
+  1. `2026-04-27 15:00` same-day replacement 축으로 재개한다.
+  2. 성공 기준은 `submitted 회복`, `quote_fresh_latency_pass_rate 개선`, `latency_state_danger 감소`, `fallback_regression=0`으로 고정한다.
+  3. 해당 기준을 충족하지 못하면 다시 OFF로 닫고 다른 direct residual 축으로 교체한다.
 
 ### 4.9B `latency_guard_canary`
 

@@ -89,6 +89,34 @@ def test_gatekeeper_fast_signature_absorbs_small_price_and_orderbook_noise():
     assert sig_a == sig_b
 
 
+def test_gatekeeper_fast_signature_absorbs_buy_ratio_band_noise():
+    stock = {"position_tag": "SCANNER"}
+    ws_a = {
+        "curr": 12570,
+        "fluctuation": 3.42,
+        "volume": 1854321,
+        "v_pw": 118.1,
+        "buy_ratio": 71.9,
+        "prog_net_qty": 18490,
+        "prog_delta_qty": 2210,
+        "ask_tot": 184200,
+        "bid_tot": 218700,
+        "net_bid_depth": 11880,
+        "net_ask_depth": -3420,
+        "orderbook": {
+            "asks": [{"price": 12590}, {"price": 12580}],
+            "bids": [{"price": 12570}, {"price": 12560}],
+        },
+    }
+    ws_b = dict(ws_a)
+    ws_b["buy_ratio"] = 79.9
+
+    sig_a = _build_gatekeeper_fast_signature(stock, ws_a, "KOSPI_ML", 82.0)
+    sig_b = _build_gatekeeper_fast_signature(stock, ws_b, "KOSPI_ML", 82.0)
+
+    assert sig_a == sig_b
+
+
 def test_gatekeeper_fast_signature_ignores_small_signed_program_flow_noise():
     stock = {"position_tag": "SCANNER"}
     ws_a = {

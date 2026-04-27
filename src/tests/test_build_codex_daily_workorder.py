@@ -1,5 +1,6 @@
 from src.engine.build_codex_daily_workorder import (
     ProjectTask,
+    _filter_stale_same_day_managed_tasks,
     _parse_project_item,
     _matches_slot,
     _resolve_slot_filters_for_target_date,
@@ -176,3 +177,68 @@ def test_parse_project_item_defaults_apply_target_without_postprocessing():
 
     assert parsed is not None
     assert parsed.apply_target == "-"
+
+
+def test_filter_stale_same_day_managed_tasks_uses_docs_as_source_of_truth(monkeypatch):
+    live_task = ProjectTask(
+        item_id="1",
+        content_type="DraftIssue",
+        title="[Checklist0427] [LatencyCanary0427-2] other_danger-only residual override 13:00 즉시 재점검",
+        url="",
+        due_date="2026-04-27",
+        status="Todo",
+        track="Checklist0427",
+        slot="INTRADAY",
+        time_window="13:00~13:20",
+        assignees="",
+        state="OPEN",
+        source="docs/2026-04-27-stage2-todo-checklist.md",
+        section="체크박스 미완료",
+    )
+    stale_task = ProjectTask(
+        item_id="2",
+        content_type="DraftIssue",
+        title="[Checklist0427] [LatencyOps0427] gatekeeper_fast_reuse signature/window 독립축 PREOPEN 승인 판정",
+        url="",
+        due_date="2026-04-27",
+        status="Todo",
+        track="Checklist0427",
+        slot="PREOPEN",
+        time_window="08:20~08:35",
+        assignees="",
+        state="OPEN",
+        source="docs/2026-04-27-stage2-todo-checklist.md",
+        section="체크박스 미완료",
+    )
+    foreign_task = ProjectTask(
+        item_id="3",
+        content_type="DraftIssue",
+        title="외부 수동 항목",
+        url="",
+        due_date="2026-04-27",
+        status="Todo",
+        track="Plan",
+        slot="INTRADAY",
+        time_window="10:00~10:30",
+        assignees="",
+        state="OPEN",
+        source="manual",
+        section="manual",
+    )
+
+    class DummyTask:
+        def __init__(self, title: str, due_date: str, track: str):
+            self.title = title
+            self.due_date = due_date
+            self.track = track
+
+    monkeypatch.setattr(
+        "src.engine.build_codex_daily_workorder.collect_backlog_tasks",
+        lambda: [DummyTask("[LatencyCanary0427-2] other_danger-only residual override 13:00 즉시 재점검", "2026-04-27", "Checklist0427")],
+    )
+
+    filtered = _filter_stale_same_day_managed_tasks(
+        [live_task, stale_task, foreign_task],
+        "2026-04-27",
+    )
+    assert [task.item_id for task in filtered] == ["1", "3"]
