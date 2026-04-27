@@ -71,7 +71,7 @@
 [보유 중 의사결정]
     |- 추가매수 후보 -> reversal_add_candidate -> scale_in_executed -> HOLDING AI 리뷰 루프
     |- 청산 신호 -> exit_signal
-    |               (scalp_soft_stop_pct / scalp_hard_stop_pct / scalp_trailing_take_profit / scalp_ai_early_exit / scalp_ai_momentum_decay)
+    |               (scalp_soft_stop_pct / scalp_hard_stop_pct / scalp_trailing_take_profit / scalp_ai_momentum_decay)
     v
 [매도 주문]
     |- 성공 -> sell_order_sent -> sell_completed -> completed
@@ -100,8 +100,8 @@
 | --- | --- |
 | soft_stop 휩쏘 가설 | 소프트손절 후 `1m/3m/5m/10m/20m` 반등을 `rebound_above_sell`, `rebound_above_buy`, `mfe_ge_0_5`, `mfe_ge_1_0`로 분리한다. 매도가만 재상회하면 micro grace/확인유예 후보이고, 매수가까지 회복하면 cooldown live가 아니라 threshold/AI 재판정 후보로 본다. |
 | 하드스탑 위치 | `scalp_preset_hard_stop_pct`, `scalp_hard_stop_pct`, `protect_hard_stop`은 soft_stop보다 완화 우선순위를 낮춘다. 하드스탑은 극단 손실 방어선이므로 반등 사례가 있어도 `hard_stop_whipsaw_aux` 보조 관찰로만 두고, 바로 완화 canary로 올리지 않는다. |
-| 하방카운트 위치 | `ai_low_score_hits`는 가격 휩쏘 필터가 아니라 `AI<=35`, `손실<=-0.7%`, `보유>=180초`, 연속 `3회` 조건의 AI 조기손절 트리거다. 스캘핑 exit 순서상 hard/soft stop이 먼저 평가되므로, soft_stop에 먼저 닿는 휩쏘는 하방카운트가 쌓이기 전에 청산될 수 있다. |
-| 4월 로그 해석 | 4월 `AI 보유감시` 로그에서 하방카운트는 `0/3` 또는 `0/4`가 대부분이고, `3/3` 도달은 매우 적다. 따라서 27일에는 soft_stop 직전 `low_score_hits`, `held_sec`, `ai_score`, `profit_rate`를 같이 잠가 “하방카운트가 작동하지 않은 휩쏘”인지 분리한다. |
+| 하방카운트 위치 | `ai_low_score_hits`/`scalp_ai_early_exit`는 2026-04-27 기준 live 경로에서 제거했다. 기존 하방카운트는 가격 휩쏘 필터가 아니라 후행 AI 조기손절이라 soft_stop 보호장치로서 실효성이 낮았다. |
+| 4월 로그 해석 | 4월 하방카운트 `0/3` 또는 `0/4` 편중과 `3/3` 희소성은 제거 판단 근거로만 보존한다. 현재 soft_stop 해석은 `rebound_above_sell/buy`, `mfe_ge_*`, `same_symbol_reentry`, `hard_stop_auxiliary` 중심으로 고정한다. |
 
 ## ID 명명 규칙
 
@@ -239,10 +239,12 @@
 | 왜 별도 ID인가 | 이 축은 단일 threshold 완화가 아니라 `signal`, `ws_age`, `ws_jitter`, `spread`, `quote_stale`를 한 묶음 가설로 잠그는 active entry canary다. 따라서 `DF-ENTRY-005`의 pivot 설명 안에 문장으로만 두면, `pivot`과 `실제 live canary`가 같은 항목으로 섞여 판정 추적이 끊긴다. |
 | live 정의 | `signal>=88`, `ws_age<=950ms`, `ws_jitter<=450ms`, `spread<=0.0075`, `quote_stale=False`, `fallback/split-entry 금지`, `normal override만 허용`을 1개 묶음으로 적용한다. |
 | 판정 원칙 | `signal/ws_age/ws_jitter/spread/quote_stale`를 개별 독립축으로 재해석하지 않는다. 오직 `latency_quote_fresh_composite` 전체 ON/OFF 효과만 본다. |
-| 기준선 | 비교 baseline은 같은 bundle 내 `quote_fresh_composite_canary_applied=False` 표본으로 고정한다. baseline 표본이 `N_min` 미달이면 hard pass/fail이 아니라 방향성 판정으로만 둔다. |
+| 기준선 | primary baseline은 같은 bundle 내 `quote_fresh_composite_canary_applied=False`, `normal_only`, `post_fallback_deprecation` 표본이다. `ShadowDiff0428`이 닫히기 전까지는 이 기준선을 hard baseline으로 승격하지 않고, `2026-04-27 15:00 offline bundle`(`budget_pass=7568`, `submitted=11`, `budget_pass_to_submitted_rate=0.1%`, `latency_state_danger=7178`, `full_fill=7`, `partial_fill=0`)은 방향성 참고선으로만 쓴다. baseline 표본이 `N_min` 미달이면 hard pass/fail이 아니라 방향성 판정으로만 둔다. |
 | 핵심 KPI | `submitted/full/partial`, `budget_pass_to_submitted_rate`, `latency_state_danger`, `normal_slippage_exceeded`, `COMPLETED + valid profit_rate` |
+| 도달목표 | primary: `budget_pass_to_submitted_rate >= baseline +1.0%p` and `submitted_orders >= 20`. secondary: `latency_state_danger / budget_pass` 비율 `-5.0%p` 이상 개선 and `full_fill + partial_fill`의 `submitted` 대비 전환율 비악화. |
 | 보조 진단 | `quote_fresh_composite_canary_applied`, `latency_canary_reason`, `other_danger/ws_age/ws_jitter/spread` 분해는 보조 설명용이다. 이 값들만으로 유지/종료를 판정하지 않는다. |
 | rollback guard | `budget_pass_to_submitted_rate`가 baseline 대비 `+1.0%p` 이상 개선하지 못하면 `composite_no_recovery`로 OFF한다. `full/partial` 품질 악화, `normal_slippage_exceeded` 증가, `fallback_regression` 재유입도 즉시 OFF 사유다. |
+| 감리 검토 포인트 | baseline이 `same bundle + canary_applied=False`로 잠겼는지, `04-27 15:00 offline bundle`이 참고선으로만 분리됐는지, 성공 기준과 rollback guard가 뒤섞이지 않았는지, baseline 부족 또는 shadow diff 미해소 시 `direction-only`로 격하한다는 규칙이 문서에 남아 있는지를 같이 본다. |
 | 금지 조건 | 같은 entry 단계에서 다른 canary를 동시에 두지 않는다. `other_danger/ws_jitter/spread` 단일축으로 되돌아가 개별 attribution을 시도하지 않는다. `gatekeeper_fast_reuse_ratio` 개선만으로 유지 판정을 하지 않는다. |
 | 현재 상태 | `2026-04-27` 기준 active entry canary로 연 상태다. same-day 판정은 `QuoteFreshReview0428`에서 묶음 기준선과 `composite_no_recovery` guard를 함께 잠그는 것으로 이어진다. |
 | 후속 연결 | 제출 회복이 확인되면 `DF-HOLDING-001`의 HOLDING/청산 품질 검증으로 넘어가고, 회복 실패면 다음 entry replacement 축 또는 새 복합축 설계로 닫는다. |
@@ -268,7 +270,7 @@
 | 분리 원칙 | `initial-only`와 `pyramid-activated` 표본을 섞지 않는다. `full fill`과 `partial fill`도 합치지 않는다. |
 | 성공 판정 | 제출 증가와 함께 체결 품질/청산 품질 악화가 없고 `COMPLETED + valid profit_rate`가 유지 또는 개선 |
 | 실패 판정 | 제출 증가 대비 `soft_stop` 급증, `full_fill` 악화, `COMPLETED + valid profit_rate` 악화 동반 |
-| 다음 액션 | `HoldingExitPlan0427`에서는 `soft_stop qualifying cohort`의 단일 조작점을 `micro grace`로 승인한다. 근거 묶음은 `rebound_above_sell_10m=93.4%`, `rebound_above_buy_10m=26.2%`, `same_symbol_reentry_loss_count=5`, `down_count_evidence 미작동`이다. `whipsaw confirmation`은 AI/호가 확인을 추가해 지연과 미체결을 다시 만들 수 있어 1차 live 조작점에서 제외한다. |
+| 다음 액션 | `HoldingExitPlan0427`에서는 `soft_stop qualifying cohort`의 단일 조작점을 `micro grace`로 승인한다. 근거 묶음은 `rebound_above_sell_10m=93.4%`, `rebound_above_buy_10m=26.2%`, `same_symbol_reentry_loss_count=5`, `hard_stop_auxiliary`다. `whipsaw confirmation`은 AI/호가 확인을 추가해 지연과 미체결을 다시 만들 수 있어 1차 live 조작점에서 제외한다. |
 | Source | [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
 
 ### DF-HOLDING-002 `soft_stop 1차 live canary` 판정 흐름

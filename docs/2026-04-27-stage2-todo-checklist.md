@@ -17,7 +17,7 @@
 - PREOPEN은 전일에 이미 `단일 조작점 + rollback guard + 코드/테스트 + restart 절차`가 준비된 carry-over 축만 받는다.
 - 손익은 `COMPLETED + valid profit_rate`만 사용하고 `full fill`과 `partial fill`은 분리한다.
 - 보유/청산 관찰은 `holding_exit_observation` 스냅샷으로만 판정하고, `partial/full`, `initial/pyramid`, `normal_only/post_fallback_deprecation`을 합산 결론으로 섞지 않는다.
-- `soft_stop` 휩쏘 판정은 하방카운트(`low_score_hits`) 작동 여부와 함께 본다. 하드스탑은 `hard_stop_whipsaw_aux` 보조 관찰로만 두고, severe-loss guard 완화 canary로 바로 올리지 않는다.
+- `soft_stop` 휩쏘 판정은 `rebound_above_sell/buy`, `mfe_ge_*`, `same_symbol_reentry`, `hard_stop_whipsaw_aux`를 함께 본다. 하드스탑은 `hard_stop_whipsaw_aux` 보조 관찰로만 두고, severe-loss guard 완화 canary로 바로 올리지 않는다.
 - `ApplyTarget`은 문서에 명시된 값만 사용하고, parser/workorder가 `remote`를 추정하지 않도록 유지한다.
 - 다축 동시 변경 금지, 승인 전 `main` 실주문 변경 금지 규칙을 유지한다.
 - 대량 재처리는 `saved snapshot 우선 -> safe wrapper async dispatch -> completion artifact/Telegram` 순서만 허용하며, foreground direct build는 금지한다.
@@ -91,7 +91,7 @@
 
 - [x] `[HoldingExitCanary0427] soft_stop 1차 live canary 10시 중간점검` (`Due: 2026-04-27`, `Slot: INTRADAY`, `TimeWindow: 10:00~10:10`, `Track: Plan`)
   - Source: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md)
-  - 판정 기준: PREOPEN에 soft_stop 보유/청산 live canary가 stage-disjoint 예외로 켜졌다면, `soft_stop qualifying cohort`, `submitted_orders/full_fill/partial_fill/completed_valid`, `soft_stop exit count`, `same_symbol_reentry_loss_count`, `fallback_regression=0`, entry latency cohort 분리 여부, `rebound_above_sell_1m/3m`, `mfe_ge_0_5`, `low_score_hits`, `held_sec`, `ai_score`, `hard_stop_whipsaw_aux` 표본수를 잠근다.
+  - 판정 기준: PREOPEN에 soft_stop 보유/청산 live canary가 stage-disjoint 예외로 켜졌다면, `soft_stop qualifying cohort`, `submitted_orders/full_fill/partial_fill/completed_valid`, `soft_stop exit count`, `same_symbol_reentry_loss_count`, `fallback_regression=0`, entry latency cohort 분리 여부, `rebound_above_sell_1m/3m`, `mfe_ge_0_5`, `held_sec`, `ai_score`, `hard_stop_whipsaw_aux` 표본수를 잠근다.
   - why: 10시 중간점검은 pass/fail이 아니라 조기 오염 탐지다. 진입병목 canary가 유입 cohort를 바꾸더라도 보유/청산 canary cohort tag가 분리되면 병렬 관찰을 유지할 수 있다.
   - 판정: 완료. `soft_stop` 1차 live canary 10시 중간점검은 `실행 대상 없음`으로 닫는다. today 10시 시점에는 보유/청산 live canary가 실제로 켜지지 않았고, `provisional-stage-disjoint` 후보 관찰 상태만 유지된다.
   - 근거:
@@ -105,7 +105,7 @@
 
 - [x] `[HoldingExitObs0427] submitted 회복 시 1차 관찰 개시 판정` (`Due: 2026-04-27`, `Slot: INTRADAY`, `TimeWindow: 11:00~11:10`, `Track: Plan`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
-  - 판정 기준: `submitted_orders >= 20` 또는 `full_fill + partial_fill >= 5`이면 관찰 개시로 잠그고, `COMPLETED + valid profit_rate >= 10` 전에는 hard pass/fail 없이 방향성 판정만 한다. soft_stop 휩쏘는 `rebound_above_sell_10m`, `rebound_above_buy_10m`, `hit_up_05_10m`, `hit_up_10_10m`, `mfe_ge_0_5`, `mfe_ge_1_0`, `down_count_evidence.hit_distribution`, `qualified_loss_low_score_but_zero_hit`을 함께 본다.
+  - 판정 기준: `submitted_orders >= 20` 또는 `full_fill + partial_fill >= 5`이면 관찰 개시로 잠그고, `COMPLETED + valid profit_rate >= 10` 전에는 hard pass/fail 없이 방향성 판정만 한다. soft_stop 휩쏘는 `rebound_above_sell_10m`, `rebound_above_buy_10m`, `hit_up_05_10m`, `hit_up_10_10m`, `mfe_ge_0_5`, `mfe_ge_1_0`, `same_symbol_reentry_loss_count`, `hard_stop_auxiliary`를 함께 본다.
   - why: submitted 회복 시 보유/청산 표본이 늦게 폭증할 수 있으므로, 1차 창에서 `normal_only/post_fallback_deprecation/full_fill/partial_fill/initial-only/pyramid-activated` 분리 카운트를 먼저 고정한다. 기존 4월 로그는 soft_stop 61건 중 10분 내 매도가 재상회 `57건(93.4%)`, +0.5% 이상 반등 `43건(70.5%)`이라 휩쏘 가설을 별도 축으로 확인해야 한다.
   - 판정: 보류. 11시 시점에도 `submitted`/`fill` 표본이 관찰 개시 문턱에 못 미쳐 `soft_stop` 1차 관찰 개시로 잠그지 않는다.
   - 근거:
@@ -239,13 +239,13 @@
 
 - [x] `[HoldingExitObs0427] trailing/soft_stop/same_symbol 재분해` (`Due: 2026-04-27`, `Slot: INTRADAY`, `TimeWindow: 15:05~15:20`, `Track: Plan`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
-  - 판정 기준: `scalp_trailing_take_profit`, `scalp_soft_stop_pct`, `scalp_ai_early_exit`, `scalp_preset_hard_stop_pct`, `scalp_hard_stop_pct`, `EOD/NXT`를 분리하고 `MISSED_UPSIDE/GOOD_EXIT/NEUTRAL`, `capture_efficiency`, `avg_extra_upside_10m_pct`, `soft_stop whipsaw_windows`, `down_count_evidence`, `hard_stop_auxiliary`, `COMPLETED valid profit_rate`를 함께 기록한다.
+  - 판정 기준: `scalp_trailing_take_profit`, `scalp_soft_stop_pct`, `scalp_preset_hard_stop_pct`, `scalp_hard_stop_pct`, `EOD/NXT`를 분리하고 `MISSED_UPSIDE/GOOD_EXIT/NEUTRAL`, `capture_efficiency`, `avg_extra_upside_10m_pct`, `soft_stop whipsaw_windows`, `hard_stop_auxiliary`, `COMPLETED valid profit_rate`를 함께 기록한다.
   - why: 4월 post-sell에서는 `MISSED_UPSIDE`와 `GOOD_EXIT`가 동시에 커서, trailing 연장 후보와 soft-stop rebound 후보를 같은 청산 개선축으로 묶으면 단일 조작점이 흐려진다.
-  - 판정: 완료. `soft_stop_rebound_split`을 보유/청산 1순위 후보로 유지하고, `trailing_continuation_micro_canary`는 2순위 observe 후보로 둔다. same_symbol 재진입 손실과 하방카운트 미작동은 soft_stop 승인 조건의 보조근거로만 묶는다.
+  - 판정: 완료. `soft_stop_rebound_split`을 보유/청산 1순위 후보로 유지하고, `trailing_continuation_micro_canary`는 2순위 observe 후보로 둔다. same_symbol 재진입 손실은 soft_stop 승인 조건의 보조근거로 묶고, 하방카운트 축은 폐기 완료로 잠근다.
   - 근거:
     - 현행 `holding_exit_observation_report` 재실행 기준 `readiness={submitted_orders=1, full_fill_events=3, partial_fill_events=3, completed_valid_trades=0, observation_ready=True, directional_only=True}`라 관찰 개시는 가능하지만 hard pass/fail 표본은 아직 없다.
     - `soft_stop_rebound`는 `total_soft_stop=61`, `rebound_above_sell_10m_rate=93.4%`, `rebound_above_buy_10m_rate=26.2%`, `same_symbol_reentry_loss_count=5`, `recommendation='soft_stop whipsaw confirmation canary 후보'`, `cooldown_live_allowed=True`였다.
-    - `down_count_evidence`는 `snapshot_review_events=9900`, `low_score_hits 0/3=9695`, `0/4=183`, `reached_trigger_reviews=2`, `qualified_loss_low_score_but_zero_hit=0`라 하방카운트는 휩쏘 방지장치라기보다 미작동/후행 신호 해석이 맞다.
+    - 하방카운트/`scalp_ai_early_exit`는 2026-04-27 기준 live 경로에서 제거했으며, soft_stop 휩쏘 판정은 `rebound/mfe/same_symbol/hard_stop_auxiliary` 기준으로만 유지한다.
     - `trailing_continuation`은 `evaluated_trailing=64`, `MISSED_UPSIDE=22(34.4%)`, `GOOD_EXIT=29(45.3%)`, `fallback_regression_count=6`, `eligible_for_live_review=False`라 2순위로 유지한다.
     - `same_symbol_reentry`는 `total_reentries=51`, `after_soft_stop_count=12`, `after_soft_stop_next_loss_count=5`라 soft_stop 이후 동일종목 재진입 손실이 보조 리스크로 존재한다.
   - 검증:
@@ -253,7 +253,7 @@
     - 현행 리포트 source는 saved snapshot + raw post_sell + raw pipeline_events만 사용했고, `load_distribution_evidence.direct_foreground_build_allowed=False`를 재확인했다.
   - 다음 액션:
     - `HoldingExitPlan0427`에서는 단일 조작점을 `soft_stop qualifying cohort`의 `micro grace`로 제한해 승인/보류를 닫는다.
-    - `same_symbol_reentry_loss_count=5`, `rebound_above_buy_10m_rate=26.2%`, `down_count_evidence` 미작동을 soft_stop 승인 근거 묶음으로 사용한다.
+    - `same_symbol_reentry_loss_count=5`, `rebound_above_buy_10m_rate=26.2%`, `hard_stop_auxiliary`를 soft_stop 승인 근거 묶음으로 사용한다.
     - `trailing_continuation_micro_canary`는 `MISSED_UPSIDE rate >= 60%`, `GOOD_EXIT rate <= 30%`를 충족하기 전까지 2순위 observe-only로 유지한다.
 
 ## 장후 체크리스트 (15:40~)
@@ -271,13 +271,13 @@
 
 - [x] `[HoldingExitPlan0427] soft_stop 1순위 보유/청산 canary 승인 또는 보류+재시각 확정` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 15:40~16:10`, `Track: Plan`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
-  - 판정 기준: 1순위는 `soft_stop_rebound_split`이며, live 승인은 `soft_stop completed_valid 손익 훼손`, `rebound_above_sell_10m`, `rebound_above_buy_10m`, `mfe_ge_0_5`, `mfe_ge_1_0`, `same_symbol_reentry_loss_count`, `low_score_hits` 미작동 여부, `fallback_regression = 0`, stage-disjoint 예외 충족 여부를 함께 본다. 하드스탑은 `hard_stop_whipsaw_aux` 보조축으로만 해석한다.
+  - 판정 기준: 1순위는 `soft_stop_rebound_split`이며, live 승인은 `soft_stop completed_valid 손익 훼손`, `rebound_above_sell_10m`, `rebound_above_buy_10m`, `mfe_ge_0_5`, `mfe_ge_1_0`, `same_symbol_reentry_loss_count`, `hard_stop_auxiliary`, `fallback_regression = 0`, stage-disjoint 예외 충족 여부를 함께 본다. 하드스탑은 `hard_stop_whipsaw_aux` 보조축으로만 해석한다.
   - why: 4월 기준 soft_stop의 realized loss 축이 trailing upside capture보다 직접 손익 훼손이 크고, 기존 로그는 soft_stop 이후 매도가 재상회/단기 반등이 많아 휩쏘 가능성이 높다. 다만 매수가 회복까지 높은 경우에는 cooldown live를 금지하고 threshold/AI 재판정 후보로 둔다.
   - 판정: 완료. `soft_stop qualifying cohort`의 단일 조작점은 `micro grace`로 선택하고 코드 적용까지 완료했다. `whipsaw confirmation`은 AI/호가 확인을 한 번 더 요구해 지연/누락을 만들 수 있으므로 오늘 1차 live 조작점으로 쓰지 않는다.
   - 근거:
     - 4월 soft_stop 61건 중 10분 내 매도가 재상회는 `57건(93.4%)`, +0.5% 이상 반등은 `43건(70.5%)`, +1.0% 이상 반등은 `23건(37.7%)`라 “즉시 손절 직후 짧은 반등” 신호가 강했다.
     - 반면 10분 내 매수가 회복은 `16건(26.2%)`에 그쳐 동일종목 cooldown이나 매수가 회복 확인보다, 매도 직후 짧은 확인유예가 더 직접적인 조작점이다.
-    - 하방카운트는 `snapshot_review_events=9900` 중 `low_score_hits 0/3=9695`, `reached_trigger_reviews=2`라 soft_stop 직전 휩쏘 필터로 거의 작동하지 않았다.
+    - 하방카운트/`scalp_ai_early_exit`는 폐기 완료 축으로 잠그고, soft_stop 직전 보호조작은 `micro grace`와 `emergency/hard_stop` 가드로만 운용한다.
     - emergency guard를 `-2.0%`, hard stop을 `-2.5%`로 남겨 급락 표본은 유예하지 않는다.
   - 코드 반영:
     - `SCALP_SOFT_STOP_MICRO_GRACE_ENABLED=True`, `SCALP_SOFT_STOP_MICRO_GRACE_SEC=20`, `SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT=-2.0` 추가.

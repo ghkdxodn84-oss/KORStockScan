@@ -709,7 +709,6 @@ def _restore_holding_runtime_state(targets):
             highest_prices[code] = max(_safe_float(highest_prices.get(code)), buy_price)
 
         if strategy == "SCALPING":
-            stock.setdefault("ai_low_score_loss_hits", 0)
             stock.setdefault("last_ai_reviewed_at", None)
             stock.setdefault("near_ai_exit_started_at", None)
             if is_default_position_tag(strategy, position_tag):
@@ -768,24 +767,12 @@ def _restore_holding_runtime_state(targets):
 def evaluate_scalping_exit(stock, code, ws_data, curr_p, buy_p, profit_rate, peak_profit):
     base_stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -1.5)
     hard_stop_pct = getattr(TRADING_RULES, 'SCALP_HARD_STOP', -2.5)
-    ai_exit_score_limit = int(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_MAX_SCORE', 35))
-    ai_exit_min_loss_pct = float(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_MIN_LOSS_PCT', -0.7))
-    ai_exit_min_hold_sec = int(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_MIN_HOLD_SEC', 180))
-    ai_exit_needed_hits = int(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_CONSECUTIVE_HITS', 3))
-    open_reclaim_needed_hits = int(
-        getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_CONSECUTIVE_HITS_OPEN_RECLAIM', ai_exit_needed_hits)
-        or ai_exit_needed_hits
-    )
     momentum_decay_score_limit = int(getattr(TRADING_RULES, 'SCALP_AI_MOMENTUM_DECAY_SCORE_LIMIT', 45) or 45)
     momentum_decay_min_hold_sec = int(getattr(TRADING_RULES, 'SCALP_AI_MOMENTUM_DECAY_MIN_HOLD_SEC', 90) or 90)
     safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5)
     trailing_start_pct = getattr(TRADING_RULES, 'SCALP_TRAILING_START_PCT', 0.6)
     weak_trailing = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_WEAK', 0.4)
     strong_trailing = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_STRONG', 0.8)
-    pos_tag = normalize_position_tag('SCALPING', stock.get('position_tag'))
-    if pos_tag == 'OPEN_RECLAIM':
-        ai_exit_needed_hits = max(ai_exit_needed_hits, open_reclaim_needed_hits)
-
     current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
     current_vpw = float(ws_data.get('v_pw', 0) or 0.0)
 
@@ -840,19 +827,6 @@ def evaluate_scalping_exit(stock, code, ws_data, curr_p, buy_p, profit_rate, pea
 
     if profit_rate <= soft_stop_pct:
         return f"소프트 손절선 도달 (profit_rate={profit_rate:.2f}% <= {soft_stop_pct}%)"
-
-    # AI 하방 리스크
-    ai_low_score_hits = int(stock.get('ai_low_score_loss_hits', 0) or 0)
-    if (
-        held_seconds >= ai_exit_min_hold_sec
-        and profit_rate <= ai_exit_min_loss_pct
-        and current_ai_score <= ai_exit_score_limit
-        and ai_low_score_hits >= ai_exit_needed_hits
-    ):
-        return (
-            f"AI 하방 리스크 연속 확인 ({ai_low_score_hits}/{ai_exit_needed_hits}, "
-            f"AI 점수 {current_ai_score:.0f})"
-        )
 
     # Dynamic Trailing (peak 확보 이후만)
     if peak_profit >= trailing_start_pct and profit_rate >= safe_profit_pct:

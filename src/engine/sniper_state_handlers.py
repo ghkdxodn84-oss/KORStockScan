@@ -3347,7 +3347,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             profit_rate=profit_rate,
             peak_profit=peak_profit,
             current_ai_score=preset_ai_score,
-            ai_exit_min_loss_pct=float(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_MIN_LOSS_PCT', -0.7) or -0.7),
+            ai_exit_min_loss_pct=-0.7,
         )
 
         if legacy_broker_recovered:
@@ -3471,20 +3471,10 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
 
     last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
     current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
-    ai_low_score_hits = int(stock.get('ai_low_score_loss_hits', 0) or 0)
-    ai_exit_score_limit = int(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_MAX_SCORE', 35))
-    ai_exit_min_loss_pct = float(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_MIN_LOSS_PCT', -0.7))
-    ai_exit_min_hold_sec = int(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_MIN_HOLD_SEC', 180))
-    ai_exit_needed_hits = int(getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_CONSECUTIVE_HITS', 3))
-    open_reclaim_needed_hits = int(
-        getattr(TRADING_RULES, 'SCALP_AI_EARLY_EXIT_CONSECUTIVE_HITS_OPEN_RECLAIM', ai_exit_needed_hits)
-        or ai_exit_needed_hits
-    )
+    near_ai_exit_score_limit = 35
+    near_ai_exit_min_loss_pct = -0.7
     momentum_decay_score_limit = int(getattr(TRADING_RULES, 'SCALP_AI_MOMENTUM_DECAY_SCORE_LIMIT', 45) or 45)
     momentum_decay_min_hold_sec = int(getattr(TRADING_RULES, 'SCALP_AI_MOMENTUM_DECAY_MIN_HOLD_SEC', 90) or 90)
-    if pos_tag == 'OPEN_RECLAIM':
-        ai_exit_needed_hits = max(ai_exit_needed_hits, open_reclaim_needed_hits)
-
     last_ai_profit = stock.get('last_ai_profit', profit_rate)
     price_change = abs(profit_rate - last_ai_profit)
     time_elapsed = now_ts - last_ai_time
@@ -3498,7 +3488,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             profit_rate=profit_rate,
             peak_profit=peak_profit,
             current_ai_score=current_ai_score,
-            ai_exit_min_loss_pct=ai_exit_min_loss_pct,
+            ai_exit_min_loss_pct=near_ai_exit_min_loss_pct,
         )
         _emit_partial_only_timeout_shadow(
             stock=stock,
@@ -3537,9 +3527,9 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 )
                 fast_sig_age_str = "-" if fast_sig_age is None else f"{fast_sig_age:.1f}"
                 sig_delta = _describe_snapshot_deltas(stock.get('last_ai_market_snapshot'), market_snapshot)
-                near_ai_exit_band = abs(profit_rate - ai_exit_min_loss_pct) <= 0.20
+                near_ai_exit_band = abs(profit_rate - near_ai_exit_min_loss_pct) <= 0.20
                 near_safe_profit_band = abs(profit_rate - safe_profit_pct) <= 0.20
-                near_low_score_band = current_ai_score <= (ai_exit_score_limit + 5)
+                near_low_score_band = current_ai_score <= (near_ai_exit_score_limit + 5)
                 fast_sig_fresh = fast_sig_age is not None and fast_sig_age < reuse_sec
                 price_change_ok = price_change < (dynamic_price_trigger * 1.25)
                 ws_fresh = ws_age_sec is None or ws_age_sec <= max_ws_age_sec
@@ -3561,11 +3551,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         "ai_holding_shadow_band",
                         profit_rate=f"{profit_rate:+.2f}",
                         ai_score=f"{current_ai_score:.0f}",
-                        ai_exit_min_loss_pct=f"{ai_exit_min_loss_pct:+.2f}",
+                        ai_exit_min_loss_pct=f"{near_ai_exit_min_loss_pct:+.2f}",
                         safe_profit_pct=f"{safe_profit_pct:+.2f}",
                         near_ai_exit=near_ai_exit_band,
                         near_safe_profit=near_safe_profit_band,
-                        distance_to_ai_exit=f"{profit_rate - ai_exit_min_loss_pct:+.2f}",
+                        distance_to_ai_exit=f"{profit_rate - near_ai_exit_min_loss_pct:+.2f}",
                         distance_to_safe_profit=f"{profit_rate - safe_profit_pct:+.2f}",
                         action=shadow_action,
                         shadow_only=True,
@@ -3589,11 +3579,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         "ai_holding_shadow_band",
                         profit_rate=f"{profit_rate:+.2f}",
                         ai_score=f"{current_ai_score:.0f}",
-                        ai_exit_min_loss_pct=f"{ai_exit_min_loss_pct:+.2f}",
+                        ai_exit_min_loss_pct=f"{near_ai_exit_min_loss_pct:+.2f}",
                         safe_profit_pct=f"{safe_profit_pct:+.2f}",
                         near_ai_exit=near_ai_exit_band,
                         near_safe_profit=near_safe_profit_band,
-                        distance_to_ai_exit=f"{profit_rate - ai_exit_min_loss_pct:+.2f}",
+                        distance_to_ai_exit=f"{profit_rate - near_ai_exit_min_loss_pct:+.2f}",
                         distance_to_safe_profit=f"{profit_rate - safe_profit_pct:+.2f}",
                         action=shadow_action,
                         shadow_only=True,
@@ -3640,12 +3630,6 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         stock['last_ai_profit'] = profit_rate
                         current_ai_score = smoothed_score
 
-                        if held_time_min * 60 >= ai_exit_min_hold_sec and profit_rate <= ai_exit_min_loss_pct and current_ai_score <= ai_exit_score_limit:
-                            ai_low_score_hits += 1
-                        else:
-                            ai_low_score_hits = 0
-
-                        stock['ai_low_score_loss_hits'] = ai_low_score_hits
                         stock['last_ai_reviewed_at'] = now_ts
                         stock['last_ai_market_signature'] = market_signature
                         stock['last_ai_market_snapshot'] = market_snapshot
@@ -3685,14 +3669,14 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             if (not stock.get('reversal_add_used')
                                     and not stock.get('reversal_add_state')
                                     and _ra_pnl_min <= profit_rate <= _ra_pnl_max
-                                    and ai_low_score_hits == 0):
+                            ):
                                 stock['reversal_add_state'] = 'STAGNATION'
                                 stock['reversal_add_profit_floor'] = profit_rate
                                 stock['reversal_add_ai_bottom'] = current_ai_score
                                 stock['reversal_add_ai_history'] = [current_ai_score]
                             # STAGNATION 리셋 조건
                             elif stock.get('reversal_add_state') == 'STAGNATION':
-                                if profit_rate < _ra_pnl_min or profit_rate > 0 or ai_low_score_hits > 0:
+                                if profit_rate < _ra_pnl_min or profit_rate > 0:
                                     stock['reversal_add_state'] = ''
                                     stock['reversal_add_profit_floor'] = 0.0
                                     stock['reversal_add_ai_bottom'] = 100
@@ -3729,7 +3713,6 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                     (not stock.get('reversal_add_used'))
                                     and (_ra_pnl_min <= profit_rate <= _ra_pnl_max)
                                     and (profit_rate >= _ra_floor - _ra_margin)
-                                    and ai_low_score_hits == 0
                                     and current_ai_score >= _ra_min_ai
                                     and (_ra_recovering_delta or _ra_recovering_consec)
                                     and _ra_supply_ok
@@ -3751,7 +3734,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
 
                         print(
                             f"👁️ [AI 보유감시: {stock['name']}] 수익: {profit_rate:+.2f}% | "
-                            f"AI: {current_ai_score:.0f}점 | 하방카운트: {ai_low_score_hits}/{ai_exit_needed_hits} | "
+                            f"AI: {current_ai_score:.0f}점 | "
                             f"갱신주기: {dynamic_max_cd}초 | AI캐시: {'HIT' if ai_cache_hit else 'MISS'}"
                         )
                         _log_holding_pipeline(
@@ -3760,7 +3743,6 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             "ai_holding_review",
                             profit_rate=f"{profit_rate:+.2f}",
                             ai_score=f"{current_ai_score:.0f}",
-                            low_score_hits=f"{ai_low_score_hits}/{ai_exit_needed_hits}",
                             held_sec=int(held_time_min * 60),
                             price_change=f"{price_change:.2f}",
                             review_cd_sec=dynamic_max_cd,
@@ -3853,16 +3835,16 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             stock.pop('soft_stop_micro_grace_extension_used', None)
 
         open_reclaim_near_ai_exit = (
-            profit_rate <= ai_exit_min_loss_pct
-            and current_ai_score <= (ai_exit_score_limit + open_reclaim_score_buffer)
+            profit_rate <= near_ai_exit_min_loss_pct
+            and current_ai_score <= (near_ai_exit_score_limit + open_reclaim_score_buffer)
         )
         scanner_fallback_near_ai_exit = (
-            profit_rate <= ai_exit_min_loss_pct
-            and current_ai_score <= (ai_exit_score_limit + scanner_fallback_score_buffer)
+            profit_rate <= near_ai_exit_min_loss_pct
+            and current_ai_score <= (near_ai_exit_score_limit + scanner_fallback_score_buffer)
         )
         default_near_ai_exit = (
-            profit_rate <= ai_exit_min_loss_pct
-            and current_ai_score <= ai_exit_score_limit
+            profit_rate <= near_ai_exit_min_loss_pct
+            and current_ai_score <= near_ai_exit_score_limit
         )
         open_reclaim_near_ai_exit_sustain_sec = _update_boolean_sustain_sec(
             stock,
@@ -3965,18 +3947,14 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 reason = f"🔪 소프트 손절 ({dynamic_stop_pct}%) [AI: {current_ai_score:.0f}]"
                 exit_rule = "scalp_soft_stop_pct"
 
-        elif profit_rate >= 0 and ai_low_score_hits:
-            stock['ai_low_score_loss_hits'] = 0
-            ai_low_score_hits = 0
-
         elif (
             not legacy_broker_recovered
             and
             pos_tag == 'OPEN_RECLAIM'
             and held_sec >= open_reclaim_hold_sec
             and peak_profit <= open_reclaim_peak_max_pct
-            and profit_rate <= ai_exit_min_loss_pct
-            and current_ai_score <= (ai_exit_score_limit + open_reclaim_score_buffer)
+            and profit_rate <= near_ai_exit_min_loss_pct
+            and current_ai_score <= (near_ai_exit_score_limit + open_reclaim_score_buffer)
         ):
             is_sell_signal = True
             sell_reason_type = "LOSS"
@@ -4010,7 +3988,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             and held_sec >= scanner_fallback_hold_sec
             and peak_profit <= scanner_fallback_peak_max_pct
             and scanner_fallback_near_ai_exit_sustain_runtime_sec >= scanner_fallback_near_ai_exit_sustain_sec
-            and current_ai_score <= (ai_exit_score_limit + scanner_fallback_score_buffer)
+            and current_ai_score <= (near_ai_exit_score_limit + scanner_fallback_score_buffer)
         ):
             is_sell_signal = True
             sell_reason_type = "LOSS"
@@ -4036,68 +4014,6 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 f"(hold={held_sec}s, near_ai_exit={scanner_fallback_near_ai_exit_sustain_runtime_sec}s, peak={peak_profit:.2f}%)"
             )
             exit_rule = "scalp_scanner_fallback_retrace_exit"
-
-        elif (
-            not legacy_broker_recovered
-            and
-            held_sec >= ai_exit_min_hold_sec
-            and profit_rate <= ai_exit_min_loss_pct
-            and current_ai_score <= ai_exit_score_limit
-            and ai_low_score_hits >= ai_exit_needed_hits
-        ):
-            ai_exit_avgdown_enabled = bool(
-                getattr(TRADING_RULES, 'SCALP_AI_EXIT_AVGDOWN_ENABLED', False)
-            )
-            ai_exit_avgdown_done = bool(stock.get('scalp_ai_exit_avgdown_done', False))
-
-            if ai_exit_avgdown_enabled and not ai_exit_avgdown_done:
-                # AI 하방카운트 기반 avg-down은 기존 가격낙폭 평가와 독립적으로 1회 시도한다.
-                avgdown_action = {
-                    "should_add": True,
-                    "add_type": "AVG_DOWN",
-                    "reason": "scalp_ai_exit_avgdown",
-                    "qty": 0,
-                    "price": 0,
-                }
-                add_result = _process_scale_in_action(stock, code, ws_data, avgdown_action, admin_id)
-                if add_result:
-                    stock['scalp_ai_exit_avgdown_done'] = True
-                    stock['ai_low_score_loss_hits'] = 0
-                    ai_low_score_hits = 0
-                    _log_holding_pipeline(
-                        stock,
-                        code,
-                        "scalp_ai_exit_avgdown",
-                        id=stock.get('id'),
-                        profit_rate=f"{profit_rate:+.2f}",
-                        ai_score=f"{current_ai_score:.0f}",
-                        low_score_hits=f"{ai_exit_needed_hits}/{ai_exit_needed_hits}",
-                        held_sec=int(held_sec),
-                        note="ai_exit_avgdown_triggered_reset_hits",
-                    )
-                    print(
-                        f"🔄 [AI카운트 물타기] {stock['name']}({code}) "
-                        f"하방카운트 {ai_exit_needed_hits}회 도달 → AVG_DOWN 실행 후 보유 재진입 "
-                        f"(수익: {profit_rate:.2f}%, AI: {current_ai_score:.0f}점)"
-                    )
-                else:
-                    is_sell_signal = True
-                    sell_reason_type = "LOSS"
-                    reason = (
-                        f"🚨 AI 하방 리스크 연속 확인 {ai_low_score_hits}/{ai_exit_needed_hits}회 "
-                        f"({current_ai_score:.0f}점). 조기 손절 [{profit_rate:.2f}%] "
-                        f"(물타기 주문 실패 - fallback)"
-                    )
-                    exit_rule = "scalp_ai_early_exit"
-            else:
-                is_sell_signal = True
-                sell_reason_type = "LOSS"
-                reason = (
-                    f"🚨 AI 하방 리스크 연속 확인 {ai_low_score_hits}/{ai_exit_needed_hits}회 "
-                    f"({current_ai_score:.0f}점). 조기 손절 ({profit_rate:.2f}%)"
-                    + (" [물타기 소진]" if ai_exit_avgdown_done else "")
-                )
-                exit_rule = "scalp_ai_early_exit"
 
         elif profit_rate >= safe_profit_pct:
             if current_ai_score < momentum_decay_score_limit and held_sec >= momentum_decay_min_hold_sec:

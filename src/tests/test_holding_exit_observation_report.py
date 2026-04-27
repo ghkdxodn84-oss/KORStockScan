@@ -279,8 +279,6 @@ def test_holding_exit_observation_report_splits_required_cohorts(monkeypatch, tm
     assert report["soft_stop_rebound"]["whipsaw_windows"][3]["window"] == "10m"
     assert report["soft_stop_rebound"]["whipsaw_windows"][3]["mfe_ge_1_0_rate"] == 100.0
     assert report["soft_stop_rebound"]["cooldown_live_allowed"] is False
-    assert report["soft_stop_rebound"]["down_count_evidence"]["snapshot_review_events"] == 3
-    assert report["soft_stop_rebound"]["down_count_evidence"]["reached_trigger_reviews"] == 1
     assert report["soft_stop_rebound"]["hard_stop_auxiliary"]["evaluated_post_sell"] == 1
     assert report["soft_stop_rebound"]["hard_stop_auxiliary"]["completed_valid_trades"] == 1
     assert report["same_symbol_reentry"]["after_soft_stop_next_loss_count"] == 1

@@ -939,7 +939,6 @@ def handle_real_execution(exec_data):
                     target_stock['ai_review_done'] = False
                     target_stock['ai_review_score'] = None
                     target_stock['ai_review_action'] = None
-                    target_stock['ai_low_score_loss_hits'] = 0
                     target_stock['last_ai_reviewed_at'] = None
                     target_stock['exit_requested'] = False
                     target_stock['exit_order_type'] = None

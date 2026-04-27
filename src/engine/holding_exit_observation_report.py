@@ -5,7 +5,6 @@ from __future__ import annotations
 import gzip
 import json
 import math
-import re
 from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -20,7 +19,6 @@ POST_FALLBACK_CUTOFF = datetime(2026, 4, 21, 9, 45)
 TARGET_EXIT_RULES = (
     "scalp_trailing_take_profit",
     "scalp_soft_stop_pct",
-    "scalp_ai_early_exit",
     "scalp_preset_hard_stop_pct",
     "scalp_hard_stop_pct",
     "EOD/NXT",
@@ -583,87 +581,6 @@ def _build_hard_stop_auxiliary(post_sell_rows: list[dict], valid_trades: list[di
     }
 
 
-def _parse_low_score_hits(value: Any) -> tuple[int, int]:
-    match = re.search(r"(\d+)\s*/\s*(\d+)", str(value or ""))
-    if not match:
-        return 0, 0
-    return int(match.group(1)), int(match.group(2))
-
-
-def _build_down_count_evidence(valid_trades: list[dict]) -> dict:
-    hit_counts: Counter[tuple[int, int]] = Counter()
-    total_reviews = 0
-    qualified_but_zero_hit = 0
-    soft_stop_zero_hit = 0
-    examples: list[dict] = []
-    for trade in valid_trades:
-        max_hit = 0
-        for event in trade.get("timeline") or []:
-            if not isinstance(event, dict) or str(event.get("stage") or "") != "ai_holding_review":
-                continue
-            fields = event.get("fields") or {}
-            hit, need = _parse_low_score_hits(fields.get("low_score_hits"))
-            if need <= 0:
-                continue
-            total_reviews += 1
-            max_hit = max(max_hit, hit)
-            hit_counts[(hit, need)] += 1
-            profit_rate = _safe_float(fields.get("profit_rate"), None)
-            ai_score = _safe_float(fields.get("ai_score"), None)
-            held_sec = _safe_int(fields.get("held_sec"), 0)
-            if profit_rate is None or ai_score is None:
-                continue
-            if (
-                held_sec >= int(getattr(TRADING_RULES, "SCALP_AI_EARLY_EXIT_MIN_HOLD_SEC", 180))
-                and profit_rate <= float(getattr(TRADING_RULES, "SCALP_AI_EARLY_EXIT_MIN_LOSS_PCT", -0.7))
-                and ai_score <= float(getattr(TRADING_RULES, "SCALP_AI_EARLY_EXIT_MAX_SCORE", 35))
-                and hit == 0
-            ):
-                qualified_but_zero_hit += 1
-                if len(examples) < 5:
-                    examples.append(
-                        {
-                            "trade_id": _trade_id(trade),
-                            "name": str(trade.get("name") or ""),
-                            "profit_rate": round(float(profit_rate), 3),
-                            "ai_score": round(float(ai_score), 1),
-                            "held_sec": int(held_sec),
-                            "low_score_hits": f"{hit}/{need}",
-                        }
-                    )
-        if _exit_group(_exit_rule_from_trade(trade)) == "scalp_soft_stop_pct" and max_hit == 0:
-            soft_stop_zero_hit += 1
-    nonzero = sum(count for (hit, _need), count in hit_counts.items() if hit > 0)
-    reached = sum(count for (hit, need), count in hit_counts.items() if need > 0 and hit >= need)
-    return {
-        "mechanism": "AI 저점수+손실 연속 확인 카운터이며 가격 휩쏘 확인 필터가 아니다.",
-        "conditions": {
-            "ai_score_max": int(getattr(TRADING_RULES, "SCALP_AI_EARLY_EXIT_MAX_SCORE", 35)),
-            "min_loss_pct": float(getattr(TRADING_RULES, "SCALP_AI_EARLY_EXIT_MIN_LOSS_PCT", -0.7)),
-            "min_hold_sec": int(getattr(TRADING_RULES, "SCALP_AI_EARLY_EXIT_MIN_HOLD_SEC", 180)),
-            "consecutive_hits": int(getattr(TRADING_RULES, "SCALP_AI_EARLY_EXIT_CONSECUTIVE_HITS", 3)),
-            "open_reclaim_consecutive_hits": int(
-                getattr(TRADING_RULES, "SCALP_AI_EARLY_EXIT_CONSECUTIVE_HITS_OPEN_RECLAIM", 4)
-            ),
-        },
-        "evaluation_order_note": "스캘핑 exit 분기에서 hard_stop/soft_stop이 AI 하방카운트 청산보다 먼저 평가된다.",
-        "snapshot_review_events": int(total_reviews),
-        "hit_distribution": [
-            {"low_score_hits": f"{hit}/{need}", "count": count}
-            for (hit, need), count in hit_counts.most_common()
-        ],
-        "nonzero_hit_reviews": int(nonzero),
-        "reached_trigger_reviews": int(reached),
-        "qualified_loss_low_score_but_zero_hit": int(qualified_but_zero_hit),
-        "soft_stop_trades_with_zero_max_hit": int(soft_stop_zero_hit),
-        "examples": examples,
-        "interpretation": (
-            "대부분 0회에 머물면 soft_stop 휩쏘를 막는 장치로는 작동하지 않은 것이다. "
-            "27일에는 soft_stop 직전 low_score_hits/held_sec/ai_score를 함께 잠가야 한다."
-        ),
-    }
-
-
 def _build_soft_stop_rebound(
     post_sell_rows: list[dict],
     same_symbol_reentry: dict,
@@ -706,7 +623,6 @@ def _build_soft_stop_rebound(
         "same_symbol_reentry_loss_count": soft_reentry_losses,
         "whipsaw_signal": whipsaw_signal,
         "whipsaw_windows": whipsaw_windows,
-        "down_count_evidence": _build_down_count_evidence(valid_trades),
         "hard_stop_auxiliary": _build_hard_stop_auxiliary(post_sell_rows, valid_trades),
         "recommendation": recommendation,
         "cooldown_live_allowed": bool(

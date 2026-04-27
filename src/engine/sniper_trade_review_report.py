@@ -505,7 +505,6 @@ def _infer_exit_rule_from_reason(reason: Any) -> str:
         ("OPEN_RECLAIM 양전환 후 재약세", "scalp_open_reclaim_retrace_exit"),
         ("SCANNER fallback 지연손절 보정", "scalp_scanner_fallback_never_green"),
         ("SCANNER fallback 양전환 후 재약세", "scalp_scanner_fallback_retrace_exit"),
-        ("AI 하방 리스크 연속 확인", "scalp_ai_early_exit"),
         ("AI 틱 가속도 둔화", "scalp_ai_momentum_decay"),
         ("고점 대비 밀림", "scalp_trailing_take_profit"),
         ("소프트 손절", "scalp_soft_stop_pct"),
