@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 from collections import Counter
 from datetime import datetime, time
@@ -76,7 +77,9 @@ def _in_window(row: dict[str, Any], since: time | None, until: time | None, targ
 
 def _read_json(path: Path) -> Any | None:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        opener = gzip.open if path.suffix == ".gz" else open
+        with opener(path, "rt", encoding="utf-8") as handle:
+            return json.load(handle)
     except (OSError, json.JSONDecodeError):
         return None
 
@@ -91,7 +94,8 @@ def _read_jsonl(
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     try:
-        with path.open("r", encoding="utf-8") as handle:
+        opener = gzip.open if path.suffix == ".gz" else open
+        with opener(path, "rt", encoding="utf-8") as handle:
             for line in handle:
                 line = line.strip()
                 if not line:
@@ -230,6 +234,8 @@ def _load_pipeline_events(bundle_dir: Path, since: time | None, until: time | No
     rows: list[dict[str, Any]] = []
     for path in sorted(events_dir.glob("pipeline_events_*.jsonl")):
         rows.extend(_read_jsonl(path, since=since, until=until, target_date=target_date, break_after_until=True))
+    for path in sorted(events_dir.glob("pipeline_events_*.jsonl.gz")):
+        rows.extend(_read_jsonl(path, since=since, until=until, target_date=target_date, break_after_until=True))
     return rows
 
 
@@ -244,7 +250,11 @@ def _load_post_sell_rows(
     evaluations: list[dict[str, Any]] = []
     for path in sorted(post_sell_dir.glob("post_sell_candidates_*.jsonl")):
         candidates.extend(_read_jsonl(path, since=since, until=until, target_date=target_date))
+    for path in sorted(post_sell_dir.glob("post_sell_candidates_*.jsonl.gz")):
+        candidates.extend(_read_jsonl(path, since=since, until=until, target_date=target_date))
     for path in sorted(post_sell_dir.glob("post_sell_evaluations_*.jsonl")):
+        evaluations.extend(_read_jsonl(path, since=since, until=until, target_date=target_date))
+    for path in sorted(post_sell_dir.glob("post_sell_evaluations_*.jsonl.gz")):
         evaluations.extend(_read_jsonl(path, since=since, until=until, target_date=target_date))
     return candidates, evaluations
 
@@ -270,6 +280,13 @@ def _fill_counts(rows: Iterable[dict[str, Any]]) -> tuple[int, int]:
         elif quality == "PARTIAL" or "partial_fill" in blob:
             partial += 1
     return full, partial
+
+
+def _avg(values: Iterable[float]) -> float | None:
+    items = [float(value) for value in values]
+    if not items:
+        return None
+    return round(sum(items) / len(items), 6)
 
 
 def _orderbook_stability_summary(
@@ -315,6 +332,74 @@ def _orderbook_stability_summary(
             "unstable_record_count": len(unstable_ids),
             "latency_danger_count": len(unstable_ids & latency_danger_ids),
             "latency_danger_rate": _percent_point(_ratio(len(unstable_ids & latency_danger_ids), len(unstable_ids))),
+        },
+    }
+
+
+def _latency_entry_price_guard_summary(
+    window_rows: list[dict[str, Any]],
+    holding_rows: list[dict[str, Any]],
+) -> dict[str, Any]:
+    submitted_rows = [row for row in window_rows if _stage(row) == "order_bundle_submitted"]
+    guard_breakdown: Counter[str] = Counter()
+    submitted_by_id: dict[str, dict[str, Any]] = {}
+    for row in submitted_rows:
+        guard = str(_field(row, "entry_price_guard") or "unknown").strip() or "unknown"
+        guard_breakdown[guard] += 1
+        record_id = _record_id(row)
+        if record_id:
+            submitted_by_id[record_id] = row
+
+    three_tick_ids = {
+        _record_id(row)
+        for row in submitted_rows
+        if str(_field(row, "entry_price_guard") or "") == "latency_danger_override_defensive"
+        and _record_id(row)
+    }
+    full_ids = {
+        _record_id(row)
+        for row in holding_rows
+        if _record_id(row) and (_stage(row) == "full_fill" or str(_field(row, "fill_quality", "fill_status") or "").upper() == "FULL")
+    }
+    partial_ids = {
+        _record_id(row)
+        for row in holding_rows
+        if _record_id(row) and (_stage(row) == "partial_fill" or str(_field(row, "fill_quality", "fill_status") or "").upper() == "PARTIAL")
+    }
+    fill_ids = full_ids | partial_ids
+
+    slippage_bps: list[float] = []
+    slippage_krw: list[float] = []
+    completed_profit_rates: list[float] = []
+    for row in holding_rows:
+        record_id = _record_id(row)
+        if record_id not in three_tick_ids:
+            continue
+        submitted = submitted_by_id.get(record_id) or {}
+        order_price = _safe_float(_field(submitted, "order_price", "latency_guarded_order_price"))
+        fill_price = _safe_float(_field(row, "fill_price", "buy_price", "exec_price"))
+        if order_price and fill_price:
+            diff = float(fill_price) - float(order_price)
+            slippage_krw.append(diff)
+            slippage_bps.append(round((diff / float(order_price)) * 10_000.0, 6))
+        status = str(_field(row, "status", "holding_status") or "").strip().upper()
+        profit = _safe_float(_field(row, "profit_rate", "realized_profit_rate"))
+        if status == "COMPLETED" and profit is not None:
+            completed_profit_rates.append(float(profit))
+
+    three_tick_fill_ids = three_tick_ids & fill_ids
+    return {
+        "submitted_guard_breakdown": dict(guard_breakdown),
+        "three_tick_guard": {
+            "submitted_count": len(three_tick_ids),
+            "full_fill_count": len(three_tick_ids & full_ids),
+            "partial_fill_count": len(three_tick_ids & partial_ids),
+            "fill_count": len(three_tick_fill_ids),
+            "fill_rate": _percent_point(_ratio(len(three_tick_fill_ids), len(three_tick_ids))),
+            "avg_realized_slippage_krw": _avg(slippage_krw),
+            "avg_realized_slippage_bps": _avg(slippage_bps),
+            "completed_valid_profit_count": len(completed_profit_rates),
+            "completed_valid_profit_avg": _avg(completed_profit_rates),
         },
     }
 
@@ -388,6 +473,7 @@ def build_entry_summary(
     until: time | None,
     label: str,
     shadow_diff_status: str,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     window_rows = [row for row in events if _pipeline(row) == ENTRY_PIPELINE and _in_window(row, since, until)]
     holding_rows = [row for row in events if _pipeline(row) == HOLDING_PIPELINE and _in_window(row, since, until)]
@@ -419,6 +505,7 @@ def build_entry_summary(
         [row for row in window_rows if _stage(row) == "order_bundle_submitted"],
         latency_state_danger,
     )
+    latency_entry_price_guard = _latency_entry_price_guard_summary(window_rows, holding_rows)
 
     baseline_samples = baseline_parts["budget_pass"]
     hard_allowed = (
@@ -452,6 +539,7 @@ def build_entry_summary(
         "axis": "latency_quote_fresh_composite",
         "label": label,
         "window": {"since": since.isoformat() if since else None, "until": until.isoformat() if until else None},
+        "bundle_metadata": metadata or {},
         "budget_pass_events": budget_pass_events,
         "order_bundle_submitted_events": submitted_events,
         "submitted_orders": submitted_events,
@@ -473,6 +561,7 @@ def build_entry_summary(
         "fallback_regression_count": _fallback_regression_count(window_rows + holding_rows),
         "signal_quality_quote_composite_candidate_events": len(signal_quality_quote_candidates),
         "orderbook_stability": orderbook_stability,
+        "latency_entry_price_guard": latency_entry_price_guard,
         "signal_quality_quote_composite_candidate_thresholds": {
             "min_signal": SIGNAL_QUALITY_QUOTE_MIN_SIGNAL,
             "min_strength": SIGNAL_QUALITY_QUOTE_MIN_STRENGTH,
@@ -534,6 +623,7 @@ def build_soft_stop_summary(
     since: time | None,
     until: time | None,
     label: str,
+    metadata: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     holding_rows = [row for row in events if _pipeline(row) == HOLDING_PIPELINE and _in_window(row, since, until)]
     grace_events = [row for row in holding_rows if _stage(row) == "soft_stop_micro_grace"]
@@ -586,6 +676,7 @@ def build_soft_stop_summary(
         "axis": "soft_stop_micro_grace",
         "label": label,
         "window": {"since": since.isoformat() if since else None, "until": until.isoformat() if until else None},
+        "bundle_metadata": metadata or {},
         "soft_stop_micro_grace_events": len(grace_events),
         "soft_stop_micro_grace_extension_used_events": len(extension_used_events),
         "scalp_soft_stop_pct_events": len(soft_stop_events),
@@ -618,9 +709,18 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
 
 def _render_entry_md(summary: dict[str, Any]) -> str:
     orderbook = summary.get("orderbook_stability") or {}
+    price_guard = summary.get("latency_entry_price_guard") or {}
+    three_tick_guard = price_guard.get("three_tick_guard") or {}
+    metadata = summary.get("bundle_metadata") or {}
     return "\n".join(
         [
             f"# Entry Quote Fresh Composite Summary ({summary['label']})",
+            "",
+            "## Bundle",
+            f"- bundle_dir: `{metadata.get('bundle_dir', '-')}`",
+            f"- target_date: `{metadata.get('target_date', '-')}`",
+            f"- manifest_generated_at: `{metadata.get('manifest_generated_at', '-')}`",
+            f"- pipeline_event_rows_loaded: `{metadata.get('pipeline_event_rows_loaded', 0)}`",
             "",
             "## 판정",
             f"- hard_pass_fail_allowed: `{summary['hard_pass_fail_allowed']}`",
@@ -638,6 +738,10 @@ def _render_entry_md(summary: dict[str, Any]) -> str:
             f"- full/partial fill: `{summary['full_fill_events']}` / `{summary['partial_fill_events']}`",
             f"- fallback_regression_count: `{summary['fallback_regression_count']}`",
             f"- signal_quality_quote_composite_candidate_events: `{summary['signal_quality_quote_composite_candidate_events']}`",
+            f"- latency_entry_price_guard_breakdown: `{price_guard.get('submitted_guard_breakdown', {})}`",
+            f"- latency_3tick_guard submitted/fill/fill_rate: `{three_tick_guard.get('submitted_count', 0)}` / `{three_tick_guard.get('fill_count', 0)}` / `{three_tick_guard.get('fill_rate')}`%",
+            f"- latency_3tick_guard realized_slippage krw/bps: `{three_tick_guard.get('avg_realized_slippage_krw')}` / `{three_tick_guard.get('avg_realized_slippage_bps')}`",
+            f"- latency_3tick_guard completed_valid_profit count/avg: `{three_tick_guard.get('completed_valid_profit_count', 0)}` / `{three_tick_guard.get('completed_valid_profit_avg')}`",
             f"- orderbook_stability_observed_count: `{orderbook.get('orderbook_stability_observed_count', 0)}`",
             f"- unstable_quote_observed_count/share: `{orderbook.get('unstable_quote_observed_count', 0)}` / `{orderbook.get('unstable_quote_share')}`%",
             f"- unstable_reason_breakdown: `{orderbook.get('unstable_reason_breakdown', {})}`",
@@ -653,9 +757,16 @@ def _render_entry_md(summary: dict[str, Any]) -> str:
 
 
 def _render_soft_stop_md(summary: dict[str, Any]) -> str:
+    metadata = summary.get("bundle_metadata") or {}
     return "\n".join(
         [
             f"# Soft Stop Micro Grace Summary ({summary['label']})",
+            "",
+            "## Bundle",
+            f"- bundle_dir: `{metadata.get('bundle_dir', '-')}`",
+            f"- target_date: `{metadata.get('target_date', '-')}`",
+            f"- manifest_generated_at: `{metadata.get('manifest_generated_at', '-')}`",
+            f"- pipeline_event_rows_loaded: `{metadata.get('pipeline_event_rows_loaded', 0)}`",
             "",
             "## 판정",
             f"- hard_pass_fail_allowed: `{summary['hard_pass_fail_allowed']}`",
@@ -696,7 +807,15 @@ def _render_combined_md(summary: dict[str, Any]) -> str:
     )
 
 
-def run_analysis(bundle_dir: Path, *, since: str | None, until: str | None, cumulative_since: str | None, label: str) -> dict[str, Any]:
+def run_analysis(
+    bundle_dir: Path,
+    *,
+    since: str | None,
+    until: str | None,
+    cumulative_since: str | None,
+    label: str,
+    output_dir: Path | None = None,
+) -> dict[str, Any]:
     if cumulative_since and since:
         raise ValueError("--since and --cumulative-since cannot be used together")
     manifest = _load_manifest(bundle_dir)
@@ -706,8 +825,21 @@ def run_analysis(bundle_dir: Path, *, since: str | None, until: str | None, cumu
     events = _load_pipeline_events(bundle_dir, since_time, until_time, target_date)
     candidates, evaluations = _load_post_sell_rows(bundle_dir, since_time, until_time, target_date)
     shadow_status = _load_shadow_diff_status(bundle_dir)
+    metadata = {
+        "bundle_dir": str(bundle_dir),
+        "target_date": manifest.get("target_date"),
+        "manifest_generated_at": manifest.get("generated_at"),
+        "pipeline_event_rows_loaded": len(events),
+    }
 
-    entry = build_entry_summary(events, since=since_time, until=until_time, label=label, shadow_diff_status=shadow_status)
+    entry = build_entry_summary(
+        events,
+        since=since_time,
+        until=until_time,
+        label=label,
+        shadow_diff_status=shadow_status,
+        metadata=metadata,
+    )
     soft_stop = build_soft_stop_summary(
         events,
         candidates,
@@ -715,6 +847,7 @@ def run_analysis(bundle_dir: Path, *, since: str | None, until: str | None, cumu
         since=since_time,
         until=until_time,
         label=label,
+        metadata=metadata,
     )
     combined = {
         "schema_version": 1,
@@ -726,7 +859,7 @@ def run_analysis(bundle_dir: Path, *, since: str | None, until: str | None, cumu
         "soft_stop": soft_stop,
     }
 
-    results_dir = bundle_dir / "results"
+    results_dir = output_dir or (bundle_dir / "results")
     _write_json(results_dir / f"entry_quote_fresh_composite_summary_{label}.json", entry)
     (results_dir / f"entry_quote_fresh_composite_summary_{label}.md").write_text(_render_entry_md(entry), encoding="utf-8")
     _write_json(results_dir / f"soft_stop_micro_grace_summary_{label}.json", soft_stop)
@@ -743,6 +876,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--until", default=None, help="HH:MM:SS")
     parser.add_argument("--cumulative-since", default=None, help="HH:MM:SS")
     parser.add_argument("--label", required=True)
+    parser.add_argument("--output-dir", type=Path, default=None, help="Optional directory for summary outputs")
     return parser
 
 
@@ -754,8 +888,9 @@ def main(argv: Iterable[str] | None = None) -> int:
         until=args.until,
         cumulative_since=args.cumulative_since,
         label=args.label,
+        output_dir=args.output_dir,
     )
-    results_dir = args.bundle_dir / "results"
+    results_dir = args.output_dir or (args.bundle_dir / "results")
     print(f"wrote live canary summaries: {results_dir}")
     print(json.dumps({"label": combined["label"], "window": combined["window"]}, ensure_ascii=False, sort_keys=True))
     return 0

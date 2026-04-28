@@ -707,6 +707,133 @@ def test_watching_state_rejects_deprecated_fallback_bundle(monkeypatch):
     assert stock.get("entry_requested_qty") is None
 
 
+def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 4, 3, 10, 0, 0)
+
+    state_handlers.datetime = FixedDateTime
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED=False,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {}
+    state_handlers.LAST_AI_CALL_TIMES = {"123456": FixedDateTime.now().timestamp() - 10}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+    state_handlers.KIWOOM_TOKEN = "token"
+
+    class DummyRadar:
+        def get_smart_target_price(self, curr_price, **kwargs):
+            return curr_price, 0.0
+
+    class DummyAI:
+        def analyze_target(self, *args, **kwargs):
+            return {"action": "BUY", "score": 90, "reason": "confirmed"}
+
+    class DummyEventBus:
+        def publish(self, *args, **kwargs):
+            return None
+
+    state_handlers.EVENT_BUS = DummyEventBus()
+
+    logs = []
+    sent_orders = []
+
+    def fake_log_entry_pipeline(stock, code, stage, **fields):
+        logs.append((stage, fields))
+
+    def fake_send_buy_order(code, qty, price, order_type_code, *args, **kwargs):
+        sent_orders.append((qty, price, order_type_code, kwargs.get("tif")))
+        return {"return_code": "0", "ord_no": "O1"}
+
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", fake_log_entry_pipeline)
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(state_handlers, "_publish_buy_signal_submission_notice", lambda *args, **kwargs: None)
+    monkeypatch.setattr(state_handlers, "evaluate_scalping_strength_momentum", lambda ws_data: {"enabled": True, "allowed": True, "reason": "ok"})
+    monkeypatch.setattr(state_handlers, "arm_big_bite_if_triggered", lambda **kwargs: (False, {}))
+    monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (True, {}))
+    monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [1])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [1])
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "describe_buy_capacity",
+        lambda *args, **kwargs: (50_000, 47_500, 5, 0.95),
+    )
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "send_buy_order", fake_send_buy_order)
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_live_buy_entry",
+        lambda **kwargs: {
+            "allowed": True,
+            "mode": "normal",
+            "decision": "ALLOW_NORMAL",
+            "reason": "latency_quote_fresh_composite_normal_override",
+            "latency_state": "DANGER",
+            "orders": [
+                {
+                    "tag": "normal",
+                    "qty": 2,
+                    "price": 9_990,
+                    "order_type": "LIMIT",
+                    "tif": "DAY",
+                }
+            ],
+            "signal_price": 10_000,
+            "latest_price": 10_020,
+            "computed_allowed_slippage": 20,
+            "ws_age_ms": 820,
+            "ws_jitter_ms": 380,
+            "spread_ratio": 0.0062,
+            "quote_stale": False,
+            "latency_danger_reasons": "ws_age_too_high,ws_jitter_too_high",
+            "latency_canary_applied": True,
+            "latency_canary_reason": "quote_fresh_composite_canary_applied",
+            "entry_price_guard": "latency_danger_override_defensive",
+            "entry_price_defensive_ticks": 3,
+            "normal_defensive_order_price": 10_010,
+            "latency_guarded_order_price": 9_990,
+            "counterfactual_order_price_1tick": 10_010,
+            "order_price": 9_990,
+        },
+    )
+
+    stock = {"id": 1, "name": "TEST", "strategy": "SCALPING", "position_tag": "SCANNER", "prob": 0.9}
+    state_handlers.handle_watching_state(
+        stock=stock,
+        code="123456",
+        ws_data={
+            "curr": 10_020,
+            "v_pw": 120.0,
+            "ask_tot": 20_000,
+            "bid_tot": 20_000,
+            "open": 10_000,
+            "fluctuation": 0.5,
+            "orderbook": {"dummy": True},
+        },
+        admin_id=1,
+        radar=DummyRadar(),
+        ai_engine=DummyAI(),
+    )
+
+    assert sent_orders == [(2, 9_990, "00", "DAY")]
+    by_stage = {stage: fields for stage, fields in logs}
+    assert by_stage["latency_pass"]["entry_price_guard"] == "latency_danger_override_defensive"
+    assert by_stage["latency_pass"]["entry_price_defensive_ticks"] == 3
+    assert by_stage["latency_pass"]["counterfactual_order_price_1tick"] == 10_010
+    assert by_stage["order_leg_request"]["price"] == 9_990
+    assert by_stage["order_leg_request"]["entry_price_defensive_ticks"] == 3
+    assert by_stage["order_bundle_submitted"]["order_price"] == 9_990
+
+
 def test_entry_arm_skips_strength_recheck_after_ai_confirm(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 

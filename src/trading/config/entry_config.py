@@ -20,6 +20,7 @@ class EntryConfig:
     fallback_allowed_slippage_pct: float = 0.003
 
     normal_defensive_ticks: int = 1
+    latency_override_defensive_ticks: int = 3
     fallback_main_defensive_ticks: int = 2
     fallback_scout_aggressive_ticks: int = 0
 

@@ -43,6 +43,9 @@ def test_latency_entry_normal_mode_uses_defensive_limit_price():
     assert result["allowed"] is True
     assert result["decision"] == "ALLOW_NORMAL"
     assert result["order_price"] == 9_990
+    assert result["entry_price_guard"] == "normal_defensive"
+    assert result["entry_price_defensive_ticks"] == 1
+    assert result["counterfactual_order_price_1tick"] == 9_990
     assert result["orderbook_stability"]["best_bid"] == 10_000
     assert result["orderbook_stability"]["best_ask"] == 10_010
 
@@ -659,6 +662,117 @@ def test_latency_quote_fresh_composite_canary_overrides_mixed_danger_to_normal(m
     assert result["reason"] == "latency_quote_fresh_composite_normal_override"
     assert result["mode"] == "normal"
     assert result["latency_danger_reasons"] == "ws_age_too_high,ws_jitter_too_high"
+    assert result["entry_price_guard"] == "latency_danger_override_defensive"
+    assert result["entry_price_defensive_ticks"] == 3
+    assert result["normal_defensive_order_price"] == 10_010
+    assert result["counterfactual_order_price_1tick"] == 10_010
+    assert result["latency_guarded_order_price"] == 9_990
+    assert result["order_price"] == 9_990
+
+
+def test_latency_quote_fresh_composite_price_guard_respects_target_buy_price(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=True,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_TAGS=("SCANNER",),
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MIN_SIGNAL_SCORE=88.0,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_AGE_MS=950,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_JITTER_MS=450,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_SPREAD_RATIO=0.0075,
+        ),
+    )
+    monkeypatch.setattr(entry_latency_module._CACHE, "update", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        entry_latency_module._CACHE,
+        "get_quote_health",
+        lambda code: SimpleNamespace(
+            ws_age_ms=820,
+            ws_jitter_ms=380,
+            quote_stale=False,
+            spread_ratio=0.0062,
+        ),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={"name": "TEST", "position_tag": "SCANNER"},
+        code="123456_quote_fresh_target_cap",
+        ws_data={
+            "curr": 10_020,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_030, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=2,
+        signal_price=10_000,
+        signal_strength=88.0,
+        target_buy_price=9_980,
+    )
+
+    assert result["allowed"] is True
+    assert result["latency_guarded_order_price"] == 9_990
+    assert result["counterfactual_order_price_1tick"] == 9_980
+    assert result["order_price"] == 9_980
+
+
+def test_latency_quote_fresh_composite_price_guard_uses_valid_tick_at_price_boundary(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=True,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_TAGS=("SCANNER",),
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MIN_SIGNAL_SCORE=88.0,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_AGE_MS=950,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_JITTER_MS=450,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_SPREAD_RATIO=0.0075,
+        ),
+    )
+    monkeypatch.setattr(entry_latency_module._CACHE, "update", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        entry_latency_module._CACHE,
+        "get_quote_health",
+        lambda code: SimpleNamespace(
+            ws_age_ms=820,
+            ws_jitter_ms=380,
+            quote_stale=False,
+            spread_ratio=0.0062,
+        ),
+    )
+
+    result = evaluate_live_buy_entry(
+        stock={"name": "TEST", "position_tag": "SCANNER"},
+        code="123456_quote_fresh_boundary",
+        ws_data={
+            "curr": 200_000,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 200_500, "volume": 100}],
+                "bids": [{"price": 200_000, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=2,
+        signal_price=200_000,
+        signal_strength=88.0,
+    )
+
+    assert result["allowed"] is True
+    assert result["normal_defensive_order_price"] == 199_900
+    assert result["latency_guarded_order_price"] == 199_700
+    assert result["order_price"] == 199_700
 
 
 def test_latency_quote_fresh_composite_canary_blocks_below_88_signal(monkeypatch):

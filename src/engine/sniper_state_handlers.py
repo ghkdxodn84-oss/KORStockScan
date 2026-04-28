@@ -3009,6 +3009,12 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
             computed_allowed_slippage=int(latency_gate.get('computed_allowed_slippage', 0) or 0),
             latency_canary_applied=bool(latency_gate.get('latency_canary_applied')),
             latency_canary_reason=latency_gate.get('latency_canary_reason'),
+            entry_price_guard=latency_gate.get('entry_price_guard'),
+            entry_price_defensive_ticks=int(latency_gate.get('entry_price_defensive_ticks', 0) or 0),
+            normal_defensive_order_price=int(latency_gate.get('normal_defensive_order_price', 0) or 0),
+            latency_guarded_order_price=int(latency_gate.get('latency_guarded_order_price', 0) or 0),
+            counterfactual_order_price_1tick=int(latency_gate.get('counterfactual_order_price_1tick', 0) or 0),
+            order_price=int(latency_gate.get('order_price', 0) or 0),
             **_build_ai_overlap_log_fields(
                 stock=stock,
                 ai_score=latency_signal_score,
@@ -3076,6 +3082,11 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
                 price=price,
                 order_type=request['order_type_code'],
                 tif=request['tif'],
+                entry_price_guard=latency_gate.get('entry_price_guard'),
+                entry_price_defensive_ticks=int(latency_gate.get('entry_price_defensive_ticks', 0) or 0),
+                normal_defensive_order_price=int(latency_gate.get('normal_defensive_order_price', 0) or 0),
+                latency_guarded_order_price=int(latency_gate.get('latency_guarded_order_price', 0) or 0),
+                counterfactual_order_price_1tick=int(latency_gate.get('counterfactual_order_price_1tick', 0) or 0),
             )
 
             res = kiwoom_orders.send_buy_order(
@@ -3168,6 +3179,12 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
             requested_qty=requested_qty,
             legs=len(successful_orders),
             wait6579_probe_canary_applied=wait6579_probe_applied,
+            entry_price_guard=latency_gate.get('entry_price_guard'),
+            entry_price_defensive_ticks=int(latency_gate.get('entry_price_defensive_ticks', 0) or 0),
+            normal_defensive_order_price=int(latency_gate.get('normal_defensive_order_price', 0) or 0),
+            latency_guarded_order_price=int(latency_gate.get('latency_guarded_order_price', 0) or 0),
+            counterfactual_order_price_1tick=int(latency_gate.get('counterfactual_order_price_1tick', 0) or 0),
+            order_price=int(latency_gate.get('order_price', 0) or 0),
         )
 
         if strategy in ['SCALPING', 'SCALP']:

@@ -30,7 +30,7 @@
 - fresh 로그가 Codex 작업환경에 없으면 서버에서 아래 명령으로 lightweight bundle만 생성한다.
   - `PYTHONPATH=. .venv/bin/python analysis/offline_live_canary_bundle/export_server_bundle.py --target-date 2026-04-28 --slot-label h1000 --evidence-cutoff 10:00:00`
 - 사용자는 로컬 PC에서 아래 형식으로 analyzer를 실행해 결과 JSON/MD를 전달한다.
-  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h1000\offline_live_canary_exports\2026-04-28\h1000" --since 09:00:00 --until 10:00:00 --label h1000`
+  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h1000\offline_live_canary_exports\2026-04-28\h1000" --output-dir "C:\KORStockScanV2\downloads\h1000\offline_live_canary_exports\2026-04-28\h1000\results" --since 09:00:00 --until 10:00:00 --label h1000`
 - 시간대 label/window는 `h0900 09:00~10:00`, `h1000 09:00~10:00`, `h1100 10:00~11:00`, `h1200 11:00~12:00`, `h1300 12:00~13:00`, `h1400 13:00~14:00`, `h1500 14:00~15:00`로 맞춘다.
 - 산출물은 `entry_quote_fresh_composite_summary_<label>.json/.md`, `soft_stop_micro_grace_summary_<label>.json/.md`, `live_canary_combined_summary_<label>.json/.md`를 기준으로 판정한다.
 - 운영 원칙:
@@ -58,19 +58,19 @@
 ### 시간대별 로컬 analyzer 명령
 
 - `09:10 KST` 필요시 1차 점검:
-  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h0900\offline_live_canary_exports\2026-04-28\h0900" --since 09:00:00 --until 10:00:00 --label h0900`
+  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h0900\offline_live_canary_exports\2026-04-28\h0900" --output-dir "C:\KORStockScanV2\downloads\h0900\offline_live_canary_exports\2026-04-28\h0900\results" --since 09:00:00 --until 10:00:00 --label h0900`
 - `10:00 KST` 점검:
-  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h1000\offline_live_canary_exports\2026-04-28\h1000" --since 09:00:00 --until 10:00:00 --label h1000`
+  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h1000\offline_live_canary_exports\2026-04-28\h1000" --output-dir "C:\KORStockScanV2\downloads\h1000\offline_live_canary_exports\2026-04-28\h1000\results" --since 09:00:00 --until 10:00:00 --label h1000`
 - `11:00 KST` 점검:
-  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h1100\offline_live_canary_exports\2026-04-28\h1100" --since 10:00:00 --until 11:00:00 --label h1100`
+  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h1100\offline_live_canary_exports\2026-04-28\h1100" --output-dir "C:\KORStockScanV2\downloads\h1100\offline_live_canary_exports\2026-04-28\h1100\results" --since 10:00:00 --until 11:00:00 --label h1100`
 - `12:00 KST` 점검:
-  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h1200\offline_live_canary_exports\2026-04-28\h1200" --since 11:00:00 --until 12:00:00 --label h1200`
+  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h1200\offline_live_canary_exports\2026-04-28\h1200" --output-dir "C:\KORStockScanV2\downloads\h1200\offline_live_canary_exports\2026-04-28\h1200\results" --since 11:00:00 --until 12:00:00 --label h1200`
 - `13:00 KST` 점검:
-  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h1300\offline_live_canary_exports\2026-04-28\h1300" --since 12:00:00 --until 13:00:00 --label h1300`
+  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h1300\offline_live_canary_exports\2026-04-28\h1300" --output-dir "C:\KORStockScanV2\downloads\h1300\offline_live_canary_exports\2026-04-28\h1300\results" --since 12:00:00 --until 13:00:00 --label h1300`
 - `14:00 KST` 점검:
-  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h1400\offline_live_canary_exports\2026-04-28\h1400" --since 13:00:00 --until 14:00:00 --label h1400`
+  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h1400\offline_live_canary_exports\2026-04-28\h1400" --output-dir "C:\KORStockScanV2\downloads\h1400\offline_live_canary_exports\2026-04-28\h1400\results" --since 13:00:00 --until 14:00:00 --label h1400`
 - `15:00 KST` 점검:
-  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h1500\offline_live_canary_exports\2026-04-28\h1500" --since 14:00:00 --until 15:00:00 --label h1500`
+  - `analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\h1500\offline_live_canary_exports\2026-04-28\h1500" --output-dir "C:\KORStockScanV2\downloads\h1500\offline_live_canary_exports\2026-04-28\h1500\results" --since 14:00:00 --until 15:00:00 --label h1500`
 
 ## 장전 체크리스트 (08:50~09:00)
 
@@ -98,131 +98,253 @@
 
 ## 장중 체크리스트 (09:00~15:20)
 
-- [ ] `[SoftStopGrace0428-0900] soft_stop_micro_grace 09시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 09:00~09:10`, `Track: Plan`)
+- [x] `[SoftStopGrace0428-0900] soft_stop_micro_grace 09시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 09:00~09:10`, `Track: Plan`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
   - 완료근거: `soft_stop_micro_grace`, `scalp_soft_stop_pct`, `scalp_hard_stop_pct`, `COMPLETED + valid profit_rate`, `full_fill`, `partial_fill`, `same_symbol_reentry_loss_count`, `emergency_pct <= -2.0`, `fallback_regression=0`.
   - hard pass/fail 전제: `soft_stop_micro_grace >= 10` 또는 `soft_stop qualifying cohort`의 `COMPLETED + valid profit_rate >= 10`.
   - 판정: 전제 충족 + 손실 tail 감소 + hard stop/동일종목 손실 비악화면 `유지`, 전제 충족 + hard stop 전환/동일종목 손실/미체결 악화면 `OFF`, 전제 미충족이면 `보류`.
   - 다음 액션: `유지`는 다음 시간 점검 계속, `OFF`는 `SCALP_SOFT_STOP_MICRO_GRACE_ENABLED=False` 및 재기동 필요 여부 기록, `보류`는 누적 표본 부족 수치와 다음 점검시각 기록.
+  - 실행 메모 (`2026-04-28 09:19 KST`): `data/pipeline_events/pipeline_events_2026-04-28.jsonl` 기준 `09:00:00~09:19:59` 구간에 `HOLDING_PIPELINE` 자체가 아직 없다. `soft_stop_micro_grace=0`, `COMPLETED + valid profit_rate=0`, `full_fill=0`, `partial_fill=0`, `same_symbol_reentry_loss_count=0`, `fallback_regression=0`.
+  - 판정 결과: `보류`
+  - 근거: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md:119) 및 [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md) 기준 `soft_stop_micro_grace_events >= 10` 또는 `COMPLETED + valid profit_rate >= 10` 전에는 hard pass/fail 금지다. 현재는 보유/청산 표본이 0건이라 유지/OFF를 닫을 근거가 없다.
+  - 검증:
+    - `PYTHONPATH=. .venv/bin/python` 집계로 `09:00:00~09:19:59` 구간 `HOLDING_PIPELINE` stage count, `COMPLETED + valid profit_rate`, `full_fill`, `partial_fill`, `fallback_regression_count`를 확인했다.
+  - 다음 액션: `[SoftStopGrace0428-1000]`에서 `h1000 (09:00:00~10:00:00)` 구간으로 재판정한다. 10시에도 `soft_stop_micro_grace=0`이면 direction-only `보류`를 유지하고 표본 부족을 누적 기록한다.
 
-- [ ] `[QuoteFreshComposite0428-0900] latency_quote_fresh_composite 09시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 09:10~09:20`, `Track: ScalpingLogic`)
+- [x] `[QuoteFreshComposite0428-0900] latency_quote_fresh_composite 09시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 09:10~09:20`, `Track: ScalpingLogic`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
   - 완료근거: `budget_pass`, `submitted`, `budget_pass_to_submitted_rate`, `latency_state_danger`, `full_fill`, `partial_fill`, `quote_fresh_composite_canary_applied=True/False`, `ShadowDiff0428`, `fallback_regression=0`.
   - hard pass/fail 전제: `submitted_orders >= 20`, baseline 표본 `>= N_min`, `ShadowDiff0428` 해소.
   - 성공 기준: `budget_pass_to_submitted_rate >= baseline +1.0%p`, `latency_state_danger / budget_pass` baseline 대비 `-5.0%p` 이상 개선, `submitted -> full_fill + partial_fill` 전환율 baseline 대비 `-2.0%p` 이내.
   - 판정: 전제 충족 + 성공 기준 충족은 `유지`, 전제 충족 + `composite_no_recovery`는 `OFF 또는 다음 독립축 교체`, 전제 미충족은 `direction-only 보류`.
   - 다음 액션: `유지`는 다음 시간 점검 계속, `OFF`는 5개 파라미터 묶음 전체 OFF, `교체`는 새 workorder와 rollback guard 필요, `direction-only 보류`는 표본 부족 수치와 다음 점검시각 기록.
+  - 실행 메모 (`2026-04-28 09:19 KST`): `data/pipeline_events/pipeline_events_2026-04-28.jsonl` 기준 `09:00:00~09:19:59` 구간에 `ENTRY_PIPELINE`는 다수 발생했지만 `order_bundle_submitted=0`, `latency_state_danger=0`, `quote_fresh_composite_canary_applied=True/False 기록=0`, `fallback_regression=0`이다. 대신 `orderbook_stability_observed=251`이 기록돼 재기동 후 observe-only 로그는 정상 반영됐다.
+  - 판정 결과: `direction-only 보류`
+  - 근거: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md:113)~[121] 및 [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md) 기준 `submitted_orders >= 20`, baseline `>= N_min`, `ShadowDiff0428` 해소 전에는 hard pass/fail 금지다. 현재 `submitted=0`이라 제출 회복/latency danger share/fill quality를 평가할 수 없어 direction-only로만 닫는다.
+  - 검증:
+    - `PYTHONPATH=. .venv/bin/python` 집계로 `09:00:00~09:19:59` 구간 `ENTRY_PIPELINE` stage count, `order_bundle_submitted`, `latency_state_danger`, `quote_fresh_composite_canary_applied`, `fallback_regression_count`를 확인했다.
+    - 같은 집계에서 `orderbook_stability_observed=251`이 확인돼 재기동 후 신규 observe-only 축이 live 로그에 적재되는 것도 함께 검증됐다.
+  - 다음 액션: `[QuoteFreshComposite0428-1000]`에서 `h1000 (09:00:00~10:00:00)` 구간으로 재판정한다. 10시에도 `submitted=0`이면 active canary는 유지하되 direction-only `보류`와 표본 부족 수치를 누적 기록한다.
 
-- [ ] `[SoftStopGrace0428-1000] soft_stop_micro_grace 10시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 10:00~10:10`, `Track: Plan`)
+- [x] `[SoftStopGrace0428-1000] soft_stop_micro_grace 10시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 10:00~10:10`, `Track: Plan`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
   - label/window: `h1000`, `09:00:00~10:00:00`
   - 완료근거: `soft_stop_micro_grace`, `scalp_soft_stop_pct`, `scalp_hard_stop_pct`, `COMPLETED + valid profit_rate`, `full_fill`, `partial_fill`, `same_symbol_reentry_loss_count`, `emergency_pct <= -2.0`, `fallback_regression=0`.
   - hard pass/fail 전제: `soft_stop_micro_grace >= 10` 또는 `soft_stop qualifying cohort`의 `COMPLETED + valid profit_rate >= 10`.
   - 판정/다음 액션: `유지`, `OFF`, `보류` 중 하나로 닫고, `보류` 시에도 다음 1시간 점검 또는 OFF/교체 액션을 기록한다.
+  - 실행 메모 (`2026-04-28 10:55 KST`): `tmp/2026-04-28/soft_stop_micro_grace_summary_h1000.json`과 `data/pipeline_events/pipeline_events_2026-04-28.jsonl`의 `09:00:00~10:00:00` 구간을 대조했다. same-slot `soft_stop_micro_grace=0`, `scalp_soft_stop_pct=0`, `scalp_hard_stop_pct=0`, `same_symbol_reentry_loss_count=0`, `fallback_regression=0`이다. `HOLDING_PIPELINE`에는 trailing 기반 `exit_signal/sell_completed`만 1건 있었고 soft-stop cohort는 아직 없다.
+  - 판정 결과: `보류`
+  - 근거: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md:119) 기준 `soft_stop_micro_grace_events >= 10` 또는 `COMPLETED + valid profit_rate >= 10` 전에는 hard pass/fail 금지다. 10시 창은 보유/청산 이벤트 자체는 일부 있었지만 `soft_stop_micro_grace`와 `scalp_soft_stop_pct` 표본이 0건이어서 유지/OFF를 닫을 근거가 없다.
+  - 검증:
+    - `tmp/2026-04-28/soft_stop_micro_grace_summary_h1000.json`
+    - `PYTHONPATH=. .venv/bin/python` 집계로 `09:00:00~10:00:00` 구간 `HOLDING_PIPELINE` stage count, `soft_stop_micro_grace`, `scalp_soft_stop_pct`, `scalp_hard_stop_pct`, `fallback_regression_count`를 재확인했다.
+  - 다음 액션: `[SoftStopGrace0428-1100]`에서 `10:00:00~11:00:00` 구간을 재판정한다. 특히 `10:53:50 KST` 수동 재기동 이후 표본을 포함해 `soft_stop_micro_grace` 발생 여부와 `scalp_soft_stop_pct` 비악화 여부를 다시 본다.
 
-- [ ] `[QuoteFreshComposite0428-1000] latency_quote_fresh_composite 10시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 10:10~10:20`, `Track: ScalpingLogic`)
+- [x] `[QuoteFreshComposite0428-1000] latency_quote_fresh_composite 10시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 10:10~10:20`, `Track: ScalpingLogic`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
   - label/window: `h1000`, `09:00:00~10:00:00`
   - 완료근거: `budget_pass`, `submitted`, `budget_pass_to_submitted_rate`, `latency_state_danger`, `full_fill`, `partial_fill`, `quote_fresh_composite_canary_applied=True/False`, `ShadowDiff0428`, `fallback_regression=0`.
   - hard pass/fail 전제: `submitted_orders >= 20`, baseline 표본 `>= N_min`, `ShadowDiff0428` 해소.
   - 판정/다음 액션: 성공 기준 충족 시 `유지`, `composite_no_recovery`면 `OFF 또는 다음 독립축 교체`, 전제 미충족이면 `direction-only 보류`와 2영업일 유효기간 및 다음 점검시각을 기록한다.
+  - 실행 메모 (`2026-04-28 10:55 KST`): `tmp/2026-04-28/entry_quote_fresh_composite_summary_h1000.json`은 `budget_pass/submitted/orderbook_stability=0`으로 비어 있었지만, same-slot 원문 `pipeline_events` 집계는 `budget_pass=1223`, `latency_block=1222`, `latency_pass=1`, `order_bundle_submitted=1`, `orderbook_stability_observed=1223`, `fallback_regression=0`을 보여준다. `latency_block` 사유는 `latency_state_danger=1120`, `latency_fallback_deprecated=102`이며, `quote_fresh_composite_canary_applied=True` 표본은 아직 0건이다.
+  - 판정 결과: `direction-only 보류`
+  - 근거: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md:113)~[121] 기준 hard pass/fail 전제는 `submitted_orders >= 20`, baseline `>= N_min`, `ShadowDiff0428` 해소다. 실제 same-slot 제출은 1건뿐이고 canary_applied baseline도 아직 0건이라, 현 시점에는 `유지/OFF`가 아니라 제출 회복 미달의 direction-only로만 닫는 것이 맞다.
+  - 검증:
+    - `tmp/2026-04-28/entry_quote_fresh_composite_summary_h1000.json`
+    - `PYTHONPATH=. .venv/bin/python` 집계로 `09:00:00~10:00:00` 구간 `budget_pass`, `latency_block`, `latency_pass`, `order_bundle_submitted`, `quote_fresh_composite_canary_applied`, `fallback_regression_count`를 재확인했다.
+    - raw 확인: `ENTRY_PIPELINE`에 `09:54:14 latency_pass`, `09:54:15 order_bundle_submitted` 1건이 있고, `10:53:50 KST` 재기동 이후에도 `budget_pass/orderbook_stability_observed/latency_block`는 다시 적재되기 시작했다.
+  - 다음 액션: `[QuoteFreshComposite0428-1100]`에서 `10:00:00~11:00:00` 구간을 재판정한다. 특히 `10:53:50 KST` 재기동 이후 표본에서 `quote_fresh_composite_canary_applied=True`, `latency_state_danger share`, `submitted/full/partial`, `entry_price_guard` 기록 여부를 함께 확인한다.
 
-- [ ] `[OrderbookStability0428-1000] orderbook_stability_observation 10시 반영 확인` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 10:20~10:30`, `Track: ScalpingLogic`)
+- [x] `[OrderbookStability0428-1000] orderbook_stability_observation 10시 반영 확인` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 10:20~10:30`, `Track: ScalpingLogic`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
   - label/window: `h1000`, `09:00:00~10:00:00`
   - 완료근거: fresh 또는 pipeline 로그에 `stage=orderbook_stability_observed`가 실제 기록되고, `entry_quote_fresh_composite_summary_h1000`에 `orderbook_stability` 섹션이 생성되며, `unstable_quote_observed_count/share`, `unstable_reason_breakdown`, `unstable_vs_submitted`, `unstable_vs_fill`, `unstable_vs_latency_danger`가 확인된다.
   - 판정: observe-only 로그/summary가 모두 생성되면 `반영 완료`, 로그 또는 summary 둘 중 하나라도 누락이면 `재점검 필요`, 둘 다 누락이면 `재기동 후 미반영 조사`.
   - 다음 액션: `반영 완료`여도 live gate 승격은 금지하고 관찰 표본만 누적한다. `재점검 필요` 또는 `미반영 조사`면 프로세스 재기동 시각, 첫 발생 로그 시각, bundle 경로를 함께 기록한다.
+  - 실행 메모 (`2026-04-28 10:55 KST`): same-slot 원문 `pipeline_events` 기준 `orderbook_stability_observed=1223`, `unstable_quote_observed=651 (53.2%)`이며 사유는 `fr_10s=251`, `quote_age_p90=245`, `quote_age_p90+print_quote_alignment=50`, `fr_10s+print_quote_alignment=46`, `fr_10s+quote_age_p90=31`, `print_quote_alignment=23`, `all_three=5`로 분해된다. 반면 `tmp/2026-04-28/entry_quote_fresh_composite_summary_h1000.json`은 `orderbook_stability_observed_count=0`으로 비어 있어 summary가 same-slot 로그를 반영하지 못했다.
+  - 판정 결과: `재점검 필요`
+  - 근거: 관찰 이벤트는 runtime에 실제 적재됐으므로 `미반영 조사`는 아니다. 다만 checklist 기준 완료조건은 `로그`와 `summary`가 모두 맞아야 하는데, h1000 로컬 bundle summary가 stale/empty 상태라 `반영 완료`로 닫을 수 없다.
+  - 검증:
+    - `tmp/2026-04-28/entry_quote_fresh_composite_summary_h1000.json`
+    - `PYTHONPATH=. .venv/bin/python` 집계로 `09:00:00~10:00:00` 구간 `orderbook_stability_observed`, `unstable_quote_observed`, `unstable_reasons`를 재확인했다.
+    - 재기동 후 추가 확인: `10:53:50 KST` 이후 `ENTRY_PIPELINE`에 `orderbook_stability_observed`가 다시 적재되고 있으며 `10:54:30~10:56:07` 구간 샘플에서도 `fr_10s`, `quote_age_p50/p90`, `print_quote_alignment`, `unstable_reasons`가 정상 출력된다.
+  - 다음 액션: `tmp/2026-04-28` h1000 bundle은 stale로 보고, `[OrderbookStability0428-1100]` 또는 다음 analyzer 재실행에서 `entry_quote_fresh_composite_summary_h1100`의 `orderbook_stability` 섹션이 runtime 로그와 맞는지 재검증한다. live gate 승격은 계속 금지한다.
 
-- [ ] `[SoftStopGrace0428-1100] soft_stop_micro_grace 11시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 11:00~11:10`, `Track: Plan`)
+- [x] `[LatencyEntryPriceGuard0428] DANGER override 진입가 3틱 방어 v1 구현/검증` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 10:30~10:45`, `Track: ScalpingLogic`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
+  - 판정: 구현 완료. `latency_state=DANGER`가 기존 `latency_quote_fresh_composite` canary로 `ALLOW_NORMAL` override될 때만 BUY 진입가를 v1 임시값 `3틱 하향`으로 방어한다.
+  - 범위: 신규 live canary가 아니라 기존 active entry canary의 체결품질 보호 가드다. fallback/scout/split-entry는 재도입하지 않고 SELL/청산가는 기존 정책을 유지한다.
+  - 완료근거: `EntryConfig.latency_override_defensive_ticks=3`, `entry_price_guard=latency_danger_override_defensive`, `entry_price_defensive_ticks`, `normal_defensive_order_price`, `latency_guarded_order_price`, `counterfactual_order_price_1tick`, `order_price`가 runtime 및 offline summary에 남는다.
+  - 비교 설계: v1은 실주문 3틱 적용과 `counterfactual_order_price_1tick` 로그 방식으로만 1틱 대비 우열을 비교한다. 종목 절반 live A/B는 동일 단계 단일 canary 원칙과 충돌하므로 별도 승인 전까지 금지한다.
+  - 검증: `.venv` 기준 unit/integration test와 analyzer summary test로 SAFE 1틱 유지, DANGER override 3틱 적용, `target_buy_price` 상한, 가격대 tick 경계, pipeline guard 필드, offline `latency_entry_price_guard` 집계를 확인했다.
+  - 다음 액션: live 반영에는 bot 재기동이 필요하다. 적용 후 시간대별 bundle에서 `latency_entry_price_guard.submitted_guard_breakdown`과 `three_tick_guard` cohort를 확인한다.
+
+- [x] `[SoftStopGrace0428-1100] soft_stop_micro_grace 11시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 11:00~11:10`, `Track: Plan`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
   - label/window: `h1100`, `10:00:00~11:00:00`
   - 완료근거: `soft_stop_micro_grace`, `scalp_soft_stop_pct`, `scalp_hard_stop_pct`, `COMPLETED + valid profit_rate`, `full_fill`, `partial_fill`, `same_symbol_reentry_loss_count`, `emergency_pct <= -2.0`, `fallback_regression=0`.
   - hard pass/fail 전제: `soft_stop_micro_grace >= 10` 또는 `soft_stop qualifying cohort`의 `COMPLETED + valid profit_rate >= 10`.
-  - 판정/다음 액션: `유지`, `OFF`, `보류` 중 하나로 닫고, hard stop 전환/동일종목 손실/미체결 악화는 즉시 OFF 후보로 기록한다.
+  - 실행 메모 (`2026-04-28 12:08 KST`, 정정): 서버 원시 `pipeline_events_2026-04-28.jsonl`의 `10:00:00~11:00:00` 창 기준 `soft_stop_micro_grace=0`, `scalp_soft_stop_pct=1`, `scalp_hard_stop_pct=0`, `same_symbol_reentry_loss_count=0`, `fallback_regression=0`이었다. `우원개발(046940)`이 `10:13:30 KST`에 `exit_rule=scalp_soft_stop_pct`, `sell_completed profit_rate=-1.86%`로 종료됐고, `HOLDING_PIPELINE` 총계는 `holding_started=2`, `sell_completed=2`, `hard_time_stop_shadow=1`, `loss_fallback_probe=1`이었다.
+  - 판정 결과: `보류`
+  - 근거: same-slot soft stop은 실제 1건 있었지만, hard pass/fail 전제인 `soft_stop_micro_grace >= 10` 또는 `soft_stop qualifying cohort >= 10`에는 여전히 크게 못 미친다. 또한 해당 사례는 `soft_stop_micro_grace` stage가 기록되지 않았으므로, 이번 축이 손절을 줄였다고 결론 내릴 근거도 아직 없다.
+  - 검증: stale 가능성이 있는 `tmp/2026-04-28` summary는 근거에서 제외하고, 서버 원시 `data/pipeline_events/pipeline_events_2026-04-28.jsonl`에서 `exit_rule=scalp_soft_stop_pct`, `sell_completed`, `046940` 종목 로그를 재확인했다. 최초 오집계는 `stage 이름`만 세고 `exit_rule`를 놓친 임시 집계 오류였다.
+  - 다음 액션: `[SoftStopGrace0428-1200]`에서 계속 같은 원시 기준으로 누적한다. soft-stop 표본이 생길 때까지 `유지/보류`만 허용하고, hard stop 전환이나 동일종목 손실 악화가 발생하면 즉시 OFF 후보로 승격한다.
 
-- [ ] `[QuoteFreshComposite0428-1100] latency_quote_fresh_composite 11시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 11:10~11:20`, `Track: ScalpingLogic`)
+- [x] `[QuoteFreshComposite0428-1100] latency_quote_fresh_composite 11시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 11:10~11:20`, `Track: ScalpingLogic`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
   - label/window: `h1100`, `10:00:00~11:00:00`
   - 완료근거: `budget_pass`, `submitted`, `budget_pass_to_submitted_rate`, `latency_state_danger`, `full_fill`, `partial_fill`, `quote_fresh_composite_canary_applied=True/False`, `ShadowDiff0428`, `fallback_regression=0`.
   - hard pass/fail 전제: `submitted_orders >= 20`, baseline 표본 `>= N_min`, `ShadowDiff0428` 해소.
-  - 판정/다음 액션: 성공 기준 충족 시 `유지`, `composite_no_recovery`면 5개 파라미터 묶음 전체 OFF 또는 새 독립축 workorder 생성, 전제 미충족이면 표본 부족 수치와 다음 점검시각 기록.
+  - 실행 메모 (`2026-04-28 11:18 KST`): 서버 원시 `10:00:00~11:00:00` 창 기준 `budget_pass=1862`, `latency_block=1858`, `latency_pass=4`, `order_bundle_submitted=4`, `order_leg_request=4`, `fallback_regression=0`이었다. blocker 사유는 `latency_state_danger=1823`, `latency_fallback_deprecated=35`였고, `latency_quote_fresh_composite_normal_override=1`, `safe_normal_entry_allowed=3`이었다. `quote_fresh_composite_canary_applied=True`는 1건뿐이며 제출 guard는 `latency_danger_override_defensive=1`, 나머지 3건은 guard 미적용 normal이었다.
+  - 판정 결과: `direction-only 보류`
+  - 근거: `budget_pass_to_submitted_rate`는 `4 / 1862 = 0.21%`로 10시 창 `1 / 1223 = 0.08%` 대비 개선됐고 canary 실표본 1건에서 실제 제출도 확인됐다. 그러나 hard pass/fail 전제인 `submitted_orders >= 20`, baseline `N_min`, `ShadowDiff0428` 해소를 충족하지 못해 승격/실패 판정을 닫을 표본은 아니다.
+  - 검증: stale 가능성이 있는 `tmp/2026-04-28/*h1100*` summary는 근거에서 제외하고, 서버 원시 `data/pipeline_events/pipeline_events_2026-04-28.jsonl`에서 `quote_fresh_composite_canary_applied`, `latency reason`, `entry_price_guard`, `order_bundle_submitted`를 재집계했다.
+  - 다음 액션: `[QuoteFreshComposite0428-1200]`에서 `submitted >= 20` 도달 여부와 `canary_applied=True` cohort의 `submitted/full/partial/COMPLETED + valid profit_rate`를 이어서 본다. 현 시점에서는 5개 파라미터 묶음 OFF 또는 신규 축 교체 판단을 열지 않는다.
 
-- [ ] `[SoftStopGrace0428-1200] soft_stop_micro_grace 12시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 12:00~12:10`, `Track: Plan`)
+- [x] `[OrderbookStability0428-1100] orderbook_stability_observation 11시 반영 재확인` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 11:20~11:30`, `Track: ScalpingLogic`)
+  - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
+  - label/window: `h1100`, `10:00:00~11:00:00`
+  - 완료근거: `entry_quote_fresh_composite_summary_h1100`의 `orderbook_stability` 섹션이 runtime `ENTRY_PIPELINE stage=orderbook_stability_observed` 집계와 같은 방향으로 생성되고, `unstable_quote_observed_count/share`, `unstable_reason_breakdown`, `unstable_vs_submitted`, `unstable_vs_fill`, `unstable_vs_latency_danger`가 0이 아닌 표본으로 확인된다.
+  - 판정: runtime 로그와 summary가 함께 맞으면 `반영 완료`, summary만 비면 `analyzer 재실행 필요`, 둘 다 비면 `재기동 후 미반영 조사`.
+  - 실행 메모 (`2026-04-28 11:18 KST`): 서버 원시 `10:00:00~11:00:00` 창 기준 `orderbook_stability_observed=1862`, `unstable_quote_observed=907 (48.7%)`였다. 사유는 `quote_age_p90=544`, `fr_10s=182`, `quote_age_p90+print_quote_alignment=66`, `fr_10s+print_quote_alignment=46`, `print_quote_alignment=39`, `fr_10s+quote_age_p90=21`, `all_three=9`로 분해됐다. 제출 4건 중 `latency_danger_override_defensive` 1건도 원시 runtime에는 정상 기록됐다.
+  - 판정 결과: `반영 완료 (서버 원시 runtime 기준)`
+  - 근거: 관찰 이벤트 자체는 11시 창에서 대량 적재됐고 `unstable_quote_observed_count/share`와 사유 breakdown도 충분한 표본으로 확인됐다. 로컬 `tmp/2026-04-28` h1100 summary는 stale/invalid 가능성이 남아 있으므로 이번 슬롯은 `summary 일치`가 아니라 `server raw runtime 반영` 기준으로 닫는다.
+  - 검증: `data/pipeline_events/pipeline_events_2026-04-28.jsonl`에서 `stage=orderbook_stability_observed`와 `unstable_reasons`를 재집계했다. local summary metadata의 `pipeline_event_rows_loaded=0` 계열 값은 판정 근거에서 제외했다.
+  - 다음 액션: observe-only 유지. `[OrderbookStability0428-1200]`부터는 가능하면 실제 bundle root를 직접 읽은 analyzer summary와 다시 합류시키되, mismatch가 남으면 bundle path/manifest 로드 실패를 우선 조사한다.
+
+- [x] `[SoftStopGrace0428-1200] soft_stop_micro_grace 12시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 12:00~12:10`, `Track: Plan`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
   - label/window: `h1200`, `11:00:00~12:00:00`
   - 완료근거: `soft_stop_micro_grace`, `scalp_soft_stop_pct`, `scalp_hard_stop_pct`, `COMPLETED + valid profit_rate`, `full_fill`, `partial_fill`, `same_symbol_reentry_loss_count`, `emergency_pct <= -2.0`, `fallback_regression=0`.
   - hard pass/fail 전제: `soft_stop_micro_grace >= 10` 또는 `soft_stop qualifying cohort`의 `COMPLETED + valid profit_rate >= 10`.
-  - 판정/다음 액션: 전제 충족 시 `유지` 또는 `OFF`, 전제 미충족 시 `보류`와 13:00 재판정 기록.
+  - 실행 메모 (`2026-04-28 12:03 KST`): 서버 원시 `pipeline_events_2026-04-28.jsonl`의 `11:00:00~12:00:00` 창 기준 `soft_stop_micro_grace=0`, `scalp_soft_stop_pct=0`, `scalp_hard_stop_pct=0`, `same_symbol_reentry_loss_count=0`, `fallback_regression=0`이었다. `HOLDING_PIPELINE`은 `holding_started=1`, `sell_completed=1`, `hard_time_stop_shadow=2`만 확인됐고 soft-stop qualifying cohort는 계속 0건이다.
+  - 판정 결과: `보류`
+  - 근거: 11시 창에 이어 12시 창도 hard pass/fail 전제 표본이 전혀 형성되지 않았다. 아직 즉시 OFF 사유는 없지만, same-day hard 판정이 밀릴 가능성이 높아졌다.
+  - 검증: stale 가능성이 있는 `tmp/2026-04-28` summary는 사용하지 않고, 서버 원시 `data/pipeline_events/pipeline_events_2026-04-28.jsonl`만 사용해 `11:00:00~12:00:00` 구간 stage 집계를 재확인했다.
+  - 다음 액션: `[SoftStopGrace0428-1300]`까지도 soft-stop cohort가 0이면 장중 hard 판정 기대를 낮추고, `[HoldingExitPostclose0428]`에서 same-day 관찰축 유지 여부를 장후 분해 기준으로 닫는다.
 
-- [ ] `[QuoteFreshComposite0428-1200] latency_quote_fresh_composite 12시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 12:10~12:20`, `Track: ScalpingLogic`)
+- [x] `[QuoteFreshComposite0428-1200] latency_quote_fresh_composite 12시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 12:10~12:20`, `Track: ScalpingLogic`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
   - label/window: `h1200`, `11:00:00~12:00:00`
   - 완료근거: `budget_pass`, `submitted`, `budget_pass_to_submitted_rate`, `latency_state_danger`, `full_fill`, `partial_fill`, `quote_fresh_composite_canary_applied=True/False`, `ShadowDiff0428`, `fallback_regression=0`.
   - hard pass/fail 전제: `submitted_orders >= 20`, baseline 표본 `>= N_min`, `ShadowDiff0428` 해소.
-  - 판정/다음 액션: 성공 기준 충족 시 `유지`, `composite_no_recovery`면 `OFF 또는 다음 독립축 교체`, direction-only는 2영업일 유효기간과 다음 점검시각을 기록한다.
+  - 실행 메모 (`2026-04-28 12:03 KST`): 서버 원시 `11:00:00~12:00:00` 창 기준 `strength_momentum_pass=1147`, `budget_pass=1731`, `latency_block=1731`, `latency_pass=0`, `order_bundle_submitted=0`, `fallback_regression=0`이었다. blocker 사유는 `latency_state_danger=1663`, `latency_fallback_deprecated=68`이었고, `quote_fresh_composite_canary_applied=True`는 0건이었다.
+  - 판정 결과: `direction-only 보류`
+  - 근거: 사용자 우려대로 BUY 후보는 계속 존재하지만 제출 회복은 12시 창에서 오히려 0건으로 후퇴했다. 다만 이번 창은 `submitted_orders >= 20`, baseline `N_min`, `ShadowDiff0428` 해소를 여전히 충족하지 못하고, canary 실표본도 0건이라 same-slot hard fail이나 즉시 축 교체를 닫을 단계는 아니다.
+  - 검증: stale 가능성이 있는 `tmp/2026-04-28/*h1200*` summary는 배제하고, 서버 원시 `data/pipeline_events/pipeline_events_2026-04-28.jsonl`에서 `strength_momentum_pass`, `budget_pass`, `latency_block`, `latency reason`, `quote_fresh_composite_canary_applied`, `order_bundle_submitted`를 재집계했다.
+  - 다음 액션: `[QuoteFreshComposite0428-1300]`에서도 `submitted=0` 또는 `canary_applied=True=0`가 반복되면 장중 유지 논리를 약화된 것으로 보고, `[QuoteFreshReview0428]`와 `[QuoteFreshBackupComposite0428]`에서 `현 축 유지 vs OFF/교체`를 장후 우선 판정한다.
 
-- [ ] `[SoftStopGrace0428-1300] soft_stop_micro_grace 13시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 13:00~13:10`, `Track: Plan`)
+- [x] `[SoftStopGrace0428-1300] soft_stop_micro_grace 13시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 13:00~13:10`, `Track: Plan`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
   - label/window: `h1300`, `12:00:00~13:00:00`
   - 완료근거: `soft_stop_micro_grace`, `scalp_soft_stop_pct`, `scalp_hard_stop_pct`, `COMPLETED + valid profit_rate`, `full_fill`, `partial_fill`, `same_symbol_reentry_loss_count`, `emergency_pct <= -2.0`, `fallback_regression=0`.
   - hard pass/fail 전제: `soft_stop_micro_grace >= 10` 또는 `soft_stop qualifying cohort`의 `COMPLETED + valid profit_rate >= 10`.
   - 판정/다음 액션: `유지`, `OFF`, `보류` 중 하나로 닫고, `same_symbol_reentry_loss_count` 악화 시 soft_stop 축과 분리한 후속 후보를 기록한다.
+  - 판정: `보류`. `h1300` summary는 `/home/ubuntu/KORStockScan/tmp/2026-04-28` 기준으로 `bundle_dir`/`pipeline_event_rows_loaded` 메타데이터가 비어 있어 stale 가능성이 높아서 서버 원시 `12:00:00~13:00:00` 집계로 닫았다.
+  - 완료 메모: 서버 원시 기준 `soft_stop_micro_grace=21`, `scalp_soft_stop_pct=1`, `scalp_hard_stop_pct=0`, `same_symbol_reentry_loss_count=0`였다. soft-stop qualifying cohort는 `씨아이에스(222080)` 1건이며 `soft_stop_micro_grace`가 실제로 개입한 뒤 `12:35:05 KST` `profit_rate=-1.78%`, `sell_completed=-1.83%`로 종료됐다. 즉 장중 표본 0은 아니지만 hard pass/fail 전제인 `COMPLETED + valid profit_rate >= 10`은 여전히 미충족이다.
+  - 다음 액션: `[HoldingExitPostclose0428]`, `[SoftStopGoodCut0428]`에서 `씨아이에스(222080)`를 `micro grace 개입 실패 표본`으로 분리하고, 우원개발류 `비개입 soft stop`과 혼합 결론을 금지한다.
 
-- [ ] `[QuoteFreshComposite0428-1300] latency_quote_fresh_composite 13시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 13:10~13:20`, `Track: ScalpingLogic`)
+- [x] `[QuoteFreshComposite0428-1300] latency_quote_fresh_composite 13시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 13:10~13:20`, `Track: ScalpingLogic`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
   - label/window: `h1300`, `12:00:00~13:00:00`
   - 완료근거: `budget_pass`, `submitted`, `budget_pass_to_submitted_rate`, `latency_state_danger`, `full_fill`, `partial_fill`, `quote_fresh_composite_canary_applied=True/False`, `ShadowDiff0428`, `fallback_regression=0`.
   - hard pass/fail 전제: `submitted_orders >= 20`, baseline 표본 `>= N_min`, `ShadowDiff0428` 해소.
   - 판정/다음 액션: 성공 기준 충족 시 `유지`, `fallback_regression >= 1`이면 즉시 OFF/회귀조사, 전제 미충족 시 direction-only와 다음 점검시각 기록.
+  - 판정: `direction-only 보류`. `/home/ubuntu/KORStockScan/tmp/2026-04-28/entry_quote_fresh_composite_summary_h1300.json`은 메타데이터/summary가 비어 있어 stale 또는 invalid summary로 보고, 서버 원시 `12:00:00~13:00:00` 집계로 닫았다.
+  - 완료 메모: 서버 원시 기준 `budget_pass=897`, `latency_block=896`, `latency_pass=1`, `order_bundle_submitted=1`, `quote_fresh_composite_canary_applied=True=0`, `latency_pass reason=safe_normal_entry_allowed 1건`이었다. 즉 제출 1건은 있었지만 active canary가 실제 제출 회복을 만든 표본은 없고, hard pass/fail 전제 `submitted_orders >= 20`도 미충족이다.
+  - 다음 액션: `[QuoteFreshComposite0428-1400]`에서도 `quote_fresh_composite_canary_applied=True=0` 또는 `submitted` 정체가 반복되면, 장후 `[QuoteFreshReview0428]`와 `[QuoteFreshBackupComposite0428]`에서 `현 축 유지 vs OFF/교체`를 우선 판정한다. 14시부터는 `tmp/2026-04-28` summary 메타데이터(`bundle_dir`, `manifest_generated_at`, `pipeline_event_rows_loaded`)를 먼저 확인한 뒤 사용한다.
 
-- [ ] `[SoftStopGrace0428-1400] soft_stop_micro_grace 14시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 14:00~14:10`, `Track: Plan`)
+- [x] `[SoftStopGrace0428-1400] soft_stop_micro_grace 14시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 14:00~14:10`, `Track: Plan`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
   - label/window: `h1400`, `13:00:00~14:00:00`
   - 완료근거: `soft_stop_micro_grace`, `scalp_soft_stop_pct`, `scalp_hard_stop_pct`, `COMPLETED + valid profit_rate`, `full_fill`, `partial_fill`, `same_symbol_reentry_loss_count`, `emergency_pct <= -2.0`, `fallback_regression=0`.
   - hard pass/fail 전제: `soft_stop_micro_grace >= 10` 또는 `soft_stop qualifying cohort`의 `COMPLETED + valid profit_rate >= 10`.
   - 판정/다음 액션: 15시 최종판정 전 `유지`, `OFF`, `보류` 임시판정을 기록하고, OFF 필요 시 재기동 필요 여부를 먼저 정리한다.
+  - 완료 메모: 사용자 승인으로 `14시 장중 점검 생략 -> 16:00 KST raw 기반 통합점검`으로 대체했다. `offline bundle` 생성 없이 `data/pipeline_events/pipeline_events_2026-04-28.jsonl`와 장후 `post_sell` 산출물 기준으로 닫는다.
 
-- [ ] `[QuoteFreshComposite0428-1400] latency_quote_fresh_composite 14시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 14:10~14:20`, `Track: ScalpingLogic`)
+- [x] `[QuoteFreshComposite0428-1400] latency_quote_fresh_composite 14시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 14:10~14:20`, `Track: ScalpingLogic`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
   - label/window: `h1400`, `13:00:00~14:00:00`
   - 완료근거: `budget_pass`, `submitted`, `budget_pass_to_submitted_rate`, `latency_state_danger`, `full_fill`, `partial_fill`, `quote_fresh_composite_canary_applied=True/False`, `ShadowDiff0428`, `fallback_regression=0`.
   - hard pass/fail 전제: `submitted_orders >= 20`, baseline 표본 `>= N_min`, `ShadowDiff0428` 해소.
   - 판정/다음 액션: 15시 최종판정 전 `유지`, `OFF`, `교체`, `direction-only 보류` 임시판정을 기록하고, 부분 적용 금지를 재확인한다.
+  - 완료 메모: 사용자 승인으로 `14시 장중 점검 생략 -> 16:00 KST raw 기반 통합점검`으로 대체했다. 장 종료 후에는 `pipeline_events` 파일이 정적이므로 `offline bundle` 없이 raw 집계로 same-day 판정을 닫는다.
 
-- [ ] `[SoftStopGrace0428-1500] soft_stop_micro_grace 15시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 15:00~15:10`, `Track: Plan`)
+- [x] `[SoftStopGrace0428-1500] soft_stop_micro_grace 15시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 15:00~15:10`, `Track: Plan`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
   - label/window: `h1500`, `14:00:00~15:00:00`
   - 완료근거: `soft_stop_micro_grace`, `scalp_soft_stop_pct`, `scalp_hard_stop_pct`, `COMPLETED + valid profit_rate`, `full_fill`, `partial_fill`, `same_symbol_reentry_loss_count`, `emergency_pct <= -2.0`, `fallback_regression=0`.
   - hard pass/fail 전제: `soft_stop_micro_grace >= 10` 또는 `soft_stop qualifying cohort`의 `COMPLETED + valid profit_rate >= 10`.
   - 판정/다음 액션: `유지`, `OFF`, `보류` 중 하나로 닫고, 보류 시 누적 표본 부족 수치와 `2026-04-29 10:00` 재판정 조건을 기록한다.
+  - 완료 메모: 사용자 승인으로 `15시 장중 점검 생략 -> 16:00 KST raw 최종점검`으로 대체했다. 장 종료 후 same-day raw 누적으로 최종 판정을 닫으므로 15시 중간 판정은 생략한다.
 
-- [ ] `[QuoteFreshComposite0428-1500] latency_quote_fresh_composite 15시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 15:10~15:20`, `Track: ScalpingLogic`)
+- [x] `[QuoteFreshComposite0428-1500] latency_quote_fresh_composite 15시 점검` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 15:10~15:20`, `Track: ScalpingLogic`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
   - label/window: `h1500`, `14:00:00~15:00:00`
   - 완료근거: `budget_pass`, `submitted`, `budget_pass_to_submitted_rate`, `latency_state_danger`, `full_fill`, `partial_fill`, `quote_fresh_composite_canary_applied=True/False`, `ShadowDiff0428`, `fallback_regression=0`.
   - hard pass/fail 전제: `submitted_orders >= 20`, baseline 표본 `>= N_min`, `ShadowDiff0428` 해소.
   - 판정/다음 액션: `유지`, `OFF`, `다음 독립축 교체`, `direction-only 보류` 중 하나로 닫고, direction-only는 2영업일 내 재판정 및 미재판정 자동 OFF를 기록한다.
+  - 완료 메모: 사용자 승인으로 `15시 장중 점검 생략 -> 16:00 KST raw 최종점검`으로 대체했다. 장 종료 후 same-day raw 누적으로 OFF/유지/교체 판정을 닫으므로 15시 중간 판정은 생략한다.
 
-- [ ] `[SoftStopGrace0428-Final1500] soft_stop_micro_grace 15시 종합판정` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 15:00~15:10`, `Track: Plan`)
+- [x] `[SoftStopGrace0428-Final1500] soft_stop_micro_grace 15시 종합판정` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 15:00~15:10`, `Track: Plan`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
   - 판정 기준: 결과는 `유지`, `OFF`, `표본부족으로 2026-04-29 10:00 재판정` 중 하나만 허용한다.
   - 완료근거: 09:00~15:00 누적 표본 수, hard stop 전환/동일종목 손실/미체결 악화 여부, `fallback_regression=0`.
   - 다음 액션: 표본부족 재판정은 누적 표본 수와 `2026-04-29 10:00 KST` 절대시각을 함께 기록한다.
+  - 완료 메모: 사용자 승인으로 `16:00 KST raw 최종점검`으로 대체했다. same-day 최종판정은 `[SoftStopGrace0428-1600Raw]`가 소유한다.
 
-- [ ] `[QuoteFreshComposite0428-Final1500] latency_quote_fresh_composite 15시 종합판정` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 15:10~15:20`, `Track: ScalpingLogic`)
+- [x] `[QuoteFreshComposite0428-Final1500] latency_quote_fresh_composite 15시 종합판정` (`Due: 2026-04-28`, `Slot: INTRADAY`, `TimeWindow: 15:10~15:20`, `Track: ScalpingLogic`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
   - 판정 기준: 결과는 `유지`, `OFF`, `다음 독립축 교체`, `direction-only로 2026-04-29 10:00 재판정` 중 하나만 허용한다.
   - 완료근거: same bundle baseline, `submitted_orders`, `latency_state_danger`, fill quality, `ShadowDiff0428`, `fallback_regression=0`.
   - 다음 액션: `direction-only`는 `2영업일 내 재판정, 미재판정 시 자동 OFF` 규칙을 명시한다. `OFF/교체` 시 예비축은 `latency_signal_quality_quote_composite`만 검토하고, 기존 5개 파라미터 부분 적용은 금지한다.
+  - 완료 메모: 사용자 승인으로 `16:00 KST raw 최종점검`으로 대체했다. same-day 최종판정은 `[QuoteFreshComposite0428-1600Raw]`가 소유한다.
 
 ## 장후 체크리스트 (18:05~19:20)
+
+- [ ] `[SoftStopGrace0428-1600Raw] soft_stop_micro_grace 16시 raw 통합점검` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 16:00~16:10`, `Track: Plan`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
+  - 범위: `09:00:00~15:30:00` same-day raw 누적
+  - 완료근거: `soft_stop_micro_grace`, `scalp_soft_stop_pct`, `scalp_hard_stop_pct`, `COMPLETED + valid profit_rate`, `same_symbol_reentry_loss_count`, `micro grace 개입 표본 vs 비개입 soft stop 표본` 분리.
+  - 판정 기준: 장 종료 후 `pipeline_events`가 정적이면 `offline bundle` 없이 raw 기준으로 `유지`, `OFF`, `보류` 중 하나를 닫는다.
+  - 다음 액션: `씨아이에스(222080)`는 `micro grace 개입 실패`, `우원개발(046940)`은 `비개입 soft stop`으로 분리하여 장후 감리에 연결한다.
+
+- [ ] `[QuoteFreshComposite0428-1600Raw] latency_quote_fresh_composite 16시 raw 통합점검` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 16:10~16:20`, `Track: ScalpingLogic`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
+  - 범위: `09:00:00~15:30:00` same-day raw 누적
+  - 완료근거: `budget_pass`, `submitted`, `budget_pass_to_submitted_rate`, `latency_state_danger`, `quote_fresh_composite_canary_applied=True/False`, `full_fill`, `partial_fill`, `ShadowDiff0428`, `fallback_regression=0`.
+  - 판정 기준: 장 종료 후 `pipeline_events`가 정적이면 `offline bundle` 없이 raw 기준으로 `유지`, `OFF`, `다음 독립축 교체`, `direction-only 보류` 중 하나를 닫는다.
+  - 다음 액션: `canary_applied=True` 표본 부재 또는 제출 회복 부재가 누적되면 `[QuoteFreshReview0428]`, `[QuoteFreshBackupComposite0428]`에서 OFF/교체 우선 판정으로 연결한다.
 
 - [ ] `[HoldingExitPostclose0428] soft_stop/trailing/same_symbol 장후 분해` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 17:40~18:00`, `Track: Plan`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
   - 판정 기준: `soft_stop_micro_grace`, `scalp_soft_stop_pct`, `trailing`, `same_symbol_reentry`, `hard_stop_auxiliary`를 분리하고 full/partial, initial/pyramid 합산 결론을 금지한다.
   - 완료근거: soft_stop/trailing/same_symbol/hard_stop_auxiliary 분리표, `COMPLETED + valid profit_rate`, full/partial 분리, missed_upside/opportunity cost 분리.
   - 다음 액션: `2026-04-29` 유지/OFF/재판정 중 하나를 checklist에 자동 파싱 가능한 항목으로 생성한다.
+
+- [ ] `[SoftStopGoodCut0428] good-cut soft stop vs whipsaw soft stop 분리` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 18:00~18:10`, `Track: Plan`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
+  - 판정 기준: `scalp_soft_stop_pct` 사례를 `good_cut`과 `whipsaw`로 분리한다. `good_cut`은 단일 시점 가격이 아니라 `T+5/T+15/T+30/종가` 가격분포, `MFE/MAE`, `post_sell rebound`, `AI 급락`, `시장/섹터 동조성`을 같이 본다. 최소 기준은 `peak_profit <= +0.20%`, `매도 후 추가 하락 지속`, `AI 급락`이면 `good_cut` 후보, `post_sell rebound_above_sell=True` 또는 `mfe_ge_0_5 / mfe_ge_1_0`이면 `whipsaw` 우선으로 본다. 두 성격이 공존하면 `ambiguous`로 남긴다.
+  - 완료근거: 우원개발(046940) 포함 same-day `scalp_soft_stop_pct` 사례에 대해 `good_cut / whipsaw / ambiguous` 라벨, `exit_rule`, `peak_profit`, `sell_completed profit_rate`, `T+5/T+15/T+30/종가`, `MFE`, `MAE`, `post_sell rebound`, `same_symbol_soft_stop_cooldown_would_block`가 같이 남는다.
+  - 다음 액션: `good_cut` 비중이 높으면 `soft_stop_micro_grace`를 same-day 실패로 보지 않고 유지/관찰 후보로 남긴다. `whipsaw` 비중이 높으면 `soft_stop_micro_grace_extend` 또는 별도 보유청산 후보로 승격 검토 항목을 생성한다.
+
+- [ ] `[EntryFollowThrough0428] 우원개발류 follow-through 실패 분해 및 예비축 정의` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 18:10~18:25`, `Track: ScalpingLogic`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [audit-reports/2026-04-27-entry-latency-composite-canary-audit-review.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-27-entry-latency-composite-canary-audit-review.md)
+  - 판정 기준: `latency=SAFE/ALLOW_NORMAL` 또는 기존 entry gate 통과 후에도 `peak_profit`이 거의 없이 `AI/strength`가 급락하고 `soft_stop` 또는 미미한 반등 후 청산으로 이어지는 종목을 `follow_through_failure` 후보로 묶는다. `latency miss`와 혼합 결론을 금지하되, 분석 결과가 충분히 쌓이면 진입 게이트 보강 후보로 환류될 여지는 열어둔다.
+  - 완료근거: 우원개발(046940) 등 same-day 사례에 대해 `entry_mode`, `latency state`, `peak_profit`, `held_sec`, `profit_rate`, `post_sell path`, `체결 후 30초/1분/3분 가격궤적`, `AI score velocity(진입평가시→체결시→보유 N초)`, `체결 시점 호가/거래량`, `시장/섹터 동조성`을 한 표에 묶고, `entry follow-through quality`가 다음 후보축인지 아닌지 판정을 남긴다.
+  - 다음 액션: `follow_through_failure` 표본이 `20건`에 도달하면 진입 시점 feature 역추적 분석을 별도 작업으로 생성한다. 후보축으로 승인되면 `2026-04-29` checklist에 `entry_follow_through_quality` observe-only 또는 예비 canary 설계 항목을 자동 파싱 가능한 작업으로 생성한다. 미승인 시 `latency_quote_fresh_composite` 장후 판정에 혼입하지 않는다.
+
+- [ ] `[FollowThroughSchema0428] 체결 후 N초 가격행동·AI velocity 로그 스키마 보강안 잠금` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 18:25~18:35`, `Track: ScalpingLogic`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
+  - 판정 기준: 향후 `follow_through_failure` 감리를 위해 `체결 후 30초/1분/3분 가격`, `AI score velocity`, `MFE/MAE`, `체결 시점 호가 잔량 비율`, `직전 거래량`, `시장/섹터 동조성`을 공통 로그/스냅샷 스키마에 넣을지 범위를 잠근다. 표본 1건만으로 정책 변경 근거로 쓰지 않는다는 문구를 같이 명시한다.
+  - 완료근거: 신규 로그 필드 후보, 저장 위치(`pipeline/holding/post_sell/snapshot`), 계산 시점, 필드명 초안, 과부하 우려와 우회 경로가 정리된다.
+  - 다음 액션: 승인되면 `2026-04-29` checklist에 구현 항목을 자동 파싱 가능한 작업으로 생성한다. 미승인 시 수동 감리 항목으로만 유지한다.
+
+- [ ] `[AprilFollowThroughBackfill0428] 4월 soft_stop/follow-through 후보 월간 선별 백필` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 18:35~18:50`, `Track: ScalpingLogic`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
+  - 판정 기준: 4월 전체를 heavy rebuild로 다시 돌리지 않고, 이미 저장된 `trade_review`, `post_sell_candidates/evaluations`, `holding_exit_observation` 입력만으로 `scalp_soft_stop_pct`와 `follow_through_failure` 후보를 월간 선별한다. `good_cut / whipsaw / ambiguous`와 `follow_through_failure`는 분리 라벨링하고, full/partial, initial/pyramid 합산 결론을 금지한다.
+  - 완료근거: 4월 대상 일자 범위, 사용한 입력 파일 목록, 선별 건수, `good_cut / whipsaw / ambiguous / follow_through_failure` 분포, 장후 심화분석 우선순위가 남는다.
+  - 다음 액션: 월간 후보 표본이 충분하면 `2026-04-29` checklist에 `entry feature backtrace` 또는 `soft_stop policy` 후속 항목을 자동 파싱 가능한 작업으로 생성한다. 입력 누락이 크면 누락 일자와 보완 필요 리포트만 별도 기록한다.
 
 - [ ] `[QuoteFreshPostclose0428] quote_fresh composite 장후 baseline/guard 정리` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 18:00~18:15`, `Track: ScalpingLogic`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [audit-reports/2026-04-27-entry-latency-composite-canary-audit-review.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-27-entry-latency-composite-canary-audit-review.md)

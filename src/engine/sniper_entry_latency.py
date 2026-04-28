@@ -14,6 +14,7 @@ from src.trading.entry.normal_entry_builder import NormalEntryBuilder
 from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
 from src.trading.entry.signal_snapshot import build_signal_snapshot
 from src.trading.market.market_data_cache import MarketDataCache
+from src.trading.order.tick_utils import move_price_by_ticks
 from src.utils.constants import TRADING_RULES
 from src.utils.logger import log_info
 
@@ -792,19 +793,49 @@ def evaluate_live_buy_entry(
         "latency_danger_reasons": latency_danger_reasons,
         "target_buy_price": int(target_buy_price or 0),
         "order_price": 0,
+        "entry_price_guard": "none",
+        "entry_price_defensive_ticks": 0,
+        "normal_defensive_order_price": 0,
+        "latency_guarded_order_price": 0,
+        "counterfactual_order_price_1tick": 0,
         "latency_canary_applied": latency_canary_applied,
         "latency_canary_reason": latency_canary_reason,
         "orderbook_stability": ORDERBOOK_STABILITY_OBSERVER.snapshot(code),
     }
 
     if effective_decision == EntryDecision.ALLOW_NORMAL:
-        defensive_order = _NORMAL_BUILDER.build(snapshot=snapshot, latest_price=latest_price)
+        is_latency_override = latency.state.value == "DANGER" and latency_canary_applied
+        defensive_ticks = (
+            _CONFIG.latency_override_defensive_ticks
+            if is_latency_override
+            else _CONFIG.normal_defensive_ticks
+        )
+        entry_price_guard = (
+            "latency_danger_override_defensive"
+            if is_latency_override
+            else "normal_defensive"
+        )
+        defensive_order = _NORMAL_BUILDER.build(
+            snapshot=snapshot,
+            latest_price=latest_price,
+            defensive_ticks=defensive_ticks,
+        )
+        normal_defensive_order_price = move_price_by_ticks(latest_price, -_CONFIG.normal_defensive_ticks)
+        latency_guarded_order_price = int(defensive_order.price)
+        counterfactual_order_price_1tick = normal_defensive_order_price
         order_price = int(defensive_order.price)
         if int(target_buy_price or 0) > 0:
-            order_price = min(order_price, int(target_buy_price))
+            target_cap = int(target_buy_price)
+            order_price = min(order_price, target_cap)
+            counterfactual_order_price_1tick = min(counterfactual_order_price_1tick, target_cap)
         result["allowed"] = True
         result["mode"] = "normal"
         result["order_price"] = order_price
+        result["entry_price_guard"] = entry_price_guard
+        result["entry_price_defensive_ticks"] = int(defensive_ticks)
+        result["normal_defensive_order_price"] = int(normal_defensive_order_price)
+        result["latency_guarded_order_price"] = int(latency_guarded_order_price)
+        result["counterfactual_order_price_1tick"] = int(counterfactual_order_price_1tick)
         result["orders"] = [
             {
                 "tag": "normal",

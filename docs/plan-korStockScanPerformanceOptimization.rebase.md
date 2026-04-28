@@ -35,6 +35,7 @@
 | `latency_signal_quality_quote_composite` | `latency_quote_fresh_composite` 미회복 시 검토할 예비 복합축. quote freshness 완화폭을 넓히는 대신 `signal>=90`, `latest_strength>=110`, `buy_pressure_10t>=65`를 요구한다 | standby/off. 현재 live 축이 아니며, `latency_quote_fresh_composite OFF -> restart.flag -> 새 축 ON` 승인 전까지 실주문에 적용하지 않는다 |
 | `holding_exit_observation` | 보유/청산 후보를 saved snapshot, post-sell, pipeline event로 분해하는 리포트 축 | live canary가 아니라 관찰/후보 고정용. `partial/full`, `initial/pyramid` 합산 결론 금지 |
 | `soft_stop_micro_grace_extend` | soft stop 최초 유예 20초가 너무 짧을 때 threshold 근처에서 1회 추가 유예하는 보조 파라미터 | standby/off. `soft_stop_micro_grace` 20초 축의 hard stop/동일종목 손실/미체결 비악화가 확인되고도 반등 포착이 부족할 때만 검토한다 |
+| `nan_cast_guard_followup` | 주문·체결·DB 복원 숫자 필드에 `NaN/inf`가 유입될 때 런타임 중단과 상태전이 실패를 막기 위한 숫자 정규화/업스트림 source 재분해 계획 | live canary 아님. 런타임 안정화/집계 품질 보강용 follow-up으로만 관리하고, 기대값 해석 입력은 재발건수·영향경로·미진입/미청산 기회비용 분해를 함께 남긴다 |
 
 ## 3. 튜닝 원칙
 
@@ -58,6 +59,7 @@
 18. `latency_quote_fresh_composite`의 pass/fail 기준선은 `same bundle + canary_applied=False + normal_only + post_fallback_deprecation` 표본이다. `ShadowDiff0428`이 닫히기 전까지는 이 기준선을 hard baseline으로 승격하지 않고, `2026-04-27 15:00 offline bundle`은 방향성 참고선으로만 사용한다.
 19. `offline_live_canary_bundle`은 장중 과부하 방지용 판정 입력이다. fresh 로그가 Codex 작업환경에 없으면 서버에서 lightweight export만 수행하고, 사용자가 로컬 analyzer로 `latency_quote_fresh_composite`와 `soft_stop_micro_grace` summary를 생성해 같은 슬롯 판정을 닫는다. 이 번들은 heavy snapshot/report builder를 호출하지 않으며, 산출물은 hard pass/fail 전제 충족 여부와 direction-only 사유를 확인하는 입력으로만 사용한다.
 20. `latency_signal_quality_quote_composite`와 `soft_stop_micro_grace_extend`는 예비축/예비 파라미터다. active 축이 실패 또는 표본부족 재판정 조건을 충족하기 전에는 live ON 하지 않으며, 활성화하려면 기존 동일 단계 canary OFF, rollback guard, restart 필요 여부, baseline cohort를 같은 checklist에 잠근다.
+21. `NaN cast` 계열 오류는 손익 축이 아니라 런타임 안정화 축으로 분리한다. 판정은 `재발 건수`, `루프 중단 여부`, `BUY_ORDERED->HOLDING/청산 상태전이 실패`, `미진입/미청산 기회비용` 기준으로 남기고, 원격과 동일 패치 복제 여부보다 메인 코드베이스 기준의 최소 안전 캐스팅/업스트림 source 추적 계획을 우선한다.
 
 ## 4. 작업 규칙
 
@@ -96,6 +98,7 @@
 | live canary | `N_min`, 주요 metric, rollback guard, OFF 조건, 판정시각이 문서와 로그에 고정됨 |
 | 성과판정 | `COMPLETED + valid profit_rate`, full/partial 분리, blocker 분포, 체결품질이 함께 제시됨 |
 | 보류/미착수 | 보류 사유, 기대값 영향, 표본충분성 또는 관측 누락 이유, 다음 판정시각 또는 폐기/코드정리 판정이 명시됨 |
+| 런타임 안정화 후속 | same-day hotfix를 장기 과제로 넘길 때는 `재발건수`, `영향 경로`, `업스트림 source 후보`, `메인 코드베이스 최소 수정범위`, `다음 절대시각`이 함께 남음 |
 | 장후/익일 이관 | `same-day 불가 이유`, `추가 데이터 vs 코드수정` 구분, `단일 조작점`, `rollback guard`, `restart 가능 여부`, `다음 절대시각`이 한 묶음으로 남음 |
 | 판정 근거 | 수치, 기준선 비교, why(왜 그 수치가 유지/보류/미완/폐기로 이어지는지)가 한 묶음으로 남음 |
 | 폐기 | 재개 조건이 없으면 폐기 문서/부속문서로 내리고 중심 문서에는 요약만 유지 |
@@ -157,6 +160,7 @@
 | entry data-quality gate | `ShadowDiff0428` open | [2026-04-28 checklist](./2026-04-28-stage2-todo-checklist.md) `ShadowDiff0428` | submitted/full/partial mismatch가 닫혀야 hard pass/fail 가능 |
 | holding/exit live canary | `soft_stop_micro_grace` active | 날짜별 checklist + holding audit/report | stage-disjoint 예외로 entry 축과 병렬 존재 가능 |
 | holding/exit observation | `holding_exit_observation` 유지 | checklist + observation report | `soft_stop/trailing/same_symbol/EOD-NXT` 분해 입력 소유 |
+| runtime stabilization follow-up | `nan_cast_guard_followup` open | [2026-05-05 checklist](./2026-05-05-stage2-todo-checklist.md) `NaNCastGuard0505` | canary 아님. 메인 기준 최소 safe cast 범위와 upstream source 추적 계획만 잠금 |
 | retired entry axes | `gatekeeper_fast_reuse`, `other_danger`, `ws_jitter`, `fallback/split-entry` closed | `execution-delta` + audit/report | historical-only. 재개는 새 workorder + rollback guard 필요 |
 
 ## 9. 델타/Q&A 라우팅
