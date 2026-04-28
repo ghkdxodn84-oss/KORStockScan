@@ -58,9 +58,19 @@ def _safe_int(value, default=0):
     if value in (None, ""):
         return default
     try:
-        return int(float(str(value).replace(",", "").replace("+", "").replace("-", "").strip()))
+        clean_value = str(value).replace(",", "").replace("+", "").strip()
+        if not clean_value:
+            return default
+        return int(float(clean_value))
     except (TypeError, ValueError):
         return default
+
+
+def _safe_positive_int(value, default=0):
+    parsed = _safe_int(value, default)
+    if parsed is None:
+        return default
+    return abs(parsed)
 
 
 def _bounded(value, low=0.0, high=9999.0):
@@ -114,7 +124,7 @@ def _freshness_score(target):
     spike_rate = _bounded(target.get("SpikeRate"), 0.0, 350.0)
     flu_rate = _safe_float(target.get("FluRate"))
     cntr_str = _bounded(target.get("CntrStr"), 0.0, 180.0)
-    trade_value = _safe_int(target.get("TradeValue"))
+    trade_value = _safe_positive_int(target.get("TradeValue"))
     rank_now = _safe_int(target.get("RankNow"))
     rank_prev = _safe_int(target.get("RankPrev"))
     source_set = set(target.get("SourceSet") or [])
@@ -129,7 +139,7 @@ def _freshness_score(target):
 
     vi_score = 0.0
     if "VI_TRIGGERED" in source_set:
-        vi_score = 250.0 + min(_safe_int(target.get("VIMotionCount")), 5) * 25.0
+        vi_score = 250.0 + min(_safe_positive_int(target.get("VIMotionCount")), 5) * 25.0
 
     source_count_score = min(240.0, max(0, len(source_set) - 1) * 80.0)
     flu_score = _bounded(flu_rate * 8.0, 0.0, 220.0)
@@ -181,10 +191,10 @@ def _merge_candidate(candidate_pool, raw_target, source):
     current["CntrStr"] = max(current.get("CntrStr", 0.0), _safe_float(raw_target.get("CntrStr", raw_target.get("cntr_str"))))
     current["PriorityScore"] = max(current.get("PriorityScore", 0.0), _safe_float(raw_target.get("PriorityScore", raw_target.get("priority_score"))))
     current["SpikeRate"] = max(current.get("SpikeRate", 0.0), _safe_float(raw_target.get("SpikeRate", raw_target.get("spike_rate"))))
-    current["TradeValue"] = max(current.get("TradeValue", 0), _safe_int(raw_target.get("TradeValue", raw_target.get("trade_value"))))
-    current["VIMotionCount"] = max(current.get("VIMotionCount", 0), _safe_int(raw_target.get("VIMotionCount")))
+    current["TradeValue"] = max(current.get("TradeValue", 0), _safe_positive_int(raw_target.get("TradeValue", raw_target.get("trade_value"))))
+    current["VIMotionCount"] = max(current.get("VIMotionCount", 0), _safe_positive_int(raw_target.get("VIMotionCount")))
 
-    price = _safe_int(raw_target.get("Price", raw_target.get("cur_prc")))
+    price = _safe_positive_int(raw_target.get("Price", raw_target.get("cur_prc")))
     if price > 0:
         current["Price"] = price
 
@@ -194,8 +204,9 @@ def _merge_candidate(candidate_pool, raw_target, source):
         current["RankNow"] = rank_now
     if rank_prev > 0:
         current["RankPrev"] = rank_prev
-    if raw_target.get("VIReleaseTime"):
-        current["VIReleaseTime"] = raw_target.get("VIReleaseTime")
+    vi_release_time = str(raw_target.get("VIReleaseTime") or "").strip()
+    if vi_release_time:
+        current["VIReleaseTime"] = max(str(current.get("VIReleaseTime") or ""), vi_release_time)
 
     current["Source"] = _representative_source(current["SourceSet"])
 
@@ -229,7 +240,7 @@ def rank_candidates(candidate_pool):
     )
 
 
-def _prune_recent_picks(recent_picks, now_ts, reentry_cooldown_sec):
+def _filter_picks_within_cooldown(recent_picks, now_ts, reentry_cooldown_sec):
     return {
         code: meta
         for code, meta in (recent_picks or {}).items()
@@ -270,7 +281,7 @@ def _remember_pick(recent_picks, target, now_ts):
 def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_codes, reentry_cooldown_sec, token=None, now_ts=None):
     now_ts = time.time() if now_ts is None else now_ts
     new_codes_found = []
-    recent_picks = _prune_recent_picks(recent_picks, now_ts, reentry_cooldown_sec)
+    recent_picks = _filter_picks_within_cooldown(recent_picks, now_ts, reentry_cooldown_sec)
 
     for target in ranked_targets:
         code = target["Code"]
@@ -289,9 +300,6 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
             f"(등락률: +{target['FluRate']}%, 체결강도: {target['CntrStr']}, "
             f"신선도점수: {score:.1f} | 출처: {target['Source']} [{source_sig}])"
         )
-        _remember_pick(recent_picks, target, now_ts)
-        new_codes_found.append(code)
-
         try:
             with db.get_session() as session:
                 today_date = datetime.now().date()
@@ -323,7 +331,11 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
                     )
                     session.add(new_record)
         except Exception as e:
-            log_info(f"⚠️ DB 저장 실패 ({code}): {e}")
+            log_error(f"⚠️ DB 저장 실패 ({code}): {e}")
+            continue
+
+        _remember_pick(recent_picks, target, now_ts)
+        new_codes_found.append(code)
 
         if len(new_codes_found) >= max_new_codes:
             break
@@ -333,6 +345,14 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
         print(f"📡 웹소켓 감시 등록 요청 완료: {len(new_codes_found)} 종목")
 
     return new_codes_found, recent_picks
+
+
+def _fetch_scan_source(source_name, fetcher, *args, **kwargs):
+    try:
+        return fetcher(*args, **kwargs) or []
+    except Exception as exc:
+        log_error(f"🚨 [SCALPING 스캐너] {source_name} 조회 실패: {exc}")
+        return []
 
 
 def run_scalper_iteration(
@@ -347,17 +367,33 @@ def run_scalper_iteration(
     open_top_limit,
     supernova_limit,
 ):
-    soaring_targets = kiwoom_utils.get_top_open_fluctuation_ka10028(
+    soaring_targets = _fetch_scan_source(
+        "ka10028 시가대비 상위",
+        kiwoom_utils.get_top_open_fluctuation_ka10028,
         token,
         mrkt_tp="000",
         limit=open_top_limit,
     )
-    supernova_targets = radar.find_supernova_targets(
+    supernova_targets = _fetch_scan_source(
+        "Supernova 수급 급증",
+        radar.find_supernova_targets,
         mrkt_tp="000",
         candidate_limit=supernova_limit,
     )
-    value_targets = kiwoom_utils.get_value_top_ka10032(token, mrkt_tp="000", limit=30)
-    vi_targets = kiwoom_utils.get_vi_triggered_ka10054(token, mrkt_tp="000", limit=30)
+    value_targets = _fetch_scan_source(
+        "ka10032 거래대금 상위",
+        kiwoom_utils.get_value_top_ka10032,
+        token,
+        mrkt_tp="000",
+        limit=30,
+    )
+    vi_targets = _fetch_scan_source(
+        "ka10054 VI 발동",
+        kiwoom_utils.get_vi_triggered_ka10054,
+        token,
+        mrkt_tp="000",
+        limit=30,
+    )
 
     candidate_pool = build_candidate_pool(
         soaring_targets=soaring_targets,

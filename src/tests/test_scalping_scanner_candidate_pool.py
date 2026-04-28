@@ -63,6 +63,45 @@ def test_candidate_pool_merges_sources_and_prefers_value_vi_combo():
     assert scalping_scanner._freshness_score(target) > 0
 
 
+def test_safe_int_preserves_rank_sentinel_but_price_helper_absorbs_signed_prices():
+    assert scalping_scanner._safe_int("-1") == -1
+    assert scalping_scanner._safe_positive_int("-50000") == 50000
+
+
+def test_rank_prev_negative_sentinel_does_not_create_rank_jump_score():
+    base = {
+        "Code": "005930",
+        "Name": "삼성전자",
+        "Price": 70000,
+        "FluRate": 0.0,
+        "CntrStr": 0.0,
+        "Source": "VALUE_TOP",
+        "SourceSet": {"VALUE_TOP"},
+        "PriorityScore": 0.0,
+        "SpikeRate": 0.0,
+        "TradeValue": 0,
+        "RankNow": 1,
+        "VIMotionCount": 0,
+    }
+
+    no_previous_rank = {**base, "RankPrev": -1}
+    real_rank_jump = {**base, "RankPrev": 61}
+
+    assert scalping_scanner._freshness_score(real_rank_jump) > scalping_scanner._freshness_score(no_previous_rank)
+
+
+def test_candidate_pool_keeps_latest_vi_release_time():
+    pool = scalping_scanner.build_candidate_pool(
+        vi_targets=[
+            {"Code": "005930", "Name": "삼성전자", "VIReleaseTime": "091500"},
+            {"Code": "005930", "Name": "삼성전자", "VIReleaseTime": "091200"},
+            {"Code": "005930", "Name": "삼성전자", "VIReleaseTime": "092000"},
+        ],
+    )
+
+    assert pool["005930"]["VIReleaseTime"] == "092000"
+
+
 def test_promote_candidates_blocks_identical_recent_pick(monkeypatch):
     monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
     db = _DB()
@@ -181,6 +220,39 @@ def test_run_scalper_iteration_keeps_ws_payload_and_max_new_codes(monkeypatch):
     assert codes == ["000000", "000001", "000002"]
     assert event_bus.events == [("COMMAND_WS_REG", {"codes": ["000000", "000001", "000002"]})]
     assert len(db.records) == 3
+
+
+def test_run_scalper_iteration_continues_when_one_source_fails(monkeypatch):
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "get_top_open_fluctuation_ka10028",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("timeout")),
+    )
+    monkeypatch.setattr(
+        kiwoom_utils,
+        "get_value_top_ka10032",
+        lambda *args, **kwargs: [{"Code": "005930", "Name": "삼성전자", "Price": 70000}],
+    )
+    monkeypatch.setattr(kiwoom_utils, "get_vi_triggered_ka10054", lambda *args, **kwargs: [])
+    radar = SimpleNamespace(find_supernova_targets=lambda *args, **kwargs: [])
+    db = _DB()
+    event_bus = _EventBus()
+
+    codes, _ = scalping_scanner.run_scalper_iteration(
+        token="TOKEN",
+        radar=radar,
+        db=db,
+        event_bus=event_bus,
+        recent_picks={},
+        reentry_cooldown_sec=1500,
+        max_new_codes=3,
+        open_top_limit=60,
+        supernova_limit=30,
+    )
+
+    assert codes == ["005930"]
+    assert event_bus.events == [("COMMAND_WS_REG", {"codes": ["005930"]})]
 
 
 def test_new_kiwoom_source_helpers_return_empty_list_on_fetch_failure(monkeypatch):
