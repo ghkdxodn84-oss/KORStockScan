@@ -87,6 +87,8 @@
 
 ### 2-3. [정정 3] fast_reuse 후속검증 — 실행 체크리스트 연동
 
+> 2026-04-27 정정: 아래 fast_reuse 선행 가설은 이후 live 판정에서 폐기됐다. 현재 기준은 `gatekeeper_fast_reuse_ratio`나 `gatekeeper_eval_ms_p95`가 아니라 `submitted/full/partial` 회복과 `latency_state_danger` 감소다. fast_reuse는 보조 진단 지표로만 사용한다.
+
 수정본 C-2에서 "04-24 PREOPEN에 fast_reuse 실전 호출 로그 확인"을 권고했으나, 당시 실행/완료 상태와 체크리스트 연동이 누락되었다. 현재는 04-24 체크리스트에 선행 확인 항목을 반영했고, 실행 여부는 PREOPEN에서 기록한다.
 
 **체크리스트 연동 항목** (04-24-stage2-todo-checklist.md 반영):
@@ -126,7 +128,7 @@ gatekeeper_fast_reuse = 0.0%
   → submitted 증가 기대
 ```
 
-이 논리가 맞다면 **quote_fresh canary보다 fast_reuse 복구가 선행**해야 할 수 있다. 04-24 PREOPEN에서 fast_reuse 로그를 먼저 확인하고, fast_reuse 복구만으로 latency가 개선되면 quote_fresh canary가 불필요해질 수 있다.
+이 논리는 후속 검증 대상 가설이었고, 2026-04-27 판정에서 직접 제출 회복축으로는 폐기됐다. 이후 같은 상황에서는 fast_reuse 복구를 선행축으로 두지 말고, `latency_state_danger` 하위원인과 `submitted/full/partial`을 우선 판정한다.
 
 **권고 판정 순서**:
 1. 04-24 PREOPEN `08:20~08:35`: fast_reuse 실전 호출 로그 확인
@@ -169,7 +171,7 @@ gatekeeper_fast_reuse = 0.0%
 
 운영 트레이더 피드백 3건을 모두 반영했다.
 
-가장 중요한 변경은 §2-3의 **fast_reuse → latency → quote_fresh 인과 체인 식별**이다. `gatekeeper_eval_ms_p95=22,653ms`의 원인이 fast_reuse 미작동에 있다면, quote_fresh threshold를 완화하는 것은 **증상 치료**이고 fast_reuse 복구가 **원인 치료**다. 04-24 PREOPEN에서 이 분기를 먼저 판정해야 canary 1축을 올바르게 선정할 수 있다.
+가장 중요한 변경은 §2-3의 **fast_reuse → latency → quote_fresh 인과 체인 가설을 실행 체크리스트에 연결한 것**이었다. 다만 2026-04-27 후속 판정으로 이 가설은 현재 live 기준에서 폐기됐으며, 이후 기준은 `latency_state_danger` 직접 blocker와 `submitted/full/partial` 회복이다.
 
 ---
 

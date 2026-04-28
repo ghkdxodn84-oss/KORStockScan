@@ -78,7 +78,7 @@ class TradingConfig:
     INVEST_RATIO_SCALPING_MAX: float = 0.22  # 2026-04-20 risk cut: 스캘핑 최대 투자 비율 (30% -> 22%)
     SCALPING_MAX_BUY_BUDGET_KRW: int = 1_200_000  # 2026-04-20 risk cut: 스캘핑 신규 진입 1회 절대 투자금 상한 (1,600,000 -> 1,200,000)
     SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED: bool = True  # 임시 운영가드: 신규 BUY 접수 수량 상한 적용
-    SCALPING_INITIAL_ENTRY_MAX_QTY: int = 1  # 임시 운영가드 기본값: 신규 BUY는 1주까지 허용
+    SCALPING_INITIAL_ENTRY_MAX_QTY: int = 2  # 임시 운영가드 기본값: 신규 BUY는 2주까지 허용
 
     # 💡 [신규 추가] 스윙 AI 동적 비중 조절용 (Min~Max)
     INVEST_RATIO_KOSDAQ_MIN: float = 0.05  # 코스닥 AI 점수 60점일 때 (5%)

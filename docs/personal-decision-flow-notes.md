@@ -268,10 +268,24 @@
 | 다음 단계 목적 | 제출량 증가가 실제 기대값 개선으로 이어지는지 `HOLDING/청산 품질`로 검증한다. 단, 진입 조건은 `submitted` 회복이 먼저다. |
 | 핵심 검증축 | `soft_stop/trailing/good_exit`, `holding_action_applied`, `holding_force_exit_triggered`, `exit_rule` 분포, `full/partial` 분리, `COMPLETED + valid profit_rate` |
 | 분리 원칙 | `initial-only`와 `pyramid-activated` 표본을 섞지 않는다. `full fill`과 `partial fill`도 합치지 않는다. |
+| 수량정책 메모 | `2026-04-28` 기준 스캘핑 초기 진입 `initial_entry_qty_cap`은 임시 `2주`로 완화한다. 이유는 `1주 cap`이 `buy_qty=1 -> template_qty=int(1*0.5)=0`을 만들어 `PYRAMID zero_qty`를 구조적으로 만들 수 있기 때문이다. 다음 판정도 `2주` 자체의 손익보다 `zero_qty 감소`, `pyramid-activated 표본 회복`, `initial-only vs pyramid-activated` 분리 유지 여부를 먼저 본다. |
+| VM 기준선 메모 | `m7g.xlarge` 상향 직후 첫 거래일은 `runtime basis shift day`로 본다. 이 날의 `gatekeeper_eval_ms_p95`, `latency_state_danger share`, `ws_age/ws_jitter`, `budget_pass_to_submitted_rate` 변화는 전략 개선과 infra 처리속도 개선이 섞일 수 있으므로, 기존 baseline과 바로 hard 비교하지 않고 `VM 이후 provisional baseline` 후보로만 둔다. |
+| 관찰축 흔들림 메모 | VM 상향 직후에는 `QuoteFresh`, `latency_state_danger`, `gatekeeper_eval_ms_p95`가 동시에 흔들릴 수 있다. 이때 `latency_state_danger` 감소나 `p95` 하락만으로 entry 축 회복으로 판정하지 않는다. 최소 `submitted/full/partial` 회복이 같이 붙어야 하고, 그렇지 않으면 `infra-only improvement` 또는 `observation wobble`로 분리한다. |
 | 성공 판정 | 제출 증가와 함께 체결 품질/청산 품질 악화가 없고 `COMPLETED + valid profit_rate`가 유지 또는 개선 |
 | 실패 판정 | 제출 증가 대비 `soft_stop` 급증, `full_fill` 악화, `COMPLETED + valid profit_rate` 악화 동반 |
 | 다음 액션 | `HoldingExitPlan0427`에서는 `soft_stop qualifying cohort`의 단일 조작점을 `micro grace`로 승인한다. 근거 묶음은 `rebound_above_sell_10m=93.4%`, `rebound_above_buy_10m=26.2%`, `same_symbol_reentry_loss_count=5`, `hard_stop_auxiliary`다. `whipsaw confirmation`은 AI/호가 확인을 추가해 지연과 미체결을 다시 만들 수 있어 1차 live 조작점에서 제외한다. |
 | Source | [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
+
+### VM 성능변경에 따른 기준선 해석 메모
+
+| 항목 | 내용 |
+| --- | --- |
+| 변경 사실 | `2026-04-28` 사용자 확인 기준 EC2 인스턴스는 `m7g.xlarge`로 상향 완료됐다. |
+| 해석 원칙 | VM 변경 직후 표본은 전략 canary 효과와 infra 효과를 분리해서 본다. 즉 `QuoteFresh/latency` 계열 지표는 같은 날 바로 `기존 main-only baseline`의 승패 근거로 쓰지 않고, `reference/provisional baseline`으로만 둔다. |
+| 먼저 볼 것 | `instance type`, `uname -m`, `nproc`, `MemAvailable`, `SwapUsed`, bot PID `/proc/<pid>/environ` 같은 provenance와 함께 `gatekeeper_eval_ms_p95`, `latency_state_danger / budget_pass`, `ws_age`, `ws_jitter`, `submitted/full/partial`를 같은 창에서 묶어 본다. |
+| 흔들림 해석 | `gatekeeper_eval_ms_p95`만 내려가거나 `latency_state_danger`만 줄어드는 경우는 전략 회복이 아니라 `infra-only improvement` 가능성이 높다. 반대로 quote freshness 지표가 출렁여도 `submitted/full/partial`이 그대로면 관찰축 민감도 변화일 수 있다. |
+| 기준선 reset 조건 | `ShadowDiff0428`이 닫히고 same-day에 `submitted/full/partial`까지 같이 움직인 뒤에만 `VM 이후 baseline reset` 후보로 승격한다. 그 전에는 `04-27 15:00 offline bundle`과 기존 `canary_applied=False` 기준선은 계속 참고선으로만 쓴다. |
+| 오판 금지 | VM 변경일의 `QuoteFresh` 개선을 새 진입축 성공으로 바로 읽지 않는다. 반대로 악화도 즉시 새 축 실패로 단정하지 않는다. 먼저 `관찰축 흔들림`, `infra-only shift`, `strategy effect` 중 어디에 가까운지 분리해야 한다. |
 
 ### DF-HOLDING-002 `soft_stop 1차 live canary` 판정 흐름
 

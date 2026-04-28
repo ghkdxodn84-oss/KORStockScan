@@ -91,9 +91,9 @@ def test_describe_buy_capacity_respects_absolute_budget_cap():
     assert used_ratio == 0.95
 
 
-def test_scalping_initial_entry_qty_cap_config_defaults_to_one_share():
+def test_scalping_initial_entry_qty_cap_config_defaults_to_two_shares():
     assert CONFIG.SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED is True
-    assert CONFIG.SCALPING_INITIAL_ENTRY_MAX_QTY == 1
+    assert CONFIG.SCALPING_INITIAL_ENTRY_MAX_QTY == 2
 
 
 def test_orderbook_stability_observation_logs_entry_pipeline(monkeypatch):
