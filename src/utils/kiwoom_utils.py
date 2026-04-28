@@ -1148,6 +1148,156 @@ def get_top_open_fluctuation_ka10028(token, mrkt_tp="000", trde_qty_cnd="0100", 
     return cleaned_list
 
 
+def _scanner_to_int(v, default=0):
+    if v in (None, ""):
+        return default
+    try:
+        clean_v = str(v).replace(',', '').replace('+', '').replace('-', '').strip()
+        if not clean_v:
+            return default
+        return int(float(clean_v))
+    except (ValueError, TypeError):
+        return default
+
+
+def _scanner_to_float(v, default=0.0):
+    if v in (None, ""):
+        return default
+    try:
+        return float(str(v).replace(',', '').replace('+', '').strip())
+    except (ValueError, TypeError):
+        return default
+
+
+def _extract_rank_items(results, preferred_keys):
+    if not results:
+        return []
+    first = results[0] if isinstance(results[0], dict) else {}
+    for key in preferred_keys:
+        items = first.get(key)
+        if isinstance(items, list):
+            return items
+    for items in first.values():
+        if isinstance(items, list):
+            return items
+    return []
+
+
+def get_value_top_ka10032(token, mrkt_tp="000", limit=30):
+    """
+    [ka10032] 거래대금 상위 요청.
+    스캐너 후보 발굴용 표준 키로 정규화하며, API/응답 이상 시 빈 리스트를 반환한다.
+    """
+    url = get_api_url("/api/dostk/rkinfo")
+    payload = {
+        "mrkt_tp": mrkt_tp,
+        "mang_stk_incls": "0",
+        "stex_tp": "3",
+    }
+
+    try:
+        results = fetch_kiwoom_api_continuous(
+            url=url, token=token, api_id='ka10032', payload=payload, use_continuous=False
+        )
+    except Exception as e:
+        log_info(f"⚠️ [ka10032] 거래대금 상위 조회 실패: {e}")
+        return []
+
+    cleaned_list = []
+    items = _extract_rank_items(
+        results,
+        (
+            "trde_prica_upper",
+            "trde_prica_upper_lst",
+            "trde_prica_rank",
+            "trde_amt_upper",
+            "data",
+        ),
+    )
+    for item in items[:limit]:
+        code = normalize_stock_code(item.get('stk_cd', item.get('code', '')))
+        if not code:
+            continue
+        cleaned_list.append({
+            'Code': code,
+            'Name': item.get('stk_nm', item.get('name', '')),
+            'Price': _scanner_to_int(item.get('cur_prc', item.get('price'))),
+            'FluRate': _scanner_to_float(item.get('flu_rt', item.get('change_rate'))),
+            'CntrStr': _scanner_to_float(item.get('cntr_str')),
+            'TradeValue': _scanner_to_int(
+                item.get('trde_prica', item.get('acc_trde_prica', item.get('trde_amt')))
+            ),
+            'RankNow': _scanner_to_int(item.get('now_rank', item.get('rank'))),
+            'RankPrev': _scanner_to_int(item.get('pred_rank', item.get('prev_rank'))),
+            'Source': 'VALUE_TOP',
+        })
+    return cleaned_list
+
+
+def get_vi_triggered_ka10054(token, mrkt_tp="000", limit=30):
+    """
+    [ka10054] 변동성완화장치 발동 종목 요청.
+    VI 자체는 승격 조건이 아니라 후보 발굴 가산점으로만 사용한다.
+    """
+    url = get_api_url("/api/dostk/stkinfo")
+    payload = {
+        "mrkt_tp": mrkt_tp,
+        "bf_mkrt_tp": "1",
+        "stk_cd": "",
+        "motn_tp": "0",
+        "skip_stk": "111111111",
+        "trde_qty_tp": "1",
+        "min_trde_qty": "100000",
+        "max_trde_qty": "0",
+        "trde_prica_tp": "1",
+        "min_trde_prica": "1000",
+        "max_trde_prica": "0",
+        "motn_drc": "1",
+        "stex_tp": "3",
+    }
+
+    try:
+        results = fetch_kiwoom_api_continuous(
+            url=url, token=token, api_id='ka10054', payload=payload, use_continuous=False
+        )
+    except Exception as e:
+        log_info(f"⚠️ [ka10054] VI 발동 종목 조회 실패: {e}")
+        return []
+
+    cleaned_list = []
+    items = _extract_rank_items(
+        results,
+        (
+            "motn_stk",
+            "vi_motn_stk",
+            "vltl_calm_motn_stk",
+            "data",
+        ),
+    )
+    for item in items[:limit]:
+        code = normalize_stock_code(item.get('stk_cd', item.get('code', '')))
+        if not code:
+            continue
+        cleaned_list.append({
+            'Code': code,
+            'Name': item.get('stk_nm', item.get('name', '')),
+            'Price': _scanner_to_int(item.get('motn_pric', item.get('cur_prc'))),
+            'FluRate': _scanner_to_float(
+                item.get('open_pric_pre_flu_rt', item.get('dynm_dispty_rt', item.get('static_dispty_rt')))
+            ),
+            'CntrStr': 0.0,
+            'TradeValue': 0,
+            'RankNow': 0,
+            'RankPrev': 0,
+            'AccTradeQty': _scanner_to_int(item.get('acc_trde_qty')),
+            'VIMotionCount': _scanner_to_int(item.get('vimotn_cnt', item.get('motn_cnt'))),
+            'VIReleaseTime': item.get('virelis_time', item.get('vi_release_time', '')),
+            'VIAppliedType': item.get('viaplc_tp', ''),
+            'Source': 'VI_TRIGGERED',
+        })
+    return cleaned_list
+
+
 def scan_volume_spike_ka10023(token, mrkt_tp="000"):
     """[ka10023] 최근 n분간 거래량이 급증한 종목 스캔 (현재가 포함)"""
     url = get_api_url("/api/dostk/rkinfo")

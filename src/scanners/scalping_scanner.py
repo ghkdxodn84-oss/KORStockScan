@@ -10,6 +10,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 import time
 from datetime import datetime
+from math import log10
 
 # 💡 Level 1 & 2 공통 모듈 임포트
 from src.utils import kiwoom_utils
@@ -33,10 +34,65 @@ def _resolve_scan_interval_sec(now_time):
 def _source_priority(source):
     """장중 신선도는 시가대비 상위보다 최근 수급 급증 신호를 더 높게 봅니다."""
     return {
-        "BOTH": 0,
-        "SUPERNOVA": 1,
-        "OPEN_TOP": 2,
-    }.get(str(source or "OPEN_TOP"), 3)
+        "VI+VALUE": 0,
+        "BOTH+VALUE": 1,
+        "SUPERNOVA+VALUE": 2,
+        "VALUE_TOP": 3,
+        "VI_TRIGGERED": 4,
+        "BOTH": 5,
+        "SUPERNOVA": 6,
+        "OPEN_TOP": 7,
+    }.get(str(source or "OPEN_TOP"), 8)
+
+
+def _safe_float(value, default=0.0):
+    if value in (None, ""):
+        return default
+    try:
+        return float(str(value).replace(",", "").replace("+", "").strip())
+    except (TypeError, ValueError):
+        return default
+
+
+def _safe_int(value, default=0):
+    if value in (None, ""):
+        return default
+    try:
+        return int(float(str(value).replace(",", "").replace("+", "").replace("-", "").strip()))
+    except (TypeError, ValueError):
+        return default
+
+
+def _bounded(value, low=0.0, high=9999.0):
+    return max(low, min(high, float(value or 0.0)))
+
+
+def _representative_source(source_set):
+    sources = set(source_set or [])
+    has_open = "OPEN_TOP" in sources
+    has_supernova = "SUPERNOVA" in sources
+    has_value = "VALUE_TOP" in sources
+    has_vi = "VI_TRIGGERED" in sources
+
+    if has_vi and has_value:
+        return "VI+VALUE"
+    if has_value and has_open and has_supernova:
+        return "BOTH+VALUE"
+    if has_value and has_supernova:
+        return "SUPERNOVA+VALUE"
+    if has_value:
+        return "VALUE_TOP"
+    if has_vi:
+        return "VI_TRIGGERED"
+    if has_open and has_supernova:
+        return "BOTH"
+    if has_supernova:
+        return "SUPERNOVA"
+    return "OPEN_TOP"
+
+
+def _source_signature(target):
+    return tuple(sorted(set(target.get("SourceSet") or [target.get("Source") or "OPEN_TOP"])))
 
 
 def _freshness_score(target):
@@ -45,15 +101,280 @@ def _freshness_score(target):
     최근 거래량 급증/체결강도/등락률이 함께 살아난 종목을 앞세웁니다.
     """
     source_bias = {
+        "VI+VALUE": 650.0,
+        "BOTH+VALUE": 600.0,
+        "SUPERNOVA+VALUE": 520.0,
         "BOTH": 500.0,
+        "VALUE_TOP": 420.0,
+        "VI_TRIGGERED": 380.0,
         "SUPERNOVA": 300.0,
         "OPEN_TOP": 0.0,
     }.get(str(target.get("Source") or "OPEN_TOP"), 0.0)
-    priority_score = float(target.get("PriorityScore", 0.0) or 0.0)
-    spike_rate = float(target.get("SpikeRate", 0.0) or 0.0)
-    flu_rate = float(target.get("FluRate", 0.0) or 0.0)
-    cntr_str = float(target.get("CntrStr", 0.0) or 0.0)
-    return source_bias + priority_score + min(spike_rate, 400.0) + (flu_rate * 8.0) + min(cntr_str, 200.0)
+    priority_score = _bounded(target.get("PriorityScore"), 0.0, 300.0)
+    spike_rate = _bounded(target.get("SpikeRate"), 0.0, 350.0)
+    flu_rate = _safe_float(target.get("FluRate"))
+    cntr_str = _bounded(target.get("CntrStr"), 0.0, 180.0)
+    trade_value = _safe_int(target.get("TradeValue"))
+    rank_now = _safe_int(target.get("RankNow"))
+    rank_prev = _safe_int(target.get("RankPrev"))
+    source_set = set(target.get("SourceSet") or [])
+
+    trade_value_score = 0.0
+    if trade_value > 0:
+        trade_value_score = min(220.0, log10(max(trade_value, 1)) * 30.0)
+
+    rank_jump_score = 0.0
+    if rank_now > 0 and rank_prev > rank_now:
+        rank_jump_score = min(180.0, (rank_prev - rank_now) * 3.0)
+
+    vi_score = 0.0
+    if "VI_TRIGGERED" in source_set:
+        vi_score = 250.0 + min(_safe_int(target.get("VIMotionCount")), 5) * 25.0
+
+    source_count_score = min(240.0, max(0, len(source_set) - 1) * 80.0)
+    flu_score = _bounded(flu_rate * 8.0, 0.0, 220.0)
+
+    return (
+        source_bias
+        + priority_score
+        + spike_rate
+        + flu_score
+        + cntr_str
+        + trade_value_score
+        + rank_jump_score
+        + vi_score
+        + source_count_score
+    )
+
+
+def _merge_candidate(candidate_pool, raw_target, source):
+    code = kiwoom_utils.normalize_stock_code(raw_target.get("Code", raw_target.get("code", "")))
+    if not code:
+        return
+
+    name = raw_target.get("Name", raw_target.get("name", ""))
+    current = candidate_pool.setdefault(
+        code,
+        {
+            "Code": code,
+            "Name": name,
+            "FluRate": 0.0,
+            "CntrStr": 0.0,
+            "Price": 0,
+            "Source": source,
+            "SourceSet": set(),
+            "PriorityScore": 0.0,
+            "SpikeRate": 0.0,
+            "TradeValue": 0,
+            "RankNow": 0,
+            "RankPrev": 0,
+            "VIMotionCount": 0,
+            "VIReleaseTime": "",
+        },
+    )
+
+    current["SourceSet"].add(source)
+    if name:
+        current["Name"] = name
+
+    current["FluRate"] = max(current.get("FluRate", 0.0), _safe_float(raw_target.get("FluRate", raw_target.get("flu_rate"))))
+    current["CntrStr"] = max(current.get("CntrStr", 0.0), _safe_float(raw_target.get("CntrStr", raw_target.get("cntr_str"))))
+    current["PriorityScore"] = max(current.get("PriorityScore", 0.0), _safe_float(raw_target.get("PriorityScore", raw_target.get("priority_score"))))
+    current["SpikeRate"] = max(current.get("SpikeRate", 0.0), _safe_float(raw_target.get("SpikeRate", raw_target.get("spike_rate"))))
+    current["TradeValue"] = max(current.get("TradeValue", 0), _safe_int(raw_target.get("TradeValue", raw_target.get("trade_value"))))
+    current["VIMotionCount"] = max(current.get("VIMotionCount", 0), _safe_int(raw_target.get("VIMotionCount")))
+
+    price = _safe_int(raw_target.get("Price", raw_target.get("cur_prc")))
+    if price > 0:
+        current["Price"] = price
+
+    rank_now = _safe_int(raw_target.get("RankNow"))
+    rank_prev = _safe_int(raw_target.get("RankPrev"))
+    if rank_now > 0:
+        current["RankNow"] = rank_now
+    if rank_prev > 0:
+        current["RankPrev"] = rank_prev
+    if raw_target.get("VIReleaseTime"):
+        current["VIReleaseTime"] = raw_target.get("VIReleaseTime")
+
+    current["Source"] = _representative_source(current["SourceSet"])
+
+
+def build_candidate_pool(
+    soaring_targets=None,
+    supernova_targets=None,
+    value_targets=None,
+    vi_targets=None,
+):
+    candidate_pool = {}
+    for target in soaring_targets or []:
+        _merge_candidate(candidate_pool, target, "OPEN_TOP")
+    for target in supernova_targets or []:
+        _merge_candidate(candidate_pool, target, "SUPERNOVA")
+    for target in value_targets or []:
+        _merge_candidate(candidate_pool, target, "VALUE_TOP")
+    for target in vi_targets or []:
+        _merge_candidate(candidate_pool, target, "VI_TRIGGERED")
+    return candidate_pool
+
+
+def rank_candidates(candidate_pool):
+    return sorted(
+        candidate_pool.values(),
+        key=lambda item: (
+            _source_priority(item.get("Source")),
+            -_freshness_score(item),
+            -_safe_float(item.get("FluRate")),
+        ),
+    )
+
+
+def _prune_recent_picks(recent_picks, now_ts, reentry_cooldown_sec):
+    return {
+        code: meta
+        for code, meta in (recent_picks or {}).items()
+        if (now_ts - float(meta.get("last_promoted_at", 0.0) or 0.0)) < reentry_cooldown_sec
+    }
+
+
+def _should_promote_candidate(target, recent_picks, now_ts, reentry_cooldown_sec):
+    code = target.get("Code")
+    previous = (recent_picks or {}).get(code)
+    if not previous:
+        return True
+    if (now_ts - float(previous.get("last_promoted_at", 0.0) or 0.0)) >= reentry_cooldown_sec:
+        return True
+
+    current_sources = set(_source_signature(target))
+    previous_sources = set(previous.get("last_source_signature") or [])
+    if len(current_sources) > len(previous_sources):
+        return True
+    if "VALUE_TOP" in current_sources and "VALUE_TOP" not in previous_sources:
+        return True
+    if "VI_TRIGGERED" in current_sources and "VI_TRIGGERED" not in previous_sources:
+        return True
+
+    current_score = _freshness_score(target)
+    previous_score = float(previous.get("last_score", 0.0) or 0.0)
+    return previous_score > 0 and current_score >= previous_score * 1.2
+
+
+def _remember_pick(recent_picks, target, now_ts):
+    recent_picks[target["Code"]] = {
+        "last_promoted_at": now_ts,
+        "last_source_signature": _source_signature(target),
+        "last_score": _freshness_score(target),
+    }
+
+
+def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_codes, reentry_cooldown_sec, token=None, now_ts=None):
+    now_ts = time.time() if now_ts is None else now_ts
+    new_codes_found = []
+    recent_picks = _prune_recent_picks(recent_picks, now_ts, reentry_cooldown_sec)
+
+    for target in ranked_targets:
+        code = target["Code"]
+        if not _should_promote_candidate(target, recent_picks, now_ts, reentry_cooldown_sec):
+            continue
+
+        curr_p = float(target.get("Price", 0))
+        if not kiwoom_utils.is_valid_stock(code, target["Name"], token=token, current_price=curr_p):
+            _remember_pick(recent_picks, target, now_ts)
+            continue
+
+        score = _freshness_score(target)
+        source_sig = ",".join(_source_signature(target))
+        print(
+            f"🎯 [타겟 포착] {target['Name']} "
+            f"(등락률: +{target['FluRate']}%, 체결강도: {target['CntrStr']}, "
+            f"신선도점수: {score:.1f} | 출처: {target['Source']} [{source_sig}])"
+        )
+        _remember_pick(recent_picks, target, now_ts)
+        new_codes_found.append(code)
+
+        try:
+            with db.get_session() as session:
+                today_date = datetime.now().date()
+
+                record = db.find_reusable_watching_record(
+                    session,
+                    rec_date=today_date,
+                    stock_code=code,
+                    strategy='SCALPING',
+                )
+
+                if record:
+                    record.stock_name = target['Name']
+                    if record.status in ('WATCHING', 'COMPLETED', 'EXPIRED'):
+                        record.strategy = 'SCALPING'
+                        record.buy_price = 0
+                        record.status = 'WATCHING'
+                        record.position_tag = 'SCANNER'
+                else:
+                    new_record = RecommendationHistory(
+                        rec_date=today_date,
+                        stock_code=code,
+                        stock_name=target['Name'],
+                        buy_price=0,
+                        trade_type='SCALP',
+                        strategy='SCALPING',
+                        status='WATCHING',
+                        position_tag='SCANNER'
+                    )
+                    session.add(new_record)
+        except Exception as e:
+            log_info(f"⚠️ DB 저장 실패 ({code}): {e}")
+
+        if len(new_codes_found) >= max_new_codes:
+            break
+
+    if new_codes_found:
+        event_bus.publish("COMMAND_WS_REG", {"codes": new_codes_found})
+        print(f"📡 웹소켓 감시 등록 요청 완료: {len(new_codes_found)} 종목")
+
+    return new_codes_found, recent_picks
+
+
+def run_scalper_iteration(
+    *,
+    token,
+    radar,
+    db,
+    event_bus,
+    recent_picks,
+    reentry_cooldown_sec,
+    max_new_codes,
+    open_top_limit,
+    supernova_limit,
+):
+    soaring_targets = kiwoom_utils.get_top_open_fluctuation_ka10028(
+        token,
+        mrkt_tp="000",
+        limit=open_top_limit,
+    )
+    supernova_targets = radar.find_supernova_targets(
+        mrkt_tp="000",
+        candidate_limit=supernova_limit,
+    )
+    value_targets = kiwoom_utils.get_value_top_ka10032(token, mrkt_tp="000", limit=30)
+    vi_targets = kiwoom_utils.get_vi_triggered_ka10054(token, mrkt_tp="000", limit=30)
+
+    candidate_pool = build_candidate_pool(
+        soaring_targets=soaring_targets,
+        supernova_targets=supernova_targets,
+        value_targets=value_targets,
+        vi_targets=vi_targets,
+    )
+    ranked_targets = rank_candidates(candidate_pool)
+    return promote_candidates(
+        db,
+        event_bus,
+        ranked_targets,
+        recent_picks,
+        max_new_codes=max_new_codes,
+        reentry_cooldown_sec=reentry_cooldown_sec,
+        token=token,
+    )
 
 
 # ==========================================
@@ -75,7 +396,6 @@ def run_scalper(is_test_mode=False):
     db = DBManager()
     event_bus = EventBus() # 💡 전역 싱글톤 이벤트 버스
     
-    today = datetime.now().strftime('%Y-%m-%d')
     # 같은 종목을 하루 종일 영구 제외하면 초반에 잡힌 이름만 오래 남게 됩니다.
     # 그래서 `already_picked` 대신 재등록 cooldown을 둬서, 한동안은 쉬게 하되
     # 다시 거래가 살아난 종목은 같은 날에도 재포착할 수 있게 만듭니다.
@@ -95,6 +415,8 @@ def run_scalper(is_test_mode=False):
         log_error("❌ 키움 토큰 발급 실패. 스캐너를 종료합니다.")
         return
 
+    radar = SniperRadar(token)
+
     while True:
         now = datetime.now()
         now_time = now.time()
@@ -111,139 +433,17 @@ def run_scalper(is_test_mode=False):
             continue
 
         scan_interval_sec = _resolve_scan_interval_sec(now_time)
-
-        # `ka10028`은 시가대비 상위라 장중에 얼굴이 잘 안 바뀔 수 있습니다.
-        # 따라서 후보 수는 넓게 가져오되, 아래에서 `SUPERNOVA/BOTH`를 우선해
-        # stale leader보다 최근에 살아난 종목이 먼저 뽑히게 합니다.
-        soaring_targets = kiwoom_utils.get_top_open_fluctuation_ka10028(
-            token,
-            mrkt_tp="000",
-            limit=open_top_limit,
+        _, recent_picks = run_scalper_iteration(
+            token=token,
+            radar=radar,
+            db=db,
+            event_bus=event_bus,
+            recent_picks=recent_picks,
+            reentry_cooldown_sec=reentry_cooldown_sec,
+            max_new_codes=max_new_codes,
+            open_top_limit=open_top_limit,
+            supernova_limit=supernova_limit,
         )
-        
-        radar = SniperRadar(token) 
-        supernova_targets = radar.find_supernova_targets(
-            mrkt_tp="000",
-            candidate_limit=supernova_limit,
-        )
-        
-        # 병합 단계에서 소스/점수를 같이 들고 가서, 최종 선별은
-        # `BOTH -> SUPERNOVA -> OPEN_TOP` 우선순위와 freshness score로 정렬합니다.
-        all_targets = {}
-        for t in soaring_targets:
-            all_targets[t['Code']] = {
-                'Code': t['Code'],
-                'Name': t['Name'],
-                'FluRate': t.get('FluRate', 0.0), # 시가대비 등락률
-                'CntrStr': t.get('CntrStr', 0.0),
-                'Price': t.get('Price', 0),
-                'Source': 'OPEN_TOP',
-                'PriorityScore': 0.0,
-                'SpikeRate': 0.0,
-            }
-            
-        for t in supernova_targets:
-            code = t.get('code', t.get('Code'))
-            if code not in all_targets:
-                all_targets[code] = {
-                    'Code': code,
-                    'Name': t.get('name', t.get('Name')),
-                    'FluRate': t.get('flu_rate', t.get('FluRate', 0.0)),
-                    'CntrStr': t.get('cntr_str', t.get('CntrStr', 150.0)),
-                    'Price': t.get('Price', t.get('cur_prc', 0)),
-                    'Source': 'SUPERNOVA',
-                    'PriorityScore': float(t.get('priority_score', 0.0) or 0.0),
-                    'SpikeRate': float(t.get('spike_rate', 0.0) or 0.0),
-                }
-            else:
-                all_targets[code]['Source'] = 'BOTH' # 두 조건 모두 만족하는 초강력 타겟
-                all_targets[code]['PriorityScore'] = max(
-                    float(all_targets[code].get('PriorityScore', 0.0) or 0.0),
-                    float(t.get('priority_score', 0.0) or 0.0),
-                )
-                all_targets[code]['SpikeRate'] = max(
-                    float(all_targets[code].get('SpikeRate', 0.0) or 0.0),
-                    float(t.get('spike_rate', 0.0) or 0.0),
-                )
-            
-        new_codes_found = []
-        now_ts = time.time()
-
-        # 최근 25분 내 이미 밀어 넣은 종목은 잠시 쉬게 해서 감시 리스트의 회전율을 높입니다.
-        # 대신 cooldown이 지나면 같은 날에도 재상승 종목을 다시 잡을 수 있습니다.
-        recent_picks = {
-            code: picked_at
-            for code, picked_at in recent_picks.items()
-            if (now_ts - picked_at) < reentry_cooldown_sec
-        }
-
-        ranked_targets = sorted(
-            all_targets.values(),
-            key=lambda item: (
-                _source_priority(item.get('Source')),
-                -_freshness_score(item),
-                -float(item.get('FluRate', 0.0) or 0.0),
-            ),
-        )
-
-        for t in ranked_targets:
-            code = t['Code']
-            if code in recent_picks:
-                continue
-
-            curr_p = float(t.get('Price', 0))
-
-            if not kiwoom_utils.is_valid_stock(code, t['Name'], token=token, current_price=curr_p):
-                recent_picks[code] = now_ts
-                continue
-
-            print(
-                f"🎯 [타겟 포착] {t['Name']} "
-                f"(등락률: +{t['FluRate']}%, 체결강도: {t['CntrStr']}, "
-                f"신선도점수: {_freshness_score(t):.1f} | 출처: {t['Source']})"
-            )
-            recent_picks[code] = now_ts
-            new_codes_found.append(code)
-
-            try:
-                with db.get_session() as session:
-                    today_date = datetime.now().date()
-
-                    record = db.find_reusable_watching_record(
-                        session,
-                        rec_date=today_date,
-                        stock_code=code,
-                        strategy='SCALPING',
-                    )
-
-                    if record:
-                        record.stock_name = t['Name']
-                        if record.status in ('WATCHING', 'COMPLETED', 'EXPIRED'):
-                            record.strategy = 'SCALPING'
-                            record.buy_price = 0
-                            record.status = 'WATCHING'
-                            record.position_tag = 'SCANNER'
-                    else:
-                        new_record = RecommendationHistory(
-                            rec_date=today_date,
-                            stock_code=code,
-                            stock_name=t['Name'],
-                            buy_price=0,
-                            trade_type='SCALP',
-                            strategy='SCALPING',
-                            status='WATCHING',
-                            position_tag='SCANNER'
-                        )
-                        session.add(new_record)
-            except Exception as e:
-                log_info(f"⚠️ DB 저장 실패 ({code}): {e}")
-            
-            if len(new_codes_found) >= max_new_codes:
-                break
-            
-        if new_codes_found:
-            event_bus.publish("COMMAND_WS_REG", {"codes": new_codes_found})
-            print(f"📡 웹소켓 감시 등록 요청 완료: {len(new_codes_found)} 종목")
 
         time.sleep(scan_interval_sec)
 
