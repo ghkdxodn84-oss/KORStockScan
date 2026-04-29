@@ -806,7 +806,7 @@ def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
         },
     )
 
-    stock = {"id": 1, "name": "TEST", "strategy": "SCALPING", "position_tag": "SCANNER", "prob": 0.9}
+    stock = {"id": 1, "name": "TEST", "strategy": "SCALPING", "position_tag": "SCANNER", "prob": 0.9, "rt_ai_prob": 0.9}
     state_handlers.handle_watching_state(
         stock=stock,
         code="123456",
@@ -817,7 +817,10 @@ def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
             "bid_tot": 20_000,
             "open": 10_000,
             "fluctuation": 0.5,
-            "orderbook": {"dummy": True},
+            "orderbook": {
+                "asks": [{"price": 10_020, "volume": 100}],
+                "bids": [{"price": 10_000, "volume": 100}],
+            },
         },
         admin_id=1,
         radar=DummyRadar(),
@@ -831,7 +834,149 @@ def test_watching_state_logs_latency_entry_price_guard(monkeypatch):
     assert by_stage["latency_pass"]["counterfactual_order_price_1tick"] == 10_010
     assert by_stage["order_leg_request"]["price"] == 9_990
     assert by_stage["order_leg_request"]["entry_price_defensive_ticks"] == 3
+    assert by_stage["order_leg_request"]["submitted_order_price"] == 9_990
+    assert by_stage["order_leg_request"]["best_bid_at_submit"] == 10_000
+    assert by_stage["order_leg_request"]["best_ask_at_submit"] == 10_020
+    assert by_stage["order_leg_request"]["price_below_bid_bps"] == 10
+    assert by_stage["order_leg_request"]["resolution_reason"] == "defensive_order_price"
     assert by_stage["order_bundle_submitted"]["order_price"] == 9_990
+    assert by_stage["order_bundle_submitted"]["submitted_order_price"] == 9_990
+
+
+def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 4, 29, 10, 0, 0)
+
+    state_handlers.datetime = FixedDateTime
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED=False,
+        SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED=True,
+        SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS=80,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {}
+    state_handlers.LAST_AI_CALL_TIMES = {"001440": FixedDateTime.now().timestamp() - 10}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+    state_handlers.KIWOOM_TOKEN = "token"
+
+    class DummyRadar:
+        def get_smart_target_price(self, curr_price, **kwargs):
+            return 48_800, 0.0
+
+    class DummyAI:
+        def analyze_target(self, *args, **kwargs):
+            return {"action": "BUY", "score": 90, "reason": "confirmed"}
+
+    class DummyEventBus:
+        def publish(self, *args, **kwargs):
+            return None
+
+    state_handlers.EVENT_BUS = DummyEventBus()
+
+    logs = []
+    sent_orders = []
+
+    def fake_log_entry_pipeline(stock, code, stage, **fields):
+        logs.append((stage, fields))
+
+    def fake_send_buy_order(code, qty, price, order_type_code, *args, **kwargs):
+        sent_orders.append((qty, price, order_type_code, kwargs.get("tif")))
+        return {"return_code": "0", "ord_no": "O1"}
+
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", fake_log_entry_pipeline)
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(state_handlers, "_publish_buy_signal_submission_notice", lambda *args, **kwargs: None)
+    monkeypatch.setattr(state_handlers, "evaluate_scalping_strength_momentum", lambda ws_data: {"enabled": True, "allowed": True, "reason": "ok"})
+    monkeypatch.setattr(state_handlers, "arm_big_bite_if_triggered", lambda **kwargs: (False, {}))
+    monkeypatch.setattr(state_handlers, "confirm_big_bite_follow_through", lambda **kwargs: (True, {}))
+    monkeypatch.setattr(state_handlers, "build_tick_data_from_ws", lambda ws_data: {})
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [1])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [1])
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "describe_buy_capacity",
+        lambda *args, **kwargs: (250_000, 240_000, 5, 0.96),
+    )
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "send_buy_order", fake_send_buy_order)
+    monkeypatch.setattr(
+        state_handlers,
+        "evaluate_live_buy_entry",
+        lambda **kwargs: {
+            "allowed": True,
+            "mode": "normal",
+            "decision": "ALLOW_NORMAL",
+            "reason": "ok",
+            "latency_state": "SAFE",
+            "orders": [
+                {
+                    "tag": "normal",
+                    "qty": 5,
+                    "price": 48_800,
+                    "order_type": "LIMIT",
+                    "tif": "DAY",
+                }
+            ],
+            "target_buy_price": 48_800,
+            "signal_price": 50_500,
+            "latest_price": 50_500,
+            "computed_allowed_slippage": 0,
+            "ws_age_ms": 120,
+            "ws_jitter_ms": 20,
+            "spread_ratio": 0.0079,
+            "quote_stale": False,
+            "latency_danger_reasons": "",
+            "latency_canary_applied": False,
+            "latency_canary_reason": "-",
+            "entry_price_guard": "normal_defensive",
+            "entry_price_defensive_ticks": 1,
+            "normal_defensive_order_price": 50_400,
+            "latency_guarded_order_price": 50_400,
+            "counterfactual_order_price_1tick": 48_800,
+            "order_price": 48_800,
+        },
+    )
+
+    stock = {"id": 4219, "name": "대한전선", "strategy": "SCALPING", "position_tag": "SCANNER", "prob": 0.9, "rt_ai_prob": 0.9}
+    state_handlers.handle_watching_state(
+        stock=stock,
+        code="001440",
+        ws_data={
+            "curr": 50_500,
+            "v_pw": 120.0,
+            "ask_tot": 20_000,
+            "bid_tot": 20_000,
+            "open": 50_000,
+            "fluctuation": 0.5,
+            "orderbook": {
+                "asks": [{"price": 50_900, "volume": 100}],
+                "bids": [{"price": 50_500, "volume": 100}],
+            },
+        },
+        admin_id=1,
+        radar=DummyRadar(),
+        ai_engine=DummyAI(),
+    )
+
+    by_stage = {stage: fields for stage, fields in logs}
+    assert sent_orders == []
+    assert "order_bundle_submitted" not in by_stage
+    assert "pre_submit_price_guard_block" in by_stage, logs
+    assert by_stage["pre_submit_price_guard_block"]["submitted_order_price"] == 48_800
+    assert by_stage["pre_submit_price_guard_block"]["best_bid_at_submit"] == 50_500
+    assert by_stage["pre_submit_price_guard_block"]["best_ask_at_submit"] == 50_900
+    assert by_stage["pre_submit_price_guard_block"]["price_below_bid_bps"] == 337
+    assert by_stage["pre_submit_price_guard_block"]["max_below_bid_bps"] == 80
+    assert by_stage["pre_submit_price_guard_block"]["resolution_reason"] == "reference_target_cap"
+    assert by_stage["order_bundle_failed"] == {}
 
 
 def test_entry_arm_skips_strength_recheck_after_ai_confirm(monkeypatch):

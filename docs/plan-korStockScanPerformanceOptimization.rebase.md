@@ -12,7 +12,7 @@
 2. 현재 기준선은 `main-only`, `normal_only`, `post_fallback_deprecation`이다.
 3. 현재 폐기 확정 축은 `fallback_scout/main`, `fallback_single`, `latency fallback split-entry`다.
 4. 현재 live 운용 원칙은 `동일 단계 내 1축 canary`다. 진입병목축과 보유/청산축은 서로 다른 단계이므로 양쪽 canary 동시 존재가 가능하지만, 같은 단계 안에서 canary 중복은 금지한다.
-5. 현재 entry live 축은 `latency_quote_fresh_composite`다. `gatekeeper_fast_reuse`, `other_danger`, `ws_jitter` 단일축은 모두 same-day 종료로 잠겼고, 복합 `quote_fresh family`만 1차 canary로 연다. 이 축은 개별 파라미터 attribution이 아니라 `묶음 ON/OFF`로만 판정한다.
+5. 현재 entry live 축은 `latency_signal_quality_quote_composite`다. `latency_quote_fresh_composite`는 `2026-04-29 08:29 KST` 기준 OFF + restart 반영까지 완료됐고, `2026-04-29 12:21 KST` 사용자 운영 override로 제출 drought 지속을 방치하지 않기 위해 `latency_signal_quality_quote_composite`를 same-day 1축 replacement로 ON 했다. 이 판정은 hard baseline 승격이 아니라 EV/거래수 회복 우선의 운영 override이며, 이후 성과판정은 새 restart 이후 cohort로 분리한다.
 6. 현재 보유/청산 live 축은 `soft_stop_micro_grace`다. `gatekeeper_fast_reuse signature/window`는 same-day `종료된 보조 진단축`이며 active 후보가 아니다.
 
 ## 2. 용어 범례
@@ -31,8 +31,8 @@
 | `shadow` | 실전 주문에는 반영하지 않고 병렬 계산만 하던 검증 방식 | 신규/보완축에서는 금지 |
 | `buy_recovery_canary` | Gemini `WAIT 65~79` 과밀 구간을 2차 재평가해 BUY 회복 여부를 보는 실전 1축 | 현재 유지축 |
 | `entry_filter_quality` | 불량 진입을 줄이고 제출/체결 품질을 높이는 다음 정식 튜닝 후보 | `buy_recovery_canary` 1차 판정 후 재판정 |
-| `latency_quote_fresh_composite` | `ws_age`, `ws_jitter`, `spread`, `other_danger`가 단일 사유가 아니라 quote freshness family로 겹쳐 제출을 막는 복합축 | active entry canary. `signal>=88`, `ws_age<=950ms`, `ws_jitter<=450ms`, `spread<=0.0075`, `quote_stale=False`를 한 묶음으로만 적용하고, 개별 파라미터 기여도는 분리 판정하지 않는다 |
-| `latency_signal_quality_quote_composite` | `latency_quote_fresh_composite` 미회복 시 검토할 예비 복합축. quote freshness 완화폭을 넓히는 대신 `signal>=90`, `latest_strength>=110`, `buy_pressure_10t>=65`를 요구한다 | standby/off. 현재 live 축이 아니며, `latency_quote_fresh_composite OFF -> restart.flag -> 새 축 ON` 승인 전까지 실주문에 적용하지 않는다 |
+| `latency_quote_fresh_composite` | `ws_age`, `ws_jitter`, `spread`, `other_danger`가 단일 사유가 아니라 quote freshness family로 겹쳐 제출을 막는 복합축 | `2026-04-29 08:29 KST` OFF + restart 완료. 현재 standby/off이며, `signal>=88`, `ws_age<=950ms`, `ws_jitter<=450ms`, `spread<=0.0075`, `quote_stale=False` 묶음은 historical/reference 축으로만 남긴다 |
+| `latency_signal_quality_quote_composite` | `latency_quote_fresh_composite` 미회복 시 검토할 예비 복합축. quote freshness 완화폭을 넓히는 대신 `signal>=90`, `latest_strength>=110`, `buy_pressure_10t>=65`를 요구한다 | `2026-04-29 12:21 KST` 운영 override로 live ON. `latency_quote_fresh_composite OFF -> restart.flag -> 새 축 ON` 순서는 충족했고, 성과는 post-restart cohort에서 `signal_quality_quote_composite_canary_applied`, `submitted/full/partial`, `COMPLETED + valid profit_rate`, `fallback_regression=0`로 분리한다 |
 | `holding_exit_observation` | 보유/청산 후보를 saved snapshot, post-sell, pipeline event로 분해하는 리포트 축 | live canary가 아니라 관찰/후보 고정용. `partial/full`, `initial/pyramid` 합산 결론 금지 |
 | `soft_stop_micro_grace_extend` | soft stop 최초 유예 20초가 너무 짧을 때 threshold 근처에서 1회 추가 유예하는 보조 파라미터 | standby/off. `soft_stop_micro_grace` 20초 축의 hard stop/동일종목 손실/미체결 비악화가 확인되고도 반등 포착이 부족할 때만 검토한다 |
 | `nan_cast_guard_followup` | 주문·체결·DB 복원 숫자 필드에 `NaN/inf`가 유입될 때 런타임 중단과 상태전이 실패를 막기 위한 숫자 정규화/업스트림 source 재분해 계획 | live canary 아님. 런타임 안정화/집계 품질 보강용 follow-up으로만 관리하고, 기대값 해석 입력은 재발건수·영향경로·미진입/미청산 기회비용 분해를 함께 남긴다 |
@@ -156,7 +156,7 @@
 
 | 영역 | 현재 상태 | 다음 판정/소유 문서 | 메모 |
 | --- | --- | --- | --- |
-| entry live canary | `latency_quote_fresh_composite` active | [2026-04-28 checklist](./2026-04-28-stage2-todo-checklist.md) `QuoteFreshReview0428` | 기준선/도달목표/가드는 §6을 본다 |
+| entry live canary | `latency_signal_quality_quote_composite` ON (`latency_quote_fresh_composite` OFF + restart 완료 후 same-day replacement) | [2026-04-29 checklist](./2026-04-29-stage2-todo-checklist.md) `QuoteFreshBackupComposite0429-1220` | 사용자 운영 override로 제출 drought 지속 방치 불허. hard baseline 승격은 보류하고 post-restart cohort를 별도 판정한다 |
 | entry data-quality gate | `ShadowDiff0428` open | [2026-04-28 checklist](./2026-04-28-stage2-todo-checklist.md) `ShadowDiff0428` | submitted/full/partial mismatch가 닫혀야 hard pass/fail 가능 |
 | holding/exit live canary | `soft_stop_micro_grace` active | 날짜별 checklist + holding audit/report | stage-disjoint 예외로 entry 축과 병렬 존재 가능 |
 | holding/exit observation | `holding_exit_observation` 유지 | checklist + observation report | `soft_stop/trailing/same_symbol/EOD-NXT` 분해 입력 소유 |

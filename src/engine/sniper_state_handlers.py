@@ -65,6 +65,7 @@ ALERTED_STOCKS = None
 # ── 프로세스 레벨 marcap TTL 캐시 (hot path용) ──
 _MARCAP_CACHE: dict[str, tuple[int, float]] = {}
 _MARCAP_CACHE_TTL: int = 300  # 5분
+_MARCAP_CACHE_MAX_SIZE: int = 512
 
 
 def _resolve_zero_qty_cooldown_sec(deposit: int) -> int:
@@ -72,6 +73,22 @@ def _resolve_zero_qty_cooldown_sec(deposit: int) -> int:
     if int(float(deposit or 0)) <= 0:
         return int(getattr(TRADING_RULES, "ZERO_DEPOSIT_RETRY_COOLDOWN_SEC", 20) or 20)
     return 1200
+
+
+def _prune_marcap_cache(now_ts: float) -> None:
+    expired_codes = [
+        stock_code
+        for stock_code, (_, exp_ts) in list(_MARCAP_CACHE.items())
+        if now_ts >= float(exp_ts or 0)
+    ]
+    for stock_code in expired_codes:
+        _MARCAP_CACHE.pop(stock_code, None)
+
+    while len(_MARCAP_CACHE) >= _MARCAP_CACHE_MAX_SIZE:
+        oldest_code = next(iter(_MARCAP_CACHE), None)
+        if oldest_code is None:
+            break
+        _MARCAP_CACHE.pop(oldest_code, None)
 
 
 def _extract_sellable_qty_from_error(err_msg: str):
@@ -851,6 +868,7 @@ def _resolve_stock_marcap(stock, code) -> int:
         return existing
     now_ts = time.time()
     norm_code = str(code or "").strip()[:6]
+    _prune_marcap_cache(now_ts)
     if norm_code:
         cached = _MARCAP_CACHE.get(norm_code)
         if cached is not None:
@@ -885,8 +903,53 @@ def _get_best_levels_from_ws(ws_data):
         if bids:
             best_bid = int(float(bids[0].get('price', 0) or 0))
     except Exception:
-        best_bid = 0
+            best_bid = 0
     return best_ask, best_bid
+
+
+def _compute_price_below_bid_bps(price, best_bid):
+    price = _coerce_int_value(price)
+    best_bid = _coerce_int_value(best_bid)
+    if price <= 0 or best_bid <= 0 or price >= best_bid:
+        return 0
+    return int(round(((best_bid - price) / best_bid) * 10000))
+
+
+def _build_entry_price_snapshot_fields(latency_gate, *, request_price, curr_price, best_bid, best_ask):
+    submitted_order_price = _coerce_int_value(request_price)
+    defensive_order_price = _coerce_int_value(latency_gate.get('latency_guarded_order_price'))
+    reference_target_price = _coerce_int_value(latency_gate.get('target_buy_price'))
+    price_below_bid_bps = _compute_price_below_bid_bps(submitted_order_price, best_bid)
+
+    resolution_reason = str(latency_gate.get('entry_price_guard') or 'none')
+    if reference_target_price > 0 and defensive_order_price > 0:
+        if submitted_order_price <= reference_target_price < defensive_order_price:
+            resolution_reason = 'reference_target_cap'
+    if defensive_order_price > 0 and submitted_order_price == defensive_order_price:
+        resolution_reason = 'defensive_order_price'
+
+    return {
+        'submitted_order_price': submitted_order_price,
+        'mark_price_at_submit': _coerce_int_value(curr_price),
+        'best_bid_at_submit': _coerce_int_value(best_bid),
+        'best_ask_at_submit': _coerce_int_value(best_ask),
+        'defensive_order_price': defensive_order_price,
+        'reference_target_price': reference_target_price,
+        'resolved_order_price': submitted_order_price,
+        'resolution_reason': resolution_reason,
+        'price_below_bid_bps': price_below_bid_bps,
+    }
+
+
+def _is_pre_submit_price_guard_block(strategy, price, best_bid):
+    if strategy not in ('SCALPING', 'SCALP'):
+        return False
+    if not bool(getattr(TRADING_RULES, 'SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED', True)):
+        return False
+    threshold_bps = int(getattr(TRADING_RULES, 'SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS', 80) or 80)
+    if threshold_bps < 0:
+        return False
+    return _compute_price_below_bid_bps(price, best_bid) > threshold_bps
 
 
 def _get_ws_snapshot_age_sec(ws_data):
@@ -1871,6 +1934,9 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
 
     current_vpw = float(ws_data.get('v_pw', 0) or 0)
     fluctuation = float(ws_data.get('fluctuation', 0.0) or 0.0)
+    current_ai_score = float(stock.get('rt_ai_prob', stock.get('prob', 0.5)) or 0.5) * 100
+    liquidity_value = 0
+    ai_decision = {}
 
     is_trigger = False
     msg = ""
@@ -2422,7 +2488,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
                             blocked_stage="blocked_ai_score",
                         ),
                         **_build_ai_ops_log_fields(
-                            ai_decision if "ai_decision" in locals() else {},
+                            ai_decision,
                             ai_score_raw=current_ai_score,
                             ai_score_after_bonus=current_ai_score,
                             entry_score_threshold=75,
@@ -2859,6 +2925,14 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
         stock['latency_entry_decision'] = latency_gate.get('decision')
         stock['latency_entry_reason'] = latency_gate.get('reason')
         _log_orderbook_stability_observation(stock, code, latency_gate.get('orderbook_stability'))
+        best_ask_at_submit, best_bid_at_submit = _get_best_levels_from_ws(ws_data)
+        latency_price_snapshot = _build_entry_price_snapshot_fields(
+            latency_gate,
+            request_price=latency_gate.get('order_price', 0),
+            curr_price=curr_price,
+            best_bid=best_bid_at_submit,
+            best_ask=best_ask_at_submit,
+        )
 
         entry_mode = latency_gate.get('mode', 'reject')
         log_info(
@@ -3015,6 +3089,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
             latency_guarded_order_price=int(latency_gate.get('latency_guarded_order_price', 0) or 0),
             counterfactual_order_price_1tick=int(latency_gate.get('counterfactual_order_price_1tick', 0) or 0),
             order_price=int(latency_gate.get('order_price', 0) or 0),
+            **latency_price_snapshot,
             **_build_ai_overlap_log_fields(
                 stock=stock,
                 ai_score=latency_signal_score,
@@ -3073,6 +3148,37 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
                 )
                 continue
 
+            price_snapshot = _build_entry_price_snapshot_fields(
+                latency_gate,
+                request_price=price,
+                curr_price=curr_price,
+                best_bid=best_bid_at_submit,
+                best_ask=best_ask_at_submit,
+            )
+            if _is_pre_submit_price_guard_block(strategy, price, best_bid_at_submit):
+                max_below_bid_bps = int(
+                    getattr(TRADING_RULES, 'SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS', 80) or 80
+                )
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "pre_submit_price_guard_block",
+                    tag=request['tag'],
+                    qty=qty,
+                    price=price,
+                    order_type=request['order_type_code'],
+                    tif=request['tif'],
+                    max_below_bid_bps=max_below_bid_bps,
+                    **price_snapshot,
+                )
+                log_info(
+                    f"[PRE_SUBMIT_PRICE_GUARD_BLOCK] {stock.get('name')}({code}) "
+                    f"price={price} best_bid={best_bid_at_submit} "
+                    f"below_bid_bps={price_snapshot['price_below_bid_bps']} "
+                    f"threshold_bps={max_below_bid_bps}"
+                )
+                continue
+
             _log_entry_pipeline(
                 stock,
                 code,
@@ -3087,6 +3193,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
                 normal_defensive_order_price=int(latency_gate.get('normal_defensive_order_price', 0) or 0),
                 latency_guarded_order_price=int(latency_gate.get('latency_guarded_order_price', 0) or 0),
                 counterfactual_order_price_1tick=int(latency_gate.get('counterfactual_order_price_1tick', 0) or 0),
+                **price_snapshot,
             )
 
             res = kiwoom_orders.send_buy_order(
@@ -3168,8 +3275,16 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
             requested_qty=requested_qty,
             entry_mode=entry_mode,
             latency_gate=latency_gate,
-            liquidity_value=liquidity_value if 'liquidity_value' in locals() else 0,
-            ai_score=latency_signal_score if 'latency_signal_score' in locals() else current_ai_score,
+            liquidity_value=liquidity_value,
+            ai_score=latency_signal_score,
+        )
+        bundle_primary_price = successful_orders[0].get('price', latency_gate.get('order_price', 0))
+        bundle_price_snapshot = _build_entry_price_snapshot_fields(
+            latency_gate,
+            request_price=bundle_primary_price,
+            curr_price=curr_price,
+            best_bid=best_bid_at_submit,
+            best_ask=best_ask_at_submit,
         )
         _log_entry_pipeline(
             stock,
@@ -3185,6 +3300,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
             latency_guarded_order_price=int(latency_gate.get('latency_guarded_order_price', 0) or 0),
             counterfactual_order_price_1tick=int(latency_gate.get('counterfactual_order_price_1tick', 0) or 0),
             order_price=int(latency_gate.get('order_price', 0) or 0),
+            **bundle_price_snapshot,
         )
 
         if strategy in ['SCALPING', 'SCALP']:
@@ -3684,8 +3800,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                         'large_sell_print_detected': feat.get('large_sell_print_detected', False),
                                         'curr_vs_micro_vwap_bp': feat.get('curr_vs_micro_vwap_bp', 0.0),
                                     }
-                                except Exception:
-                                    pass
+                                except Exception as exc:
+                                    log_error(f"⚠️ [REVERSAL_ADD] feature extract failed ({code}): {exc}")
 
                             # AI bottom/history 갱신 (STAGNATION/REVERSAL_CANDIDATE 구간에서만)
                             if stock.get('reversal_add_state') in ('STAGNATION', 'REVERSAL_CANDIDATE'):
@@ -4082,7 +4198,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             pass
 
         if not is_sell_signal and peak_profit >= getattr(TRADING_RULES, 'KOSDAQ_TARGET', 4.0):
-            # TODO: KOSDAQ 트레일링 되밀림 폭을 TRAILING_DRAWDOWN_PCT로 통일 검토
+            # Follow-up tracked in checklist: SwingTrailingPolicy0506
             drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100
             if drawdown >= 1.0:
                 is_sell_signal = True
@@ -4126,7 +4242,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         except Exception:
             pass
 
-        # TODO: TRAILING_START_PCT는 스윙 트레일링 시작 수익률로 통일 필요
+        # Follow-up tracked in checklist: SwingTrailingPolicy0506
         # 현재 로직은 해당 임계 도달 시 즉시 익절로 동작
         if not is_sell_signal and profit_rate >= getattr(TRADING_RULES, 'TRAILING_START_PCT'):
             is_sell_signal = True

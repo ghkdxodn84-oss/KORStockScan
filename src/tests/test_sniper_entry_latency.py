@@ -251,6 +251,7 @@ def test_latency_spread_relief_canary_overrides_reject_danger_to_normal(monkeypa
         replace(
             CONFIG,
             SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=True,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
@@ -295,6 +296,7 @@ def test_latency_spread_relief_canary_requires_spread_only_danger(monkeypatch):
         replace(
             CONFIG,
             SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=True,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
@@ -337,6 +339,7 @@ def test_latency_ws_jitter_relief_canary_overrides_reject_danger_to_normal(monke
         replace(
             CONFIG,
             SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=True,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
@@ -394,6 +397,7 @@ def test_latency_ws_jitter_relief_canary_requires_jitter_only_danger(monkeypatch
         replace(
             CONFIG,
             SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=True,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
@@ -449,6 +453,7 @@ def test_latency_other_danger_relief_canary_overrides_reject_danger_to_normal(mo
         replace(
             CONFIG,
             SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=True,
@@ -506,6 +511,7 @@ def test_latency_other_danger_relief_canary_enforces_stricter_residual_limits(mo
         replace(
             CONFIG,
             SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=True,
@@ -721,6 +727,53 @@ def test_latency_quote_fresh_composite_price_guard_respects_target_buy_price(mon
     assert result["latency_guarded_order_price"] == 9_990
     assert result["counterfactual_order_price_1tick"] == 9_980
     assert result["order_price"] == 9_980
+
+
+def test_scalping_target_buy_price_can_override_defensive_order_price_for_daehan_cable():
+    result = evaluate_live_buy_entry(
+        stock={"name": "대한전선", "position_tag": "SCANNER"},
+        code="001440_daehan_cable_target_cap",
+        ws_data={
+            "curr": 50_500,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 50_900, "volume": 100}],
+                "bids": [{"price": 50_500, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=5,
+        signal_price=50_500,
+        signal_strength=90.0,
+        target_buy_price=48_800,
+    )
+
+    assert result["allowed"] is False
+    assert result["decision"] == "REJECT_DANGER"
+
+    result = evaluate_live_buy_entry(
+        stock={"name": "대한전선", "position_tag": "SCANNER"},
+        code="001440_daehan_cable_target_cap_tight_spread",
+        ws_data={
+            "curr": 50_500,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 50_600, "volume": 100}],
+                "bids": [{"price": 50_500, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=5,
+        signal_price=50_500,
+        signal_strength=90.0,
+        target_buy_price=48_800,
+    )
+
+    assert result["allowed"] is True
+    assert result["normal_defensive_order_price"] == 50_400
+    assert result["latency_guarded_order_price"] == 50_400
+    assert result["target_buy_price"] == 48_800
+    assert result["order_price"] == 48_800
 
 
 def test_latency_quote_fresh_composite_price_guard_uses_valid_tick_at_price_boundary(monkeypatch):
@@ -949,6 +1002,7 @@ def test_latency_danger_reasons_are_allowlist_controllable(monkeypatch):
         replace(
             CONFIG,
             SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
             SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
             SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,

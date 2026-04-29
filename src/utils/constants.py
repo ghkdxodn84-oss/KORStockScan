@@ -155,6 +155,8 @@ class TradingConfig:
     SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT: float = 0.20  # 기본 최소 체결비율
     SCALP_PARTIAL_FILL_MIN_RATIO_STRONG_ABS_OVERRIDE: float = 0.10  # strong_absolute_override 예외
     SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP: float = 0.00  # SCALP_PRESET_TP 예외(적용 제외)
+    SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED: bool = True  # submitted 전 비정상 저가 지정가 차단
+    SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS: int = 80  # best_bid 대비 허용 하향 괴리(bp)
     SCALP_OPEN_RECLAIM_NEVER_GREEN_HOLD_SEC: int = 300  # OPEN_RECLAIM never-green 조기 정리 최소 보유시간
     SCALP_OPEN_RECLAIM_NEVER_GREEN_PEAK_MAX_PCT: float = 0.20  # OPEN_RECLAIM never-green 최대 허용 고점수익
     SCALP_OPEN_RECLAIM_NEAR_AI_EXIT_SCORE_BUFFER: int = 5  # OPEN_RECLAIM near_ai_exit 점수 여유폭
@@ -171,13 +173,13 @@ class TradingConfig:
     SCALP_LATENCY_GUARD_CANARY_MAX_WS_JITTER_MS: int = 260  # latency canary 최대 ws_jitter
     SCALP_LATENCY_GUARD_CANARY_MAX_SPREAD_RATIO: float = 0.0100  # latency canary 최대 spread_ratio
     SCALP_LATENCY_GUARD_CANARY_ALLOWED_DANGER_REASONS: tuple = ()  # 비어 있으면 전체 허용, 값이 있으면 해당 danger reason만 canary 허용
-    SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED: bool = True  # 2026-04-27: quote freshness 복합 residual 1차 canary
+    SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED: bool = False  # 2026-04-29 OFF 확정: quote freshness 복합 residual canary 기본 비활성
     SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_TAGS: tuple = ("SCANNER", "VWAP_RECLAIM", "OPEN_RECLAIM")  # composite relief 적용 태그
     SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MIN_SIGNAL_SCORE: float = 88.0  # 단일축 실패 후 복합축은 더 강한 신호만 허용
     SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_AGE_MS: int = 950  # 복합축 최대 ws_age
     SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_JITTER_MS: int = 450  # 복합축 최대 ws_jitter
     SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_SPREAD_RATIO: float = 0.0075  # 복합축 최대 spread_ratio
-    SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED: bool = False  # 예비 검증축: 강한 수급 x quote freshness
+    SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED: bool = True  # 2026-04-29 운영 override: 강한 수급 x quote freshness
     SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_TAGS: tuple = ("SCANNER", "VWAP_RECLAIM", "OPEN_RECLAIM")
     SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MIN_SIGNAL_SCORE: float = 90.0
     SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MIN_STRENGTH: float = 110.0
@@ -592,6 +594,8 @@ def _build_trading_rules() -> TradingConfig:
     env_partial_fill_min_default = _env_float("KORSTOCKSCAN_SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT")
     env_partial_fill_min_strong = _env_float("KORSTOCKSCAN_SCALP_PARTIAL_FILL_MIN_RATIO_STRONG_ABS_OVERRIDE")
     env_partial_fill_min_preset = _env_float("KORSTOCKSCAN_SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP")
+    env_pre_submit_price_guard_enabled = _env_bool("KORSTOCKSCAN_SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED")
+    env_pre_submit_max_below_bid_bps = _env_int("KORSTOCKSCAN_SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS")
     if (
         env_dynamic_strength_enabled is not None
         or env_dynamic_strength_tags is not None
@@ -603,6 +607,8 @@ def _build_trading_rules() -> TradingConfig:
         or env_partial_fill_min_default is not None
         or env_partial_fill_min_strong is not None
         or env_partial_fill_min_preset is not None
+        or env_pre_submit_price_guard_enabled is not None
+        or env_pre_submit_max_below_bid_bps is not None
     ):
         config = replace(
             config,
@@ -636,6 +642,12 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP=env_partial_fill_min_preset
             if env_partial_fill_min_preset is not None
             else config.SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP,
+            SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED=env_pre_submit_price_guard_enabled
+            if env_pre_submit_price_guard_enabled is not None
+            else config.SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED,
+            SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS=env_pre_submit_max_below_bid_bps
+            if env_pre_submit_max_below_bid_bps is not None
+            else config.SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS,
         )
 
     env_scalping_enable_avg_down = _env_bool("KORSTOCKSCAN_SCALPING_ENABLE_AVG_DOWN")
