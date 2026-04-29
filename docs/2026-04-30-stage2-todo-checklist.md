@@ -8,6 +8,7 @@
 - 대한전선 진입가 후속조치는 신규 alpha 진입축이 아니라 비정상 저가 제출 차단과 감리 추적성 보강으로만 해석한다.
 - `P0` 가드의 day-1 KPI와 rollback trigger를 장후 바로 잠가, 임의 임계값 고착을 막는다.
 - `P1 resolver`와 `schema split`은 same-day live 확장이 아니라 observe/backtest ingress 조건 확정으로만 넘긴다.
+- soft stop 감소 접근은 `micro grace 시간연장`보다 `REVERSAL_ADD 소형 canary`와 `bad_entry_block observe-only classifier`로 전략 가설을 분리한다.
 
 ## 오늘 강제 규칙
 
@@ -23,6 +24,8 @@
 - `ApplyTarget`은 문서에 명시된 값만 사용하고, parser/workorder가 `remote`를 추정하지 않도록 유지한다.
 - 다축 동시 변경 금지, 승인 전 `main` 실주문 변경 금지 규칙을 유지한다.
 - `mechanical_momentum_latency_relief`는 AI score 50/70 mechanical fallback 상태의 제출 drought를 푸는 entry 1축이다. `latency_signal_quality_quote_composite`, `latency_quote_fresh_composite`, legacy `other_danger/ws_jitter/spread` relief와 동시에 켜지 않으며, 장전에는 enable flag와 restart provenance만 확인한다.
+- `REVERSAL_ADD`는 entry canary가 아니라 보유 중 `position_addition` canary다. `soft_stop_micro_grace`와 같은 보유 포지션을 건드리므로 cohort를 반드시 분리하고, `reversal_add_used` 이후 soft stop 악화가 보이면 즉시 OFF 후보로 본다.
+- `bad_entry_block`은 observe-only다. `2026-04-30`에는 진입 자체를 막지 않고 `bad_entry_block_observed` 로그와 후속 soft stop/하드스탑/회복 여부만 본다.
 
 ## 장전 체크리스트 (08:45~08:55)
 
@@ -39,6 +42,13 @@
   - why: 대한전선 케이스는 신규 alpha canary가 아니라 비정상 저가 제출을 막는 안전가드와 감리 추적성 보강이다. PREOPEN에서는 same-day submitted/fill 성과가 아니라 코드 로드, restart, 이벤트 필드 기록 가능성만 확인한다.
   - 다음 액션: 장전 로드가 확인되면 장중에는 `pre_submit_price_guard_block` 발생 여부와 `submitted_order_price`, `best_bid_at_submit`, `price_below_bid_bps`, `resolution_reason` 품질만 관찰한다. 로드 실패 시 P0 guard를 OFF한 채로 두지 말고 restart/provenance 원인을 우선 수정한다.
 
+- [ ] `[ReversalAddBadEntry0430-Preopen] REVERSAL_ADD 소형 canary 및 bad_entry_block observe-only 로드 확인` (`Due: 2026-04-30`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: ScalpingLogic`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [sniper_scale_in.py](/home/ubuntu/KORStockScan/src/engine/sniper_scale_in.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
+  - 판정 기준: main bot restart provenance를 확인하고 `REVERSAL_ADD_ENABLED=True`, `REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED=True`, `REVERSAL_ADD_SIZE_RATIO=0.33`, `SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED=True` 로드 여부를 확인한다.
+  - why: `micro grace 20초`만으로는 soft stop 감소 전략의 설득력이 약하다. `2026-04-30` 오전부터는 `유효 진입 초반 눌림 회수`와 `불량 진입 후보 분류`를 별도 가설로 관찰해야 한다.
+  - rollback guard: `reversal_add_used` 후 `scalp_soft_stop_pct` 전환이 발생하거나, `reversal_add` 체결 cohort의 `COMPLETED + valid profit_rate` 평균이 `<= -0.30%`이면 장중 OFF 후보로 본다. `bad_entry_block`은 observe-only라 주문 차단이나 청산 변경을 하지 않는다.
+  - 다음 액션: 로드 확인 후 장중 `[ReversalAddBadEntry0430-1030]`에서 `reversal_add_candidate`, `reversal_add_used`, `scale_in_executed add_type=AVG_DOWN`, `bad_entry_block_observed`, 후속 `soft_stop/trailing/COMPLETED`를 분리한다.
+
 ## 장중 체크리스트 (09:00~15:20)
 
 - [ ] `[MechanicalMomentumLatencyRelief0430-1000] mechanical_momentum_latency_relief 10시 1차 판정` (`Due: 2026-04-30`, `Slot: INTRADAY`, `TimeWindow: 10:00~10:15`, `Track: ScalpingLogic`)
@@ -47,7 +57,13 @@
   - why: 이 축은 거래수 회복을 위한 운영 override라 오전 1시간 안에 최소 방향성은 나와야 한다. `submitted`가 움직이지 않으면 같은 날 추가 유지 근거가 약하다.
   - 다음 액션: 제출 회복이 있으면 12시 full 창으로 유지판정하고, `budget_pass >= 150`인데 `submitted <= 2`면 장중 OFF/다음축 재분해를 연다.
 
-## 장후 체크리스트 (16:00~19:40)
+- [ ] `[ReversalAddBadEntry0430-1030] REVERSAL_ADD/bad_entry_block 오전 1차 관찰` (`Due: 2026-04-30`, `Slot: INTRADAY`, `TimeWindow: 10:30~10:45`, `Track: ScalpingLogic`)
+  - Source: [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - 판정 기준: `09:00~10:30` 창에서 `reversal_add_candidate`, `reversal_add_blocked_reason`, `scale_in_executed add_type=AVG_DOWN`, `reversal_add_used`, `bad_entry_block_observed`, `soft_stop_micro_grace`, `scalp_soft_stop_pct`, `COMPLETED + valid profit_rate`를 분리한다.
+  - why: `2026-04-30` 오전을 단순 진단으로 허비하지 않기 위해, 유효 진입의 초반 눌림은 소형 추가매수로 실험하고 never-green/AI fade는 observe-only로 분류한다.
+  - 다음 액션: `REVERSAL_ADD` 체결이 1건 이상이면 해당 record를 장중 anchor case로 고정하고 이후 soft stop 여부를 추적한다. 후보만 있고 체결이 없으면 `zero_qty`, `position_at_cap`, `supply_conditions_not_met`, `ai_not_recovering` 중 어느 blocker인지 닫는다. `bad_entry_block_observed`가 3건 이상이면 장후 classifier 승격 표본으로 보낸다.
+
+## 장후 체크리스트 (16:00~20:00)
 
 - [ ] `[DynamicEntryPriceP0Guard0430-Postclose] P0 guard KPI/rollback 1차 점검` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 16:00~16:20`, `Track: ScalpingLogic`)
   - Source: [2026-04-29-daehan-cable-entry-price-audit-rereport.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-29-daehan-cable-entry-price-audit-rereport.md), [2026-04-29-daehan-cable-entry-price-audit-followup.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-29-daehan-cable-entry-price-audit-followup.md)
@@ -59,6 +75,7 @@
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
   - 판정 기준: 대한전선 후속조치와 `pre-submit price guard`를 기준으로 `remove`, `observe-only`, `baseline-promote`, `active-canary` 중 변동이 필요한 항목이 있는지 닫고, entry price 후속 검증에 쓰는 cohort도 `baseline cohort / candidate live cohort / observe-only cohort / excluded cohort / rollback owner / cross-contamination check`로 잠근다.
   - why: 이번 P0는 신규 alpha canary가 아니라 BUY 제출 안전가드다. cohort 분류를 문서와 같이 잠가야 `P0 guard`, `P1 resolver`, `P2 microstructure`가 서로 섞이지 않는다.
+  - 실행 메모 (`2026-04-30 사후 rebasing`): code-review change set 기준으로 `RECEIPT_LOCK` 분리, `target_stock snapshot 전달`, `_sanitize_pending_add_states` 부작용 제거, startup 명시 sanitize, `describe_scale_in_qty` 규칙 테이블화, `holding elapsed` 공용 파서 정리, `handle_watching_state` 1차 분해, receipt 평균가 canonical(`round(..., 4)`) 정리, `_find_execution_target` 우선순위 테스트 고정, `ENTRY_LOCK/state_lock/RECEIPT_LOCK fallback` ownership 주석 반영까지 끝났다. 다만 이 항목의 본래 목적은 runtime cohort 분류와 롤아웃 가이드 잠금이므로, 코드 반영만으로 완료 처리하지 않고 `운영상 lock ownership guide + cohort 문서화`가 남은 상태로 유지한다.
   - 다음 액션: 상태 변경이 있으면 checklist와 관련 기준문서에 함께 반영하고, 변경이 없으면 `변동 없음`과 근거를 남긴다.
 
 - [ ] `[GeminiSchemaIngress0430] Gemini flag-off schema registry 로드/contract 관찰` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 16:35~16:55`, `Track: ScalpingLogic`)
@@ -82,7 +99,7 @@
 - [ ] `[DeepSeekAcceptanceCarry0430] DeepSeek retry acceptance 단일 스냅샷 경로 점검` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 17:35~17:55`, `Track: Plan`)
   - Source: [2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md](/home/ubuntu/KORStockScan/docs/2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md), [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_deepseek_engine_review.md)
   - 판정 기준: `_build_retry_acceptance_snapshot()`과 `_call_deepseek_safe()`에서 `live_sensitive` 계산이 중복 없이 일관되게 유지되는지 확인하고, retry 외 경로의 노이즈 증분이 없는지 코드/테스트로 입증한다.
-  - why(권장): 현재는 저위험 정합성 개선이므로, 내일 장후 창에서 코드 정리 여유를 두고 패치 대기 가능하다.
+  - why(권장): 현재는 저위험 정합성 개선이므로, `2026-04-30` 장후 창에서 코드 정리 여유를 두고 패치 대기 가능하다.
   - 다음 액션: 중복 계산이 제거되면 `flag-off acceptance` 목표 유지 상태로 코드 정리 PR을 한 번에 반영한다.
 
 - [ ] `[DeepSeekInterfaceGap0430] DeepSeek 공통 인터페이스 일치 점검` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 17:55~18:10`, `Track: Plan`)
@@ -121,7 +138,13 @@
   - why: Rebase 기준 보유/청산 1순위는 여전히 `soft_stop_rebound_split`이며, 2026-04-29 표본은 `정당 컷`, `혼합형 rebound`, `same-day 회수형 recovery recapture`가 함께 나왔다. 지금 단계에서 바로 live 파라미터를 더 열면 원인귀속이 흐려지고, 반대로 이 표본을 독립 분해하지 않으면 EV 훼손 패턴을 놓칠 수 있다.
   - 다음 액션: `MISSED_UPSIDE/recovery recapture`가 누적되면 다음 운영일인 `2026-05-04` checklist에 `observe-only label/log patch` 또는 `extend acceptance` 항목을 올린다. `GOOD_EXIT` 우세면 live 파라미터는 그대로 두고 `soft_stop_micro_grace`만 유지한다.
 
-- [ ] `[InitialQtyCap3Share0430-Postclose] 스캘핑 신규 BUY 3주 cap 전환 승인조건 판정` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 19:25~19:40`, `Track: ScalpingLogic`)
+- [ ] `[ReversalAddBadEntry0430-Postclose] REVERSAL_ADD 소형 canary와 bad_entry_block classifier 장후 판정` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 19:25~19:45`, `Track: ScalpingLogic`)
+  - Source: [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - 판정 기준: `reversal_add_used` cohort와 비사용 후보를 분리해 `full/partial`, `initial/pyramid`, `soft_stop`, `trailing`, `COMPLETED + valid profit_rate`, `post_sell outcome`을 비교한다. `bad_entry_block_observed`는 후속 `soft_stop/hard_stop/GOOD_EXIT/MISSED_UPSIDE` 분포만 보고 실전 차단 승격 여부를 판단한다.
+  - why: 이 항목의 목적은 soft stop을 몇 초 늦추는 것이 아니라, `유효 진입 회수`와 `불량 진입 회피` 중 어느 전략이 EV 개선 가능성이 큰지 고르는 것이다.
+  - 다음 액션: `REVERSAL_ADD`가 손익/soft stop tail을 악화시키면 OFF하고 classifier 관찰만 유지한다. `bad_entry_block` 후보가 반복적으로 손실로 끝나면 다음 운영일 `2026-05-04`에 live entry block 후보를 별도 단일축으로 올린다.
+
+- [ ] `[InitialQtyCap3Share0430-Postclose] 스캘핑 신규 BUY 3주 cap 전환 승인조건 판정` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 19:45~20:00`, `Track: ScalpingLogic`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [2026-04-29-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-29-stage2-todo-checklist.md)
   - 판정 기준: 2주 cap cohort의 `initial_entry_qty_cap_applied`, `initial-only`, `pyramid-activated`, `ADD_BLOCKED reason=zero_qty`, `full_fill`, `partial_fill`, `soft_stop`, `COMPLETED + valid profit_rate`, `same-symbol reentry`, `order_failed`를 재집계한다. `3주 cap`은 `mechanical_momentum_latency_relief` entry canary와 같은 단계 live 변경이므로, 제출 회복과 P0 price guard가 안정적이고 soft stop tail이 악화되지 않은 경우에만 익일 이후 canary 후보로 본다.
   - why: 2주 cap은 `buy_qty=1 -> pyramid zero_qty` 왜곡을 줄이는 임시 운영가드로 승인됐지만, 3주 확대는 exposure와 soft stop tail을 직접 키운다. submitted 회복이 관찰 중인 상태에서 수량축을 바로 올리면 entry 효과와 holding/exit 손실 tail 원인귀속이 섞인다.

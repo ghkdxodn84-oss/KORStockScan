@@ -31,6 +31,7 @@ from src.engine.sniper_scale_in import (
     evaluate_swing_avg_down,
     evaluate_swing_pyramid,
     evaluate_scalping_reversal_add,
+    resolve_holding_elapsed_sec,
 )
 from src.engine.sniper_scale_in_utils import record_add_history_event
 from src.engine.trade_pause_control import is_buy_side_paused, get_pause_state_label
@@ -71,7 +72,7 @@ _MARCAP_CACHE_MAX_SIZE: int = 512
 def _resolve_zero_qty_cooldown_sec(deposit: int) -> int:
     """주문가능금액 0원은 일시 조회 실패일 수 있어 짧게 재조회합니다."""
     if int(float(deposit or 0)) <= 0:
-        return int(getattr(TRADING_RULES, "ZERO_DEPOSIT_RETRY_COOLDOWN_SEC", 20) or 20)
+        return _rule_int("ZERO_DEPOSIT_RETRY_COOLDOWN_SEC", 20)
     return 1200
 
 
@@ -117,6 +118,48 @@ BIG_BITE_STATE = {}
 _SAME_SYMBOL_SOFT_STOP_TS: dict[str, float] = {}
 
 
+def _mutate_stock_state(stock, set_fields: dict | None = None, pop_fields: list | tuple = ()):
+    """기본 상태(dict) 변경은 ENTRY_LOCK 하에서 일괄 반영.
+
+    lock ownership:
+    - `stock` dict의 runtime truth(status/odno/pending flags/qty 등) 변경은 이 helper 우선
+    - `ACTIVE_TARGETS`, `cooldowns`, `highest_prices`, `alerted_stocks` 같은 shared collection은
+      `with ENTRY_LOCK:` 블록 안에서 직접 갱신
+    """
+    if stock is None:
+        return
+    with ENTRY_LOCK:
+        if set_fields:
+            for key, value in set_fields.items():
+                stock[key] = value
+        for key in pop_fields:
+            stock.pop(key, None)
+
+
+def _rule(name, default=None):
+    if TRADING_RULES is None:
+        return default
+    return getattr(TRADING_RULES, name, default)
+
+
+def _rule_bool(name, default=False):
+    return bool(_rule(name, default))
+
+
+def _rule_int(name, default=0):
+    try:
+        return int(_rule(name, default) or default)
+    except (TypeError, ValueError):
+        return int(default)
+
+
+def _rule_float(name, default=0.0):
+    try:
+        return float(_rule(name, default) or default)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 def bind_state_dependencies(
     *,
     kiwoom_token=None,
@@ -148,7 +191,6 @@ def bind_state_dependencies(
         EVENT_BUS = event_bus
     if active_targets is not None:
         ACTIVE_TARGETS = active_targets
-        _sanitize_pending_add_states(ACTIVE_TARGETS)
     if cooldowns is not None:
         COOLDOWNS = cooldowns
     if alerted_stocks is not None:
@@ -171,6 +213,12 @@ def bind_state_dependencies(
         SEND_EXIT_BEST_IOC = send_exit_best_ioc
     if dual_persona_engine is not None:
         DUAL_PERSONA_ENGINE = dual_persona_engine
+
+
+def sanitize_pending_add_states(active_targets=None):
+    """재시작/복구 시 pending add 정합성을 보수 정리합니다."""
+    targets = active_targets if active_targets is not None else ACTIVE_TARGETS
+    _sanitize_pending_add_states(targets)
 
 
 def _publish_gatekeeper_report_proxy(stock, code, gatekeeper, allowed):
@@ -246,7 +294,7 @@ def _format_entry_order_line(order):
 
 
 def _resolve_buy_signal_audience(*, liquidity_value=0, ai_score=0):
-    threshold = getattr(TRADING_RULES, 'VIP_LIQUIDITY_THRESHOLD', 1_000_000_000) if TRADING_RULES else 1_000_000_000
+    threshold = _rule_float('VIP_LIQUIDITY_THRESHOLD', 1_000_000_000)
     try:
         liquidity = float(liquidity_value or 0)
     except (TypeError, ValueError):
@@ -394,9 +442,7 @@ def _resolve_sell_order_sign(sell_reason_type: str, profit_rate) -> str:
 
 
 def _mark_same_symbol_soft_stop(code: str, *, now_ts: float) -> None:
-    cooldown_sec = int(
-        getattr(TRADING_RULES, "SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_SEC", 600) or 600
-    )
+    cooldown_sec = _rule_int("SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_SEC", 600)
     if cooldown_sec <= 0:
         return
     _SAME_SYMBOL_SOFT_STOP_TS[code] = now_ts
@@ -420,12 +466,8 @@ def _remember_exit_context(
     else:
         stock.pop("last_exit_soft_stop_threshold_pct", None)
 
-    cooldown_sec = int(
-        getattr(TRADING_RULES, "SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_SEC", 600) or 600
-    )
-    cooldown_enabled = bool(
-        getattr(TRADING_RULES, "SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED", True)
-    )
+    cooldown_sec = _rule_int("SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_SEC", 600)
+    cooldown_enabled = _rule_bool("SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED", True)
     stock["last_exit_same_symbol_soft_stop_cooldown_would_block"] = bool(
         str(exit_rule or "").strip() == "scalp_soft_stop_pct" and cooldown_enabled and cooldown_sec > 0
     )
@@ -438,7 +480,7 @@ def _emit_same_symbol_soft_stop_cooldown_shadow(
     now_ts: float,
     runtime_remaining_sec: int,
 ) -> None:
-    enabled = bool(getattr(TRADING_RULES, "SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED", True))
+    enabled = _rule_bool("SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED", True)
     if not enabled:
         return
 
@@ -446,9 +488,7 @@ def _emit_same_symbol_soft_stop_cooldown_shadow(
     if marked_at <= 0:
         return
 
-    cooldown_sec = int(
-        getattr(TRADING_RULES, "SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_SEC", 600) or 600
-    )
+    cooldown_sec = _rule_int("SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_SEC", 600)
     if cooldown_sec <= 0:
         return
 
@@ -475,6 +515,61 @@ def _emit_same_symbol_soft_stop_cooldown_shadow(
     stock["_same_symbol_soft_stop_cooldown_shadow_logged_key"] = logged_key
 
 
+def _observe_bad_entry_block_candidate(
+    stock,
+    code: str,
+    *,
+    strategy: str,
+    profit_rate: float,
+    peak_profit: float,
+    current_ai_score: float,
+    held_sec: int,
+    now_ts: float,
+) -> None:
+    if (strategy or "").upper() != "SCALPING":
+        return
+    if not _rule_bool("SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED", True):
+        return
+
+    interval_sec = _rule_int("SCALP_BAD_ENTRY_BLOCK_LOG_INTERVAL_SEC", 30)
+    last_logged = float(stock.get("last_bad_entry_block_observed_ts", 0.0) or 0.0)
+    if interval_sec > 0 and now_ts - last_logged < interval_sec:
+        return
+
+    min_hold_sec = _rule_int("SCALP_BAD_ENTRY_BLOCK_MIN_HOLD_SEC", 60)
+    min_loss_pct = _rule_float("SCALP_BAD_ENTRY_BLOCK_MIN_LOSS_PCT", -0.70)
+    max_peak_pct = _rule_float("SCALP_BAD_ENTRY_BLOCK_MAX_PEAK_PROFIT_PCT", 0.20)
+    ai_limit = _rule_float("SCALP_BAD_ENTRY_BLOCK_AI_SCORE_LIMIT", 45)
+
+    if held_sec < min_hold_sec or profit_rate > min_loss_pct or peak_profit > max_peak_pct:
+        return
+    if float(current_ai_score or 0.0) > ai_limit:
+        return
+
+    feat = stock.get("last_reversal_features") or {}
+    if not isinstance(feat, dict):
+        feat = {}
+    stock["last_bad_entry_block_observed_ts"] = now_ts
+    _log_holding_pipeline(
+        stock,
+        code,
+        "bad_entry_block_observed",
+        classifier="never_green_ai_fade",
+        observe_only=True,
+        profit_rate=f"{profit_rate:+.2f}",
+        peak_profit=f"{peak_profit:+.2f}",
+        current_ai_score=f"{float(current_ai_score or 0.0):.0f}",
+        held_sec=int(held_sec or 0),
+        min_loss_pct=f"{min_loss_pct:+.2f}",
+        max_peak_profit_pct=f"{max_peak_pct:+.2f}",
+        ai_score_limit=f"{ai_limit:.0f}",
+        buy_pressure_10t=feat.get("buy_pressure_10t", "-"),
+        tick_acceleration_ratio=feat.get("tick_acceleration_ratio", "-"),
+        large_sell_print_detected=feat.get("large_sell_print_detected", "-"),
+        curr_vs_micro_vwap_bp=feat.get("curr_vs_micro_vwap_bp", "-"),
+    )
+
+
 def _emit_partial_only_timeout_shadow(
     *,
     stock: dict,
@@ -484,11 +579,11 @@ def _emit_partial_only_timeout_shadow(
     peak_profit: float,
     current_ai_score: float,
 ) -> None:
-    enabled = bool(getattr(TRADING_RULES, "SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_ENABLED", True))
+    enabled = _rule_bool("SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_ENABLED", True)
     if not enabled:
         return
 
-    timeout_sec = int(getattr(TRADING_RULES, "SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_SEC", 180) or 180)
+    timeout_sec = _rule_int("SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_SEC", 180)
     if timeout_sec <= 0 or held_sec < timeout_sec:
         return
 
@@ -497,7 +592,7 @@ def _emit_partial_only_timeout_shadow(
     if requested_qty <= 1 or buy_qty <= 0 or buy_qty > 1 or buy_qty >= requested_qty:
         return
 
-    peak_max_pct = float(getattr(TRADING_RULES, "SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_MAX_PEAK_PCT", 0.20) or 0.20)
+    peak_max_pct = _rule_float("SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_MAX_PEAK_PCT", 0.20)
     if peak_profit > peak_max_pct:
         return
 
@@ -630,24 +725,24 @@ def _emit_scalp_hard_time_stop_shadow(
     current_ai_score: float,
     ai_exit_min_loss_pct: float,
 ) -> None:
-    if not bool(getattr(TRADING_RULES, "SCALP_COMMON_HARD_TIME_STOP_SHADOW_ONLY", True)):
+    if not _rule_bool("SCALP_COMMON_HARD_TIME_STOP_SHADOW_ONLY", True):
         return
     if int(stock.get("buy_qty", 0) or 0) <= 0:
         return
     if str(stock.get("status", "") or "").strip().upper() in {"COMPLETED", "SOLD"}:
         return
 
-    raw_candidates = getattr(TRADING_RULES, "SCALP_COMMON_HARD_TIME_STOP_SHADOW_MINUTES", (3, 5, 7)) or (3, 5, 7)
+    raw_candidates = _rule("SCALP_COMMON_HARD_TIME_STOP_SHADOW_MINUTES", (3, 5, 7)) or (3, 5, 7)
     try:
         candidates = sorted({max(1, int(value)) for value in raw_candidates})
     except Exception:
         candidates = [3, 5, 7]
 
-    shadow_min_loss_pct = float(
-        getattr(TRADING_RULES, "SCALP_COMMON_HARD_TIME_STOP_SHADOW_MIN_LOSS_PCT", ai_exit_min_loss_pct) or ai_exit_min_loss_pct
+    shadow_min_loss_pct = _rule_float(
+        "SCALP_COMMON_HARD_TIME_STOP_SHADOW_MIN_LOSS_PCT", ai_exit_min_loss_pct
     )
     shadow_peak_max_pct = float(
-        getattr(TRADING_RULES, "SCALP_COMMON_HARD_TIME_STOP_SHADOW_MAX_PEAK_PCT", 0.20) or 0.20
+        _rule_float("SCALP_COMMON_HARD_TIME_STOP_SHADOW_MAX_PEAK_PCT", 0.20)
     )
     if profit_rate > shadow_min_loss_pct or peak_profit > shadow_peak_max_pct:
         return
@@ -776,7 +871,7 @@ def _log_watching_shared_prompt_shadow_result(stock_name, code, payload, record_
 
 
 def _shadow_runtime_enabled() -> bool:
-    return bool(getattr(TRADING_RULES, "OPENAI_DUAL_PERSONA_ENABLED", False))
+    return _rule_bool("OPENAI_DUAL_PERSONA_ENABLED", False)
 
 
 def _submit_watching_shared_prompt_shadow(*, stock_name, code, ws_data, recent_ticks, recent_candles, gemini_result, record_id=None):
@@ -833,27 +928,27 @@ def _reason_codes(**checks) -> str:
 
 
 def _get_swing_gap_threshold(strategy: str) -> float:
-    fallback = float(getattr(TRADING_RULES, 'MAX_SWING_GAP_UP_PCT', 3.0) or 3.0)
+    fallback = _rule_float('MAX_SWING_GAP_UP_PCT', 3.0)
     strategy_upper = str(strategy or '').upper()
     if strategy_upper == 'KOSPI_ML':
-        return float(getattr(TRADING_RULES, 'MAX_SWING_GAP_UP_PCT_KOSPI', fallback) or fallback)
-    return float(getattr(TRADING_RULES, 'MAX_SWING_GAP_UP_PCT_KOSDAQ', fallback) or fallback)
+        return _rule_float('MAX_SWING_GAP_UP_PCT_KOSPI', fallback)
+    return _rule_float('MAX_SWING_GAP_UP_PCT_KOSDAQ', fallback)
 
 
 def _resolve_gatekeeper_reject_cooldown(action_label: str) -> tuple[int, str]:
     action = str(action_label or '').strip()
     if action == '눌림 대기':
         return (
-            int(getattr(TRADING_RULES, 'ML_GATEKEEPER_PULLBACK_WAIT_COOLDOWN', 60 * 20) or 60 * 20),
+            _rule_int('ML_GATEKEEPER_PULLBACK_WAIT_COOLDOWN', 60 * 20),
             'pullback_wait',
         )
     if action in {'전량 회피', '둘 다 아님'}:
         return (
-            int(getattr(TRADING_RULES, 'ML_GATEKEEPER_REJECT_COOLDOWN', 60 * 60 * 2) or 60 * 60 * 2),
+            _rule_int('ML_GATEKEEPER_REJECT_COOLDOWN', 60 * 60 * 2),
             'hard_reject',
         )
     return (
-        int(getattr(TRADING_RULES, 'ML_GATEKEEPER_NEUTRAL_COOLDOWN', 60 * 30) or 60 * 30),
+        _rule_int('ML_GATEKEEPER_NEUTRAL_COOLDOWN', 60 * 30),
         'neutral_hold',
     )
 
@@ -886,6 +981,110 @@ def _resolve_stock_marcap(stock, code) -> int:
         _MARCAP_CACHE[norm_code] = (marcap, now_ts + _MARCAP_CACHE_TTL)
         stock['marcap'] = marcap
     return marcap
+
+
+def _dispatch_scalp_preset_exit(
+    *,
+    stock,
+    code,
+    now_ts,
+    curr_p,
+    buy_p,
+    profit_rate,
+    peak_profit,
+    strategy,
+    sell_reason_type,
+    reason,
+    exit_rule,
+):
+    target_id = stock.get('id')
+    expected_qty = int(stock.get('buy_qty', 0) or 0)
+    orig_ord_no = stock.get('preset_tp_ord_no', '')
+    preset_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
+    preset_held_sec = 0
+    try:
+        if stock.get('order_time'):
+            preset_held_sec = max(0, int(now_ts - float(stock.get('order_time') or 0)))
+    except Exception as exc:
+        log_error(
+            f"[SCALP_PRESET_EXIT] order_time 파싱 실패 ({stock.get('code', '-')}, {stock.get('order_time')}): {exc}"
+        )
+        preset_held_sec = 0
+
+    _remember_exit_context(
+        stock=stock,
+        exit_rule=exit_rule,
+        peak_profit=peak_profit,
+        held_sec=preset_held_sec,
+        current_ai_score=preset_ai_score,
+    )
+    stock['last_exit_reason'] = reason
+    _log_holding_pipeline(
+        stock,
+        code,
+        "exit_signal",
+        sell_reason_type=sell_reason_type,
+        reason=reason,
+        exit_rule=exit_rule or "-",
+        profit_rate=f"{profit_rate:+.2f}",
+        peak_profit=f"{peak_profit:+.2f}",
+        current_ai_score=f"{preset_ai_score:.0f}",
+        held_sec=preset_held_sec,
+        curr_price=curr_p,
+        buy_price=buy_p,
+        buy_qty=expected_qty,
+    )
+
+    try:
+        if target_id:
+            with DB.get_session() as session:
+                session.query(RecommendationHistory).filter_by(id=target_id).update({"status": "SELL_ORDERED"})
+    except Exception as e:
+        log_error(f"🚨 [DB 에러] {stock['name']} SELL_ORDERED 장부 잠금 실패: {e}")
+
+    rem_qty = _confirm_cancel_or_reload_remaining(code, orig_ord_no, KIWOOM_TOKEN, expected_qty)
+    pending_sell_msg = ""
+    set_fields = {
+        'last_exit_reason': reason,
+    }
+    ord_no = ''
+    if rem_qty > 0:
+        sell_res = _send_exit_best_ioc(code, rem_qty, KIWOOM_TOKEN)
+        set_fields.update({
+            'exit_requested': True,
+            'exit_order_type': '16',
+            'exit_order_time': now_ts,
+            'sell_order_time': now_ts,
+        })
+        ord_no = str(sell_res.get('ord_no', '') or '') if isinstance(sell_res, dict) else ''
+        if ord_no:
+            set_fields['sell_ord_no'] = ord_no
+        sign = _resolve_sell_order_sign(sell_reason_type, profit_rate)
+        pending_sell_msg = (
+            f"{sign} **{stock['name']} 매도 전송 ({strategy})**\n"
+            f"사유: `{reason}`\n"
+            f"현재가 기준 수익: `{profit_rate:+.2f}%` (고점: {peak_profit:.1f}%)"
+        )
+        set_fields['pending_sell_msg'] = pending_sell_msg
+        _log_holding_pipeline(
+            stock,
+            code,
+            "sell_order_sent",
+            sell_reason_type=sell_reason_type,
+            exit_rule=exit_rule or "-",
+            qty=rem_qty,
+            ord_no=ord_no or "-",
+            order_type=set_fields.get("exit_order_type") or stock.get("exit_order_type") or "-",
+            profit_rate=f"{profit_rate:+.2f}",
+        )
+
+    _mutate_stock_state(
+        stock,
+        set_fields=set_fields | {
+            'status': 'SELL_ORDERED',
+            'sell_target_price': curr_p,
+        },
+    )
 
 
 def _get_best_levels_from_ws(ws_data):
@@ -944,9 +1143,9 @@ def _build_entry_price_snapshot_fields(latency_gate, *, request_price, curr_pric
 def _is_pre_submit_price_guard_block(strategy, price, best_bid):
     if strategy not in ('SCALPING', 'SCALP'):
         return False
-    if not bool(getattr(TRADING_RULES, 'SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED', True)):
+    if not bool(_rule("SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED", True)):
         return False
-    threshold_bps = int(getattr(TRADING_RULES, 'SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS', 80) or 80)
+    threshold_bps = int(_rule("SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS", 80) or 80)
     if threshold_bps < 0:
         return False
     return _compute_price_below_bid_bps(price, best_bid) > threshold_bps
@@ -1137,8 +1336,8 @@ def _is_wait65_79_candidate(action, ai_score) -> bool:
         score = float(ai_score or 0.0)
     except Exception:
         return False
-    min_score = float(getattr(TRADING_RULES, "AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE", 65) or 65)
-    max_score = float(getattr(TRADING_RULES, "AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE", 79) or 79)
+    min_score = float(_rule("AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE", 65) or 65)
+    max_score = float(_rule("AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE", 79) or 79)
     return min_score <= score <= max_score
 
 
@@ -1180,7 +1379,7 @@ def _should_run_main_buy_recovery_canary(
     *,
     feature_probe=None,
 ):
-    if not bool(getattr(TRADING_RULES, "AI_MAIN_BUY_RECOVERY_CANARY_ENABLED", False)):
+    if not _rule_bool("AI_MAIN_BUY_RECOVERY_CANARY_ENABLED", False):
         return False
     if bool((ai_decision or {}).get("ai_fallback_score_50", False)):
         return False
@@ -1191,8 +1390,8 @@ def _should_run_main_buy_recovery_canary(
         score = float(ai_score or 0.0)
     except Exception:
         return False
-    min_score = float(getattr(TRADING_RULES, "AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE", 65) or 65)
-    max_score = float(getattr(TRADING_RULES, "AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE", 79) or 79)
+    min_score = _rule_float("AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE", 65)
+    max_score = _rule_float("AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE", 79)
     if score < min_score or score > max_score:
         return False
 
@@ -1210,9 +1409,9 @@ def _should_run_main_buy_recovery_canary(
     if not isinstance(probe, dict):
         return False
 
-    min_buy_pressure = float(getattr(TRADING_RULES, "AI_MAIN_BUY_RECOVERY_CANARY_MIN_BUY_PRESSURE", 65.0) or 65.0)
-    min_tick_accel = float(getattr(TRADING_RULES, "AI_MAIN_BUY_RECOVERY_CANARY_MIN_TICK_ACCEL", 1.20) or 1.20)
-    min_micro_vwap_bp = float(getattr(TRADING_RULES, "AI_MAIN_BUY_RECOVERY_CANARY_MIN_MICRO_VWAP_BP", 0.0) or 0.0)
+    min_buy_pressure = _rule_float("AI_MAIN_BUY_RECOVERY_CANARY_MIN_BUY_PRESSURE", 65.0)
+    min_tick_accel = _rule_float("AI_MAIN_BUY_RECOVERY_CANARY_MIN_TICK_ACCEL", 1.20)
+    min_micro_vwap_bp = _rule_float("AI_MAIN_BUY_RECOVERY_CANARY_MIN_MICRO_VWAP_BP", 0.0)
 
     buy_pressure = float(probe.get("buy_pressure", 0.0) or 0.0)
     tick_accel = float(probe.get("tick_accel", 0.0) or 0.0)
@@ -1231,30 +1430,7 @@ def _should_run_main_buy_recovery_canary(
 
 
 def _resolve_holding_elapsed_sec(stock):
-    now_ts = time.time()
-    raw_order_time = stock.get("order_time")
-    if raw_order_time not in (None, "", 0, "0"):
-        try:
-            return max(0, int(now_ts - float(raw_order_time)))
-        except Exception:
-            pass
-
-    raw_buy_time = stock.get("buy_time")
-    if not raw_buy_time:
-        return 0
-    try:
-        if isinstance(raw_buy_time, datetime):
-            buy_dt = raw_buy_time
-        else:
-            buy_str = str(raw_buy_time)
-            try:
-                buy_dt = datetime.fromisoformat(buy_str)
-            except Exception:
-                parsed_time = datetime.strptime(buy_str, "%H:%M:%S").time()
-                buy_dt = datetime.combine(datetime.now().date(), parsed_time)
-        return max(0, int((datetime.now() - buy_dt).total_seconds()))
-    except Exception:
-        return 0
+    return resolve_holding_elapsed_sec(stock)
 
 
 def _bucket_int(value, bucket):
@@ -1274,6 +1450,1264 @@ def _bucket_int_with_deadband(value, bucket, *, zero_band=1.0):
         return int(numeric // bucket)
     except Exception:
         return 0
+
+
+def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, runtime, config):
+    strategy = runtime["strategy"]
+    pos_tag = runtime["pos_tag"]
+    now_ts = runtime["now_ts"]
+    curr_price = runtime["curr_price"]
+    current_vpw = runtime["current_vpw"]
+    fluctuation = runtime["fluctuation"]
+    cooldowns = runtime["cooldowns"]
+    event_bus = runtime["event_bus"]
+
+    is_trigger = runtime["is_trigger"]
+    msg = runtime["msg"]
+    ratio = runtime["ratio"]
+    liquidity_value = runtime["liquidity_value"]
+
+    current_ai_score = runtime["current_ai_score"]
+    ai_decision = {}
+    ai_prob = runtime["ai_prob"]
+    buy_threshold = runtime["buy_threshold"]
+    strong_vpw = runtime["strong_vpw"]
+
+    if strategy == 'SCALPING':
+        if pos_tag == 'VCP_CANDID':
+            return False
+
+        current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
+        min_ratio = config["INVEST_RATIO_SCALPING_MIN"]
+        max_ratio = config["INVEST_RATIO_SCALPING_MAX"]
+        ratio = min_ratio + (current_ai_score / 100.0) * (max_ratio - min_ratio)
+
+        ask_tot = int(float(ws_data.get('ask_tot', 0) or 0))
+        bid_tot = int(float(ws_data.get('bid_tot', 0) or 0))
+        open_price = float(ws_data.get('open', curr_price) or curr_price)
+        marcap = _resolve_stock_marcap(stock, code)
+        turnover_hint = estimate_turnover_hint(curr_price, ws_data.get('volume', 0))
+        scalp_limits = get_dynamic_scalp_thresholds(marcap, turnover_hint=turnover_hint)
+
+        intraday_surge = ((curr_price - open_price) / open_price) * 100 if open_price > 0 else fluctuation
+        liquidity_value = (ask_tot + bid_tot) * curr_price
+        max_surge = float(scalp_limits.get('max_surge', config["MAX_SCALP_SURGE_PCT"]) or config["MAX_SCALP_SURGE_PCT"])
+        max_intraday_surge = float(
+            scalp_limits.get('max_intraday_surge', config["MAX_INTRADAY_SURGE"]) or config["MAX_INTRADAY_SURGE"]
+        )
+        min_liquidity = int(scalp_limits.get('min_liquidity', config["MIN_SCALP_LIQUIDITY"]) or config["MIN_SCALP_LIQUIDITY"])
+        big_bite_hit = False
+        big_bite_armed = False
+        big_bite_confirmed = False
+        big_bite_info = {}
+        entry_arm = _get_live_entry_arm(stock, code)
+
+        if entry_arm:
+            current_ai_score = float(entry_arm.get('ai_score', current_ai_score) or current_ai_score)
+            ratio = float(entry_arm.get('ratio', ratio) or ratio)
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    'rt_ai_prob': current_ai_score / 100.0,
+                    'target_buy_price': int(entry_arm.get('target_buy_price') or curr_price),
+                    'entry_armed_resume_count': int(stock.get('entry_armed_resume_count', 0) or 0) + 1,
+                },
+            )
+            _log_entry_pipeline(
+                stock,
+                code,
+                "entry_armed_resume",
+                ai_score=f"{current_ai_score:.1f}",
+                ratio=f"{ratio:.4f}",
+                remaining_sec=f"{float(entry_arm.get('remaining_sec', 0.0) or 0.0):.1f}",
+                armed_reason=entry_arm.get('reason'),
+                dynamic_reason=entry_arm.get('dynamic_reason'),
+            )
+            is_trigger = True
+        else:
+            if fluctuation >= max_surge or intraday_surge >= max_intraday_surge:
+                overlap_snapshot = _extract_ai_overlap_snapshot(ws_data=ws_data)
+                _mutate_stock_state(stock, set_fields={'last_ai_overlap_snapshot': overlap_snapshot})
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "blocked_overbought",
+                    fluctuation=f"{fluctuation:.2f}",
+                    intraday_surge=f"{intraday_surge:.2f}",
+                    max_surge=f"{max_surge:.2f}",
+                    max_intraday_surge=f"{max_intraday_surge:.2f}",
+                    marcap=marcap,
+                    cap_bucket=scalp_limits.get('bucket_label'),
+                    **_build_ai_overlap_log_fields(
+                        stock=stock,
+                        ai_score=current_ai_score,
+                        momentum_tag=stock.get("entry_momentum_tag"),
+                        threshold_profile=stock.get("entry_threshold_profile"),
+                        overbought_blocked=True,
+                        blocked_stage="blocked_overbought",
+                        overlap_snapshot=overlap_snapshot,
+                    ),
+                )
+                return False
+
+            try:
+                tick_data = build_tick_data_from_ws(ws_data)
+                big_bite_armed, big_bite_info = arm_big_bite_if_triggered(
+                    stock=stock,
+                    code=code,
+                    ws_data=ws_data,
+                    tick_data=tick_data,
+                    runtime_state=BIG_BITE_STATE,
+                )
+                big_bite_confirmed, confirm_info = confirm_big_bite_follow_through(
+                    stock=stock,
+                    code=code,
+                    ws_data=ws_data,
+                    runtime_state=BIG_BITE_STATE,
+                )
+                big_bite_hit = bool(big_bite_confirmed)
+                big_bite_info = {**(big_bite_info or {}), **(confirm_info or {})}
+            except Exception as exc:
+                log_error(f"⚠️ [Big-Bite] 보조 신호 계산 실패 ({code}): {exc}")
+
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    'big_bite_confirmed': bool(big_bite_confirmed),
+                    'big_bite_info': big_bite_info or {},
+                    'big_bite_triggered': bool(big_bite_armed),
+                },
+            )
+
+            gate_tags = config["BIG_BITE_HARD_GATE_TAGS_SCALPING"]
+            hard_gate_required = bool(
+                config["BIG_BITE_HARD_GATE_ENABLED"]
+                and gate_tags
+                and any(tag in pos_tag for tag in gate_tags)
+            )
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    'big_bite_hard_gate_required': hard_gate_required,
+                    'big_bite_hard_gate_blocked': bool(hard_gate_required and not big_bite_confirmed),
+                    'big_bite_hard_gate_tags': gate_tags,
+                },
+            )
+
+            if hard_gate_required and not big_bite_confirmed:
+                _mutate_stock_state(stock, set_fields={'big_bite_block_reason': 'hard_gate'})
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "blocked_big_bite_hard_gate",
+                    required=hard_gate_required,
+                    triggered=big_bite_armed,
+                    confirmed=big_bite_confirmed,
+                    position_tag=pos_tag,
+                )
+                return False
+
+            if pos_tag == 'VCP_NEXT':
+                _mutate_stock_state(
+                    stock,
+                    set_fields={
+                        'target_buy_price': curr_price,
+                        'msg_audience': 'ADMIN_ONLY',
+                    },
+                )
+                is_trigger = True
+                msg = (
+                    f"🚀 **{stock['name']} ({code}) VCP 시초가 예약 매수!**\n"
+                    f"현재가: `{curr_price:,}원` (전일 VCP NEXT 달성)"
+                )
+            else:
+                if radar is None:
+                    _log_entry_pipeline(stock, code, "blocked_missing_radar", strategy=strategy)
+                    return False
+
+                observe_only = bool(_rule("SCALP_DYNAMIC_VPW_OBSERVE_ONLY", True))
+                momentum_ws_data = dict(ws_data or {})
+                momentum_ws_data["_position_tag"] = pos_tag
+                momentum_gate = evaluate_scalping_strength_momentum(momentum_ws_data)
+                _mutate_stock_state(
+                    stock,
+                    set_fields={
+                        'entry_momentum_tag': momentum_gate.get("position_tag"),
+                        'entry_threshold_profile': momentum_gate.get("threshold_profile"),
+                    },
+                )
+                if momentum_gate.get("enabled"):
+                    _log_strength_momentum_observation(stock, code, momentum_gate)
+                    if not observe_only and not momentum_gate.get("allowed"):
+                        overlap_snapshot = _extract_ai_overlap_snapshot(ws_data=ws_data)
+                        _mutate_stock_state(stock, set_fields={'last_ai_overlap_snapshot': overlap_snapshot})
+                        _log_entry_pipeline(
+                            stock,
+                            code,
+                            "blocked_strength_momentum",
+                            reason=momentum_gate.get("reason"),
+                            delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
+                            buy_value=int(momentum_gate.get("window_buy_value", 0) or 0),
+                            buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
+                            exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
+                            net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
+                            **_build_ai_overlap_log_fields(
+                                stock=stock,
+                                ai_score=current_ai_score,
+                                momentum_tag=momentum_gate.get("position_tag"),
+                                threshold_profile=momentum_gate.get("threshold_profile"),
+                                overbought_blocked=False,
+                                blocked_stage="blocked_strength_momentum",
+                                overlap_snapshot=overlap_snapshot,
+                            ),
+                        )
+                        return False
+
+                if current_vpw < config["VPW_SCALP_LIMIT"]:
+                    shadow_candidate = None
+                    if momentum_gate.get("allowed"):
+                        if observe_only:
+                            shadow_candidate = record_shadow_candidate(stock, code, ws_data, momentum_gate)
+                            if shadow_candidate:
+                                _log_entry_pipeline(
+                                    stock,
+                                    code,
+                                    "shadow_candidate_recorded",
+                                    shadow_id=shadow_candidate.get("shadow_id"),
+                                    signal_price=shadow_candidate.get("signal_price"),
+                                    dynamic_delta=f"{float(shadow_candidate.get('dynamic_delta', 0.0) or 0.0):.1f}",
+                                    dynamic_buy_value=int(shadow_candidate.get("dynamic_window_buy_value", 0) or 0),
+                                    dynamic_buy_ratio=f"{float(shadow_candidate.get('dynamic_window_buy_ratio', 0.0) or 0.0):.2f}",
+                                )
+                        else:
+                            _log_entry_pipeline(
+                                stock,
+                                code,
+                                "dynamic_vpw_override_pass",
+                                current_vpw=f"{current_vpw:.1f}",
+                                threshold=config["VPW_SCALP_LIMIT"],
+                                dynamic_reason=momentum_gate.get("reason"),
+                                dynamic_delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
+                                dynamic_buy_value=int(momentum_gate.get("window_buy_value", 0) or 0),
+                                dynamic_buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
+                                dynamic_exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
+                                dynamic_net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
+                                dynamic_profile=momentum_gate.get("threshold_profile"),
+                            )
+                            shadow_candidate = None
+                    if not (momentum_gate.get("allowed") and not observe_only):
+                        overlap_snapshot = _extract_ai_overlap_snapshot(ws_data=ws_data)
+                        _mutate_stock_state(stock, set_fields={'last_ai_overlap_snapshot': overlap_snapshot})
+                        _log_entry_pipeline(
+                            stock,
+                            code,
+                            "blocked_vpw",
+                            current_vpw=f"{current_vpw:.1f}",
+                            threshold=config["VPW_SCALP_LIMIT"],
+                            dynamic_allowed=momentum_gate.get("allowed"),
+                            dynamic_reason=momentum_gate.get("reason"),
+                            dynamic_delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
+                            dynamic_buy_value=int(momentum_gate.get("window_buy_value", 0) or 0),
+                            dynamic_exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
+                            dynamic_net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
+                            shadow_recorded=bool(shadow_candidate),
+                            **_build_ai_overlap_log_fields(
+                                stock=stock,
+                                ai_score=current_ai_score,
+                                momentum_tag=momentum_gate.get("position_tag"),
+                                threshold_profile=momentum_gate.get("threshold_profile"),
+                                overbought_blocked=False,
+                                blocked_stage="blocked_vpw",
+                                overlap_snapshot=overlap_snapshot,
+                            ),
+                        )
+                        return False
+
+                if liquidity_value < min_liquidity:
+                    _log_entry_pipeline(
+                        stock,
+                        code,
+                        "blocked_liquidity",
+                        liquidity_value=int(liquidity_value),
+                        min_liquidity=min_liquidity,
+                        marcap=marcap,
+                        cap_bucket=scalp_limits.get('bucket_label'),
+                    )
+                    return False
+
+                scanner_price = stock.get('buy_price') or 0
+                if scanner_price > 0:
+                    gap_pct = (curr_price - scanner_price) / scanner_price * 100
+                    if gap_pct >= 1.5:
+                        if code not in cooldowns:
+                            with ENTRY_LOCK:
+                                cooldowns[code] = now_ts + 1200
+                        _log_entry_pipeline(
+                            stock,
+                            code,
+                            "blocked_gap_from_scan",
+                            gap_pct=f"{gap_pct:.1f}",
+                            scanner_price=int(scanner_price),
+                            curr_price=curr_price,
+                        )
+                        return False
+
+                current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
+                target_buy_price, used_drop_pct = radar.get_smart_target_price(
+                    curr_price,
+                    v_pw=current_vpw,
+                    ai_score=current_ai_score,
+                    ask_tot=ask_tot,
+                    bid_tot=bid_tot,
+                )
+
+                last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
+                time_elapsed = now_ts - last_ai_time
+                is_vip_target = (target_buy_price > 0) and (curr_price <= target_buy_price * 1.015)
+
+                if is_vip_target and last_ai_time == 0:
+                    log_info(f"⏳ [{stock['name']}] 첫 AI 분석을 시작합니다... (기계적 매수 일시 보류)")
+
+                if ai_engine and is_vip_target and (time_elapsed > config["AI_WATCHING_COOLDOWN"] or last_ai_time == 0):
+                    ai_call_executed = False
+                    try:
+                        recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
+                        recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
+                        if ws_data.get('orderbook') and recent_ticks:
+                            ai_decision = ai_engine.analyze_target(
+                                stock['name'],
+                                ws_data,
+                                recent_ticks,
+                                recent_candles,
+                                prompt_profile="watching",
+                            )
+                            ai_call_executed = True
+                            _mutate_stock_state(
+                                stock,
+                                pop_fields=[
+                                    'wait6579_probe_canary_armed',
+                                    'wait6579_probe_canary_source',
+                                    'wait6579_probe_canary_score',
+                                ],
+                            )
+
+                            action = ai_decision.get('action', 'WAIT')
+                            ai_score = ai_decision.get('score', 50)
+                            reason = ai_decision.get('reason', '사유 없음')
+                            feature_probe = _extract_buy_recovery_probe_features(
+                                ai_engine,
+                                ws_data,
+                                recent_ticks,
+                                recent_candles,
+                            ) or {
+                                "buy_pressure": 0.0,
+                                "tick_accel": 0.0,
+                                "micro_vwap_bp": 0.0,
+                                "large_sell_print": False,
+                            }
+                            latency_state = str((ws_data or {}).get("latency_state", "") or "").strip().upper() or "-"
+                            overlap_snapshot = _extract_ai_overlap_snapshot(
+                                ws_data=ws_data,
+                                recent_ticks=recent_ticks,
+                                recent_candles=recent_candles,
+                                ai_engine=ai_engine,
+                            )
+                            _mutate_stock_state(stock, set_fields={'last_ai_overlap_snapshot': overlap_snapshot})
+                            _log_entry_pipeline(
+                                stock,
+                                code,
+                                "ai_confirmed",
+                                action=action,
+                                vip_target=is_vip_target,
+                                buy_pressure=f"{float(feature_probe.get('buy_pressure', 0.0) or 0.0):.2f}",
+                                tick_accel=f"{float(feature_probe.get('tick_accel', 0.0) or 0.0):.3f}",
+                                micro_vwap_bp=f"{float(feature_probe.get('micro_vwap_bp', 0.0) or 0.0):.2f}",
+                                large_sell_print_detected=bool(feature_probe.get("large_sell_print", False)),
+                                latency_state=latency_state,
+                                **_build_ai_overlap_log_fields(
+                                    stock=stock,
+                                    ai_score=ai_score,
+                                    momentum_tag=stock.get("entry_momentum_tag"),
+                                    threshold_profile=stock.get("entry_threshold_profile"),
+                                    overbought_blocked=False,
+                                    blocked_stage="-",
+                                    overlap_snapshot=overlap_snapshot,
+                                ),
+                                **_build_ai_ops_log_fields(
+                                    ai_decision,
+                                    ai_score_raw=ai_score,
+                                    ai_score_after_bonus=ai_score,
+                                    entry_score_threshold=75,
+                                    big_bite_bonus_applied=False,
+                                    ai_cooldown_blocked=False,
+                                ),
+                            )
+                            if _is_wait65_79_candidate(action, ai_score):
+                                _log_wait65_79_ev_candidate(
+                                    stock=stock,
+                                    code=code,
+                                    action=action,
+                                    ai_score=ai_score,
+                                    ai_decision=ai_decision,
+                                    ws_data=ws_data,
+                                    feature_probe=feature_probe,
+                                )
+                            _submit_watching_shared_prompt_shadow(
+                                stock_name=stock['name'],
+                                code=code,
+                                ws_data=ws_data,
+                                recent_ticks=recent_ticks,
+                                recent_candles=recent_candles,
+                                gemini_result=ai_decision,
+                                record_id=stock.get("id"),
+                            )
+
+                            if _should_run_main_buy_recovery_canary(
+                                ai_decision,
+                                ai_score,
+                                ws_data,
+                                recent_ticks,
+                                recent_candles,
+                                ai_engine,
+                                feature_probe=feature_probe,
+                            ):
+                                recovery_decision = ai_engine.analyze_target_shadow_prompt(
+                                    stock['name'],
+                                    ws_data,
+                                    recent_ticks,
+                                    recent_candles,
+                                    strategy="SCALPING",
+                                    prompt_override=SCALPING_BUY_RECOVERY_CANARY_PROMPT,
+                                    prompt_type="scalping_buy_recovery_canary",
+                                    cache_profile="watching_buy_recovery_canary",
+                                )
+                                recovery_action = str(recovery_decision.get("action", "WAIT") or "WAIT").upper()
+                                recovery_score = float(recovery_decision.get("score", 50) or 50)
+                                promote_threshold = float(_rule("AI_MAIN_BUY_RECOVERY_CANARY_PROMOTE_SCORE", 75) or 75)
+                                can_promote = (
+                                    str(action or "WAIT").upper() != "BUY"
+                                    and recovery_action == "BUY"
+                                    and recovery_score >= promote_threshold
+                                )
+                                _log_entry_pipeline(
+                                    stock,
+                                    code,
+                                    "watching_buy_recovery_canary",
+                                    main_action=str(action or "WAIT").upper(),
+                                    main_score=f"{float(ai_score or 0.0):.1f}",
+                                    recovery_action=recovery_action,
+                                    recovery_score=f"{recovery_score:.1f}",
+                                    promoted=str(can_promote).lower(),
+                                    promote_threshold=f"{promote_threshold:.1f}",
+                                    **_build_ai_ops_log_fields(
+                                        recovery_decision,
+                                        ai_score_raw=recovery_score,
+                                        ai_score_after_bonus=recovery_score,
+                                        entry_score_threshold=promote_threshold,
+                                        big_bite_bonus_applied=False,
+                                        ai_cooldown_blocked=False,
+                                    ),
+                                )
+                                if can_promote:
+                                    action = "BUY"
+                                    ai_score = recovery_score
+                                    reason = (
+                                        f"{reason} | buy_recovery_canary:{recovery_score:.0f}"
+                                        if reason
+                                        else f"buy_recovery_canary:{recovery_score:.0f}"
+                                    )
+                                ai_decision = dict(ai_decision or {})
+                                ai_decision["action"] = action
+                                ai_decision["score"] = ai_score
+                                ai_decision["reason"] = reason
+                                _mutate_stock_state(
+                                    stock,
+                                    set_fields={
+                                        'wait6579_probe_canary_armed': True,
+                                        'wait6579_probe_canary_source': "buy_recovery_canary_promoted",
+                                        'wait6579_probe_canary_score': f"{float(recovery_score):.1f}",
+                                    },
+                                )
+
+                            if ai_score != 50:
+                                _mutate_stock_state(stock, set_fields={'rt_ai_prob': ai_score / 100.0})
+                                current_ai_score = ai_score
+                                log_info(f"💎 [VIP AI 확답 완료: {stock['name']}] {action} | 점수: {ai_score}점 | {reason}")
+                                if action == "BUY":
+                                    ai_msg = (
+                                        f"🤖 <b>[VIP 종목 실시간 분석]</b>\n"
+                                        f"🎯 종목: {stock['name']}\n"
+                                        f"⚡ 행동: <b>{action} ({ai_score}점)</b>\n"
+                                        f"🧠 사유: {reason}"
+                                    )
+                                    target_audience = (
+                                        'VIP_ALL'
+                                        if liquidity_value >= config["VIP_LIQUIDITY_THRESHOLD"] and current_ai_score >= 90
+                                        else 'ADMIN_ONLY'
+                                    )
+                                    event_bus.publish(
+                                        'TELEGRAM_BROADCAST',
+                                        {'message': ai_msg, 'audience': target_audience, 'parse_mode': 'HTML'},
+                                    )
+                            else:
+                                log_info(f"⚠️ [{stock['name']}] AI 판단 보류(Score 50). 기계적 로직으로 폴백합니다.")
+                                current_ai_score = 50
+                    except Exception as e:
+                        log_error(
+                            f"🚨 [AI 엔진 오류] {stock['name']}({code}): {e} | "
+                            "기계적 매수 모드로 폴백(Fallback)합니다."
+                        )
+                        current_ai_score = 50
+
+                    if ai_call_executed:
+                        with ENTRY_LOCK:
+                            LAST_AI_CALL_TIMES[code] = now_ts
+
+                    if ai_call_executed and last_ai_time == 0:
+                        if not big_bite_confirmed:
+                            _log_entry_pipeline(
+                                stock,
+                                code,
+                                "first_ai_wait",
+                                ai_score=f"{current_ai_score:.1f}",
+                                big_bite_confirmed=big_bite_confirmed,
+                                vip_target=is_vip_target,
+                            )
+                            return False
+
+                boost_applied_value = 0
+                if big_bite_confirmed:
+                    boost_applied_value = config["BIG_BITE_BOOST_SCORE"]
+                elif big_bite_armed:
+                    boost_applied_value = config["BIG_BITE_ARMED_ENTRY_BONUS"]
+
+                if boost_applied_value:
+                    current_ai_score = min(100.0, current_ai_score + boost_applied_value)
+                    _mutate_stock_state(
+                        stock,
+                        set_fields={
+                            'big_bite_boosted': bool(big_bite_confirmed),
+                            'big_bite_boost_value': boost_applied_value,
+                        },
+                    )
+                else:
+                    _mutate_stock_state(
+                        stock,
+                        set_fields={
+                            'big_bite_boosted': False,
+                            'big_bite_boost_value': 0,
+                        },
+                    )
+
+                if ai_engine and is_vip_target and last_ai_time > 0 and time_elapsed <= config["AI_WATCHING_COOLDOWN"]:
+                    _log_entry_pipeline(
+                        stock,
+                        code,
+                        "ai_cooldown_blocked",
+                        cooldown_elapsed_sec=int(time_elapsed),
+                        cooldown_threshold_sec=config["AI_WATCHING_COOLDOWN"],
+                        **_build_ai_ops_log_fields(
+                            {
+                                "ai_parse_ok": False,
+                                "ai_parse_fail": False,
+                                "ai_fallback_score_50": False,
+                                "ai_response_ms": 0,
+                                "ai_prompt_type": "scalping_watch_cooldown_blocked",
+                                "ai_result_source": "watching_cooldown",
+                            },
+                            ai_score_raw=current_ai_score,
+                            ai_score_after_bonus=current_ai_score,
+                            entry_score_threshold=75,
+                            big_bite_bonus_applied=bool(boost_applied_value),
+                            ai_cooldown_blocked=True,
+                        ),
+                    )
+
+                if current_ai_score < 75 and current_ai_score != 50:
+                    cooldown_time = config["AI_WAIT_DROP_COOLDOWN"]
+                    with ENTRY_LOCK:
+                        cooldowns[code] = now_ts + cooldown_time
+                    _log_entry_pipeline(
+                        stock,
+                        code,
+                        "blocked_ai_score",
+                        threshold=75,
+                        cooldown_sec=cooldown_time,
+                        **_build_ai_overlap_log_fields(
+                            stock=stock,
+                            ai_score=current_ai_score,
+                            momentum_tag=stock.get("entry_momentum_tag"),
+                            threshold_profile=stock.get("entry_threshold_profile"),
+                            overbought_blocked=False,
+                            blocked_stage="blocked_ai_score",
+                        ),
+                        **_build_ai_ops_log_fields(
+                            ai_decision,
+                            ai_score_raw=current_ai_score,
+                            ai_score_after_bonus=current_ai_score,
+                            entry_score_threshold=75,
+                            big_bite_bonus_applied=bool(boost_applied_value),
+                            ai_cooldown_blocked=False,
+                        ),
+                    )
+                    return False
+
+                final_target_buy_price, final_used_drop_pct = radar.get_smart_target_price(
+                    curr_price,
+                    v_pw=current_vpw,
+                    ai_score=current_ai_score,
+                    ask_tot=ask_tot,
+                    bid_tot=bid_tot,
+                )
+                _mutate_stock_state(stock, set_fields={'target_buy_price': final_target_buy_price})
+                _activate_entry_arm(
+                    stock,
+                    code,
+                    ai_score=current_ai_score,
+                    ratio=ratio,
+                    target_buy_price=final_target_buy_price,
+                    current_vpw=current_vpw,
+                    reason='qualification_passed',
+                    dynamic_reason=momentum_gate.get('reason'),
+                )
+                is_trigger = True
+                if big_bite_confirmed:
+                    _mutate_stock_state(stock, set_fields={'big_bite_boosted': True})
+
+    elif strategy in ['KOSDAQ_ML', 'KOSPI_ML']:
+        if radar is None:
+            _log_entry_pipeline(stock, code, "blocked_missing_radar", strategy=strategy)
+            return False
+
+        if strategy == 'KOSDAQ_ML':
+            marcap = _resolve_stock_marcap(stock, code)
+            turnover_hint = estimate_turnover_hint(curr_price, ws_data.get('volume', 0))
+            swing_gap = get_dynamic_swing_gap_threshold(strategy, marcap, turnover_hint=turnover_hint)
+            max_gap = float(
+                swing_gap.get('threshold', _get_swing_gap_threshold(strategy)) or _get_swing_gap_threshold(strategy)
+            )
+            if fluctuation >= max_gap:
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "blocked_swing_gap",
+                    strategy=strategy,
+                    fluctuation=f"{fluctuation:.2f}",
+                    threshold=f"{max_gap:.2f}",
+                    marcap=marcap,
+                    cap_bucket=swing_gap.get('bucket_label'),
+                )
+                return False
+
+            vpw_limit_base = int(config["VPW_KOSDAQ_LIMIT"])
+            strong_vpw = int(config["VPW_STRONG_KOSDAQ_LIMIT"])
+            buy_threshold = int(config["BUY_SCORE_KOSDAQ_THRESHOLD"])
+            vpw_condition = current_vpw >= vpw_limit_base
+            ratio_min = float(config["INVEST_RATIO_KOSDAQ_MIN"])
+            ratio_max = float(config["INVEST_RATIO_KOSDAQ_MAX"])
+            ai_score_threshold = int(config["AI_SCORE_THRESHOLD_KOSDAQ"])
+            ai_prob = stock.get('prob', config["SNIPER_AGGRESSIVE_PROB"])
+            v_pw_limit = vpw_limit_base if ai_prob >= 0.70 else strong_vpw
+        else:
+            marcap = _resolve_stock_marcap(stock, code)
+            turnover_hint = estimate_turnover_hint(curr_price, ws_data.get('volume', 0))
+            swing_gap = get_dynamic_swing_gap_threshold(strategy, marcap, turnover_hint=turnover_hint)
+            max_gap = float(
+                swing_gap.get('threshold', _get_swing_gap_threshold(strategy)) or _get_swing_gap_threshold(strategy)
+            )
+            if fluctuation >= max_gap:
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "blocked_swing_gap",
+                    strategy=strategy,
+                    fluctuation=f"{fluctuation:.2f}",
+                    threshold=f"{max_gap:.2f}",
+                    marcap=marcap,
+                    cap_bucket=swing_gap.get('bucket_label'),
+                )
+                return False
+
+            vpw_limit_base = 100
+            strong_vpw = int(config["VPW_STRONG_LIMIT"])
+            buy_threshold = int(config["BUY_SCORE_THRESHOLD"])
+            vpw_condition = current_vpw >= 103
+            ratio_min = float(config["INVEST_RATIO_KOSPI_MIN"])
+            ratio_max = float(config["INVEST_RATIO_KOSPI_MAX"])
+            ai_score_threshold = int(config["AI_SCORE_THRESHOLD_KOSPI"])
+            ai_prob = stock.get('prob', config["SNIPER_AGGRESSIVE_PROB"])
+            v_pw_limit = vpw_limit_base if ai_prob >= 0.70 else strong_vpw
+
+        score, prices, conclusion, checklist, metrics = radar.analyze_signal_integrated(ws_data, ai_prob)
+        is_shooting = current_vpw >= v_pw_limit
+        if (score >= buy_threshold or is_shooting) and vpw_condition:
+            gatekeeper_error_cd = int(_rule('ML_GATEKEEPER_ERROR_COOLDOWN', 60 * 10))
+            gatekeeper = None
+            gatekeeper_allow = False
+            action_label = 'UNKNOWN'
+            gatekeeper_eval_ms = 0
+
+            if not ai_engine:
+                log_error(f"🚨 [{strategy} Gatekeeper 미초기화] {stock['name']}({code})")
+                with ENTRY_LOCK:
+                    cooldowns[code] = now_ts + gatekeeper_error_cd
+                _log_entry_pipeline(stock, code, "blocked_gatekeeper_missing", strategy=strategy)
+                return False
+
+            realtime_ctx = None
+            gatekeeper_fast_sig = _build_gatekeeper_fast_signature(stock, ws_data, strategy, score)
+            gatekeeper_fast_snapshot = _build_gatekeeper_fast_snapshot(stock, ws_data, strategy, score)
+            gatekeeper_fast_reuse_sec = _resolve_gatekeeper_fast_reuse_sec()
+            gatekeeper_fast_max_ws_age = float(_rule('AI_GATEKEEPER_FAST_REUSE_MAX_WS_AGE_SEC', 2.0) or 2.0)
+            gatekeeper_ws_age_sec = _get_ws_snapshot_age_sec(ws_data)
+            fast_sig_matches = gatekeeper_fast_sig == stock.get('last_gatekeeper_fast_signature')
+            fast_sig_age = _resolve_reference_age_sec(
+                stock.get('last_gatekeeper_fast_at'),
+                fallback_ts=stock.get('last_gatekeeper_action_at'),
+                now_ts=now_ts,
+            )
+            fast_sig_age_str = "-" if fast_sig_age is None else f"{fast_sig_age:.1f}"
+            near_score_boundary = abs(float(score) - float(buy_threshold)) <= 3.0
+            fast_sig_fresh = fast_sig_age is not None and fast_sig_age < gatekeeper_fast_reuse_sec
+            ws_fresh = gatekeeper_ws_age_sec is None or gatekeeper_ws_age_sec <= gatekeeper_fast_max_ws_age
+            has_last_action = bool(str(stock.get('last_gatekeeper_action', '') or '').strip())
+            has_last_allow_flag = 'last_gatekeeper_allow_entry' in stock
+            can_fast_reuse = (
+                fast_sig_matches and fast_sig_fresh and ws_fresh and not near_score_boundary and has_last_action and has_last_allow_flag
+            )
+
+            if can_fast_reuse:
+                gatekeeper = {
+                    'allow_entry': bool(stock.get('last_gatekeeper_allow_entry', False)),
+                    'action_label': stock.get('last_gatekeeper_action', 'UNKNOWN'),
+                    'report': stock.get('last_gatekeeper_report', ''),
+                    'eval_ms': 0,
+                    'lock_wait_ms': 0,
+                    'packet_build_ms': 0,
+                    'model_call_ms': 0,
+                    'total_internal_ms': 0,
+                    'cache_hit': True,
+                    'cache_mode': 'fast_reuse',
+                }
+                gatekeeper_eval_ms = 0
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "gatekeeper_fast_reuse",
+                    strategy=strategy,
+                    action=gatekeeper.get('action_label', 'UNKNOWN'),
+                    age_sec=fast_sig_age_str,
+                    ws_age_sec="-" if gatekeeper_ws_age_sec is None else f"{gatekeeper_ws_age_sec:.2f}",
+                )
+                is_new_evaluation = False
+            else:
+                action_age_sec = _resolve_reference_age_sec(stock.get('last_gatekeeper_action_at'), now_ts=now_ts)
+                allow_age_sec = _resolve_reference_age_sec(stock.get('last_gatekeeper_allow_entry_at'), now_ts=now_ts)
+                action_age_sec_str = "-" if action_age_sec is None else f"{action_age_sec:.2f}"
+                allow_age_sec_str = "-" if allow_age_sec is None else f"{allow_age_sec:.2f}"
+                sig_delta = _describe_snapshot_deltas(stock.get('last_gatekeeper_fast_snapshot', {}), gatekeeper_fast_snapshot, limit=5) or "-"
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "gatekeeper_fast_reuse_bypass",
+                    strategy=strategy,
+                    score=round(float(score), 2),
+                    age_sec=fast_sig_age_str,
+                    ws_age_sec="-" if gatekeeper_ws_age_sec is None else f"{gatekeeper_ws_age_sec:.2f}",
+                    action_age_sec=action_age_sec_str,
+                    allow_entry_age_sec=allow_age_sec_str,
+                    sig_delta=sig_delta,
+                    reason_codes=_reason_codes(
+                        sig_changed=fast_sig_matches,
+                        age_expired=fast_sig_fresh,
+                        ws_stale=ws_fresh,
+                        score_boundary=not near_score_boundary,
+                        missing_action=has_last_action,
+                        missing_allow_flag=has_last_allow_flag,
+                    ),
+                )
+                try:
+                    realtime_ctx = kiwoom_utils.build_realtime_analysis_context(
+                        token=KIWOOM_TOKEN,
+                        code=code,
+                        ws_data=ws_data,
+                        market_cap=_resolve_stock_marcap(stock, code),
+                        strat_label=strategy,
+                        position_status='NONE',
+                        avg_price=0,
+                        pnl_pct=0.0,
+                        trailing_pct=0.0,
+                        stop_pct=0.0,
+                        target_price=curr_price,
+                        target_reason='WATCHING 최종 진입 Gatekeeper 검증',
+                        score=float(score),
+                        conclusion=conclusion,
+                        quant_metrics=metrics,
+                    )
+                    gatekeeper_started_at = time.perf_counter()
+                    gatekeeper = ai_engine.evaluate_realtime_gatekeeper(
+                        stock_name=stock['name'],
+                        stock_code=code,
+                        realtime_ctx=realtime_ctx,
+                        analysis_mode='SWING',
+                    )
+                    gatekeeper_eval_ms = int((time.perf_counter() - gatekeeper_started_at) * 1000)
+                    gatekeeper['eval_ms'] = gatekeeper_eval_ms
+                    record_gatekeeper_snapshot(stock=stock, code=code, strategy=strategy, realtime_ctx=realtime_ctx, gatekeeper=gatekeeper)
+                    is_new_evaluation = True
+                    _mutate_stock_state(
+                        stock,
+                        set_fields={
+                            'last_gatekeeper_action_at': now_ts,
+                            'last_gatekeeper_allow_entry_at': now_ts,
+                            'last_gatekeeper_fast_snapshot': gatekeeper_fast_snapshot,
+                            'last_gatekeeper_fast_at': now_ts,
+                        },
+                    )
+                    with ENTRY_LOCK:
+                        LAST_AI_CALL_TIMES[code] = now_ts
+                    action_label = gatekeeper.get('action_label', 'UNKNOWN')
+                    gatekeeper_allow = bool(gatekeeper.get('allow_entry', False))
+                    gatekeeper_cache_mode = str(gatekeeper.get('cache_mode', 'hit' if gatekeeper.get('cache_hit') else 'miss'))
+                    _mutate_stock_state(
+                        stock,
+                        set_fields={
+                            'last_gatekeeper_action': action_label,
+                            'last_gatekeeper_report': gatekeeper.get('report', ''),
+                            'last_gatekeeper_eval_ms': gatekeeper_eval_ms,
+                            'last_gatekeeper_allow_entry': gatekeeper_allow,
+                            'last_gatekeeper_cache_mode': gatekeeper_cache_mode,
+                            'last_gatekeeper_lock_wait_ms': int(gatekeeper.get('lock_wait_ms', 0) or 0),
+                            'last_gatekeeper_packet_build_ms': int(gatekeeper.get('packet_build_ms', 0) or 0),
+                            'last_gatekeeper_model_call_ms': int(gatekeeper.get('model_call_ms', 0) or 0),
+                            'last_gatekeeper_total_internal_ms': int(gatekeeper.get('total_internal_ms', 0) or 0),
+                            'last_gatekeeper_fast_signature': gatekeeper_fast_sig,
+                        },
+                    )
+                    if is_new_evaluation and realtime_ctx is not None:
+                        _submit_gatekeeper_dual_persona_shadow(
+                            stock_name=stock['name'],
+                            code=code,
+                            strategy=strategy,
+                            realtime_ctx=realtime_ctx,
+                            gatekeeper=gatekeeper,
+                            record_id=stock.get('id'),
+                        )
+                except Exception as e:
+                    log_error(f"🚨 [{strategy} Gatekeeper 오류] {stock['name']}({code}): {e}")
+                    with ENTRY_LOCK:
+                        cooldowns[code] = now_ts + gatekeeper_error_cd
+                    _log_entry_pipeline(
+                        stock, code, "blocked_gatekeeper_error", strategy=strategy, cooldown_sec=gatekeeper_error_cd,
+                        gatekeeper_eval_ms=gatekeeper_eval_ms,
+                        gatekeeper_lock_wait_ms=stock.get('last_gatekeeper_lock_wait_ms', 0),
+                        gatekeeper_packet_build_ms=stock.get('last_gatekeeper_packet_build_ms', 0),
+                        gatekeeper_model_call_ms=stock.get('last_gatekeeper_model_call_ms', 0),
+                        gatekeeper_total_internal_ms=stock.get('last_gatekeeper_total_internal_ms', 0),
+                    )
+                    return False
+
+            if not gatekeeper_allow:
+                gatekeeper_reject_cd, gatekeeper_cd_policy = _resolve_gatekeeper_reject_cooldown(action_label)
+                log_info(f"🚫 [{strategy} Gatekeeper 거부] {stock['name']} ({action_label})")
+                with ENTRY_LOCK:
+                    cooldowns[code] = now_ts + gatekeeper_reject_cd
+                _log_entry_pipeline(
+                    stock, code, "blocked_gatekeeper_reject", strategy=strategy, action=action_label,
+                    cooldown_sec=gatekeeper_reject_cd, cooldown_policy=gatekeeper_cd_policy,
+                    gatekeeper_eval_ms=gatekeeper_eval_ms, gatekeeper_cache=stock.get('last_gatekeeper_cache_mode', 'miss'),
+                    gatekeeper_lock_wait_ms=stock.get('last_gatekeeper_lock_wait_ms', 0),
+                    gatekeeper_packet_build_ms=stock.get('last_gatekeeper_packet_build_ms', 0),
+                    gatekeeper_model_call_ms=stock.get('last_gatekeeper_model_call_ms', 0),
+                    gatekeeper_total_internal_ms=stock.get('last_gatekeeper_total_internal_ms', 0),
+                )
+                return False
+
+            blocked, block_reason = _should_block_swing_entry(stock.get('strategy', ''))
+            if blocked:
+                log_info(f"⛔ [시장환경필터] {stock['name']}({code}) 스윙 진입 보류 - {block_reason}")
+                _log_entry_pipeline(stock, code, "market_regime_block", strategy=strategy)
+                return False
+
+            _log_entry_pipeline(
+                stock, code, "market_regime_pass", strategy=strategy, gatekeeper=action_label,
+                score=round(float(score), 2), gatekeeper_eval_ms=gatekeeper_eval_ms,
+                gatekeeper_cache=stock.get('last_gatekeeper_cache_mode', 'miss'),
+                gatekeeper_lock_wait_ms=stock.get('last_gatekeeper_lock_wait_ms', 0),
+                gatekeeper_packet_build_ms=stock.get('last_gatekeeper_packet_build_ms', 0),
+                gatekeeper_model_call_ms=stock.get('last_gatekeeper_model_call_ms', 0),
+                gatekeeper_total_internal_ms=stock.get('last_gatekeeper_total_internal_ms', 0),
+            )
+            score_weight = max(0.0, min(1.0, (float(score) - buy_threshold) / max(1.0, (100 - buy_threshold))))
+            ratio = ratio_min + (score_weight * (ratio_max - ratio_min))
+            if is_shooting and ratio < ((ratio_min + ratio_max) / 2):
+                ratio = (ratio_min + ratio_max) / 2
+
+            is_trigger = True
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    'target_buy_price': curr_price,
+                    'msg_audience': 'VIP_ALL',
+                },
+            )
+            _publish_gatekeeper_report_proxy(stock, code, gatekeeper, allowed=True)
+
+    runtime.update(
+        {
+            "is_trigger": is_trigger,
+            "msg": msg,
+            "ratio": ratio,
+            "liquidity_value": liquidity_value,
+            "current_ai_score": current_ai_score,
+        }
+    )
+    return True
+
+
+def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
+    strategy = runtime["strategy"]
+    ratio = runtime["ratio"]
+    curr_price = runtime["curr_price"]
+    liquidity_value = runtime["liquidity_value"]
+    msg = runtime["msg"]
+    now_ts = runtime["now_ts"]
+    cooldowns = runtime["cooldowns"]
+    alerted_stocks = runtime["alerted_stocks"]
+
+    if not admin_id:
+        log_info(f"⚠️ [매수보류] {stock['name']}: 관리자 ID가 없습니다.")
+        _log_entry_pipeline(stock, code, "blocked_no_admin")
+        return False
+
+    deposit = kiwoom_orders.get_deposit(KIWOOM_TOKEN)
+    uncapped_target_budget = int(max(float(deposit) * float(ratio), 0.0))
+    budget_cap = 0
+    if strategy == 'SCALPING':
+        budget_cap = int(_rule('SCALPING_MAX_BUY_BUDGET_KRW', 0) or 0)
+    target_budget, safe_budget, real_buy_qty, used_safety_ratio = kiwoom_orders.describe_buy_capacity(
+        curr_price, deposit, ratio, max_budget=budget_cap
+    )
+    budget_cap_applied = budget_cap > 0 and target_budget < uncapped_target_budget
+    budget_cap_msg = f", 절대한도 {budget_cap:,}원 적용" if budget_cap_applied else ""
+
+    if real_buy_qty <= 0:
+        zero_qty_cooldown_sec = _resolve_zero_qty_cooldown_sec(deposit)
+        is_zero_deposit = int(float(deposit or 0)) <= 0
+        deposit_errors = kiwoom_orders.get_last_deposit_errors()
+        auth_failure = next((err for err in deposit_errors if kiwoom_orders.is_auth_failure_error(err)), None)
+        zero_qty_stage = "auth_zero_qty" if is_zero_deposit and auth_failure else "blocked_zero_qty"
+        if is_zero_deposit:
+            log_info(
+                f"⚠️ [매수보류] {stock['name']}: 주문가능금액 조회가 0원으로 반환되어 재조회 대기합니다. "
+                f"(주문가능금액 {deposit:,}원, 전략비중 {ratio:.1%}, 안전계수 {used_safety_ratio:.0%}, "
+                f"실사용예산 {safe_budget:,}원, 현재가 {curr_price:,}원, 재조회대기 {zero_qty_cooldown_sec}초)"
+            )
+        else:
+            log_info(
+                f"⚠️ [매수보류] {stock['name']}: 매수 수량이 0주입니다. "
+                f"(주문가능금액 {deposit:,}원, 전략비중 {ratio:.1%}, 안전계수 {used_safety_ratio:.0%}, "
+                f"실사용예산 {safe_budget:,}원, 현재가 {curr_price:,}원{budget_cap_msg})"
+            )
+        log_info(
+            f"[DEBUG] {code} 매수 수량 0주 "
+            f"(deposit={deposit}, ratio={ratio:.4f}, uncapped_target_budget={uncapped_target_budget}, "
+            f"target_budget={target_budget}, safe_budget={safe_budget}, safety_ratio={used_safety_ratio:.4f}, "
+            f"curr_price={curr_price}, retry_cooldown_sec={zero_qty_cooldown_sec})"
+        )
+        with ENTRY_LOCK:
+            cooldowns[code] = now_ts + zero_qty_cooldown_sec
+        _log_entry_pipeline(
+            stock, code, zero_qty_stage, deposit=deposit, ratio=f"{ratio:.4f}", target_budget=target_budget,
+            safe_budget=safe_budget, safety_ratio=f"{used_safety_ratio:.4f}", curr_price=curr_price,
+            budget_cap=budget_cap if budget_cap_applied else "-", cooldown_sec=zero_qty_cooldown_sec,
+            auth_return_code=(auth_failure or {}).get("return_code", "-"),
+            auth_return_msg=(auth_failure or {}).get("return_msg", "-"),
+        )
+        return False
+
+    _log_entry_pipeline(
+        stock, code, "budget_pass", deposit=deposit, ratio=f"{ratio:.4f}", target_budget=target_budget,
+        safe_budget=safe_budget, safety_ratio=f"{used_safety_ratio:.4f}",
+        budget_cap=budget_cap if budget_cap_applied else "-", qty=real_buy_qty,
+    )
+
+    if strategy == 'SCALPING':
+        order_type_code = "00"
+        final_price = int(float(stock.get('target_buy_price', curr_price) or curr_price))
+    else:
+        order_type_code = "6"
+        final_price = 0
+
+    latency_signal_strength = float(stock.get('rt_ai_prob', stock.get('prob', 0.0)) or 0.0)
+    latency_signal_score = latency_signal_strength * 100.0
+    latency_gate = evaluate_live_buy_entry(
+        stock=stock, code=code, ws_data=ws_data, strategy_id=strategy, planned_qty=real_buy_qty,
+        signal_price=curr_price, signal_strength=latency_signal_strength,
+        target_buy_price=final_price if strategy == 'SCALPING' else 0,
+    )
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            'latency_entry_state': latency_gate.get('latency_state'),
+            'latency_entry_decision': latency_gate.get('decision'),
+            'latency_entry_reason': latency_gate.get('reason'),
+        },
+    )
+    _log_orderbook_stability_observation(stock, code, latency_gate.get('orderbook_stability'))
+    best_ask_at_submit, best_bid_at_submit = _get_best_levels_from_ws(ws_data)
+    latency_price_snapshot = _build_entry_price_snapshot_fields(
+        latency_gate, request_price=latency_gate.get('order_price', 0), curr_price=curr_price,
+        best_bid=best_bid_at_submit, best_ask=best_ask_at_submit,
+    )
+
+    entry_mode = latency_gate.get('mode', 'reject')
+    log_info(
+        f"[LATENCY_ENTRY_DECISION] {stock.get('name')}({code}) "
+        f"mode={entry_mode} decision={latency_gate.get('decision')} latency={latency_gate.get('latency_state')} "
+        f"signal={latency_gate.get('signal_price')} latest={latency_gate.get('latest_price')} "
+        f"allowed_slippage={latency_gate.get('computed_allowed_slippage')} orders={len(latency_gate.get('orders') or [])}"
+    )
+    if not latency_gate.get('allowed') or entry_mode == 'reject':
+        log_info(
+            f"[LATENCY_ENTRY_BLOCK] {stock.get('name')}({code}) decision={latency_gate.get('decision')} "
+            f"latency={latency_gate.get('latency_state')} reason={latency_gate.get('reason')} "
+            f"signal={latency_gate.get('signal_price')} latest={latency_gate.get('latest_price')} "
+            f"ws_age_ms={latency_gate.get('ws_age_ms')} ws_jitter_ms={latency_gate.get('ws_jitter_ms')} "
+            f"spread_ratio={latency_gate.get('spread_ratio')} quote_stale={latency_gate.get('quote_stale')}"
+        )
+        clear_signal_reference(stock)
+        _log_entry_pipeline(
+            stock, code, "latency_block", decision=latency_gate.get('decision'), latency=latency_gate.get('latency_state'),
+            reason=latency_gate.get('reason'), ws_age_ms=latency_gate.get('ws_age_ms'),
+            ws_jitter_ms=latency_gate.get('ws_jitter_ms'),
+            spread_ratio=f"{float(latency_gate.get('spread_ratio', 0.0) or 0.0):.6f}",
+            quote_stale=bool(latency_gate.get('quote_stale')),
+            latency_danger_reasons=latency_gate.get('latency_danger_reasons'),
+            signal_price=int(latency_gate.get('signal_price', 0) or 0),
+            latest_price=int(latency_gate.get('latest_price', 0) or 0),
+            computed_allowed_slippage=int(latency_gate.get('computed_allowed_slippage', 0) or 0),
+            latency_canary_applied=bool(latency_gate.get('latency_canary_applied')),
+            latency_canary_reason=latency_gate.get('latency_canary_reason'),
+            **_build_ai_overlap_log_fields(
+                stock=stock, ai_score=latency_signal_score, momentum_tag=stock.get("entry_momentum_tag"),
+                threshold_profile=stock.get("entry_threshold_profile"), overbought_blocked=False,
+                blocked_stage="latency_block",
+            ),
+        )
+        return False
+
+    requested_qty = int(real_buy_qty or 0)
+    planned_orders = latency_gate.get('orders') or []
+    wait6579_probe_applied = False
+    if strategy == 'SCALPING' and bool(_rule("AI_WAIT6579_PROBE_CANARY_ENABLED", True)) and bool(stock.get('wait6579_probe_canary_armed')):
+        probe_max_budget = int(_rule("AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 50_000) or 50_000)
+        probe_min_qty = int(_rule("AI_WAIT6579_PROBE_CANARY_MIN_QTY", 1) or 1)
+        probe_max_qty = int(_rule("AI_WAIT6579_PROBE_CANARY_MAX_QTY", 1) or 1)
+        adjusted_orders, original_qty, scaled_qty, applied = _apply_wait6579_probe_canary(
+            planned_orders, curr_price=curr_price, max_budget_krw=probe_max_budget,
+            min_qty=probe_min_qty, max_qty=probe_max_qty,
+        )
+        if adjusted_orders:
+            planned_orders = adjusted_orders
+            latency_gate["orders"] = planned_orders
+        if scaled_qty > 0:
+            requested_qty = scaled_qty
+        wait6579_probe_applied = bool(applied)
+        _log_entry_pipeline(
+            stock, code, "wait6579_probe_canary_applied", source=stock.get('wait6579_probe_canary_source', '-'),
+            ai_score=stock.get('wait6579_probe_canary_score', '-'), max_budget_krw=probe_max_budget,
+            min_qty=probe_min_qty, max_qty=probe_max_qty, original_qty=original_qty, scaled_qty=scaled_qty,
+            legs=len(planned_orders), applied=wait6579_probe_applied,
+        )
+        log_info(
+            f"[WAIT6579_PROBE_CANARY] {stock.get('name')}({code}) "
+            f"qty={original_qty}->{scaled_qty} max_budget={probe_max_budget} applied={wait6579_probe_applied}"
+        )
+        _mutate_stock_state(
+            stock,
+            pop_fields=['wait6579_probe_canary_armed', 'wait6579_probe_canary_source', 'wait6579_probe_canary_score'],
+        )
+
+    if strategy == "SCALPING" and bool(_rule("SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED", False)):
+        initial_entry_qty_cap = int(_rule("SCALPING_INITIAL_ENTRY_MAX_QTY", 1) or 1)
+        adjusted_orders, original_qty, scaled_qty, applied = _apply_initial_entry_qty_cap(planned_orders, max_total_qty=initial_entry_qty_cap)
+        if adjusted_orders:
+            planned_orders = adjusted_orders
+            latency_gate["orders"] = planned_orders
+        if scaled_qty > 0:
+            requested_qty = scaled_qty
+        _log_entry_pipeline(
+            stock, code, "initial_entry_qty_cap_applied", enabled=True, cap_qty=initial_entry_qty_cap,
+            original_qty=original_qty, scaled_qty=scaled_qty, applied=bool(applied),
+            entry_mode=entry_mode, legs=len(planned_orders),
+        )
+        if applied:
+            log_info(
+                f"[INITIAL_ENTRY_QTY_CAP] {stock.get('name')}({code}) "
+                f"qty={original_qty}->{scaled_qty} cap={initial_entry_qty_cap} entry_mode={entry_mode}"
+            )
+
+    _log_entry_pipeline(
+        stock, code, "latency_pass", mode=entry_mode, decision=latency_gate.get('decision'),
+        latency=latency_gate.get('latency_state'), orders=len(planned_orders), reason=latency_gate.get('reason'),
+        ws_age_ms=latency_gate.get('ws_age_ms'), ws_jitter_ms=latency_gate.get('ws_jitter_ms'),
+        spread_ratio=f"{float(latency_gate.get('spread_ratio', 0.0) or 0.0):.6f}",
+        quote_stale=bool(latency_gate.get('quote_stale')), latency_danger_reasons=latency_gate.get('latency_danger_reasons'),
+        signal_price=int(latency_gate.get('signal_price', 0) or 0), latest_price=int(latency_gate.get('latest_price', 0) or 0),
+        computed_allowed_slippage=int(latency_gate.get('computed_allowed_slippage', 0) or 0),
+        latency_canary_applied=bool(latency_gate.get('latency_canary_applied')),
+        latency_canary_reason=latency_gate.get('latency_canary_reason'), entry_price_guard=latency_gate.get('entry_price_guard'),
+        entry_price_defensive_ticks=int(latency_gate.get('entry_price_defensive_ticks', 0) or 0),
+        normal_defensive_order_price=int(latency_gate.get('normal_defensive_order_price', 0) or 0),
+        latency_guarded_order_price=int(latency_gate.get('latency_guarded_order_price', 0) or 0),
+        counterfactual_order_price_1tick=int(latency_gate.get('counterfactual_order_price_1tick', 0) or 0),
+        order_price=int(latency_gate.get('order_price', 0) or 0), **latency_price_snapshot,
+        **_build_ai_overlap_log_fields(
+            stock=stock, ai_score=latency_signal_score, momentum_tag=stock.get("entry_momentum_tag"),
+            threshold_profile=stock.get("entry_threshold_profile"), overbought_blocked=False, blocked_stage="-",
+        ),
+    )
+
+    if is_buy_side_paused():
+        log_info(
+            f"[TRADING_PAUSED_BLOCK] buy order blocked "
+            f"{stock.get('name')}({code}) strategy={strategy} state={get_pause_state_label()}"
+        )
+        clear_signal_reference(stock)
+        _log_entry_pipeline(stock, code, "blocked_pause", strategy=strategy)
+        return False
+
+    big_bite_summary = ""
+    if stock.get('big_bite_triggered') or stock.get('big_bite_confirmed'):
+        info = stock.get('big_bite_info') or {}
+        big_bite_summary = (
+            f"\n🧪 Big-Bite: T={stock.get('big_bite_triggered')} / C={stock.get('big_bite_confirmed')} / "
+            f"Boost=+{stock.get('big_bite_boost_value', 0)}"
+            f"\n└ agg={info.get('agg_value')} impact={info.get('impact_ratio')} chase={info.get('chase_pct')}"
+        )
+        _mutate_stock_state(stock, set_fields={'msg_audience': 'ADMIN_ONLY'})
+
+    msg = msg or (
+        f"✅ **{stock['name']} ({code}) 진입 주문 전송!**\n전략: `{strategy}`\n현재가: `{curr_price:,}원`\n주문 수량: `{requested_qty}주`"
+        f"{big_bite_summary}"
+    )
+
+    successful_orders = []
+    for planned_order in planned_orders:
+        request = _resolve_live_entry_order_request(
+            strategy=strategy, entry_mode=entry_mode, planned_order=planned_order,
+            default_order_type_code=order_type_code, default_price=final_price,
+        )
+        qty = request['qty']
+        price = request['price']
+        if qty <= 0:
+            _log_entry_pipeline(stock, code, "skip_order_leg_zero_qty", tag=request['tag'])
+            continue
+        price_snapshot = _build_entry_price_snapshot_fields(
+            latency_gate, request_price=price, curr_price=curr_price,
+            best_bid=best_bid_at_submit, best_ask=best_ask_at_submit,
+        )
+        if _is_pre_submit_price_guard_block(strategy, price, best_bid_at_submit):
+            max_below_bid_bps = int(_rule('SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS', 80) or 80)
+            _log_entry_pipeline(
+                stock, code, "pre_submit_price_guard_block", tag=request['tag'], qty=qty, price=price,
+                order_type=request['order_type_code'], tif=request['tif'],
+                max_below_bid_bps=max_below_bid_bps, **price_snapshot,
+            )
+            log_info(
+                f"[PRE_SUBMIT_PRICE_GUARD_BLOCK] {stock.get('name')}({code}) "
+                f"price={price} best_bid={best_bid_at_submit} "
+                f"below_bid_bps={price_snapshot['price_below_bid_bps']} threshold_bps={max_below_bid_bps}"
+            )
+            continue
+        _log_entry_pipeline(
+            stock, code, "order_leg_request", tag=request['tag'], qty=qty, price=price,
+            order_type=request['order_type_code'], tif=request['tif'],
+            entry_price_guard=latency_gate.get('entry_price_guard'),
+            entry_price_defensive_ticks=int(latency_gate.get('entry_price_defensive_ticks', 0) or 0),
+            normal_defensive_order_price=int(latency_gate.get('normal_defensive_order_price', 0) or 0),
+            latency_guarded_order_price=int(latency_gate.get('latency_guarded_order_price', 0) or 0),
+            counterfactual_order_price_1tick=int(latency_gate.get('counterfactual_order_price_1tick', 0) or 0),
+            **price_snapshot,
+        )
+        res = kiwoom_orders.send_buy_order(
+            code, qty, price, request['order_type_code'], token=KIWOOM_TOKEN,
+            order_type_desc="매수" if strategy == 'SCALPING' else "최유리지정가", tif=request['tif'],
+        )
+        if not isinstance(res, dict):
+            _log_entry_pipeline(stock, code, "order_leg_no_response", tag=request['tag'])
+            continue
+        rt_cd = str(res.get('return_code', res.get('rt_cd', '')))
+        if rt_cd != '0':
+            log_info(f"[LATENCY_ENTRY_ORDER_FAIL] {stock.get('name')}({code}) tag={planned_order.get('tag')} msg={res.get('return_msg')}")
+            _log_entry_pipeline(
+                stock, code, "order_leg_fail", tag=request['tag'], return_code=rt_cd,
+                message=res.get('return_msg') or res.get('err_msg'),
+            )
+            continue
+        ord_no = str(res.get('ord_no', '') or res.get('odno', ''))
+        successful_orders.append({
+            'tag': request['tag'], 'qty': qty, 'price': price, 'ord_no': ord_no, 'tif': request['tif'],
+            'order_type': request['order_type_code'], 'status': 'OPEN', 'filled_qty': 0, 'sent_at': now_ts,
+        })
+        _stage_buy_order_submission(
+            stock=stock, code=code, curr_price=curr_price, requested_qty=requested_qty, msg=msg, entry_orders=successful_orders,
+        )
+        log_info(
+            f"[LATENCY_ENTRY_ORDER_SENT] {stock.get('name')}({code}) "
+            f"tag={request['tag']} qty={qty} price={price} type={request['order_type_code']} tif={request['tif']} ord_no={ord_no}"
+        )
+        _log_entry_pipeline(stock, code, "order_leg_sent", tag=request['tag'], ord_no=ord_no)
+
+    if not successful_orders:
+        log_info(f"❌ [{stock['name']}] 매수 주문 전송 실패 (성공 주문 없음)")
+        clear_signal_reference(stock)
+        _log_entry_pipeline(stock, code, "order_bundle_failed")
+        return False
+
+    _mutate_stock_state(stock, set_fields={'entry_mode': entry_mode})
+    _finalize_buy_order_submission(
+        stock=stock, code=code, curr_price=curr_price, requested_qty=requested_qty, msg=msg, entry_orders=successful_orders,
+    )
+    _publish_buy_signal_submission_notice(
+        stock, code, strategy=strategy, curr_price=curr_price, requested_qty=requested_qty, entry_mode=entry_mode,
+        latency_gate=latency_gate, liquidity_value=liquidity_value, ai_score=latency_signal_score,
+    )
+    bundle_primary_price = successful_orders[0].get('price', latency_gate.get('order_price', 0))
+    bundle_price_snapshot = _build_entry_price_snapshot_fields(
+        latency_gate, request_price=bundle_primary_price, curr_price=curr_price,
+        best_bid=best_bid_at_submit, best_ask=best_ask_at_submit,
+    )
+    _log_entry_pipeline(
+        stock, code, "order_bundle_submitted", entry_mode=entry_mode, requested_qty=requested_qty,
+        legs=len(successful_orders), wait6579_probe_canary_applied=wait6579_probe_applied,
+        entry_price_guard=latency_gate.get('entry_price_guard'),
+        entry_price_defensive_ticks=int(latency_gate.get('entry_price_defensive_ticks', 0) or 0),
+        normal_defensive_order_price=int(latency_gate.get('normal_defensive_order_price', 0) or 0),
+        latency_guarded_order_price=int(latency_gate.get('latency_guarded_order_price', 0) or 0),
+        counterfactual_order_price_1tick=int(latency_gate.get('counterfactual_order_price_1tick', 0) or 0),
+        order_price=int(latency_gate.get('order_price', 0) or 0), **bundle_price_snapshot,
+    )
+
+    if strategy in ['SCALPING', 'SCALP']:
+        with ENTRY_LOCK:
+            alerted_stocks.add(code)
+    else:
+        _mutate_stock_state(stock, set_fields={'msg_audience': 'VIP_ALL'})
+
+    try:
+        with DB.get_session() as session:
+            session.query(RecommendationHistory).filter_by(id=stock.get('id')).update({
+                "status": "BUY_ORDERED",
+                "buy_price": curr_price,
+                "buy_qty": requested_qty,
+            })
+    except Exception as e:
+        log_error(f"🚨 [DB 에러] {stock['name']} BUY_ORDERED 장부 업데이트 실패: {e}")
+
+    clear_signal_reference(stock)
+    return False
 
 
 def _coerce_int_value(value, default=0):
@@ -1323,16 +2757,16 @@ def _floor_bucket_float(value, step):
 
 def _resolve_holding_ai_fast_reuse_sec(is_critical_zone, dynamic_max_cd):
     configured_sec = (
-        float(getattr(TRADING_RULES, 'AI_HOLDING_FAST_REUSE_CRITICAL_SEC', 8.0) or 8.0)
+        float(_rule('AI_HOLDING_FAST_REUSE_CRITICAL_SEC', 8.0) or 8.0)
         if is_critical_zone
-        else float(getattr(TRADING_RULES, 'AI_HOLDING_FAST_REUSE_NORMAL_SEC', 20.0) or 20.0)
+        else float(_rule('AI_HOLDING_FAST_REUSE_NORMAL_SEC', 20.0) or 20.0)
     )
     review_window_floor = max(0.0, float(dynamic_max_cd or 0.0)) + 2.0
     return max(configured_sec, review_window_floor)
 
 
 def _resolve_gatekeeper_fast_reuse_sec():
-    configured_sec = float(getattr(TRADING_RULES, 'AI_GATEKEEPER_FAST_REUSE_SEC', 12.0) or 12.0)
+    configured_sec = float(_rule('AI_GATEKEEPER_FAST_REUSE_SEC', 12.0) or 12.0)
     return max(configured_sec, 20.0)
 
 
@@ -1503,7 +2937,7 @@ def _merge_pending_entry_orders(existing_orders, entry_orders):
 
 
 def _clear_entry_arm(stock):
-    for key in [
+    _mutate_stock_state(stock, pop_fields=(
         'entry_armed',
         'entry_armed_at',
         'entry_armed_until',
@@ -1514,23 +2948,27 @@ def _clear_entry_arm(stock):
         'entry_armed_vpw',
         'entry_armed_dynamic_reason',
         'entry_armed_resume_count',
-    ]:
-        stock.pop(key, None)
+    ))
 
 
 def _activate_entry_arm(stock, code, *, ai_score, ratio, target_buy_price, current_vpw, reason, dynamic_reason):
-    ttl_sec = int(getattr(TRADING_RULES, 'SCALP_ENTRY_ARM_TTL_SEC', 20) or 20)
+    ttl_sec = int(_rule('SCALP_ENTRY_ARM_TTL_SEC', 20) or 20)
     now_ts = time.time()
-    stock['entry_armed'] = True
-    stock['entry_armed_at'] = now_ts
-    stock['entry_armed_until'] = now_ts + ttl_sec
-    stock['entry_armed_reason'] = reason
-    stock['entry_armed_ai_score'] = float(ai_score)
-    stock['entry_armed_ratio'] = float(ratio)
-    stock['entry_armed_target_buy_price'] = int(target_buy_price or 0)
-    stock['entry_armed_vpw'] = float(current_vpw)
-    stock['entry_armed_dynamic_reason'] = dynamic_reason
-    stock['entry_armed_resume_count'] = 0
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            'entry_armed': True,
+            'entry_armed_at': now_ts,
+            'entry_armed_until': now_ts + ttl_sec,
+            'entry_armed_reason': reason,
+            'entry_armed_ai_score': float(ai_score),
+            'entry_armed_ratio': float(ratio),
+            'entry_armed_target_buy_price': int(target_buy_price or 0),
+            'entry_armed_vpw': float(current_vpw),
+            'entry_armed_dynamic_reason': dynamic_reason,
+            'entry_armed_resume_count': 0,
+        },
+    )
     _log_entry_pipeline(
         stock,
         code,
@@ -1720,7 +3158,7 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
     if order_time <= 0:
         return
 
-    timeout_sec = 20 if strategy == 'SCALPING' else getattr(TRADING_RULES, 'ORDER_TIMEOUT_SEC', 30)
+    timeout_sec = 20 if strategy == 'SCALPING' else _rule_int('ORDER_TIMEOUT_SEC', 30)
     if time.time() - order_time <= timeout_sec:
         return
 
@@ -1736,20 +3174,20 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
 
         min_fill_ratio = 0.0
         partial_fill_ratio_guard_enabled = bool(
-            getattr(TRADING_RULES, 'SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED', False)
+            _rule_bool('SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED', False)
         )
         if partial_fill_ratio_guard_enabled:
             min_fill_ratio = float(
-                getattr(TRADING_RULES, 'SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT', 0.20) or 0.20
+                _rule_float('SCALP_PARTIAL_FILL_MIN_RATIO_DEFAULT', 0.20)
             )
             position_tag = normalize_position_tag(stock.get('strategy'), stock.get('position_tag'))
             if position_tag == 'SCALP_PRESET_TP':
                 min_fill_ratio = float(
-                    getattr(TRADING_RULES, 'SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP', 0.0) or 0.0
+                    _rule_float('SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP', 0.0)
                 )
             elif str(stock.get('entry_dynamic_reason', '') or '').strip().lower() == 'strong_absolute_override':
                 min_fill_ratio = float(
-                    getattr(TRADING_RULES, 'SCALP_PARTIAL_FILL_MIN_RATIO_STRONG_ABS_OVERRIDE', 0.10) or 0.10
+                    _rule_float('SCALP_PARTIAL_FILL_MIN_RATIO_STRONG_ABS_OVERRIDE', 0.10)
                 )
             min_fill_ratio = max(0.0, min(1.0, min_fill_ratio))
 
@@ -1768,11 +3206,16 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
         if partial_fill_ratio_guard_enabled and min_fill_ratio > 0 and fill_ratio < min_fill_ratio:
             res = kiwoom_orders.send_sell_order_market(code=code, qty=buy_qty, token=KIWOOM_TOKEN)
             if _is_ok_response(res):
-                stock['status'] = 'SELL_ORDERED'
-                stock['sell_target_price'] = int(stock.get('order_price', 0) or 0)
-                stock['sell_order_time'] = time.time()
-                stock['pending_sell_msg'] = (
-                    f"partial_fill_ratio_below_min(fill_ratio={fill_ratio:.3f},min={min_fill_ratio:.3f})"
+                _mutate_stock_state(
+                    stock,
+                    set_fields={
+                        'status': 'SELL_ORDERED',
+                        'sell_target_price': int(stock.get('order_price', 0) or 0),
+                        'sell_order_time': time.time(),
+                        'pending_sell_msg': (
+                            f"partial_fill_ratio_below_min(fill_ratio={fill_ratio:.3f},min={min_fill_ratio:.3f})"
+                        ),
+                    },
                 )
                 _log_entry_pipeline(
                     stock,
@@ -1806,21 +3249,31 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
                 f"partial fill ratio below min but market sell failed: {err_msg}"
             )
 
-        stock['status'] = 'HOLDING'
-        stock.pop('odno', None)
+        _mutate_stock_state(
+            stock,
+            set_fields={'status': 'HOLDING'},
+            pop_fields=['odno'],
+        )
         log_info(f"[ENTRY_RECONCILED] {stock.get('name')}({code}) partial fill kept, remaining entry orders cancelled")
     else:
-        stock['status'] = 'WATCHING'
-        stock.pop('odno', None)
-        stock.pop('order_time', None)
-        stock.pop('pending_buy_msg', None)
-        stock.pop('target_buy_price', None)
-        stock.pop('order_price', None)
+        _mutate_stock_state(
+            stock,
+            set_fields={'status': 'WATCHING'},
+            pop_fields=[
+                'odno',
+                'order_time',
+                'pending_buy_msg',
+                'target_buy_price',
+                'order_price',
+            ],
+        )
         _clear_entry_arm(stock)
-        HIGHEST_PRICES.pop(code, None)
-        ALERTED_STOCKS.discard(code)
+        with ENTRY_LOCK:
+            HIGHEST_PRICES.pop(code, None)
+            ALERTED_STOCKS.discard(code)
         if strategy in ['SCALPING', 'SCALP']:
-            COOLDOWNS[code] = time.time() + 1200
+            with ENTRY_LOCK:
+                COOLDOWNS[code] = time.time() + 1200
         try:
             with DB.get_session() as session:
                 session.query(RecommendationHistory).filter_by(id=stock.get('id')).update({
@@ -1866,38 +3319,38 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
                 f"[TRADING_PAUSED_BLOCK] WATCHING buy skipped "
                 f"{stock.get('name')}({code}) state={get_pause_state_label()}"
             )
-            stock['last_pause_block_log_ts'] = now_ts
+            _mutate_stock_state(stock, set_fields={'last_pause_block_log_ts': now_ts})
         return
 
-    MAX_SCALP_SURGE_PCT = getattr(TRADING_RULES, 'MAX_SCALP_SURGE_PCT', 20.0)
-    MAX_INTRADAY_SURGE = getattr(TRADING_RULES, 'MAX_INTRADAY_SURGE', 15.0)
-    MIN_SCALP_LIQUIDITY = getattr(TRADING_RULES, 'MIN_SCALP_LIQUIDITY', 500_000_000)
-    SNIPER_AGGRESSIVE_PROB = getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.70)
-    BUY_SCORE_THRESHOLD = getattr(TRADING_RULES, 'BUY_SCORE_THRESHOLD', 70)
-    VPW_STRONG_LIMIT = getattr(TRADING_RULES, 'VPW_STRONG_LIMIT', 120)
-    INVEST_RATIO_SCALPING_MIN = getattr(TRADING_RULES, 'INVEST_RATIO_SCALPING_MIN', 0.05)
-    INVEST_RATIO_SCALPING_MAX = getattr(TRADING_RULES, 'INVEST_RATIO_SCALPING_MAX', 0.25)
-    VPW_SCALP_LIMIT = getattr(TRADING_RULES, 'VPW_SCALP_LIMIT', 120)
-    AI_WATCHING_COOLDOWN = getattr(TRADING_RULES, 'AI_WATCHING_COOLDOWN', 60)
-    VIP_LIQUIDITY_THRESHOLD = getattr(TRADING_RULES, 'VIP_LIQUIDITY_THRESHOLD', 1_000_000_000)
-    AI_WAIT_DROP_COOLDOWN = getattr(TRADING_RULES, 'AI_WAIT_DROP_COOLDOWN', 300)
-    VPW_KOSDAQ_LIMIT = getattr(TRADING_RULES, 'VPW_KOSDAQ_LIMIT', 105)
-    VPW_STRONG_KOSDAQ_LIMIT = getattr(TRADING_RULES, 'VPW_STRONG_KOSDAQ_LIMIT', 120)
-    BUY_SCORE_KOSDAQ_THRESHOLD = getattr(TRADING_RULES, 'BUY_SCORE_KOSDAQ_THRESHOLD', 80)
-    INVEST_RATIO_KOSDAQ_MIN = getattr(TRADING_RULES, 'INVEST_RATIO_KOSDAQ_MIN', 0.05)
-    INVEST_RATIO_KOSDAQ_MAX = getattr(TRADING_RULES, 'INVEST_RATIO_KOSDAQ_MAX', 0.15)
-    AI_SCORE_THRESHOLD_KOSDAQ = getattr(TRADING_RULES, 'AI_SCORE_THRESHOLD_KOSDAQ', 60)
-    INVEST_RATIO_KOSPI_MIN = getattr(TRADING_RULES, 'INVEST_RATIO_KOSPI_MIN', 0.10)
-    INVEST_RATIO_KOSPI_MAX = getattr(TRADING_RULES, 'INVEST_RATIO_KOSPI_MAX', 0.30)
-    AI_SCORE_THRESHOLD_KOSPI = getattr(TRADING_RULES, 'AI_SCORE_THRESHOLD_KOSPI', 60)
-    BIG_BITE_BOOST_SCORE = getattr(TRADING_RULES, 'BIG_BITE_BOOST_SCORE', 5)
-    BIG_BITE_ARMED_ENTRY_BONUS = getattr(TRADING_RULES, 'BIG_BITE_ARMED_ENTRY_BONUS', 2)
-    BIG_BITE_HARD_GATE_ENABLED = getattr(TRADING_RULES, 'BIG_BITE_HARD_GATE_ENABLED', False)
-    BIG_BITE_HARD_GATE_TAGS_SCALPING = getattr(
-        TRADING_RULES, 'BIG_BITE_HARD_GATE_TAGS_SCALPING', ("VCP", "BREAK", "BRK", "SHOOT", "NEXT")
+    MAX_SCALP_SURGE_PCT = _rule_float('MAX_SCALP_SURGE_PCT', 20.0)
+    MAX_INTRADAY_SURGE = _rule_float('MAX_INTRADAY_SURGE', 15.0)
+    MIN_SCALP_LIQUIDITY = _rule_float('MIN_SCALP_LIQUIDITY', 500_000_000)
+    SNIPER_AGGRESSIVE_PROB = _rule_float('SNIPER_AGGRESSIVE_PROB', 0.70)
+    BUY_SCORE_THRESHOLD = _rule_float('BUY_SCORE_THRESHOLD', 70)
+    VPW_STRONG_LIMIT = _rule_float('VPW_STRONG_LIMIT', 120)
+    INVEST_RATIO_SCALPING_MIN = _rule_float('INVEST_RATIO_SCALPING_MIN', 0.05)
+    INVEST_RATIO_SCALPING_MAX = _rule_float('INVEST_RATIO_SCALPING_MAX', 0.25)
+    VPW_SCALP_LIMIT = _rule_float('VPW_SCALP_LIMIT', 120)
+    AI_WATCHING_COOLDOWN = _rule_int('AI_WATCHING_COOLDOWN', 60)
+    VIP_LIQUIDITY_THRESHOLD = _rule_float('VIP_LIQUIDITY_THRESHOLD', 1_000_000_000)
+    AI_WAIT_DROP_COOLDOWN = _rule_int('AI_WAIT_DROP_COOLDOWN', 300)
+    VPW_KOSDAQ_LIMIT = _rule_float('VPW_KOSDAQ_LIMIT', 105)
+    VPW_STRONG_KOSDAQ_LIMIT = _rule_float('VPW_STRONG_KOSDAQ_LIMIT', 120)
+    BUY_SCORE_KOSDAQ_THRESHOLD = _rule_float('BUY_SCORE_KOSDAQ_THRESHOLD', 80)
+    INVEST_RATIO_KOSDAQ_MIN = _rule_float('INVEST_RATIO_KOSDAQ_MIN', 0.05)
+    INVEST_RATIO_KOSDAQ_MAX = _rule_float('INVEST_RATIO_KOSDAQ_MAX', 0.15)
+    AI_SCORE_THRESHOLD_KOSDAQ = _rule_float('AI_SCORE_THRESHOLD_KOSDAQ', 60)
+    INVEST_RATIO_KOSPI_MIN = _rule_float('INVEST_RATIO_KOSPI_MIN', 0.10)
+    INVEST_RATIO_KOSPI_MAX = _rule_float('INVEST_RATIO_KOSPI_MAX', 0.30)
+    AI_SCORE_THRESHOLD_KOSPI = _rule_float('AI_SCORE_THRESHOLD_KOSPI', 60)
+    BIG_BITE_BOOST_SCORE = _rule_float('BIG_BITE_BOOST_SCORE', 5)
+    BIG_BITE_ARMED_ENTRY_BONUS = _rule_float('BIG_BITE_ARMED_ENTRY_BONUS', 2)
+    BIG_BITE_HARD_GATE_ENABLED = _rule_bool('BIG_BITE_HARD_GATE_ENABLED', False)
+    BIG_BITE_HARD_GATE_TAGS_SCALPING = _rule(
+        'BIG_BITE_HARD_GATE_TAGS_SCALPING', ("VCP", "BREAK", "BRK", "SHOOT", "NEXT")
     )
-    BIG_BITE_HARD_GATE_TAGS_KOSDAQ = getattr(TRADING_RULES, 'BIG_BITE_HARD_GATE_TAGS_KOSDAQ', ())
-    BIG_BITE_HARD_GATE_TAGS_KOSPI = getattr(TRADING_RULES, 'BIG_BITE_HARD_GATE_TAGS_KOSPI', ())
+    BIG_BITE_HARD_GATE_TAGS_KOSDAQ = _rule('BIG_BITE_HARD_GATE_TAGS_KOSDAQ', ())
+    BIG_BITE_HARD_GATE_TAGS_KOSPI = _rule('BIG_BITE_HARD_GATE_TAGS_KOSPI', ())
 
     strategy = normalize_strategy(stock.get('strategy'))
     pos_tag = normalize_position_tag(strategy, stock.get('position_tag'))
@@ -1935,1390 +3388,62 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
     current_vpw = float(ws_data.get('v_pw', 0) or 0)
     fluctuation = float(ws_data.get('fluctuation', 0.0) or 0.0)
     current_ai_score = float(stock.get('rt_ai_prob', stock.get('prob', 0.5)) or 0.5) * 100
-    liquidity_value = 0
-    ai_decision = {}
-
-    is_trigger = False
-    msg = ""
-    ratio = 0.10
-
-    ai_prob = stock.get('prob', SNIPER_AGGRESSIVE_PROB)
-    buy_threshold = BUY_SCORE_THRESHOLD
-    strong_vpw = VPW_STRONG_LIMIT
-
-    if strategy == 'SCALPING':
-        if pos_tag == 'VCP_CANDID':
-            return
-
-        current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
-        min_ratio = INVEST_RATIO_SCALPING_MIN
-        max_ratio = INVEST_RATIO_SCALPING_MAX
-        ratio = min_ratio + (current_ai_score / 100.0) * (max_ratio - min_ratio)
-
-        ask_tot = int(float(ws_data.get('ask_tot', 0) or 0))
-        bid_tot = int(float(ws_data.get('bid_tot', 0) or 0))
-        open_price = float(ws_data.get('open', curr_price) or curr_price)
-        marcap = _resolve_stock_marcap(stock, code)
-        turnover_hint = estimate_turnover_hint(curr_price, ws_data.get('volume', 0))
-        scalp_limits = get_dynamic_scalp_thresholds(marcap, turnover_hint=turnover_hint)
-
-        intraday_surge = ((curr_price - open_price) / open_price) * 100 if open_price > 0 else fluctuation
-        liquidity_value = (ask_tot + bid_tot) * curr_price
-        max_surge = float(scalp_limits.get('max_surge', MAX_SURGE) or MAX_SURGE)
-        max_intraday_surge = float(scalp_limits.get('max_intraday_surge', MAX_INTRADAY_SURGE) or MAX_INTRADAY_SURGE)
-        min_liquidity = int(scalp_limits.get('min_liquidity', MIN_LIQUIDITY) or MIN_LIQUIDITY)
-        big_bite_hit = False
-        big_bite_armed = False
-        big_bite_confirmed = False
-        big_bite_info = {}
-        entry_arm = _get_live_entry_arm(stock, code)
-
-        if entry_arm:
-            current_ai_score = float(entry_arm.get('ai_score', current_ai_score) or current_ai_score)
-            ratio = float(entry_arm.get('ratio', ratio) or ratio)
-            stock['rt_ai_prob'] = current_ai_score / 100.0
-            stock['target_buy_price'] = int(entry_arm.get('target_buy_price') or curr_price)
-            stock['entry_armed_resume_count'] = int(stock.get('entry_armed_resume_count', 0) or 0) + 1
-            _log_entry_pipeline(
-                stock,
-                code,
-                "entry_armed_resume",
-                ai_score=f"{current_ai_score:.1f}",
-                ratio=f"{ratio:.4f}",
-                remaining_sec=f"{float(entry_arm.get('remaining_sec', 0.0) or 0.0):.1f}",
-                armed_reason=entry_arm.get('reason'),
-                dynamic_reason=entry_arm.get('dynamic_reason'),
-            )
-            is_trigger = True
-        else:
-            if fluctuation >= max_surge or intraday_surge >= max_intraday_surge:
-                overlap_snapshot = _extract_ai_overlap_snapshot(ws_data=ws_data)
-                stock["last_ai_overlap_snapshot"] = overlap_snapshot
-                _log_entry_pipeline(
-                    stock,
-                    code,
-                    "blocked_overbought",
-                    fluctuation=f"{fluctuation:.2f}",
-                    intraday_surge=f"{intraday_surge:.2f}",
-                    max_surge=f"{max_surge:.2f}",
-                    max_intraday_surge=f"{max_intraday_surge:.2f}",
-                    marcap=marcap,
-                    cap_bucket=scalp_limits.get('bucket_label'),
-                    **_build_ai_overlap_log_fields(
-                        stock=stock,
-                        ai_score=current_ai_score,
-                        momentum_tag=stock.get("entry_momentum_tag"),
-                        threshold_profile=stock.get("entry_threshold_profile"),
-                        overbought_blocked=True,
-                        blocked_stage="blocked_overbought",
-                        overlap_snapshot=overlap_snapshot,
-                    ),
-                )
-                return
-
-            # --------------------------
-            # Big-Bite: arm -> confirm (보조 확증 신호)
-            # --------------------------
-            try:
-                tick_data = build_tick_data_from_ws(ws_data)
-                big_bite_armed, big_bite_info = arm_big_bite_if_triggered(
-                    stock=stock,
-                    code=code,
-                    ws_data=ws_data,
-                    tick_data=tick_data,
-                    runtime_state=BIG_BITE_STATE,
-                )
-                big_bite_confirmed, confirm_info = confirm_big_bite_follow_through(
-                    stock=stock,
-                    code=code,
-                    ws_data=ws_data,
-                    runtime_state=BIG_BITE_STATE,
-                )
-                big_bite_hit = bool(big_bite_confirmed)
-                big_bite_info = {**(big_bite_info or {}), **(confirm_info or {})}
-            except Exception as exc:
-                log_error(f"⚠️ [Big-Bite] 보조 신호 계산 실패 ({code}): {exc}")
-
-            stock['big_bite_confirmed'] = bool(big_bite_confirmed)
-            stock['big_bite_info'] = big_bite_info or {}
-            stock['big_bite_triggered'] = bool(big_bite_armed)
-
-            if strategy == 'SCALPING':
-                gate_tags = BIG_BITE_HARD_GATE_TAGS_SCALPING
-            elif strategy == 'KOSDAQ_ML':
-                gate_tags = BIG_BITE_HARD_GATE_TAGS_KOSDAQ
-            elif strategy == 'KOSPI_ML':
-                gate_tags = BIG_BITE_HARD_GATE_TAGS_KOSPI
-            else:
-                gate_tags = ()
-
-            hard_gate_required = bool(
-                BIG_BITE_HARD_GATE_ENABLED
-                and gate_tags
-                and any(tag in pos_tag for tag in gate_tags)
-            )
-            stock['big_bite_hard_gate_required'] = hard_gate_required
-            stock['big_bite_hard_gate_blocked'] = bool(hard_gate_required and not big_bite_confirmed)
-            stock['big_bite_hard_gate_tags'] = gate_tags
-
-            if hard_gate_required and not big_bite_confirmed:
-                stock['big_bite_block_reason'] = 'hard_gate'
-                _log_entry_pipeline(
-                    stock,
-                    code,
-                    "blocked_big_bite_hard_gate",
-                    required=hard_gate_required,
-                    triggered=big_bite_armed,
-                    confirmed=big_bite_confirmed,
-                    position_tag=pos_tag,
-                )
-                return
-
-            if pos_tag == 'VCP_NEXT':
-                stock['target_buy_price'] = curr_price
-                is_trigger = True
-                msg = (
-                    f"🚀 **{stock['name']} ({code}) VCP 시초가 예약 매수!**\n"
-                    f"현재가: `{curr_price:,}원` (전일 VCP NEXT 달성)"
-                )
-                stock['msg_audience'] = 'ADMIN_ONLY'
-
-            else:
-                if radar is None:
-                    _log_entry_pipeline(stock, code, "blocked_missing_radar", strategy=strategy)
-                    return
-
-                observe_only = bool(getattr(TRADING_RULES, "SCALP_DYNAMIC_VPW_OBSERVE_ONLY", True))
-                momentum_ws_data = dict(ws_data or {})
-                momentum_ws_data["_position_tag"] = pos_tag
-                momentum_gate = evaluate_scalping_strength_momentum(momentum_ws_data)
-                stock["entry_momentum_tag"] = momentum_gate.get("position_tag")
-                stock["entry_threshold_profile"] = momentum_gate.get("threshold_profile")
-                if momentum_gate.get("enabled"):
-                    _log_strength_momentum_observation(stock, code, momentum_gate)
-                    if not observe_only and not momentum_gate.get("allowed"):
-                        overlap_snapshot = _extract_ai_overlap_snapshot(ws_data=ws_data)
-                        stock["last_ai_overlap_snapshot"] = overlap_snapshot
-                        _log_entry_pipeline(
-                            stock,
-                            code,
-                            "blocked_strength_momentum",
-                            reason=momentum_gate.get("reason"),
-                            delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
-                            buy_value=int(momentum_gate.get("window_buy_value", 0) or 0),
-                            buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
-                            exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
-                            net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
-                            **_build_ai_overlap_log_fields(
-                                stock=stock,
-                                ai_score=current_ai_score,
-                                momentum_tag=momentum_gate.get("position_tag"),
-                                threshold_profile=momentum_gate.get("threshold_profile"),
-                                overbought_blocked=False,
-                                blocked_stage="blocked_strength_momentum",
-                                overlap_snapshot=overlap_snapshot,
-                            ),
-                        )
-                        return
-
-                if current_vpw < VPW_SCALP_LIMIT:
-                    shadow_candidate = None
-                    if momentum_gate.get("allowed"):
-                        if observe_only:
-                            shadow_candidate = record_shadow_candidate(stock, code, ws_data, momentum_gate)
-                            if shadow_candidate:
-                                _log_entry_pipeline(
-                                    stock,
-                                    code,
-                                    "shadow_candidate_recorded",
-                                    shadow_id=shadow_candidate.get("shadow_id"),
-                                    signal_price=shadow_candidate.get("signal_price"),
-                                    dynamic_delta=f"{float(shadow_candidate.get('dynamic_delta', 0.0) or 0.0):.1f}",
-                                    dynamic_buy_value=int(shadow_candidate.get("dynamic_window_buy_value", 0) or 0),
-                                    dynamic_buy_ratio=f"{float(shadow_candidate.get('dynamic_window_buy_ratio', 0.0) or 0.0):.2f}",
-                                )
-                        else:
-                            _log_entry_pipeline(
-                                stock,
-                                code,
-                                "dynamic_vpw_override_pass",
-                                current_vpw=f"{current_vpw:.1f}",
-                                threshold=VPW_SCALP_LIMIT,
-                                dynamic_reason=momentum_gate.get("reason"),
-                                dynamic_delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
-                                dynamic_buy_value=int(momentum_gate.get("window_buy_value", 0) or 0),
-                                dynamic_buy_ratio=f"{float(momentum_gate.get('window_buy_ratio', 0.0) or 0.0):.2f}",
-                                dynamic_exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
-                                dynamic_net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
-                                dynamic_profile=momentum_gate.get("threshold_profile"),
-                            )
-                            shadow_candidate = None
-                    if not (momentum_gate.get("allowed") and not observe_only):
-                        overlap_snapshot = _extract_ai_overlap_snapshot(ws_data=ws_data)
-                        stock["last_ai_overlap_snapshot"] = overlap_snapshot
-                        _log_entry_pipeline(
-                            stock,
-                            code,
-                            "blocked_vpw",
-                            current_vpw=f"{current_vpw:.1f}",
-                            threshold=VPW_SCALP_LIMIT,
-                            dynamic_allowed=momentum_gate.get("allowed"),
-                            dynamic_reason=momentum_gate.get("reason"),
-                            dynamic_delta=f"{float(momentum_gate.get('vpw_delta', 0.0) or 0.0):.1f}",
-                            dynamic_buy_value=int(momentum_gate.get("window_buy_value", 0) or 0),
-                            dynamic_exec_buy_ratio=f"{float(momentum_gate.get('window_exec_buy_ratio', 0.0) or 0.0):.2f}",
-                            dynamic_net_buy_qty=int(momentum_gate.get("window_net_buy_qty", 0) or 0),
-                            shadow_recorded=bool(shadow_candidate),
-                            **_build_ai_overlap_log_fields(
-                                stock=stock,
-                                ai_score=current_ai_score,
-                                momentum_tag=momentum_gate.get("position_tag"),
-                                threshold_profile=momentum_gate.get("threshold_profile"),
-                                overbought_blocked=False,
-                                blocked_stage="blocked_vpw",
-                                overlap_snapshot=overlap_snapshot,
-                            ),
-                        )
-                        return
-                if liquidity_value < min_liquidity:
-                    _log_entry_pipeline(
-                        stock,
-                        code,
-                        "blocked_liquidity",
-                        liquidity_value=int(liquidity_value),
-                        min_liquidity=min_liquidity,
-                        marcap=marcap,
-                        cap_bucket=scalp_limits.get('bucket_label'),
-                    )
-                    return
-
-                scanner_price = stock.get('buy_price') or 0
-                if scanner_price > 0:
-                    gap_pct = (curr_price - scanner_price) / scanner_price * 100
-                    if gap_pct >= 1.5:
-                        if code not in cooldowns:
-                            cooldowns[code] = now_ts + 1200
-                        _log_entry_pipeline(
-                            stock,
-                            code,
-                            "blocked_gap_from_scan",
-                            gap_pct=f"{gap_pct:.1f}",
-                            scanner_price=int(scanner_price),
-                            curr_price=curr_price,
-                        )
-                        return
-
-                current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
-                target_buy_price, used_drop_pct = radar.get_smart_target_price(
-                    curr_price,
-                    v_pw=current_vpw,
-                    ai_score=current_ai_score,
-                    ask_tot=ask_tot,
-                    bid_tot=bid_tot,
-                )
-
-                last_ai_time = LAST_AI_CALL_TIMES.get(code, 0)
-                time_elapsed = now_ts - last_ai_time
-                is_vip_target = (target_buy_price > 0) and (curr_price <= target_buy_price * 1.015)
-
-                if is_vip_target and last_ai_time == 0:
-                    print(f"⏳ [{stock['name']}] 첫 AI 분석을 시작합니다... (기계적 매수 일시 보류)")
-
-                if ai_engine and is_vip_target and (time_elapsed > AI_WATCHING_COOLDOWN or last_ai_time == 0):
-                    ai_call_executed = False
-                    try:
-                        recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=10)
-                        recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=40)
-
-                        if ws_data.get('orderbook') and recent_ticks:
-                            ai_decision = ai_engine.analyze_target(
-                                stock['name'],
-                                ws_data,
-                                recent_ticks,
-                                recent_candles,
-                                prompt_profile="watching",
-                            )
-                            ai_call_executed = True
-                            stock.pop('wait6579_probe_canary_armed', None)
-                            stock.pop('wait6579_probe_canary_source', None)
-                            stock.pop('wait6579_probe_canary_score', None)
-
-                            action = ai_decision.get('action', 'WAIT')
-                            ai_score = ai_decision.get('score', 50)
-                            reason = ai_decision.get('reason', '사유 없음')
-                            feature_probe = _extract_buy_recovery_probe_features(
-                                ai_engine,
-                                ws_data,
-                                recent_ticks,
-                                recent_candles,
-                            ) or {
-                                "buy_pressure": 0.0,
-                                "tick_accel": 0.0,
-                                "micro_vwap_bp": 0.0,
-                                "large_sell_print": False,
-                            }
-                            latency_state = str((ws_data or {}).get("latency_state", "") or "").strip().upper() or "-"
-                            overlap_snapshot = _extract_ai_overlap_snapshot(
-                                ws_data=ws_data,
-                                recent_ticks=recent_ticks,
-                                recent_candles=recent_candles,
-                                ai_engine=ai_engine,
-                            )
-                            stock["last_ai_overlap_snapshot"] = overlap_snapshot
-                            _log_entry_pipeline(
-                                stock,
-                                code,
-                                "ai_confirmed",
-                                action=action,
-                                vip_target=is_vip_target,
-                                buy_pressure=f"{float(feature_probe.get('buy_pressure', 0.0) or 0.0):.2f}",
-                                tick_accel=f"{float(feature_probe.get('tick_accel', 0.0) or 0.0):.3f}",
-                                micro_vwap_bp=f"{float(feature_probe.get('micro_vwap_bp', 0.0) or 0.0):.2f}",
-                                large_sell_print_detected=bool(feature_probe.get("large_sell_print", False)),
-                                latency_state=latency_state,
-                                **_build_ai_overlap_log_fields(
-                                    stock=stock,
-                                    ai_score=ai_score,
-                                    momentum_tag=stock.get("entry_momentum_tag"),
-                                    threshold_profile=stock.get("entry_threshold_profile"),
-                                    overbought_blocked=False,
-                                    blocked_stage="-",
-                                    overlap_snapshot=overlap_snapshot,
-                                ),
-                                **_build_ai_ops_log_fields(
-                                    ai_decision,
-                                    ai_score_raw=ai_score,
-                                    ai_score_after_bonus=ai_score,
-                                    entry_score_threshold=75,
-                                    big_bite_bonus_applied=False,
-                                    ai_cooldown_blocked=False,
-                                ),
-                            )
-                            if _is_wait65_79_candidate(action, ai_score):
-                                _log_wait65_79_ev_candidate(
-                                    stock=stock,
-                                    code=code,
-                                    action=action,
-                                    ai_score=ai_score,
-                                    ai_decision=ai_decision,
-                                    ws_data=ws_data,
-                                    feature_probe=feature_probe,
-                                )
-                            _submit_watching_shared_prompt_shadow(
-                                stock_name=stock['name'],
-                                code=code,
-                                ws_data=ws_data,
-                                recent_ticks=recent_ticks,
-                                recent_candles=recent_candles,
-                                gemini_result=ai_decision,
-                                record_id=stock.get("id"),
-                            )
-
-                            if _should_run_main_buy_recovery_canary(
-                                ai_decision,
-                                ai_score,
-                                ws_data,
-                                recent_ticks,
-                                recent_candles,
-                                ai_engine,
-                                feature_probe=feature_probe,
-                            ):
-                                recovery_decision = ai_engine.analyze_target_shadow_prompt(
-                                    stock['name'],
-                                    ws_data,
-                                    recent_ticks,
-                                    recent_candles,
-                                    strategy="SCALPING",
-                                    prompt_override=SCALPING_BUY_RECOVERY_CANARY_PROMPT,
-                                    prompt_type="scalping_buy_recovery_canary",
-                                    cache_profile="watching_buy_recovery_canary",
-                                )
-                                recovery_action = str(recovery_decision.get("action", "WAIT") or "WAIT").upper()
-                                recovery_score = float(recovery_decision.get("score", 50) or 50)
-                                promote_threshold = float(
-                                    getattr(TRADING_RULES, "AI_MAIN_BUY_RECOVERY_CANARY_PROMOTE_SCORE", 75) or 75
-                                )
-                                can_promote = (
-                                    str(action or "WAIT").upper() != "BUY"
-                                    and recovery_action == "BUY"
-                                    and recovery_score >= promote_threshold
-                                )
-                                _log_entry_pipeline(
-                                    stock,
-                                    code,
-                                    "watching_buy_recovery_canary",
-                                    main_action=str(action or "WAIT").upper(),
-                                    main_score=f"{float(ai_score or 0.0):.1f}",
-                                    recovery_action=recovery_action,
-                                    recovery_score=f"{recovery_score:.1f}",
-                                    promoted=str(can_promote).lower(),
-                                    promote_threshold=f"{promote_threshold:.1f}",
-                                    **_build_ai_ops_log_fields(
-                                        recovery_decision,
-                                        ai_score_raw=recovery_score,
-                                        ai_score_after_bonus=recovery_score,
-                                        entry_score_threshold=promote_threshold,
-                                        big_bite_bonus_applied=False,
-                                        ai_cooldown_blocked=False,
-                                    ),
-                                )
-                                if can_promote:
-                                    action = "BUY"
-                                    ai_score = recovery_score
-                                    reason = (
-                                        f"{reason} | buy_recovery_canary:{recovery_score:.0f}"
-                                        if reason
-                                        else f"buy_recovery_canary:{recovery_score:.0f}"
-                                    )
-                                    ai_decision = dict(ai_decision or {})
-                                    ai_decision["action"] = action
-                                    ai_decision["score"] = ai_score
-                                    ai_decision["reason"] = reason
-                                    stock['wait6579_probe_canary_armed'] = True
-                                    stock['wait6579_probe_canary_source'] = "buy_recovery_canary_promoted"
-                                    stock['wait6579_probe_canary_score'] = f"{float(recovery_score):.1f}"
-
-                            if ai_score != 50:
-                                stock['rt_ai_prob'] = ai_score / 100.0
-                                current_ai_score = ai_score
-                                print(
-                                    f"💎 [VIP AI 확답 완료: {stock['name']}] {action} | 점수: {ai_score}점 | {reason}"
-                                )
-
-                                if action == "BUY":
-                                    ai_msg = (
-                                        f"🤖 <b>[VIP 종목 실시간 분석]</b>\n"
-                                        f"🎯 종목: {stock['name']}\n"
-                                        f"⚡ 행동: <b>{action} ({ai_score}점)</b>\n"
-                                        f"🧠 사유: {reason}"
-                                    )
-                                    target_audience = (
-                                        'VIP_ALL'
-                                        if liquidity_value >= VIP_LIQUIDITY_THRESHOLD and current_ai_score >= 90
-                                        else 'ADMIN_ONLY'
-                                    )
-                                    event_bus.publish(
-                                        'TELEGRAM_BROADCAST',
-                                        {'message': ai_msg, 'audience': target_audience, 'parse_mode': 'HTML'},
-                                    )
-                            else:
-                                print(
-                                    f"⚠️ [{stock['name']}] AI 판단 보류(Score 50). 기계적 로직으로 폴백합니다."
-                                )
-                                current_ai_score = 50
-
-                    except Exception as e:
-                        log_error(
-                            f"🚨 [AI 엔진 오류] {stock['name']}({code}): {e} | "
-                            "기계적 매수 모드로 폴백(Fallback)합니다."
-                        )
-                        current_ai_score = 50
-
-                    if ai_call_executed:
-                        LAST_AI_CALL_TIMES[code] = now_ts
-
-                    if ai_call_executed and last_ai_time == 0:
-                        if not big_bite_confirmed:
-                            _log_entry_pipeline(
-                                stock,
-                                code,
-                                "first_ai_wait",
-                                ai_score=f"{current_ai_score:.1f}",
-                                big_bite_confirmed=big_bite_confirmed,
-                                vip_target=is_vip_target,
-                            )
-                            return
-
-                # Big-Bite 점수 보너스 (보수적)
-                boost_applied_value = 0
-                if big_bite_confirmed:
-                    boost_applied_value = BIG_BITE_BOOST_SCORE
-                elif big_bite_armed:
-                    boost_applied_value = BIG_BITE_ARMED_ENTRY_BONUS
-
-                if boost_applied_value:
-                    current_ai_score = min(100.0, current_ai_score + boost_applied_value)
-                    stock['big_bite_boosted'] = bool(big_bite_confirmed)
-                    stock['big_bite_boost_value'] = boost_applied_value
-                else:
-                    stock['big_bite_boosted'] = False
-                    stock['big_bite_boost_value'] = 0
-
-                if ai_engine and is_vip_target and last_ai_time > 0 and time_elapsed <= AI_WATCHING_COOLDOWN:
-                    # 쿨다운 구간은 실제 AI 호출이 아닌 보류 판단 상태이므로, shared와 구분되는 라벨로 기록.
-                    _log_entry_pipeline(
-                        stock,
-                        code,
-                        "ai_cooldown_blocked",
-                        cooldown_elapsed_sec=int(time_elapsed),
-                        cooldown_threshold_sec=AI_WATCHING_COOLDOWN,
-                        **_build_ai_ops_log_fields(
-                            {
-                                "ai_parse_ok": False,
-                                "ai_parse_fail": False,
-                                "ai_fallback_score_50": False,
-                                "ai_response_ms": 0,
-                                "ai_prompt_type": "scalping_watch_cooldown_blocked",
-                                "ai_result_source": "watching_cooldown",
-                            },
-                            ai_score_raw=current_ai_score,
-                            ai_score_after_bonus=current_ai_score,
-                            entry_score_threshold=75,
-                            big_bite_bonus_applied=bool(boost_applied_value),
-                            ai_cooldown_blocked=True,
-                        ),
-                    )
-
-                if current_ai_score < 75 and current_ai_score != 50:
-                    cooldown_time = AI_WAIT_DROP_COOLDOWN
-
-                    cooldowns[code] = now_ts + cooldown_time
-                    _log_entry_pipeline(
-                        stock,
-                        code,
-                        "blocked_ai_score",
-                        threshold=75,
-                        cooldown_sec=cooldown_time,
-                        **_build_ai_overlap_log_fields(
-                            stock=stock,
-                            ai_score=current_ai_score,
-                            momentum_tag=stock.get("entry_momentum_tag"),
-                            threshold_profile=stock.get("entry_threshold_profile"),
-                            overbought_blocked=False,
-                            blocked_stage="blocked_ai_score",
-                        ),
-                        **_build_ai_ops_log_fields(
-                            ai_decision,
-                            ai_score_raw=current_ai_score,
-                            ai_score_after_bonus=current_ai_score,
-                            entry_score_threshold=75,
-                            big_bite_bonus_applied=bool(boost_applied_value),
-                            ai_cooldown_blocked=False,
-                        ),
-                    )
-                    return
-
-                final_target_buy_price, final_used_drop_pct = radar.get_smart_target_price(
-                    curr_price,
-                    v_pw=current_vpw,
-                    ai_score=current_ai_score,
-                    ask_tot=ask_tot,
-                    bid_tot=bid_tot,
-                )
-
-                stock['target_buy_price'] = final_target_buy_price
-                _activate_entry_arm(
-                    stock,
-                    code,
-                    ai_score=current_ai_score,
-                    ratio=ratio,
-                    target_buy_price=final_target_buy_price,
-                    current_vpw=current_vpw,
-                    reason='qualification_passed',
-                    dynamic_reason=momentum_gate.get('reason'),
-                )
-                is_trigger = True
-                if big_bite_confirmed:
-                    stock['big_bite_boosted'] = True
-
-    elif strategy in ['KOSDAQ_ML', 'KOSPI_ML']:
-        if radar is None:
-            _log_entry_pipeline(stock, code, "blocked_missing_radar", strategy=strategy)
-            return
-
-        if strategy == 'KOSDAQ_ML':
-            marcap = _resolve_stock_marcap(stock, code)
-            turnover_hint = estimate_turnover_hint(curr_price, ws_data.get('volume', 0))
-            swing_gap = get_dynamic_swing_gap_threshold(strategy, marcap, turnover_hint=turnover_hint)
-            max_gap = float(swing_gap.get('threshold', _get_swing_gap_threshold(strategy)) or _get_swing_gap_threshold(strategy))
-            if fluctuation >= max_gap:
-                _log_entry_pipeline(
-                    stock,
-                    code,
-                    "blocked_swing_gap",
-                    strategy=strategy,
-                    fluctuation=f"{fluctuation:.2f}",
-                    threshold=f"{max_gap:.2f}",
-                    marcap=marcap,
-                    cap_bucket=swing_gap.get('bucket_label'),
-                )
-                return
-
-            vpw_limit_base = getattr(TRADING_RULES, 'VPW_KOSDAQ_LIMIT', 105)
-            strong_vpw = getattr(TRADING_RULES, 'VPW_STRONG_KOSDAQ_LIMIT', 120)
-            buy_threshold = getattr(TRADING_RULES, 'BUY_SCORE_KOSDAQ_THRESHOLD', 80)
-            vpw_condition = current_vpw >= vpw_limit_base
-            ratio_min = getattr(TRADING_RULES, 'INVEST_RATIO_KOSDAQ_MIN', 0.05)
-            ratio_max = getattr(TRADING_RULES, 'INVEST_RATIO_KOSDAQ_MAX', 0.15)
-            ai_score_threshold = getattr(TRADING_RULES, 'AI_SCORE_THRESHOLD_KOSDAQ', 60)
-
-            ai_prob = stock.get('prob', getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.70))
-            v_pw_limit = vpw_limit_base if ai_prob >= 0.70 else strong_vpw
-
-        else:
-            marcap = _resolve_stock_marcap(stock, code)
-            turnover_hint = estimate_turnover_hint(curr_price, ws_data.get('volume', 0))
-            swing_gap = get_dynamic_swing_gap_threshold(strategy, marcap, turnover_hint=turnover_hint)
-            max_gap = float(swing_gap.get('threshold', _get_swing_gap_threshold(strategy)) or _get_swing_gap_threshold(strategy))
-            if fluctuation >= max_gap:
-                _log_entry_pipeline(
-                    stock,
-                    code,
-                    "blocked_swing_gap",
-                    strategy=strategy,
-                    fluctuation=f"{fluctuation:.2f}",
-                    threshold=f"{max_gap:.2f}",
-                    marcap=marcap,
-                    cap_bucket=swing_gap.get('bucket_label'),
-                )
-                return
-
-            vpw_limit_base = 100
-            strong_vpw = getattr(TRADING_RULES, 'VPW_STRONG_LIMIT', 105)
-            buy_threshold = getattr(TRADING_RULES, 'BUY_SCORE_THRESHOLD', 70)
-            vpw_condition = current_vpw >= 103
-            ratio_min = getattr(TRADING_RULES, 'INVEST_RATIO_KOSPI_MIN', 0.10)
-            ratio_max = getattr(TRADING_RULES, 'INVEST_RATIO_KOSPI_MAX', 0.30)
-            ai_score_threshold = getattr(TRADING_RULES, 'AI_SCORE_THRESHOLD_KOSPI', 60)
-
-            ai_prob = stock.get('prob', getattr(TRADING_RULES, 'SNIPER_AGGRESSIVE_PROB', 0.70))
-            v_pw_limit = vpw_limit_base if ai_prob >= 0.70 else strong_vpw
-
-        score, prices, conclusion, checklist, metrics = radar.analyze_signal_integrated(ws_data, ai_prob)
-        is_shooting = current_vpw >= v_pw_limit
-
-        if (score >= buy_threshold or is_shooting) and vpw_condition:
-            gatekeeper_error_cd = getattr(TRADING_RULES, 'ML_GATEKEEPER_ERROR_COOLDOWN', 60 * 10)
-            gatekeeper = None
-            gatekeeper_allow = False
-            action_label = 'UNKNOWN'
-            gatekeeper_eval_ms = 0
-            gatekeeper_cd_policy = 'neutral_hold'
-
-            if not ai_engine:
-                log_error(f"🚨 [{strategy} Gatekeeper 미초기화] {stock['name']}({code})")
-                cooldowns[code] = now_ts + gatekeeper_error_cd
-                _log_entry_pipeline(stock, code, "blocked_gatekeeper_missing", strategy=strategy)
-                return
-
-            try:
-                realtime_ctx = None
-                gatekeeper_fast_sig = _build_gatekeeper_fast_signature(stock, ws_data, strategy, score)
-                gatekeeper_fast_snapshot = _build_gatekeeper_fast_snapshot(stock, ws_data, strategy, score)
-                gatekeeper_fast_reuse_sec = _resolve_gatekeeper_fast_reuse_sec()
-                gatekeeper_fast_max_ws_age = float(getattr(TRADING_RULES, 'AI_GATEKEEPER_FAST_REUSE_MAX_WS_AGE_SEC', 2.0) or 2.0)
-                gatekeeper_ws_age_sec = _get_ws_snapshot_age_sec(ws_data)
-                fast_sig_matches = gatekeeper_fast_sig == stock.get('last_gatekeeper_fast_signature')
-                fast_sig_age = _resolve_reference_age_sec(
-                    stock.get('last_gatekeeper_fast_at'),
-                    fallback_ts=stock.get('last_gatekeeper_action_at'),
-                    now_ts=now_ts,
-                )
-                fast_sig_age_str = "-" if fast_sig_age is None else f"{fast_sig_age:.1f}"
-                near_score_boundary = abs(float(score) - float(buy_threshold)) <= 3.0
-                fast_sig_fresh = fast_sig_age is not None and fast_sig_age < gatekeeper_fast_reuse_sec
-                ws_fresh = gatekeeper_ws_age_sec is None or gatekeeper_ws_age_sec <= gatekeeper_fast_max_ws_age
-                has_last_action = bool(str(stock.get('last_gatekeeper_action', '') or '').strip())
-                has_last_allow_flag = 'last_gatekeeper_allow_entry' in stock
-                can_fast_reuse = (
-                    fast_sig_matches
-                    and fast_sig_fresh
-                    and ws_fresh
-                    and not near_score_boundary
-                    and has_last_action
-                    and has_last_allow_flag
-                )
-
-                if can_fast_reuse:
-                    gatekeeper = {
-                        'allow_entry': bool(stock.get('last_gatekeeper_allow_entry', False)),
-                        'action_label': stock.get('last_gatekeeper_action', 'UNKNOWN'),
-                        'report': stock.get('last_gatekeeper_report', ''),
-                        'eval_ms': 0,
-                        'lock_wait_ms': 0,
-                        'packet_build_ms': 0,
-                        'model_call_ms': 0,
-                        'total_internal_ms': 0,
-                        'cache_hit': True,
-                        'cache_mode': 'fast_reuse',
-                    }
-                    gatekeeper_eval_ms = 0
-                    _log_entry_pipeline(
-                        stock,
-                        code,
-                        "gatekeeper_fast_reuse",
-                        strategy=strategy,
-                        action=gatekeeper.get('action_label', 'UNKNOWN'),
-                        age_sec=fast_sig_age_str,
-                        ws_age_sec="-" if gatekeeper_ws_age_sec is None else f"{gatekeeper_ws_age_sec:.2f}",
-                    )
-                    is_new_evaluation = False
-                else:
-                    # age 계산: 값이 없으면 "-" sentinel 사용 (p95 오염 방지)
-                    action_age_sec = _resolve_reference_age_sec(
-                        stock.get('last_gatekeeper_action_at'),
-                        now_ts=now_ts,
-                    )
-                    allow_age_sec = _resolve_reference_age_sec(
-                        stock.get('last_gatekeeper_allow_entry_at'),
-                        now_ts=now_ts,
-                    )
-                    action_age_sec_str = "-" if action_age_sec is None else f"{action_age_sec:.2f}"
-                    allow_age_sec_str = "-" if allow_age_sec is None else f"{allow_age_sec:.2f}"
-
-                    sig_delta = _describe_snapshot_deltas(
-                        stock.get('last_gatekeeper_fast_snapshot', {}),
-                        gatekeeper_fast_snapshot,
-                        limit=5
-                    ) or "-"
-                    _log_entry_pipeline(
-                        stock,
-                        code,
-                        "gatekeeper_fast_reuse_bypass",
-                        strategy=strategy,
-                        score=round(float(score), 2),
-                        age_sec=fast_sig_age_str,
-                        ws_age_sec="-" if gatekeeper_ws_age_sec is None else f"{gatekeeper_ws_age_sec:.2f}",
-                        action_age_sec=action_age_sec_str,
-                        allow_entry_age_sec=allow_age_sec_str,
-                        sig_delta=sig_delta,
-                        reason_codes=_reason_codes(
-                            sig_changed=fast_sig_matches,
-                            age_expired=fast_sig_fresh,
-                            ws_stale=ws_fresh,
-                            score_boundary=not near_score_boundary,
-                            missing_action=has_last_action,
-                            missing_allow_flag=has_last_allow_flag,
-                        ),
-                    )
-                    realtime_ctx = kiwoom_utils.build_realtime_analysis_context(
-                        token=KIWOOM_TOKEN,
-                        code=code,
-                        ws_data=ws_data,
-                        market_cap=_resolve_stock_marcap(stock, code),
-                        strat_label=strategy,
-                        position_status='NONE',
-                        avg_price=0,
-                        pnl_pct=0.0,
-                        trailing_pct=0.0,
-                        stop_pct=0.0,
-                        target_price=curr_price,
-                        target_reason='WATCHING 최종 진입 Gatekeeper 검증',
-                        score=float(score),
-                        conclusion=conclusion,
-                        quant_metrics=metrics,
-                    )
-                    gatekeeper_started_at = time.perf_counter()
-                    gatekeeper = ai_engine.evaluate_realtime_gatekeeper(
-                        stock_name=stock['name'],
-                        stock_code=code,
-                        realtime_ctx=realtime_ctx,
-                        analysis_mode='SWING',
-                    )
-                    gatekeeper_eval_ms = int((time.perf_counter() - gatekeeper_started_at) * 1000)
-                    gatekeeper['eval_ms'] = gatekeeper_eval_ms
-                    record_gatekeeper_snapshot(
-                        stock=stock,
-                        code=code,
-                        strategy=strategy,
-                        realtime_ctx=realtime_ctx,
-                        gatekeeper=gatekeeper,
-                    )
-                    # 신규 평가 결과는 저장하고 timestamp 갱신 (fast_reuse는 갱신 안 함)
-                    is_new_evaluation = True
-                    stock['last_gatekeeper_action_at'] = now_ts
-                    stock['last_gatekeeper_allow_entry_at'] = now_ts
-                    stock['last_gatekeeper_fast_snapshot'] = gatekeeper_fast_snapshot
-                    stock['last_gatekeeper_fast_at'] = now_ts
-                    
-                LAST_AI_CALL_TIMES[code] = now_ts
-                action_label = gatekeeper.get('action_label', 'UNKNOWN')
-                gatekeeper_allow = bool(gatekeeper.get('allow_entry', False))
-                gatekeeper_cache_mode = str(gatekeeper.get('cache_mode', 'hit' if gatekeeper.get('cache_hit') else 'miss'))
-                stock['last_gatekeeper_action'] = action_label
-                stock['last_gatekeeper_report'] = gatekeeper.get('report', '')
-                stock['last_gatekeeper_eval_ms'] = gatekeeper_eval_ms
-                stock['last_gatekeeper_allow_entry'] = gatekeeper_allow
-                stock['last_gatekeeper_cache_mode'] = gatekeeper_cache_mode
-                stock['last_gatekeeper_lock_wait_ms'] = int(gatekeeper.get('lock_wait_ms', 0) or 0)
-                stock['last_gatekeeper_packet_build_ms'] = int(gatekeeper.get('packet_build_ms', 0) or 0)
-                stock['last_gatekeeper_model_call_ms'] = int(gatekeeper.get('model_call_ms', 0) or 0)
-                stock['last_gatekeeper_total_internal_ms'] = int(gatekeeper.get('total_internal_ms', 0) or 0)
-                stock['last_gatekeeper_fast_signature'] = gatekeeper_fast_sig
-                if is_new_evaluation and realtime_ctx is not None:
-                    _submit_gatekeeper_dual_persona_shadow(
-                        stock_name=stock['name'],
-                        code=code,
-                        strategy=strategy,
-                        realtime_ctx=realtime_ctx,
-                        gatekeeper=gatekeeper,
-                        record_id=stock.get('id'),
-                    )
-            except Exception as e:
-                log_error(f"🚨 [{strategy} Gatekeeper 오류] {stock['name']}({code}): {e}")
-                cooldowns[code] = now_ts + gatekeeper_error_cd
-                _log_entry_pipeline(
-                    stock,
-                    code,
-                    "blocked_gatekeeper_error",
-                    strategy=strategy,
-                    cooldown_sec=gatekeeper_error_cd,
-                    gatekeeper_eval_ms=gatekeeper_eval_ms,
-                    gatekeeper_lock_wait_ms=stock.get('last_gatekeeper_lock_wait_ms', 0),
-                    gatekeeper_packet_build_ms=stock.get('last_gatekeeper_packet_build_ms', 0),
-                    gatekeeper_model_call_ms=stock.get('last_gatekeeper_model_call_ms', 0),
-                    gatekeeper_total_internal_ms=stock.get('last_gatekeeper_total_internal_ms', 0),
-                )
-                return
-
-            if not gatekeeper_allow:
-                gatekeeper_reject_cd, gatekeeper_cd_policy = _resolve_gatekeeper_reject_cooldown(action_label)
-                print(f"🚫 [{strategy} Gatekeeper 거부] {stock['name']} ({action_label})")
-                cooldowns[code] = now_ts + gatekeeper_reject_cd
-                _log_entry_pipeline(
-                    stock,
-                    code,
-                    "blocked_gatekeeper_reject",
-                    strategy=strategy,
-                    action=action_label,
-                    cooldown_sec=gatekeeper_reject_cd,
-                    cooldown_policy=gatekeeper_cd_policy,
-                    gatekeeper_eval_ms=gatekeeper_eval_ms,
-                    gatekeeper_cache=stock.get('last_gatekeeper_cache_mode', 'miss'),
-                    gatekeeper_lock_wait_ms=stock.get('last_gatekeeper_lock_wait_ms', 0),
-                    gatekeeper_packet_build_ms=stock.get('last_gatekeeper_packet_build_ms', 0),
-                    gatekeeper_model_call_ms=stock.get('last_gatekeeper_model_call_ms', 0),
-                    gatekeeper_total_internal_ms=stock.get('last_gatekeeper_total_internal_ms', 0),
-                )
-                return
-
-            blocked, block_reason = _should_block_swing_entry(stock.get('strategy', ''))
-            if blocked:
-                print(f"⛔ [시장환경필터] {stock['name']}({code}) 스윙 진입 보류 - {block_reason}")
-                _log_entry_pipeline(stock, code, "market_regime_block", strategy=strategy)
-                return
-
-            _log_entry_pipeline(
-                stock,
-                code,
-                "market_regime_pass",
-                strategy=strategy,
-                gatekeeper=action_label,
-                score=round(float(score), 2),
-                gatekeeper_eval_ms=gatekeeper_eval_ms,
-                gatekeeper_cache=stock.get('last_gatekeeper_cache_mode', 'miss'),
-                gatekeeper_lock_wait_ms=stock.get('last_gatekeeper_lock_wait_ms', 0),
-                gatekeeper_packet_build_ms=stock.get('last_gatekeeper_packet_build_ms', 0),
-                gatekeeper_model_call_ms=stock.get('last_gatekeeper_model_call_ms', 0),
-                gatekeeper_total_internal_ms=stock.get('last_gatekeeper_total_internal_ms', 0),
-            )
-
-            score_weight = max(0.0, min(1.0, (float(score) - buy_threshold) / max(1.0, (100 - buy_threshold))))
-            ratio = ratio_min + (score_weight * (ratio_max - ratio_min))
-            if is_shooting and ratio < ((ratio_min + ratio_max) / 2):
-                ratio = (ratio_min + ratio_max) / 2
-
-            is_trigger = True
-            stock['target_buy_price'] = curr_price
-            stock['msg_audience'] = 'VIP_ALL'
-            _publish_gatekeeper_report_proxy(stock, code, gatekeeper, allowed=True)
-
-    if is_trigger:
-        if not admin_id:
-            print(f"⚠️ [매수보류] {stock['name']}: 관리자 ID가 없습니다.")
-            _log_entry_pipeline(stock, code, "blocked_no_admin")
-            return
-
-        deposit = kiwoom_orders.get_deposit(KIWOOM_TOKEN)
-        uncapped_target_budget = int(max(float(deposit) * float(ratio), 0.0))
-        budget_cap = 0
-        if strategy == 'SCALPING':
-            budget_cap = int(getattr(TRADING_RULES, 'SCALPING_MAX_BUY_BUDGET_KRW', 0) or 0)
-        target_budget, safe_budget, real_buy_qty, used_safety_ratio = kiwoom_orders.describe_buy_capacity(
-            curr_price,
-            deposit,
-            ratio,
-            max_budget=budget_cap,
-        )
-        budget_cap_applied = budget_cap > 0 and target_budget < uncapped_target_budget
-        budget_cap_msg = f", 절대한도 {budget_cap:,}원 적용" if budget_cap_applied else ""
-
-        if real_buy_qty <= 0:
-            zero_qty_cooldown_sec = _resolve_zero_qty_cooldown_sec(deposit)
-            is_zero_deposit = int(float(deposit or 0)) <= 0
-            deposit_errors = kiwoom_orders.get_last_deposit_errors()
-            auth_failure = next(
-                (err for err in deposit_errors if kiwoom_orders.is_auth_failure_error(err)),
-                None,
-            )
-            zero_qty_stage = "auth_zero_qty" if is_zero_deposit and auth_failure else "blocked_zero_qty"
-            if is_zero_deposit:
-                print(
-                    f"⚠️ [매수보류] {stock['name']}: 주문가능금액 조회가 0원으로 반환되어 재조회 대기합니다. "
-                    f"(주문가능금액 {deposit:,}원, 전략비중 {ratio:.1%}, 안전계수 {used_safety_ratio:.0%}, "
-                    f"실사용예산 {safe_budget:,}원, 현재가 {curr_price:,}원, 재조회대기 {zero_qty_cooldown_sec}초)"
-                )
-            else:
-                print(
-                    f"⚠️ [매수보류] {stock['name']}: 매수 수량이 0주입니다. "
-                    f"(주문가능금액 {deposit:,}원, 전략비중 {ratio:.1%}, 안전계수 {used_safety_ratio:.0%}, "
-                    f"실사용예산 {safe_budget:,}원, 현재가 {curr_price:,}원{budget_cap_msg})"
-                )
-            log_info(
-                f"[DEBUG] {code} 매수 수량 0주 "
-                f"(deposit={deposit}, ratio={ratio:.4f}, uncapped_target_budget={uncapped_target_budget}, "
-                f"target_budget={target_budget}, "
-                f"safe_budget={safe_budget}, safety_ratio={used_safety_ratio:.4f}, curr_price={curr_price}, "
-                f"retry_cooldown_sec={zero_qty_cooldown_sec})"
-            )
-            cooldowns[code] = now_ts + zero_qty_cooldown_sec
-            _log_entry_pipeline(
-                stock,
-                code,
-                zero_qty_stage,
-                deposit=deposit,
-                ratio=f"{ratio:.4f}",
-                target_budget=target_budget,
-                safe_budget=safe_budget,
-                safety_ratio=f"{used_safety_ratio:.4f}",
-                curr_price=curr_price,
-                budget_cap=budget_cap if budget_cap_applied else "-",
-                cooldown_sec=zero_qty_cooldown_sec,
-                auth_return_code=(auth_failure or {}).get("return_code", "-"),
-                auth_return_msg=(auth_failure or {}).get("return_msg", "-"),
-            )
-            return
-
-        _log_entry_pipeline(
-            stock,
-            code,
-            "budget_pass",
-            deposit=deposit,
-            ratio=f"{ratio:.4f}",
-            target_budget=target_budget,
-            safe_budget=safe_budget,
-            safety_ratio=f"{used_safety_ratio:.4f}",
-            budget_cap=budget_cap if budget_cap_applied else "-",
-            qty=real_buy_qty,
-        )
-
-        if strategy == 'SCALPING':
-            order_type_code = "00"
-            final_price = int(float(stock.get('target_buy_price', curr_price) or curr_price))
-        else:
-            order_type_code = "6"
-            final_price = 0
-
-        latency_signal_strength = float(stock.get('rt_ai_prob', stock.get('prob', 0.0)) or 0.0)
-        latency_signal_score = latency_signal_strength * 100.0
-        latency_gate = evaluate_live_buy_entry(
-            stock=stock,
-            code=code,
-            ws_data=ws_data,
-            strategy_id=strategy,
-            planned_qty=real_buy_qty,
-            signal_price=curr_price,
-            signal_strength=latency_signal_strength,
-            target_buy_price=final_price if strategy == 'SCALPING' else 0,
-        )
-        stock['latency_entry_state'] = latency_gate.get('latency_state')
-        stock['latency_entry_decision'] = latency_gate.get('decision')
-        stock['latency_entry_reason'] = latency_gate.get('reason')
-        _log_orderbook_stability_observation(stock, code, latency_gate.get('orderbook_stability'))
-        best_ask_at_submit, best_bid_at_submit = _get_best_levels_from_ws(ws_data)
-        latency_price_snapshot = _build_entry_price_snapshot_fields(
-            latency_gate,
-            request_price=latency_gate.get('order_price', 0),
-            curr_price=curr_price,
-            best_bid=best_bid_at_submit,
-            best_ask=best_ask_at_submit,
-        )
-
-        entry_mode = latency_gate.get('mode', 'reject')
-        log_info(
-            f"[LATENCY_ENTRY_DECISION] {stock.get('name')}({code}) "
-            f"mode={entry_mode} decision={latency_gate.get('decision')} "
-            f"latency={latency_gate.get('latency_state')} "
-            f"signal={latency_gate.get('signal_price')} latest={latency_gate.get('latest_price')} "
-            f"allowed_slippage={latency_gate.get('computed_allowed_slippage')} "
-            f"orders={len(latency_gate.get('orders') or [])}"
-        )
-        if not latency_gate.get('allowed') or entry_mode == 'reject':
-            log_info(
-                f"[LATENCY_ENTRY_BLOCK] {stock.get('name')}({code}) "
-                f"decision={latency_gate.get('decision')} "
-                f"latency={latency_gate.get('latency_state')} "
-                f"reason={latency_gate.get('reason')} "
-                f"signal={latency_gate.get('signal_price')} latest={latency_gate.get('latest_price')} "
-                f"ws_age_ms={latency_gate.get('ws_age_ms')} "
-                f"ws_jitter_ms={latency_gate.get('ws_jitter_ms')} "
-                f"spread_ratio={latency_gate.get('spread_ratio')} "
-                f"quote_stale={latency_gate.get('quote_stale')}"
-            )
-            clear_signal_reference(stock)
-            _log_entry_pipeline(
-                stock,
-                code,
-                "latency_block",
-                decision=latency_gate.get('decision'),
-                latency=latency_gate.get('latency_state'),
-                reason=latency_gate.get('reason'),
-                ws_age_ms=latency_gate.get('ws_age_ms'),
-                ws_jitter_ms=latency_gate.get('ws_jitter_ms'),
-                spread_ratio=f"{float(latency_gate.get('spread_ratio', 0.0) or 0.0):.6f}",
-                quote_stale=bool(latency_gate.get('quote_stale')),
-                latency_danger_reasons=latency_gate.get('latency_danger_reasons'),
-                signal_price=int(latency_gate.get('signal_price', 0) or 0),
-                latest_price=int(latency_gate.get('latest_price', 0) or 0),
-                computed_allowed_slippage=int(latency_gate.get('computed_allowed_slippage', 0) or 0),
-                latency_canary_applied=bool(latency_gate.get('latency_canary_applied')),
-                latency_canary_reason=latency_gate.get('latency_canary_reason'),
-                **_build_ai_overlap_log_fields(
-                    stock=stock,
-                    ai_score=latency_signal_score,
-                    momentum_tag=stock.get("entry_momentum_tag"),
-                    threshold_profile=stock.get("entry_threshold_profile"),
-                    overbought_blocked=False,
-                    blocked_stage="latency_block",
-                ),
-            )
-            return
-
-        requested_qty = int(real_buy_qty or 0)
-        planned_orders = latency_gate.get('orders') or []
-        wait6579_probe_applied = False
-        if (
-            strategy == 'SCALPING'
-            and bool(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_ENABLED", True))
-            and bool(stock.get('wait6579_probe_canary_armed'))
-        ):
-            probe_max_budget = int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 50_000) or 50_000)
-            probe_min_qty = int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MIN_QTY", 1) or 1)
-            probe_max_qty = int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_QTY", 1) or 1)
-            adjusted_orders, original_qty, scaled_qty, applied = _apply_wait6579_probe_canary(
-                planned_orders,
-                curr_price=curr_price,
-                max_budget_krw=probe_max_budget,
-                min_qty=probe_min_qty,
-                max_qty=probe_max_qty,
-            )
-            if adjusted_orders:
-                planned_orders = adjusted_orders
-                latency_gate["orders"] = planned_orders
-            if scaled_qty > 0:
-                requested_qty = scaled_qty
-            wait6579_probe_applied = bool(applied)
-            _log_entry_pipeline(
-                stock,
-                code,
-                "wait6579_probe_canary_applied",
-                source=stock.get('wait6579_probe_canary_source', '-'),
-                ai_score=stock.get('wait6579_probe_canary_score', '-'),
-                max_budget_krw=probe_max_budget,
-                min_qty=probe_min_qty,
-                max_qty=probe_max_qty,
-                original_qty=original_qty,
-                scaled_qty=scaled_qty,
-                legs=len(planned_orders),
-                applied=wait6579_probe_applied,
-            )
-            log_info(
-                f"[WAIT6579_PROBE_CANARY] {stock.get('name')}({code}) "
-                f"qty={original_qty}->{scaled_qty} max_budget={probe_max_budget} applied={wait6579_probe_applied}"
-            )
-            stock.pop('wait6579_probe_canary_armed', None)
-            stock.pop('wait6579_probe_canary_source', None)
-            stock.pop('wait6579_probe_canary_score', None)
-
-        if strategy == "SCALPING" and bool(
-            getattr(TRADING_RULES, "SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED", False)
-        ):
-            initial_entry_qty_cap = int(
-                getattr(TRADING_RULES, "SCALPING_INITIAL_ENTRY_MAX_QTY", 1) or 1
-            )
-            adjusted_orders, original_qty, scaled_qty, applied = _apply_initial_entry_qty_cap(
-                planned_orders,
-                max_total_qty=initial_entry_qty_cap,
-            )
-            if adjusted_orders:
-                planned_orders = adjusted_orders
-                latency_gate["orders"] = planned_orders
-            if scaled_qty > 0:
-                requested_qty = scaled_qty
-            _log_entry_pipeline(
-                stock,
-                code,
-                "initial_entry_qty_cap_applied",
-                enabled=True,
-                cap_qty=initial_entry_qty_cap,
-                original_qty=original_qty,
-                scaled_qty=scaled_qty,
-                applied=bool(applied),
-                entry_mode=entry_mode,
-                legs=len(planned_orders),
-            )
-            if applied:
-                log_info(
-                    f"[INITIAL_ENTRY_QTY_CAP] {stock.get('name')}({code}) "
-                    f"qty={original_qty}->{scaled_qty} cap={initial_entry_qty_cap} "
-                    f"entry_mode={entry_mode}"
-                )
-
-        _log_entry_pipeline(
-            stock,
-            code,
-            "latency_pass",
-            mode=entry_mode,
-            decision=latency_gate.get('decision'),
-            latency=latency_gate.get('latency_state'),
-            orders=len(planned_orders),
-            reason=latency_gate.get('reason'),
-            ws_age_ms=latency_gate.get('ws_age_ms'),
-            ws_jitter_ms=latency_gate.get('ws_jitter_ms'),
-            spread_ratio=f"{float(latency_gate.get('spread_ratio', 0.0) or 0.0):.6f}",
-            quote_stale=bool(latency_gate.get('quote_stale')),
-            latency_danger_reasons=latency_gate.get('latency_danger_reasons'),
-            signal_price=int(latency_gate.get('signal_price', 0) or 0),
-            latest_price=int(latency_gate.get('latest_price', 0) or 0),
-            computed_allowed_slippage=int(latency_gate.get('computed_allowed_slippage', 0) or 0),
-            latency_canary_applied=bool(latency_gate.get('latency_canary_applied')),
-            latency_canary_reason=latency_gate.get('latency_canary_reason'),
-            entry_price_guard=latency_gate.get('entry_price_guard'),
-            entry_price_defensive_ticks=int(latency_gate.get('entry_price_defensive_ticks', 0) or 0),
-            normal_defensive_order_price=int(latency_gate.get('normal_defensive_order_price', 0) or 0),
-            latency_guarded_order_price=int(latency_gate.get('latency_guarded_order_price', 0) or 0),
-            counterfactual_order_price_1tick=int(latency_gate.get('counterfactual_order_price_1tick', 0) or 0),
-            order_price=int(latency_gate.get('order_price', 0) or 0),
-            **latency_price_snapshot,
-            **_build_ai_overlap_log_fields(
-                stock=stock,
-                ai_score=latency_signal_score,
-                momentum_tag=stock.get("entry_momentum_tag"),
-                threshold_profile=stock.get("entry_threshold_profile"),
-                overbought_blocked=False,
-                blocked_stage="-",
-            ),
-        )
-
-        if is_buy_side_paused():
-            log_info(
-                f"[TRADING_PAUSED_BLOCK] buy order blocked "
-                f"{stock.get('name')}({code}) strategy={strategy} state={get_pause_state_label()}"
-            )
-            clear_signal_reference(stock)
-            _log_entry_pipeline(stock, code, "blocked_pause", strategy=strategy)
-            return
-
-        big_bite_summary = ""
-        if stock.get('big_bite_triggered') or stock.get('big_bite_confirmed'):
-            info = stock.get('big_bite_info') or {}
-            big_bite_summary = (
-                f"\n🧪 Big-Bite: "
-                f"T={stock.get('big_bite_triggered')} / C={stock.get('big_bite_confirmed')} / "
-                f"Boost=+{stock.get('big_bite_boost_value', 0)}"
-                f"\n└ agg={info.get('agg_value')} impact={info.get('impact_ratio')} chase={info.get('chase_pct')}"
-            )
-            stock['msg_audience'] = 'ADMIN_ONLY'
-
-        msg = msg or (
-            f"✅ **{stock['name']} ({code}) 진입 주문 전송!**\n"
-            f"전략: `{strategy}`\n"
-            f"현재가: `{curr_price:,}원`\n"
-            f"주문 수량: `{requested_qty}주`"
-            f"{big_bite_summary}"
-        )
-
-        successful_orders = []
-        for planned_order in planned_orders:
-            request = _resolve_live_entry_order_request(
-                strategy=strategy,
-                entry_mode=entry_mode,
-                planned_order=planned_order,
-                default_order_type_code=order_type_code,
-                default_price=final_price,
-            )
-            qty = request['qty']
-            price = request['price']
-            if qty <= 0:
-                _log_entry_pipeline(
-                    stock,
-                    code,
-                    "skip_order_leg_zero_qty",
-                    tag=request['tag'],
-                )
-                continue
-
-            price_snapshot = _build_entry_price_snapshot_fields(
-                latency_gate,
-                request_price=price,
-                curr_price=curr_price,
-                best_bid=best_bid_at_submit,
-                best_ask=best_ask_at_submit,
-            )
-            if _is_pre_submit_price_guard_block(strategy, price, best_bid_at_submit):
-                max_below_bid_bps = int(
-                    getattr(TRADING_RULES, 'SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS', 80) or 80
-                )
-                _log_entry_pipeline(
-                    stock,
-                    code,
-                    "pre_submit_price_guard_block",
-                    tag=request['tag'],
-                    qty=qty,
-                    price=price,
-                    order_type=request['order_type_code'],
-                    tif=request['tif'],
-                    max_below_bid_bps=max_below_bid_bps,
-                    **price_snapshot,
-                )
-                log_info(
-                    f"[PRE_SUBMIT_PRICE_GUARD_BLOCK] {stock.get('name')}({code}) "
-                    f"price={price} best_bid={best_bid_at_submit} "
-                    f"below_bid_bps={price_snapshot['price_below_bid_bps']} "
-                    f"threshold_bps={max_below_bid_bps}"
-                )
-                continue
-
-            _log_entry_pipeline(
-                stock,
-                code,
-                "order_leg_request",
-                tag=request['tag'],
-                qty=qty,
-                price=price,
-                order_type=request['order_type_code'],
-                tif=request['tif'],
-                entry_price_guard=latency_gate.get('entry_price_guard'),
-                entry_price_defensive_ticks=int(latency_gate.get('entry_price_defensive_ticks', 0) or 0),
-                normal_defensive_order_price=int(latency_gate.get('normal_defensive_order_price', 0) or 0),
-                latency_guarded_order_price=int(latency_gate.get('latency_guarded_order_price', 0) or 0),
-                counterfactual_order_price_1tick=int(latency_gate.get('counterfactual_order_price_1tick', 0) or 0),
-                **price_snapshot,
-            )
-
-            res = kiwoom_orders.send_buy_order(
-                code,
-                qty,
-                price,
-                request['order_type_code'],
-                token=KIWOOM_TOKEN,
-                order_type_desc="매수" if strategy == 'SCALPING' else "최유리지정가",
-                tif=request['tif'],
-            )
-
-            if not isinstance(res, dict):
-                _log_entry_pipeline(stock, code, "order_leg_no_response", tag=request['tag'])
-                continue
-            rt_cd = str(res.get('return_code', res.get('rt_cd', '')))
-            if rt_cd != '0':
-                log_info(
-                    f"[LATENCY_ENTRY_ORDER_FAIL] {stock.get('name')}({code}) "
-                    f"tag={planned_order.get('tag')} msg={res.get('return_msg')}"
-                )
-                _log_entry_pipeline(
-                    stock,
-                    code,
-                    "order_leg_fail",
-                    tag=request['tag'],
-                    return_code=rt_cd,
-                    message=res.get('return_msg') or res.get('err_msg'),
-                )
-                continue
-
-            ord_no = str(res.get('ord_no', '') or res.get('odno', ''))
-            successful_orders.append({
-                'tag': request['tag'],
-                'qty': qty,
-                'price': price,
-                'ord_no': ord_no,
-                'tif': request['tif'],
-                'order_type': request['order_type_code'],
-                'status': 'OPEN',
-                'filled_qty': 0,
-                'sent_at': now_ts,
-            })
-            _stage_buy_order_submission(
-                stock=stock,
-                code=code,
-                curr_price=curr_price,
-                requested_qty=requested_qty,
-                msg=msg,
-                entry_orders=successful_orders,
-            )
-            log_info(
-                f"[LATENCY_ENTRY_ORDER_SENT] {stock.get('name')}({code}) "
-                f"tag={request['tag']} qty={qty} price={price} "
-                f"type={request['order_type_code']} tif={request['tif']} ord_no={ord_no}"
-            )
-            _log_entry_pipeline(stock, code, "order_leg_sent", tag=request['tag'], ord_no=ord_no)
-
-        if not successful_orders:
-            print(f"❌ [{stock['name']}] 매수 주문 전송 실패 (성공 주문 없음)")
-            clear_signal_reference(stock)
-            _log_entry_pipeline(stock, code, "order_bundle_failed")
-            return
-
-        stock['entry_mode'] = entry_mode
-        _finalize_buy_order_submission(
-            stock=stock,
-            code=code,
-            curr_price=curr_price,
-            requested_qty=requested_qty,
-            msg=msg,
-            entry_orders=successful_orders,
-        )
-        _publish_buy_signal_submission_notice(
-            stock,
-            code,
-            strategy=strategy,
-            curr_price=curr_price,
-            requested_qty=requested_qty,
-            entry_mode=entry_mode,
-            latency_gate=latency_gate,
-            liquidity_value=liquidity_value,
-            ai_score=latency_signal_score,
-        )
-        bundle_primary_price = successful_orders[0].get('price', latency_gate.get('order_price', 0))
-        bundle_price_snapshot = _build_entry_price_snapshot_fields(
-            latency_gate,
-            request_price=bundle_primary_price,
-            curr_price=curr_price,
-            best_bid=best_bid_at_submit,
-            best_ask=best_ask_at_submit,
-        )
-        _log_entry_pipeline(
-            stock,
-            code,
-            "order_bundle_submitted",
-            entry_mode=entry_mode,
-            requested_qty=requested_qty,
-            legs=len(successful_orders),
-            wait6579_probe_canary_applied=wait6579_probe_applied,
-            entry_price_guard=latency_gate.get('entry_price_guard'),
-            entry_price_defensive_ticks=int(latency_gate.get('entry_price_defensive_ticks', 0) or 0),
-            normal_defensive_order_price=int(latency_gate.get('normal_defensive_order_price', 0) or 0),
-            latency_guarded_order_price=int(latency_gate.get('latency_guarded_order_price', 0) or 0),
-            counterfactual_order_price_1tick=int(latency_gate.get('counterfactual_order_price_1tick', 0) or 0),
-            order_price=int(latency_gate.get('order_price', 0) or 0),
-            **bundle_price_snapshot,
-        )
-
-        if strategy in ['SCALPING', 'SCALP']:
-            alerted_stocks.add(code)
-        else:
-            stock['msg_audience'] = 'VIP_ALL'
-
-        try:
-            with DB.get_session() as session:
-                session.query(RecommendationHistory).filter_by(id=stock.get('id')).update({
-                    "status": "BUY_ORDERED",
-                    "buy_price": curr_price,
-                    "buy_qty": requested_qty,
-                })
-        except Exception as e:
-            log_error(f"🚨 [DB 에러] {stock['name']} BUY_ORDERED 장부 업데이트 실패: {e}")
-
-        clear_signal_reference(stock)
+    runtime = {
+        "strategy": strategy,
+        "pos_tag": pos_tag,
+        "now_ts": now_ts,
+        "now_dt": now_dt,
+        "curr_price": curr_price,
+        "current_vpw": current_vpw,
+        "fluctuation": fluctuation,
+        "current_ai_score": current_ai_score,
+        "liquidity_value": 0,
+        "is_trigger": False,
+        "msg": "",
+        "ratio": 0.10,
+        "ai_prob": stock.get('prob', SNIPER_AGGRESSIVE_PROB),
+        "buy_threshold": BUY_SCORE_THRESHOLD,
+        "strong_vpw": VPW_STRONG_LIMIT,
+        "cooldowns": cooldowns,
+        "alerted_stocks": alerted_stocks,
+        "event_bus": event_bus,
+    }
+    config = {
+        "MAX_SCALP_SURGE_PCT": MAX_SCALP_SURGE_PCT,
+        "MAX_INTRADAY_SURGE": MAX_INTRADAY_SURGE,
+        "MIN_SCALP_LIQUIDITY": MIN_SCALP_LIQUIDITY,
+        "SNIPER_AGGRESSIVE_PROB": SNIPER_AGGRESSIVE_PROB,
+        "BUY_SCORE_THRESHOLD": BUY_SCORE_THRESHOLD,
+        "VPW_STRONG_LIMIT": VPW_STRONG_LIMIT,
+        "INVEST_RATIO_SCALPING_MIN": INVEST_RATIO_SCALPING_MIN,
+        "INVEST_RATIO_SCALPING_MAX": INVEST_RATIO_SCALPING_MAX,
+        "VPW_SCALP_LIMIT": VPW_SCALP_LIMIT,
+        "AI_WATCHING_COOLDOWN": AI_WATCHING_COOLDOWN,
+        "VIP_LIQUIDITY_THRESHOLD": VIP_LIQUIDITY_THRESHOLD,
+        "AI_WAIT_DROP_COOLDOWN": AI_WAIT_DROP_COOLDOWN,
+        "VPW_KOSDAQ_LIMIT": VPW_KOSDAQ_LIMIT,
+        "VPW_STRONG_KOSDAQ_LIMIT": VPW_STRONG_KOSDAQ_LIMIT,
+        "BUY_SCORE_KOSDAQ_THRESHOLD": BUY_SCORE_KOSDAQ_THRESHOLD,
+        "INVEST_RATIO_KOSDAQ_MIN": INVEST_RATIO_KOSDAQ_MIN,
+        "INVEST_RATIO_KOSDAQ_MAX": INVEST_RATIO_KOSDAQ_MAX,
+        "AI_SCORE_THRESHOLD_KOSDAQ": AI_SCORE_THRESHOLD_KOSDAQ,
+        "INVEST_RATIO_KOSPI_MIN": INVEST_RATIO_KOSPI_MIN,
+        "INVEST_RATIO_KOSPI_MAX": INVEST_RATIO_KOSPI_MAX,
+        "AI_SCORE_THRESHOLD_KOSPI": AI_SCORE_THRESHOLD_KOSPI,
+        "BIG_BITE_BOOST_SCORE": BIG_BITE_BOOST_SCORE,
+        "BIG_BITE_ARMED_ENTRY_BONUS": BIG_BITE_ARMED_ENTRY_BONUS,
+        "BIG_BITE_HARD_GATE_ENABLED": BIG_BITE_HARD_GATE_ENABLED,
+        "BIG_BITE_HARD_GATE_TAGS_SCALPING": BIG_BITE_HARD_GATE_TAGS_SCALPING,
+        "BIG_BITE_HARD_GATE_TAGS_KOSDAQ": BIG_BITE_HARD_GATE_TAGS_KOSDAQ,
+        "BIG_BITE_HARD_GATE_TAGS_KOSPI": BIG_BITE_HARD_GATE_TAGS_KOSPI,
+    }
+
+    if not _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, runtime, config):
+        return
+
+    if runtime["is_trigger"]:
+        _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime)
+        return
 
 
 
@@ -3338,11 +3463,13 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
     cooldowns = COOLDOWNS
     alerted_stocks = ALERTED_STOCKS
     highest_prices = HIGHEST_PRICES
+    if not isinstance(highest_prices, dict):
+        highest_prices = {}
 
     raw_strategy = (stock.get('strategy') or 'KOSPI_ML').upper()
     strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
     pos_tag = normalize_position_tag(strategy, stock.get('position_tag'))
-    stock['position_tag'] = pos_tag
+    _mutate_stock_state(stock, set_fields={"position_tag": pos_tag})
     legacy_broker_recovered = bool(stock.get('broker_recovered_legacy'))
 
     curr_p = int(float(ws_data.get('curr', 0) or 0))
@@ -3364,9 +3491,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
     # 9) 아니면 HOLD 유지
     # --------------------------------------------------------
 
-    if code not in highest_prices:
-        highest_prices[code] = curr_p
-    highest_prices[code] = max(highest_prices[code], curr_p)
+    if isinstance(highest_prices, dict):
+        with ENTRY_LOCK:
+            if code not in highest_prices:
+                highest_prices[code] = curr_p
+            highest_prices[code] = max(highest_prices[code], curr_p)
 
     profit_rate = calculate_net_profit_rate(buy_p, curr_p)
     peak_profit = calculate_net_profit_rate(buy_p, highest_prices[code])
@@ -3381,82 +3510,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 f"[{strategy}] 보유 종목 감시 중: {stock['name']}({code}) 수익률 {profit_rate:+.2f}%, "
                 f"AI 점수 {current_ai_score:.0f}점"
             )
-            LAST_LOG_TIMES[code] = now_ts
-
-    def _dispatch_scalp_preset_exit(*, sell_reason_type, reason, exit_rule):
-        target_id = stock.get('id')
-        expected_qty = int(stock.get('buy_qty', 0) or 0)
-        orig_ord_no = stock.get('preset_tp_ord_no', '')
-        preset_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
-        preset_held_sec = 0
-        try:
-            if stock.get('order_time'):
-                preset_held_sec = max(0, int(now_ts - float(stock.get('order_time') or 0)))
-        except Exception:
-            preset_held_sec = 0
-
-        _remember_exit_context(
-            stock=stock,
-            exit_rule=exit_rule,
-            peak_profit=peak_profit,
-            held_sec=preset_held_sec,
-            current_ai_score=preset_ai_score,
-        )
-        stock['last_exit_reason'] = reason
-        _log_holding_pipeline(
-            stock,
-            code,
-            "exit_signal",
-            sell_reason_type=sell_reason_type,
-            reason=reason,
-            exit_rule=exit_rule or "-",
-            profit_rate=f"{profit_rate:+.2f}",
-            peak_profit=f"{peak_profit:+.2f}",
-            current_ai_score=f"{preset_ai_score:.0f}",
-            held_sec=preset_held_sec,
-            curr_price=curr_p,
-            buy_price=buy_p,
-            buy_qty=expected_qty,
-        )
-
-        try:
-            if target_id:
-                with DB.get_session() as session:
-                    session.query(RecommendationHistory).filter_by(id=target_id).update({"status": "SELL_ORDERED"})
-        except Exception as e:
-            print(f"🚨 [DB 에러] {stock['name']} SELL_ORDERED 장부 잠금 실패: {e}")
-
-        rem_qty = _confirm_cancel_or_reload_remaining(code, orig_ord_no, KIWOOM_TOKEN, expected_qty)
-        ord_no = ''
-        if rem_qty > 0:
-            sell_res = _send_exit_best_ioc(code, rem_qty, KIWOOM_TOKEN)
-            stock['exit_requested'] = True
-            stock['exit_order_type'] = '16'
-            stock['exit_order_time'] = now_ts
-            ord_no = str(sell_res.get('ord_no', '') or '') if isinstance(sell_res, dict) else ''
-            if ord_no:
-                stock['sell_ord_no'] = ord_no
-            stock['sell_order_time'] = now_ts
-            sign = _resolve_sell_order_sign(sell_reason_type, profit_rate)
-            stock['pending_sell_msg'] = (
-                f"{sign} **{stock['name']} 매도 전송 ({strategy})**\n"
-                f"사유: `{reason}`\n"
-                f"현재가 기준 수익: `{profit_rate:+.2f}%` (고점: {peak_profit:.1f}%)"
-            )
-            _log_holding_pipeline(
-                stock,
-                code,
-                "sell_order_sent",
-                sell_reason_type=sell_reason_type,
-                exit_rule=exit_rule or "-",
-                qty=rem_qty,
-                ord_no=ord_no or "-",
-                order_type=stock.get("exit_order_type") or "-",
-                profit_rate=f"{profit_rate:+.2f}",
-            )
-
-        stock['status'] = 'SELL_ORDERED'
-        stock['sell_target_price'] = curr_p
+            with ENTRY_LOCK:
+                LAST_LOG_TIMES[code] = now_ts
 
     if stock.get('exit_mode') == 'SCALP_PRESET_TP':
         if stock.get('exit_requested'):
@@ -3466,28 +3521,26 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         preset_hard_stop_pct = float(
             stock.get(
                 'hard_stop_pct',
-                getattr(TRADING_RULES, 'SCALP_PRESET_HARD_STOP_PCT', -0.7),
+                _rule('SCALP_PRESET_HARD_STOP_PCT', -0.7),
             )
-            or getattr(TRADING_RULES, 'SCALP_PRESET_HARD_STOP_PCT', -0.7)
+            or _rule('SCALP_PRESET_HARD_STOP_PCT', -0.7)
         )
         preset_hard_stop_grace_sec = int(
             stock.get(
                 'hard_stop_grace_sec',
-                getattr(TRADING_RULES, 'SCALP_PRESET_HARD_STOP_GRACE_SEC', 0),
+                _rule('SCALP_PRESET_HARD_STOP_GRACE_SEC', 0),
             )
             or 0
         )
         preset_hard_stop_emergency_pct = float(
             stock.get(
                 'hard_stop_emergency_pct',
-                getattr(
-                    TRADING_RULES,
+                _rule(
                     'SCALP_PRESET_HARD_STOP_EMERGENCY_PCT',
                     min(preset_hard_stop_pct - 0.5, -1.2),
                 ),
             )
-            or getattr(
-                TRADING_RULES,
+            or _rule(
                 'SCALP_PRESET_HARD_STOP_EMERGENCY_PCT',
                 min(preset_hard_stop_pct - 0.5, -1.2),
             )
@@ -3505,7 +3558,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         )
 
         if legacy_broker_recovered:
-            stock['last_exit_guard_reason'] = 'broker_recovered_legacy'
+            _mutate_stock_state(stock, set_fields={'last_exit_guard_reason': 'broker_recovered_legacy'})
         elif profit_rate <= preset_hard_stop_pct:
             within_grace = preset_hard_stop_grace_sec > 0 and preset_held_sec < preset_hard_stop_grace_sec
             emergency_break = profit_rate <= preset_hard_stop_emergency_pct
@@ -3521,11 +3574,19 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     emergency_pct=f"{preset_hard_stop_emergency_pct:+.2f}",
                 )
             else:
-                print(
+                log_info(
                     f"🔪 [SCALP 출구엔진] {stock['name']} 손절선 터치({profit_rate:.2f}%). "
                     "즉각 최유리(IOC) 청산!"
                 )
                 _dispatch_scalp_preset_exit(
+                    stock=stock,
+                    code=code,
+                    now_ts=now_ts,
+                    curr_p=curr_p,
+                    buy_p=buy_p,
+                    profit_rate=profit_rate,
+                    peak_profit=peak_profit,
+                    strategy=strategy,
                     sell_reason_type="LOSS",
                     reason=f"🛑 SCALP 출구엔진 손절선 도달 ({preset_hard_stop_pct:+.2f}%)",
                     exit_rule="scalp_preset_hard_stop_pct",
@@ -3533,8 +3594,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 return
 
         if profit_rate >= 0.8 and not stock.get('ai_review_done', False):
-            print(f"🤖 [SCALP 출구엔진] {stock['name']} +0.8% 도달! AI 1회 검문 실시...")
-            stock['ai_review_done'] = True
+            log_info(f"🤖 [SCALP 출구엔진] {stock['name']} +0.8% 도달! AI 1회 검문 실시...")
+            _mutate_stock_state(stock, set_fields={'ai_review_done': True})
 
             if ai_engine:
                 try:
@@ -3551,8 +3612,13 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     ai_action = ai_decision.get('action', 'WAIT')
                     ai_score = ai_decision.get('score', 50)
 
-                    stock['ai_review_action'] = ai_action
-                    stock['ai_review_score'] = ai_score
+                    _mutate_stock_state(
+                        stock,
+                        set_fields={
+                            'ai_review_action': ai_action,
+                            'ai_review_score': ai_score,
+                        },
+                    )
 
                     # Gemini holding/exit action schema(HOLD/TRIM/EXIT)는 action_v2로 전달된다.
                     # 현 실행경로는 기존 호환을 위해 action(legacy: WAIT/SELL/DROP)을 함께 사용한다.
@@ -3571,11 +3637,19 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                 ai_cooldown_blocked=False,
                             ),
                         )
-                        print(
+                        log_info(
                             "🛑 [SCALP 출구엔진 AI] 모멘텀 둔화 감지. 1.5% 포기 후 즉시 최유리(IOC) "
                             "청산!"
                         )
                         _dispatch_scalp_preset_exit(
+                            stock=stock,
+                            code=code,
+                            now_ts=now_ts,
+                            curr_p=curr_p,
+                            buy_p=buy_p,
+                            profit_rate=profit_rate,
+                            peak_profit=peak_profit,
+                            strategy=strategy,
                             sell_reason_type="MOMENTUM_DECAY",
                             reason="🛑 SCALP 출구엔진 AI 모멘텀 둔화 즉시청산",
                             exit_rule="scalp_preset_ai_review_exit",
@@ -3596,20 +3670,27 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                 ai_cooldown_blocked=False,
                             ),
                         )
-                        print(
+                        log_info(
                             "✅ [SCALP 출구엔진 AI] 돌파 모멘텀 유지(WAIT/BUY). 1.5% 유지, +0.3% 보호선 구축."
                         )
-                        stock['protect_profit_pct'] = 0.3
-
+                        _mutate_stock_state(stock, set_fields={'protect_profit_pct': 0.3})
                 except Exception as e:
-                    print(f"⚠️ [SCALP 출구엔진 AI] 분석 실패: {e}. 기존 지정가 유지.")
+                    log_error(f"⚠️ [SCALP 출구엔진 AI] 분석 실패: {e}. 기존 지정가 유지.")
 
         protect_pct = stock.get('protect_profit_pct')
         if protect_pct is not None and profit_rate <= protect_pct:
-            print(
+            log_info(
                 f"🛡️ [SCALP 출구엔진] {stock['name']} +0.3% 보호선 이탈. 최유리(IOC) 약익절!"
             )
             _dispatch_scalp_preset_exit(
+                stock=stock,
+                code=code,
+                now_ts=now_ts,
+                curr_p=curr_p,
+                buy_p=buy_p,
+                profit_rate=profit_rate,
+                peak_profit=peak_profit,
+                strategy=strategy,
                 sell_reason_type="TRAILING",
                 reason=f"🛡️ SCALP 출구엔진 보호선 이탈 ({protect_pct:+.2f}%)",
                 exit_rule="scalp_preset_protect_profit",
@@ -3627,8 +3708,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
     current_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
     near_ai_exit_score_limit = 35
     near_ai_exit_min_loss_pct = -0.7
-    momentum_decay_score_limit = int(getattr(TRADING_RULES, 'SCALP_AI_MOMENTUM_DECAY_SCORE_LIMIT', 45) or 45)
-    momentum_decay_min_hold_sec = int(getattr(TRADING_RULES, 'SCALP_AI_MOMENTUM_DECAY_MIN_HOLD_SEC', 90) or 90)
+    momentum_decay_score_limit = _rule_int('SCALP_AI_MOMENTUM_DECAY_SCORE_LIMIT', 45)
+    momentum_decay_min_hold_sec = _rule_int('SCALP_AI_MOMENTUM_DECAY_MIN_HOLD_SEC', 90)
     last_ai_profit = stock.get('last_ai_profit', profit_rate)
     price_change = abs(profit_rate - last_ai_profit)
     time_elapsed = now_ts - last_ai_time
@@ -3654,14 +3735,14 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         )
 
     if strategy == 'SCALPING' and ai_engine and radar:
-        safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5)
+        safe_profit_pct = _rule_float('SCALP_SAFE_PROFIT', 0.5)
         is_critical_zone = (profit_rate >= safe_profit_pct) or (profit_rate < 0)
 
-        dynamic_min_cd = 3 if is_critical_zone else getattr(TRADING_RULES, 'AI_HOLDING_MIN_COOLDOWN', 15)
+        dynamic_min_cd = 3 if is_critical_zone else _rule_int('AI_HOLDING_MIN_COOLDOWN', 15)
         dynamic_max_cd = (
-            getattr(TRADING_RULES, 'AI_HOLDING_CRITICAL_COOLDOWN', 20)
+            _rule_int('AI_HOLDING_CRITICAL_COOLDOWN', 20)
             if is_critical_zone
-            else getattr(TRADING_RULES, 'AI_HOLDING_MAX_COOLDOWN', 60)
+            else _rule_int('AI_HOLDING_MAX_COOLDOWN', 60)
         )
         dynamic_price_trigger = 0.20 if is_critical_zone else 0.40
 
@@ -3671,7 +3752,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 market_snapshot = _build_holding_ai_fast_snapshot(ws_data)
                 market_signature = tuple(market_snapshot.values())
                 reuse_sec = _resolve_holding_ai_fast_reuse_sec(is_critical_zone, dynamic_max_cd)
-                max_ws_age_sec = float(getattr(TRADING_RULES, 'AI_HOLDING_FAST_REUSE_MAX_WS_AGE_SEC', 1.5) or 1.5)
+                max_ws_age_sec = _rule_float('AI_HOLDING_FAST_REUSE_MAX_WS_AGE_SEC', 1.5)
                 ws_age_sec = _get_ws_snapshot_age_sec(ws_data)
                 fast_sig_matches = market_signature == stock.get('last_ai_market_signature')
                 fast_sig_age = _resolve_reference_age_sec(
@@ -3780,145 +3861,170 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         ai_cache_hit = bool(ai_decision.get('cache_hit', False))
 
                         smoothed_score = int((current_ai_score * 0.6) + (raw_ai_score * 0.4))
-                        stock['rt_ai_prob'] = smoothed_score / 100.0
-                        stock['last_ai_profit'] = profit_rate
+                        _mutate_stock_state(
+                            stock,
+                            set_fields={
+                                'rt_ai_prob': smoothed_score / 100.0,
+                                'last_ai_profit': profit_rate,
+                                'last_ai_reviewed_at': now_ts,
+                                'last_ai_market_signature': market_signature,
+                                'last_ai_market_snapshot': market_snapshot,
+                                'last_ai_market_signature_at': now_ts,
+                            },
+                        )
                         current_ai_score = smoothed_score
 
-                        stock['last_ai_reviewed_at'] = now_ts
-                        stock['last_ai_market_signature'] = market_signature
-                        stock['last_ai_market_snapshot'] = market_snapshot
-                        stock['last_ai_market_signature_at'] = now_ts
-
-                        # reversal_add: 수급 피처 저장 및 STAGNATION 상태 갱신
-                        if getattr(TRADING_RULES, 'REVERSAL_ADD_ENABLED', False):
-                            if hasattr(ai_engine, '_extract_scalping_features') and recent_ticks:
-                                try:
-                                    feat = ai_engine._extract_scalping_features(ws_data, recent_ticks, recent_candles)
-                                    stock['last_reversal_features'] = {
-                                        'buy_pressure_10t': feat.get('buy_pressure_10t', 50.0),
-                                        'tick_acceleration_ratio': feat.get('tick_acceleration_ratio', 0.0),
-                                        'large_sell_print_detected': feat.get('large_sell_print_detected', False),
-                                        'curr_vs_micro_vwap_bp': feat.get('curr_vs_micro_vwap_bp', 0.0),
-                                    }
-                                except Exception as exc:
-                                    log_error(f"⚠️ [REVERSAL_ADD] feature extract failed ({code}): {exc}")
-
-                            # AI bottom/history 갱신 (STAGNATION/REVERSAL_CANDIDATE 구간에서만)
-                            if stock.get('reversal_add_state') in ('STAGNATION', 'REVERSAL_CANDIDATE'):
-                                _ra_hist = list(stock.get('reversal_add_ai_history', []))
-                                _ra_hist.append(current_ai_score)
-                                stock['reversal_add_ai_history'] = _ra_hist[-4:]
-                                stock['reversal_add_ai_bottom'] = min(
-                                    int(stock.get('reversal_add_ai_bottom', 100)),
-                                    current_ai_score,
+                    # reversal_add: 수급 피처 저장 및 STAGNATION 상태 갱신
+                    if _rule_bool('REVERSAL_ADD_ENABLED', False):
+                        if hasattr(ai_engine, '_extract_scalping_features') and recent_ticks:
+                            try:
+                                feat = ai_engine._extract_scalping_features(ws_data, recent_ticks, recent_candles)
+                                _mutate_stock_state(
+                                    stock,
+                                    set_fields={
+                                        'last_reversal_features': {
+                                            'buy_pressure_10t': feat.get('buy_pressure_10t', 50.0),
+                                            'tick_acceleration_ratio': feat.get('tick_acceleration_ratio', 0.0),
+                                            'large_sell_print_detected': feat.get('large_sell_print_detected', False),
+                                            'curr_vs_micro_vwap_bp': feat.get('curr_vs_micro_vwap_bp', 0.0),
+                                        },
+                                    },
                                 )
-                                stock['reversal_add_profit_floor'] = min(
-                                    float(stock.get('reversal_add_profit_floor', 0.0)),
-                                    profit_rate,
-                                )
+                            except Exception as exc:
+                                log_error(f"⚠️ [REVERSAL_ADD] feature extract failed ({code}): {exc}")
 
-                            # STAGNATION 진입 판단
-                            _ra_pnl_min = float(getattr(TRADING_RULES, 'REVERSAL_ADD_PNL_MIN', -0.45))
-                            _ra_pnl_max = float(getattr(TRADING_RULES, 'REVERSAL_ADD_PNL_MAX', -0.10))
-                            if (not stock.get('reversal_add_used')
-                                    and not stock.get('reversal_add_state')
-                                    and _ra_pnl_min <= profit_rate <= _ra_pnl_max
-                            ):
-                                stock['reversal_add_state'] = 'STAGNATION'
-                                stock['reversal_add_profit_floor'] = profit_rate
-                                stock['reversal_add_ai_bottom'] = current_ai_score
-                                stock['reversal_add_ai_history'] = [current_ai_score]
-                            # STAGNATION 리셋 조건
-                            elif stock.get('reversal_add_state') == 'STAGNATION':
-                                if profit_rate < _ra_pnl_min or profit_rate > 0:
-                                    stock['reversal_add_state'] = ''
-                                    stock['reversal_add_profit_floor'] = 0.0
-                                    stock['reversal_add_ai_bottom'] = 100
-                                    stock['reversal_add_ai_history'] = []
+                        # AI bottom/history 갱신 (STAGNATION/REVERSAL_CANDIDATE 구간에서만)
+                        if stock.get('reversal_add_state') in ('STAGNATION', 'REVERSAL_CANDIDATE'):
+                            _ra_hist = list(stock.get('reversal_add_ai_history', []))
+                            _ra_hist.append(current_ai_score)
+                            _mutate_stock_state(
+                                stock,
+                                set_fields={
+                                    'reversal_add_ai_history': _ra_hist[-4:],
+                                    'reversal_add_ai_bottom': min(
+                                        int(stock.get('reversal_add_ai_bottom', 100)),
+                                        current_ai_score,
+                                    ),
+                                    'reversal_add_profit_floor': min(
+                                        float(stock.get('reversal_add_profit_floor', 0.0)),
+                                        profit_rate,
+                                    ),
+                                },
+                            )
 
-                            # REVERSAL_CANDIDATE 전이 판단 (실행 직전 후보 상태)
-                            _ra_state = stock.get('reversal_add_state', '')
-                            if _ra_state in ('STAGNATION', 'REVERSAL_CANDIDATE'):
-                                _ra_floor = float(stock.get('reversal_add_profit_floor', 0.0))
-                                _ra_margin = float(getattr(TRADING_RULES, 'REVERSAL_ADD_STAGNATION_LOW_FLOOR_MARGIN', 0.05))
-                                _ra_min_ai = int(getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_AI_SCORE', 60))
-                                _ra_bottom = int(stock.get('reversal_add_ai_bottom', 100))
-                                _ra_recovery_delta = int(getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_AI_RECOVERY_DELTA', 15))
-                                _ra_hist = list(stock.get('reversal_add_ai_history', []))
-                                _ra_recovering_delta = (current_ai_score >= _ra_bottom + _ra_recovery_delta)
-                                _ra_recovering_consec = (
-                                    len(_ra_hist) >= 2 and _ra_hist[-1] > _ra_hist[-2] and current_ai_score > _ra_hist[-1]
-                                )
-
-                                _ra_feat = stock.get('last_reversal_features', {})
-                                if _ra_feat:
-                                    _ra_checks = [
-                                        _ra_feat.get('buy_pressure_10t', 0) >= getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_BUY_PRESSURE', 55),
-                                        _ra_feat.get('tick_acceleration_ratio', 0) >= getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_TICK_ACCEL', 0.95),
-                                        not _ra_feat.get('large_sell_print_detected', True),
-                                        _ra_feat.get('curr_vs_micro_vwap_bp', -999) >= getattr(TRADING_RULES, 'REVERSAL_ADD_VWAP_BP_MIN', -5.0),
-                                    ]
-                                    _ra_supply_ok = sum(_ra_checks) >= 3
-                                else:
-                                    _ra_bp = float(stock.get('last_reversal_features', {}).get('buy_pressure_10t', 50.0))
-                                    _ra_supply_ok = _ra_bp >= getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_BUY_PRESSURE', 55)
-
-                                _ra_candidate_ok = (
-                                    (not stock.get('reversal_add_used'))
-                                    and (_ra_pnl_min <= profit_rate <= _ra_pnl_max)
-                                    and (profit_rate >= _ra_floor - _ra_margin)
-                                    and current_ai_score >= _ra_min_ai
-                                    and (_ra_recovering_delta or _ra_recovering_consec)
-                                    and _ra_supply_ok
+                        # STAGNATION 진입 판단
+                        _ra_pnl_min = _rule_float('REVERSAL_ADD_PNL_MIN', -0.45)
+                        _ra_pnl_max = _rule_float('REVERSAL_ADD_PNL_MAX', -0.10)
+                        if (not stock.get('reversal_add_used')
+                                and not stock.get('reversal_add_state')
+                                and _ra_pnl_min <= profit_rate <= _ra_pnl_max
+                        ):
+                            _mutate_stock_state(
+                                stock,
+                                set_fields={
+                                    'reversal_add_state': 'STAGNATION',
+                                    'reversal_add_profit_floor': profit_rate,
+                                    'reversal_add_ai_bottom': current_ai_score,
+                                    'reversal_add_ai_history': [current_ai_score],
+                                },
+                            )
+                        # STAGNATION 리셋 조건
+                        elif stock.get('reversal_add_state') == 'STAGNATION':
+                            if profit_rate < _ra_pnl_min or profit_rate > 0:
+                                _mutate_stock_state(
+                                    stock,
+                                    set_fields={
+                                        'reversal_add_state': '',
+                                        'reversal_add_profit_floor': 0.0,
+                                        'reversal_add_ai_bottom': 100,
+                                        'reversal_add_ai_history': [],
+                                    },
                                 )
 
-                                if _ra_candidate_ok and _ra_state != 'REVERSAL_CANDIDATE':
-                                    stock['reversal_add_state'] = 'REVERSAL_CANDIDATE'
-                                    _log_holding_pipeline(
-                                        stock,
-                                        code,
-                                        "reversal_add_candidate",
-                                        state="REVERSAL_CANDIDATE",
-                                        reason="candidate_ready",
-                                        profit_rate=f"{profit_rate:+.2f}",
-                                        ai_score=f"{current_ai_score:.0f}",
-                                    )
-                                elif (not _ra_candidate_ok) and _ra_state == 'REVERSAL_CANDIDATE':
-                                    stock['reversal_add_state'] = 'STAGNATION'
+                        # REVERSAL_CANDIDATE 전이 판단 (실행 직전 후보 상태)
+                        _ra_state = stock.get('reversal_add_state', '')
+                        if _ra_state in ('STAGNATION', 'REVERSAL_CANDIDATE'):
+                            _ra_floor = float(stock.get('reversal_add_profit_floor', 0.0))
+                            _ra_margin = _rule_float('REVERSAL_ADD_STAGNATION_LOW_FLOOR_MARGIN', 0.05)
+                            _ra_min_ai = _rule_int('REVERSAL_ADD_MIN_AI_SCORE', 60)
+                            _ra_bottom = int(stock.get('reversal_add_ai_bottom', 100))
+                            _ra_recovery_delta = _rule_int('REVERSAL_ADD_MIN_AI_RECOVERY_DELTA', 15)
+                            _ra_hist = list(stock.get('reversal_add_ai_history', []))
+                            _ra_recovering_delta = (current_ai_score >= _ra_bottom + _ra_recovery_delta)
+                            _ra_recovering_consec = (
+                                len(_ra_hist) >= 2 and _ra_hist[-1] > _ra_hist[-2] and current_ai_score > _ra_hist[-1]
+                            )
 
-                        print(
-                            f"👁️ [AI 보유감시: {stock['name']}] 수익: {profit_rate:+.2f}% | "
-                            f"AI: {current_ai_score:.0f}점 | "
-                            f"갱신주기: {dynamic_max_cd}초 | AI캐시: {'HIT' if ai_cache_hit else 'MISS'}"
-                        )
-                        _log_holding_pipeline(
-                            stock,
-                            code,
-                            "ai_holding_review",
-                            profit_rate=f"{profit_rate:+.2f}",
-                            ai_score=f"{current_ai_score:.0f}",
-                            held_sec=int(held_time_min * 60),
-                            price_change=f"{price_change:.2f}",
-                            review_cd_sec=dynamic_max_cd,
-                            review_ms=int((time.perf_counter() - holding_ai_review_started) * 1000),
-                            ai_cache="hit" if ai_cache_hit else "miss",
-                            **_build_ai_ops_log_fields(
-                                ai_decision,
-                                ai_score_raw=raw_ai_score,
-                                ai_score_after_bonus=current_ai_score,
-                                ai_cooldown_blocked=False,
-                            ),
-                        )
+                            _ra_feat = stock.get('last_reversal_features', {})
+                            if _ra_feat:
+                                _ra_checks = [
+                                    _ra_feat.get('buy_pressure_10t', 0) >= _rule_float('REVERSAL_ADD_MIN_BUY_PRESSURE', 55),
+                                    _ra_feat.get('tick_acceleration_ratio', 0) >= _rule_float('REVERSAL_ADD_MIN_TICK_ACCEL', 0.95),
+                                    not _ra_feat.get('large_sell_print_detected', True),
+                                    _ra_feat.get('curr_vs_micro_vwap_bp', -999) >= _rule_float('REVERSAL_ADD_VWAP_BP_MIN', -5.0),
+                                ]
+                                _ra_supply_ok = sum(_ra_checks) >= 3
+                            else:
+                                _ra_bp = float(stock.get('last_reversal_features', {}).get('buy_pressure_10t', 50.0))
+                                _ra_supply_ok = _ra_bp >= _rule_float('REVERSAL_ADD_MIN_BUY_PRESSURE', 55)
+
+                            _ra_candidate_ok = (
+                                (not stock.get('reversal_add_used'))
+                                and (_ra_pnl_min <= profit_rate <= _ra_pnl_max)
+                                and (profit_rate >= _ra_floor - _ra_margin)
+                                and current_ai_score >= _ra_min_ai
+                                and (_ra_recovering_delta or _ra_recovering_consec)
+                                and _ra_supply_ok
+                            )
+
+                            if _ra_candidate_ok and _ra_state != 'REVERSAL_CANDIDATE':
+                                _mutate_stock_state(stock, set_fields={'reversal_add_state': 'REVERSAL_CANDIDATE'})
+                                _log_holding_pipeline(
+                                    stock,
+                                    code,
+                                    "reversal_add_candidate",
+                                    state="REVERSAL_CANDIDATE",
+                                    reason="candidate_ready",
+                                    profit_rate=f"{profit_rate:+.2f}",
+                                    ai_score=f"{current_ai_score:.0f}",
+                                )
+                            elif (not _ra_candidate_ok) and _ra_state == 'REVERSAL_CANDIDATE':
+                                _mutate_stock_state(stock, set_fields={'reversal_add_state': 'STAGNATION'})
+
+                    log_info(
+                        f"👁️ [AI 보유감시: {stock['name']}] 수익: {profit_rate:+.2f}% | "
+                        f"AI: {current_ai_score:.0f}점 | "
+                        f"갱신주기: {dynamic_max_cd}초 | AI캐시: {'HIT' if ai_cache_hit else 'MISS'}"
+                    )
+                    _log_holding_pipeline(
+                        stock,
+                        code,
+                        "ai_holding_review",
+                        profit_rate=f"{profit_rate:+.2f}",
+                        ai_score=f"{current_ai_score:.0f}",
+                        held_sec=int(held_time_min * 60),
+                        price_change=f"{price_change:.2f}",
+                        review_cd_sec=dynamic_max_cd,
+                        review_ms=int((time.perf_counter() - holding_ai_review_started) * 1000),
+                        ai_cache="hit" if ai_cache_hit else "miss",
+                        **_build_ai_ops_log_fields(
+                            ai_decision,
+                            ai_score_raw=raw_ai_score,
+                            ai_score_after_bonus=current_ai_score,
+                            ai_cooldown_blocked=False,
+                        ),
+                    )
 
             except Exception as e:
                 log_info(f"🚨 [보유 AI 감시 에러] {stock['name']}({code}): {e}")
             finally:
-                LAST_AI_CALL_TIMES[code] = now_ts
+                with ENTRY_LOCK:
+                    LAST_AI_CALL_TIMES[code] = now_ts
 
     # ── reversal_add POST_ADD_EVAL 집중 감시 ──────────────────
     if not is_sell_signal and stock.get('reversal_add_state') == 'POST_ADD_EVAL':
         _ra_executed_at = float(stock.get('reversal_add_executed_at', 0))
-        _ra_eval_sec = int(getattr(TRADING_RULES, 'REVERSAL_ADD_POST_EVAL_SEC', 25))
+        _ra_eval_sec = _rule_int('REVERSAL_ADD_POST_EVAL_SEC', 25)
         _ra_elapsed = now_ts - _ra_executed_at
         _ra_feat = stock.get('last_reversal_features', {})
         _ra_floor = float(stock.get('reversal_add_profit_floor', -1.0))
@@ -3938,7 +4044,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             )
             exit_rule = "reversal_add_post_eval_fail"
         elif _ra_elapsed >= _ra_eval_sec:
-            stock['reversal_add_state'] = ""  # 일반 HOLDING 복귀
+            _mutate_stock_state(stock, set_fields={'reversal_add_state': ''})
 
     if hard_stop_price > 0 and curr_p <= hard_stop_price:
         is_sell_signal = True
@@ -3953,23 +4059,23 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         exit_rule = "protect_trailing_stop"
 
     elif strategy == 'SCALPING':
-        base_stop_pct = getattr(TRADING_RULES, 'SCALP_STOP', -1.5)
-        hard_stop_pct = getattr(TRADING_RULES, 'SCALP_HARD_STOP', -2.5)
-        safe_profit_pct = getattr(TRADING_RULES, 'SCALP_SAFE_PROFIT', 0.5)
-        open_reclaim_peak_max_pct = float(getattr(TRADING_RULES, 'SCALP_OPEN_RECLAIM_NEVER_GREEN_PEAK_MAX_PCT', 0.20) or 0.20)
-        open_reclaim_hold_sec = int(getattr(TRADING_RULES, 'SCALP_OPEN_RECLAIM_NEVER_GREEN_HOLD_SEC', 300) or 300)
-        open_reclaim_score_buffer = int(getattr(TRADING_RULES, 'SCALP_OPEN_RECLAIM_NEAR_AI_EXIT_SCORE_BUFFER', 5) or 5)
-        open_reclaim_retrace_sustain_sec = int(
-            getattr(TRADING_RULES, 'SCALP_OPEN_RECLAIM_RETRACE_NEAR_AI_EXIT_SUSTAIN_SEC', 120) or 120
+        base_stop_pct = _rule_float('SCALP_STOP', -1.5)
+        hard_stop_pct = _rule_float('SCALP_HARD_STOP', -2.5)
+        safe_profit_pct = _rule_float('SCALP_SAFE_PROFIT', 0.5)
+        open_reclaim_peak_max_pct = _rule_float('SCALP_OPEN_RECLAIM_NEVER_GREEN_PEAK_MAX_PCT', 0.20)
+        open_reclaim_hold_sec = _rule_int('SCALP_OPEN_RECLAIM_NEVER_GREEN_HOLD_SEC', 300)
+        open_reclaim_score_buffer = _rule_int('SCALP_OPEN_RECLAIM_NEAR_AI_EXIT_SCORE_BUFFER', 5)
+        open_reclaim_retrace_sustain_sec = _rule_int(
+            'SCALP_OPEN_RECLAIM_RETRACE_NEAR_AI_EXIT_SUSTAIN_SEC', 120
         )
-        scanner_fallback_peak_max_pct = float(getattr(TRADING_RULES, 'SCALP_SCANNER_FALLBACK_NEVER_GREEN_PEAK_MAX_PCT', 0.20) or 0.20)
-        scanner_fallback_hold_sec = int(getattr(TRADING_RULES, 'SCALP_SCANNER_FALLBACK_NEVER_GREEN_HOLD_SEC', 420) or 420)
-        scanner_fallback_score_buffer = int(getattr(TRADING_RULES, 'SCALP_SCANNER_FALLBACK_NEAR_AI_EXIT_SCORE_BUFFER', 8) or 8)
-        scanner_fallback_near_ai_exit_sustain_sec = int(
-            getattr(TRADING_RULES, 'SCALP_SCANNER_FALLBACK_NEAR_AI_EXIT_SUSTAIN_SEC', 120) or 120
+        scanner_fallback_peak_max_pct = _rule_float('SCALP_SCANNER_FALLBACK_NEVER_GREEN_PEAK_MAX_PCT', 0.20)
+        scanner_fallback_hold_sec = _rule_int('SCALP_SCANNER_FALLBACK_NEVER_GREEN_HOLD_SEC', 420)
+        scanner_fallback_score_buffer = _rule_int('SCALP_SCANNER_FALLBACK_NEAR_AI_EXIT_SCORE_BUFFER', 8)
+        scanner_fallback_near_ai_exit_sustain_sec = _rule_int(
+            'SCALP_SCANNER_FALLBACK_NEAR_AI_EXIT_SUSTAIN_SEC', 120
         )
-        scanner_fallback_retrace_sustain_sec = int(
-            getattr(TRADING_RULES, 'SCALP_SCANNER_FALLBACK_RETRACE_NEAR_AI_EXIT_SUSTAIN_SEC', 150) or 150
+        scanner_fallback_retrace_sustain_sec = _rule_int(
+            'SCALP_SCANNER_FALLBACK_RETRACE_NEAR_AI_EXIT_SUSTAIN_SEC', 150
         )
         if highest_prices.get(code, 0) > 0:
             drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100
@@ -3980,13 +4086,28 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         hard_stop_pct = min(base_stop_pct, hard_stop_pct)
         if current_ai_score >= 75:
             dynamic_stop_pct = max(soft_stop_pct - 1.0, hard_stop_pct)
-            dynamic_trailing_limit = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_STRONG', 0.8)
+            dynamic_trailing_limit = _rule_float('SCALP_TRAILING_LIMIT_STRONG', 0.8)
         else:
             dynamic_stop_pct = soft_stop_pct
-            dynamic_trailing_limit = getattr(TRADING_RULES, 'SCALP_TRAILING_LIMIT_WEAK', 0.4)
+            dynamic_trailing_limit = _rule_float('SCALP_TRAILING_LIMIT_WEAK', 0.4)
         if profit_rate > dynamic_stop_pct:
-            stock.pop('soft_stop_micro_grace_started_at', None)
-            stock.pop('soft_stop_micro_grace_extension_used', None)
+            _mutate_stock_state(
+                stock,
+                pop_fields=(
+                    'soft_stop_micro_grace_started_at',
+                    'soft_stop_micro_grace_extension_used',
+                ),
+            )
+        _observe_bad_entry_block_candidate(
+            stock,
+            code,
+            strategy=strategy,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            current_ai_score=current_ai_score,
+            held_sec=held_sec,
+            now_ts=now_ts,
+        )
 
         open_reclaim_near_ai_exit = (
             profit_rate <= near_ai_exit_min_loss_pct
@@ -4020,7 +4141,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         )
 
         if legacy_broker_recovered:
-            stock['last_exit_guard_reason'] = 'broker_recovered_legacy'
+            _mutate_stock_state(stock, set_fields={'last_exit_guard_reason': 'broker_recovered_legacy'})
         elif profit_rate <= hard_stop_pct:
             is_sell_signal = True
             sell_reason_type = "LOSS"
@@ -4028,26 +4149,25 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             exit_rule = "scalp_hard_stop_pct"
 
         elif profit_rate <= dynamic_stop_pct:
-            soft_stop_grace_enabled = bool(
-                getattr(TRADING_RULES, 'SCALP_SOFT_STOP_MICRO_GRACE_ENABLED', False)
+            soft_stop_grace_enabled = _rule_bool(
+                'SCALP_SOFT_STOP_MICRO_GRACE_ENABLED', False
             )
-            soft_stop_grace_sec = int(
-                getattr(TRADING_RULES, 'SCALP_SOFT_STOP_MICRO_GRACE_SEC', 0) or 0
+            soft_stop_grace_sec = _rule_int(
+                'SCALP_SOFT_STOP_MICRO_GRACE_SEC', 0
             )
-            soft_stop_grace_extend_enabled = bool(
-                getattr(TRADING_RULES, 'SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_ENABLED', False)
+            soft_stop_grace_extend_enabled = _rule_bool(
+                'SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_ENABLED', False
             )
-            soft_stop_grace_extend_sec = int(
-                getattr(TRADING_RULES, 'SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_SEC', 0) or 0
+            soft_stop_grace_extend_sec = _rule_int(
+                'SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_SEC', 0
             )
             soft_stop_grace_extend_buffer_pct = max(
                 0.0,
-                float(getattr(TRADING_RULES, 'SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_BUFFER_PCT', 0.0) or 0.0),
+                _rule_float('SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_BUFFER_PCT', 0.0),
             )
             soft_stop_emergency_pct = min(
                 float(
-                    getattr(
-                        TRADING_RULES,
+                    _rule(
                         'SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT',
                         dynamic_stop_pct - 0.5,
                     )
@@ -4058,7 +4178,10 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             soft_stop_grace_started_at = float(stock.get('soft_stop_micro_grace_started_at', 0.0) or 0.0)
             if soft_stop_grace_started_at <= 0:
                 soft_stop_grace_started_at = now_ts
-                stock['soft_stop_micro_grace_started_at'] = soft_stop_grace_started_at
+                _mutate_stock_state(
+                    stock,
+                    set_fields={'soft_stop_micro_grace_started_at': soft_stop_grace_started_at},
+                )
             soft_stop_grace_elapsed_sec = max(0, int(now_ts - soft_stop_grace_started_at))
             soft_stop_within_grace = (
                 soft_stop_grace_enabled
@@ -4075,7 +4198,10 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 and profit_rate >= (float(dynamic_stop_pct) - soft_stop_grace_extend_buffer_pct)
             )
             if soft_stop_extension_within_grace and soft_stop_grace_elapsed_sec >= soft_stop_grace_sec:
-                stock['soft_stop_micro_grace_extension_used'] = True
+                _mutate_stock_state(
+                    stock,
+                    set_fields={'soft_stop_micro_grace_extension_used': True},
+                )
             soft_stop_within_grace = soft_stop_within_grace or soft_stop_extension_within_grace
             if soft_stop_within_grace:
                 _log_holding_pipeline(
@@ -4189,15 +4315,17 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         try:
             buy_date_str = stock.get('date', datetime.now().strftime('%Y-%m-%d'))
             buy_date = datetime.strptime(buy_date_str, '%Y-%m-%d').date()
-            if np.busday_count(buy_date, datetime.now().date()) >= getattr(TRADING_RULES, 'KOSDAQ_HOLDING_DAYS', 2):
+            kosdaq_holding_days = _rule_int('KOSDAQ_HOLDING_DAYS', 2)
+            if np.busday_count(buy_date, datetime.now().date()) >= kosdaq_holding_days:
                 is_sell_signal = True
                 sell_reason_type = "TIMEOUT"
                 reason = "⏳ 코스닥 스윙 기한 만료 청산"
                 exit_rule = "kosdaq_timeout"
-        except Exception:
-            pass
+        except Exception as exc:
+            log_error(f"[KOSDAQ_TIMEOUT] holding 기간 파싱 실패 ({stock.get('code', '-')}, date={stock.get('date')}) ({exc})")
 
-        if not is_sell_signal and peak_profit >= getattr(TRADING_RULES, 'KOSDAQ_TARGET', 4.0):
+        kosdaq_target = _rule_float('KOSDAQ_TARGET', 4.0)
+        if not is_sell_signal and peak_profit >= kosdaq_target:
             # Follow-up tracked in checklist: SwingTrailingPolicy0506
             drawdown = (highest_prices[code] - curr_p) / highest_prices[code] * 100
             if drawdown >= 1.0:
@@ -4205,50 +4333,53 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 sell_reason_type = "TRAILING"
                 reason = (
                     "🏆 KOSDAQ 트레일링 익절 (+"
-                    f"{getattr(TRADING_RULES, 'KOSDAQ_TARGET', 4.0)}% 돌파 후 하락)"
+                    f"{kosdaq_target}% 돌파 후 하락)"
                 )
                 exit_rule = "kosdaq_trailing_take_profit"
 
-        elif not is_sell_signal and profit_rate <= getattr(TRADING_RULES, 'KOSDAQ_STOP', -2.0):
+        kosdaq_stop = _rule_float('KOSDAQ_STOP', -2.0)
+        if not is_sell_signal and profit_rate <= kosdaq_stop:
             is_sell_signal = True
             sell_reason_type = "LOSS"
-            reason = f"🛑 KOSDAQ 전용 방어선 이탈 ({getattr(TRADING_RULES, 'KOSDAQ_STOP', -2.0)}%)"
+            reason = f"🛑 KOSDAQ 전용 방어선 이탈 ({kosdaq_stop}%)"
             exit_rule = "kosdaq_stop_loss"
 
     elif strategy == 'KOSPI_ML':
         pos_tag = normalize_position_tag(strategy, stock.get('position_tag'))
         if pos_tag == 'BREAKOUT':
-            current_stop_loss = getattr(TRADING_RULES, 'STOP_LOSS_BREAKOUT')
+            current_stop_loss = _rule_float('STOP_LOSS_BREAKOUT', -2.5)
             regime_name = "전고점 돌파"
         elif pos_tag == 'BOTTOM':
-            current_stop_loss = getattr(TRADING_RULES, 'STOP_LOSS_BOTTOM')
+            current_stop_loss = _rule_float('STOP_LOSS_BOTTOM', -2.5)
             regime_name = "바닥 탈출"
         else:
             current_stop_loss = (
-                getattr(TRADING_RULES, 'STOP_LOSS_BULL')
+                _rule_float('STOP_LOSS_BULL', -2.5)
                 if market_regime == 'BULL'
-                else getattr(TRADING_RULES, 'STOP_LOSS_BEAR')
+                else _rule_float('STOP_LOSS_BEAR', -2.5)
             )
             regime_name = "상승장" if market_regime == 'BULL' else "조정장"
 
         try:
             buy_date_str = stock.get('date', datetime.now().strftime('%Y-%m-%d'))
             buy_date = datetime.strptime(buy_date_str, '%Y-%m-%d').date()
-            if np.busday_count(buy_date, datetime.now().date()) >= getattr(TRADING_RULES, 'HOLDING_DAYS'):
+            holding_days = _rule_int('HOLDING_DAYS', 3)
+            if np.busday_count(buy_date, datetime.now().date()) >= holding_days:
                 is_sell_signal = True
                 sell_reason_type = "TIMEOUT"
-                reason = f"⏳ {getattr(TRADING_RULES, 'HOLDING_DAYS')}일 스윙 보유 만료"
+                reason = f"⏳ {holding_days}일 스윙 보유 만료"
                 exit_rule = "kospi_timeout"
-        except Exception:
-            pass
+        except Exception as exc:
+            log_error(f"[KOSPI_TIMEOUT] holding 기간 파싱 실패 ({stock.get('code', '-')}, date={stock.get('date')}) ({exc})")
 
         # Follow-up tracked in checklist: SwingTrailingPolicy0506
         # 현재 로직은 해당 임계 도달 시 즉시 익절로 동작
-        if not is_sell_signal and profit_rate >= getattr(TRADING_RULES, 'TRAILING_START_PCT'):
+        trailing_start_pct = _rule_float('TRAILING_START_PCT', 2.0)
+        if not is_sell_signal and profit_rate >= trailing_start_pct:
             is_sell_signal = True
             sell_reason_type = "PROFIT"
             reason = (
-                f"🎯 트레일링 시작 수익률 도달 (+{getattr(TRADING_RULES, 'TRAILING_START_PCT')}%) "
+                f"🎯 트레일링 시작 수익률 도달 (+{trailing_start_pct}%) "
                 "(현 로직: 즉시 익절)"
             )
             exit_rule = "kospi_trailing_start_take_profit"
@@ -4284,10 +4415,10 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 )
             allowed_reasons = set(
                 str(item).strip()
-                for item in (getattr(TRADING_RULES, "SCALP_LOSS_FALLBACK_ALLOWED_REASONS", ("reversal_add_ok",)) or ())
+                for item in (_rule("SCALP_LOSS_FALLBACK_ALLOWED_REASONS", ("reversal_add_ok",)) or ())
                 if str(item).strip()
             )
-            min_fallback_ai = int(getattr(TRADING_RULES, "SCALP_LOSS_FALLBACK_MIN_AI_SCORE", 65) or 65)
+            min_fallback_ai = _rule_int("SCALP_LOSS_FALLBACK_MIN_AI_SCORE", 65)
             fallback_reason = str((fallback_action or {}).get("reason") or "")
             fallback_candidate = bool(
                 fallback_action
@@ -4309,8 +4440,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 peak_profit=f"{peak_profit:+.2f}",
             )
             if fallback_candidate:
-                observe_only = bool(getattr(TRADING_RULES, "SCALP_LOSS_FALLBACK_OBSERVE_ONLY", True))
-                enabled = bool(getattr(TRADING_RULES, "SCALP_LOSS_FALLBACK_ENABLED", False))
+                observe_only = _rule_bool("SCALP_LOSS_FALLBACK_OBSERVE_ONLY", True)
+                enabled = _rule_bool("SCALP_LOSS_FALLBACK_ENABLED", False)
                 if enabled and not observe_only:
                     log_info(
                         f"[LOSS_FALLBACK] {stock.get('name')}({code}) "
@@ -4338,7 +4469,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             current_ai_score=current_ai_score,
             soft_stop_threshold_pct=dynamic_stop_pct if str(exit_rule or "").strip() == "scalp_soft_stop_pct" else None,
         )
-        stock['last_exit_reason'] = reason
+        _mutate_stock_state(stock, set_fields={'last_exit_reason': reason})
         _log_holding_pipeline(
             stock,
             code,
@@ -4384,10 +4515,10 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 if record and record.buy_qty:
                     buy_qty = max(buy_qty, int(record.buy_qty))
         except Exception as e:
-            print(f"🚨 [DB 조회 에러] ID {target_id} 수량 조회 실패: {e}")
+            log_error(f"🚨 [DB 조회 에러] ID {target_id} 수량 조회 실패: {e}")
 
         if buy_qty <= 0:
-            print(f"⚠️ [{stock['name']}] 고유 ID({target_id})의 수량이 0주입니다. 실제 키움 잔고로 폴백합니다...")
+            log_info(f"⚠️ [{stock['name']}] 고유 ID({target_id})의 수량이 0주입니다. 실제 키움 잔고로 폴백합니다...")
             real_inventory, _ = kiwoom_orders.get_my_inventory(KIWOOM_TOKEN)
             real_stock = next(
                 (item for item in (real_inventory or []) if str(item.get('code', '')).strip()[:6] == code),
@@ -4396,36 +4527,42 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
 
             if real_stock and int(float(real_stock.get('qty', 0) or 0)) > 0:
                 buy_qty = int(float(real_stock.get('qty', 0) or 0))
-                stock['buy_qty'] = buy_qty
-                print(
+                _mutate_stock_state(stock, set_fields={'buy_qty': buy_qty})
+                log_info(
                     f"🔄 [수량 폴백] 실제 계좌에서 총 잔고 {buy_qty}주를 매도합니다. "
                     "(다중 매매건 합산 수량일 수 있음)"
                 )
 
         if not admin_id:
-            print(f"🚨 [매도실패] {stock['name']}: 관리자 ID가 없습니다.")
+            log_error(f"🚨 [매도실패] {stock['name']}: 관리자 ID가 없습니다.")
             return
 
         if buy_qty <= 0:
-            print(f"🚨 [매도실패] {stock['name']}: 실제 잔고도 0주입니다! 강제 완료(COMPLETED) 처리.")
+            log_error(f"🚨 [매도실패] {stock['name']}: 실제 잔고도 0주입니다! 강제 완료(COMPLETED) 처리.")
             try:
                 with DB.get_session() as session:
                     session.query(RecommendationHistory).filter_by(id=target_id).update({"status": "COMPLETED"})
             except Exception as e:
-                print(f"🚨 [DB 에러] {stock['name']} COMPLETED 전환 실패: {e}")
+                log_error(f"🚨 [DB 에러] {stock['name']} COMPLETED 전환 실패: {e}")
 
-            stock['status'] = 'COMPLETED'
-            highest_prices.pop(code, None)
+            _mutate_stock_state(stock, set_fields={'status': 'COMPLETED'})
+            with ENTRY_LOCK:
+                HIGHEST_PRICES.pop(code, None)
             return
 
         try:
             with DB.get_session() as session:
                 session.query(RecommendationHistory).filter_by(id=target_id).update({"status": "SELL_ORDERED"})
         except Exception as e:
-            print(f"🚨 [DB 에러] {stock['name']} SELL_ORDERED 장부 잠금 실패: {e}")
+            log_error(f"🚨 [DB 에러] {stock['name']} SELL_ORDERED 장부 잠금 실패: {e}")
 
-        stock['status'] = 'SELL_ORDERED'
-        stock['sell_target_price'] = curr_p
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                'status': 'SELL_ORDERED',
+                'sell_target_price': curr_p,
+            },
+        )
 
         res = kiwoom_orders.send_smart_sell_order(
             code=code,
@@ -4443,16 +4580,19 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 is_success = True
                 ord_no = str(res.get('ord_no', '') or res.get('odno', ''))
             else:
-                print(f"❌ [매도거절] {stock['name']}: {res.get('return_msg')}")
+                log_error(f"❌ [매도거절] {stock['name']}: {res.get('return_msg')}")
         elif res:
             is_success = True
 
         if is_success:
-            print(f"✅ [{stock['name']}] 매도 주문 전송 완료. 체결 영수증 처리 대기 중...")
-            stock['pending_sell_msg'] = msg
-            stock['sell_order_time'] = now_ts
+            log_info(f"✅ [{stock['name']}] 매도 주문 전송 완료. 체결 영수증 처리 대기 중...")
+            set_fields = {
+                'pending_sell_msg': msg,
+                'sell_order_time': now_ts,
+            }
             if ord_no:
-                stock['sell_odno'] = ord_no
+                set_fields['sell_odno'] = ord_no
+            _mutate_stock_state(stock, set_fields=set_fields)
             _log_holding_pipeline(
                 stock,
                 code,
@@ -4466,9 +4606,10 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             )
 
             if strategy == 'SCALPING' and now_t < TIME_15_30:
-                cooldowns[code] = now_ts + 1200
-                alerted_stocks.discard(code)
-                print(f"♻️ [{stock['name']}] 스캘핑 청산 완료 후 20분 쿨타임 진입.")
+                with ENTRY_LOCK:
+                    cooldowns[code] = now_ts + 1200
+                    alerted_stocks.discard(code)
+                log_info(f"♻️ [{stock['name']}] 스캘핑 청산 완료 후 20분 쿨타임 진입.")
         else:
             err_msg = str(res.get('return_msg', '') if isinstance(res, dict) else '')
             sellable_qty = _extract_sellable_qty_from_error(err_msg)
@@ -4476,23 +4617,23 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             # '매도가능수량 부족'은 0주인 경우에만 완료로 간주한다.
             # 양수 수량이면 실계좌 잔고가 남아있는 상태이므로 HOLDING으로 복구해 재시도한다.
             if '매도가능수량' in err_msg and sellable_qty == 0:
-                print(f"🚨 [{stock['name']}] 잔고 0주(이미 매도됨). COMPLETED로 강제 전환.")
+                log_error(f"🚨 [{stock['name']}] 잔고 0주(이미 매도됨). COMPLETED로 강제 전환.")
                 new_status = 'COMPLETED'
             else:
                 if '매도가능수량' in err_msg and sellable_qty and sellable_qty > 0:
                     prev_qty = int(stock.get('buy_qty', 0) or 0)
                     if prev_qty != sellable_qty:
-                        stock['buy_qty'] = sellable_qty
-                        print(
+                        _mutate_stock_state(stock, set_fields={'buy_qty': sellable_qty})
+                        log_error(
                             f"⚠️ [{stock['name']}] 매도가능수량 불일치 감지 "
                             f"(요청:{prev_qty}주, 가능:{sellable_qty}주). "
                             "HOLDING 복구 후 재시도 대상으로 유지합니다."
                         )
                 else:
-                    print(f"🚨 [{stock['name']}] 일시적 매도 실패! HOLDING으로 원상복구.")
+                    log_error(f"🚨 [{stock['name']}] 일시적 매도 실패! HOLDING으로 원상복구.")
                 new_status = 'HOLDING'
 
-            stock['status'] = new_status
+            _mutate_stock_state(stock, set_fields={'status': new_status})
             _log_holding_pipeline(
                 stock,
                 code,
@@ -4509,11 +4650,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 with DB.get_session() as session:
                     session.query(RecommendationHistory).filter_by(id=target_id).update({"status": new_status})
             except Exception as e:
-                print(f"🚨 [DB 에러] {stock['name']} 예외 상태({new_status}) 업데이트 실패: {e}")
-                log_info(f"🚨 [DB 에러] {stock['name']} 예외 상태({new_status}) 업데이트 실패: {e}")
+                log_error(f"🚨 [DB 에러] {stock['name']} 예외 상태({new_status}) 업데이트 실패: {e}")
 
             if new_status == 'COMPLETED':
-                highest_prices.pop(code, None)
+                with ENTRY_LOCK:
+                    HIGHEST_PRICES.pop(code, None)
         return
 
     # --------------------------------------------------------
@@ -4541,7 +4682,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         )
         if scale_in_action:
             if scale_in_action.get("reason") == "reversal_add_ok":
-                stock['reversal_add_state'] = "ADD_ARMED"
+                _mutate_stock_state(stock, set_fields={'reversal_add_state': 'ADD_ARMED'})
             log_info(
                 "[ADD_SIGNAL] "
                 f"{stock.get('name')}({code}) "
@@ -4557,11 +4698,16 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 admin_id=admin_id,
             )
             if add_result and scale_in_action.get("reason") == "reversal_add_ok":
-                stock['reversal_add_used'] = True
-                stock['reversal_add_state'] = "POST_ADD_EVAL"
-                stock['reversal_add_executed_at'] = now_ts
+                _mutate_stock_state(
+                    stock,
+                    set_fields={
+                        'reversal_add_used': True,
+                        'reversal_add_state': 'POST_ADD_EVAL',
+                        'reversal_add_executed_at': now_ts,
+                    },
+                )
             elif (not add_result) and scale_in_action.get("reason") == "reversal_add_ok":
-                stock['reversal_add_state'] = "REVERSAL_CANDIDATE"
+                _mutate_stock_state(stock, set_fields={'reversal_add_state': 'REVERSAL_CANDIDATE'})
                 _log_holding_pipeline(
                     stock,
                     code,
@@ -4572,7 +4718,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     ai_score=f"{current_ai_score:.0f}",
                 )
             return
-        if strategy == 'SCALPING' and getattr(TRADING_RULES, 'REVERSAL_ADD_ENABLED', False):
+        if strategy == 'SCALPING' and _rule_bool('REVERSAL_ADD_ENABLED', False):
             _last_ra_probe_log = float(stock.get('last_reversal_add_probe_log_ts', 0) or 0)
             if now_ts - _last_ra_probe_log >= 30:
                 _ra_probe = evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_sec)
@@ -4587,7 +4733,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         profit_rate=f"{profit_rate:+.2f}",
                         ai_score=f"{current_ai_score:.0f}",
                     )
-                stock['last_reversal_add_probe_log_ts'] = now_ts
+                _mutate_stock_state(stock, set_fields={'last_reversal_add_probe_log_ts': now_ts})
             return
     else:
         last_block = float(stock.get('last_add_block_log_ts', 0) or 0)
@@ -4604,7 +4750,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     f"{stock.get('name')}({code}) "
                     f"strategy={strategy} reason={gate.get('reason')}"
                 )
-            stock['last_add_block_log_ts'] = now_ts
+            _mutate_stock_state(stock, set_fields={'last_add_block_log_ts': now_ts})
 
 
 def can_consider_scale_in(
@@ -4619,7 +4765,7 @@ def can_consider_scale_in(
     """추가매수 공통 게이트: 조건을 만족하는 경우에만 True."""
     _ = (code, ws_data)
 
-    if getattr(TRADING_RULES, 'SCALE_IN_REQUIRE_HISTORY_TABLE', False):
+    if _rule_bool('SCALE_IN_REQUIRE_HISTORY_TABLE', False):
         return {"allowed": False, "reason": "history_table_required"}
 
     if stock.get('pending_add_order') and not stock.get('pending_add_ord_no'):
@@ -4630,7 +4776,7 @@ def can_consider_scale_in(
     pending_ts = float(stock.get('pending_add_requested_at', 0) or 0)
     if pending_ts:
         raw_strategy = (strategy or "").upper()
-        base_timeout = 20 if raw_strategy == 'SCALPING' else int(getattr(TRADING_RULES, 'ORDER_TIMEOUT_SEC', 30) or 30)
+        base_timeout = 20 if raw_strategy == 'SCALPING' else _rule_int('ORDER_TIMEOUT_SEC', 30)
         add_type = (stock.get('pending_add_type') or '').upper()
         if raw_strategy != 'SCALPING' and add_type == 'PYRAMID':
             base_timeout = int(base_timeout * 2)
@@ -4647,7 +4793,7 @@ def can_consider_scale_in(
     if stock.get('status') != 'HOLDING':
         return {"allowed": False, "reason": "not_holding"}
 
-    if not getattr(TRADING_RULES, 'ENABLE_SCALE_IN', False):
+    if not _rule_bool('ENABLE_SCALE_IN', False):
         return {"allowed": False, "reason": "scale_in_disabled"}
 
     if is_buy_side_paused():
@@ -4667,19 +4813,19 @@ def can_consider_scale_in(
     # 동일 루프/짧은 시간 중복 호출 방지
     # 손절 직전 fallback probe는 관찰 타이밍이 짧아 lock을 선택적으로 우회한다.
     if not skip_add_judgment_lock:
-        lock_sec = int(getattr(TRADING_RULES, 'ADD_JUDGMENT_LOCK_SEC', 20) or 20)
+        lock_sec = _rule_int('ADD_JUDGMENT_LOCK_SEC', 20)
         last_check = float(stock.get('last_scale_in_check_ts', 0) or 0)
         if last_check > 0 and (time.time() - last_check) < lock_sec:
             return {"allowed": False, "reason": "add_judgment_locked"}
 
     # 최근 추가매수 직후 쿨다운
-    cooldown_sec = int(getattr(TRADING_RULES, 'SCALE_IN_COOLDOWN_SEC', 180) or 180)
+    cooldown_sec = _rule_int('SCALE_IN_COOLDOWN_SEC', 180)
     last_add = float(stock.get('last_add_time', 0) or 0)
     if not last_add and stock.get('last_add_at'):
         try:
             last_add = stock['last_add_at'].timestamp()
-        except Exception:
-            pass
+        except Exception as exc:
+            log_error(f"[SCALE_IN_GUARD] last_add_at timestamp 변환 실패 ({stock.get('code', '-')}: {stock.get('last_add_at')}) {exc}")
     if last_add > 0 and (time.time() - last_add) < cooldown_sec:
         return {"allowed": False, "reason": "scale_in_cooldown"}
 
@@ -4698,20 +4844,20 @@ def can_consider_scale_in(
     curr_price = int(float(ws_data.get('curr', 0) or 0))
     deposit_hint = float(stock.get('account_deposit', 0) or stock.get('deposit', 0) or 0)
     if curr_price > 0 and deposit_hint > 0:
-        max_pos_pct = float(getattr(TRADING_RULES, 'MAX_POSITION_PCT', 0.30) or 0.30)
+        max_pos_pct = _rule_float('MAX_POSITION_PCT', 0.30)
         if (buy_q * curr_price) >= (deposit_hint * max_pos_pct * 0.98):
             return {"allowed": False, "reason": "position_at_cap"}
 
     # 전략별 허용 여부
     raw_strategy = (strategy or "").upper()
     if raw_strategy == 'SCALPING':
-        allow_avg = bool(getattr(TRADING_RULES, 'SCALPING_ENABLE_AVG_DOWN', False))
-        allow_pyr = int(getattr(TRADING_RULES, 'SCALPING_MAX_PYRAMID_COUNT', 0) or 0) > 0
+        allow_avg = _rule_bool('SCALPING_ENABLE_AVG_DOWN', False)
+        allow_pyr = _rule_int('SCALPING_MAX_PYRAMID_COUNT', 0) > 0
         if not (allow_avg or allow_pyr):
             return {"allowed": False, "reason": "scalping_scale_in_disabled"}
     elif raw_strategy in ('KOSPI_ML', 'KOSDAQ_ML'):
-        allow_avg = bool(getattr(TRADING_RULES, 'SWING_ENABLE_AVG_DOWN', False))
-        allow_pyr = int(getattr(TRADING_RULES, 'SWING_MAX_PYRAMID_COUNT', 0) or 0) > 0
+        allow_avg = _rule_bool('SWING_ENABLE_AVG_DOWN', False)
+        allow_pyr = _rule_int('SWING_MAX_PYRAMID_COUNT', 0) > 0
         if not (allow_avg or allow_pyr):
             return {"allowed": False, "reason": "swing_scale_in_disabled"}
 
@@ -4719,7 +4865,7 @@ def can_consider_scale_in(
             allow_avg
             and not allow_pyr
             and market_regime == 'BEAR'
-            and getattr(TRADING_RULES, 'BLOCK_SWING_AVG_DOWN_IN_BEAR', True)
+            and _rule_bool('BLOCK_SWING_AVG_DOWN_IN_BEAR', True)
         ):
             return {"allowed": False, "reason": "bear_avg_down_blocked"}
     else:
@@ -4728,41 +4874,43 @@ def can_consider_scale_in(
     # 장 마감 근접 시 추가매수 금지
     now = datetime.now()
     try:
-        close_str = getattr(TRADING_RULES, 'MARKET_CLOSE_TIME', "15:30:00")
+        close_str = _rule("MARKET_CLOSE_TIME", "15:30:00")
         close_t = datetime.strptime(close_str, "%H:%M:%S").time()
         close_dt = datetime.combine(now.date(), close_t) - timedelta(minutes=5)
         if now >= close_dt:
             return {"allowed": False, "reason": "near_market_close"}
-    except Exception:
-        pass
+    except Exception as exc:
+        log_error(f"[SCALE_IN_GUARD] MARKET_CLOSE_TIME parse 실패: {close_str if isinstance(close_str, str) else 'invalid'} ({exc})")
 
     if raw_strategy == 'SCALPING':
         try:
-            cutoff_str = getattr(TRADING_RULES, 'SCALPING_NEW_BUY_CUTOFF', "15:00:00")
+            cutoff_str = _rule("SCALPING_NEW_BUY_CUTOFF", "15:00:00")
             cutoff_t = datetime.strptime(cutoff_str, "%H:%M:%S").time()
             if now.time() >= cutoff_t:
                 return {"allowed": False, "reason": "scalping_cutoff"}
-        except Exception:
-            pass
+        except Exception as exc:
+            log_error(f"[SCALE_IN_GUARD] SCALPING_NEW_BUY_CUTOFF parse 실패: {cutoff_str if isinstance(cutoff_str, str) else 'invalid'} ({exc})")
 
     if not skip_add_judgment_lock:
-        stock['last_scale_in_check_ts'] = time.time()
+        _mutate_stock_state(stock, set_fields={'last_scale_in_check_ts': time.time()})
     return {"allowed": True, "reason": "ok"}
 
 
 def _clear_pending_add_meta(stock, reason=None):
-    for key in [
-        'pending_add_order',
-        'pending_add_type',
-        'pending_add_qty',
-        'pending_add_ord_no',
-        'pending_add_requested_at',
-        'pending_add_counted',
-        'pending_add_filled_qty',
-        'add_order_time',
-        'add_odno',
-    ]:
-        stock.pop(key, None)
+    _mutate_stock_state(
+        stock,
+        pop_fields=(
+            'pending_add_order',
+            'pending_add_type',
+            'pending_add_qty',
+            'pending_add_ord_no',
+            'pending_add_requested_at',
+            'pending_add_counted',
+            'pending_add_filled_qty',
+            'add_order_time',
+            'add_odno',
+        ),
+    )
     if reason:
         log_info(f"[ADD_CANCELLED] pending add cleared ({reason}) for {stock.get('name')}")
 
@@ -4797,7 +4945,7 @@ def _cancel_or_reconcile_pending_add(stock, reason):
     code = str(stock.get('code', '')).strip()[:6]
 
     if not ord_no:
-        stock['scale_in_locked'] = True
+        _mutate_stock_state(stock, set_fields={'scale_in_locked': True})
         _persist_scale_in_flags(stock)
         record_add_history_event(
             DB,
@@ -4823,7 +4971,7 @@ def _cancel_or_reconcile_pending_add(stock, reason):
         return {"cleared": True, "reason": f"{reason}_missing_ordno"}
 
     if not code or not KIWOOM_TOKEN:
-        stock['scale_in_locked'] = True
+        _mutate_stock_state(stock, set_fields={'scale_in_locked': True})
         _persist_scale_in_flags(stock)
         log_error(
             f"[ADD_BLOCKED] {stock.get('name')}({code}) cannot reconcile pending add "
@@ -4855,7 +5003,7 @@ def _cancel_or_reconcile_pending_add(stock, reason):
     err_msg = str(res.get('return_msg', '')) if isinstance(res, dict) else str(res)
     uncertain_keywords = ['주문없음', '취소가능수량', '체결', '원주문']
     if any(keyword in err_msg for keyword in uncertain_keywords):
-        stock['scale_in_locked'] = True
+        _mutate_stock_state(stock, set_fields={'scale_in_locked': True})
         _persist_scale_in_flags(stock)
         record_add_history_event(
             DB,
@@ -4897,7 +5045,7 @@ def _sanitize_pending_add_states(active_targets):
         if stock.get('pending_add_order'):
             # 주문번호가 없으면 복구 불가 → 정리
             if not stock.get('pending_add_ord_no'):
-                stock['scale_in_locked'] = True
+                _mutate_stock_state(stock, set_fields={'scale_in_locked': True})
                 _persist_scale_in_flags(stock)
                 _clear_pending_add_meta(stock, reason="recovery_no_ordno")
                 continue
@@ -4905,7 +5053,7 @@ def _sanitize_pending_add_states(active_targets):
             pending_ts = float(stock.get('pending_add_requested_at', 0) or 0)
             if pending_ts:
                 raw_strategy = (stock.get('strategy') or '').upper()
-                timeout_sec = 20 if raw_strategy == 'SCALPING' else int(getattr(TRADING_RULES, 'ORDER_TIMEOUT_SEC', 30) or 30)
+                timeout_sec = 20 if raw_strategy == 'SCALPING' else int(_rule('ORDER_TIMEOUT_SEC', 30) or 30)
                 if (time.time() - pending_ts) > timeout_sec:
                     _cancel_or_reconcile_pending_add(stock, reason="recovery_timeout")
 
@@ -4931,8 +5079,8 @@ def _evaluate_scale_in_signal(
         try:
             highest_prices = HIGHEST_PRICES or {}
             is_new_high = curr_price >= float(highest_prices.get(code, curr_price))
-        except Exception:
-            pass
+        except Exception as exc:
+            log_error(f"[SCALEIN_STATE] highest_prices 비교 실패 ({code}, curr_price={curr_price}): {exc}")
 
         avg_down = evaluate_scalping_avg_down(stock, profit_rate)
         pyramid = evaluate_scalping_pyramid(stock, profit_rate, peak_profit, is_new_high)
@@ -4977,7 +5125,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
     - 실패 시 pending 메타 저장하지 않음
     """
     if not admin_id:
-        print(f"⚠️ [추가매수보류] {stock.get('name')}: 관리자 ID가 없습니다.")
+        log_error(f"⚠️ [추가매수보류] {stock.get('name')}: 관리자 ID가 없습니다.")
         log_info(f"[ADD_BLOCKED] {stock.get('name')}({code}) reason=no_admin")
         return None
 
@@ -5011,7 +5159,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             f"buy_qty={stock.get('buy_qty', 0)} add_type={add_type} "
             f"template_qty={template_qty} cap_qty={cap_qty} floor_applied={floor_applied}"
         )
-        print(
+        log_info(
             f"⚠️ [추가매수보류] {stock.get('name')}: 추가매수 수량 0주 "
             f"(주문가능금액 {deposit:,}원, 현재가 {curr_price:,}원)"
         )
@@ -5044,7 +5192,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
     )
 
     if res is None:
-        print(f"❌ [{stock.get('name')}] 추가매수 주문 전송 실패 (None 반환)")
+        log_error(f"❌ [{stock.get('name')}] 추가매수 주문 전송 실패 (None 반환)")
         log_info(f"[ADD_ORDER_SENT] {stock.get('name')}({code}) failed=None_response")
         return None
 
@@ -5052,16 +5200,20 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         rt_cd = str(res.get('return_code', res.get('rt_cd', '')))
         if rt_cd == '0':
             ord_no = str(res.get('ord_no', '') or res.get('odno', ''))
-            stock['pending_add_order'] = True
-            stock['pending_add_type'] = add_type
-            stock['pending_add_qty'] = qty
-            stock['pending_add_ord_no'] = ord_no
-            stock['pending_add_requested_at'] = time.time()
-            stock['add_order_time'] = time.time()
+            now_ts = time.time()
+            set_fields = {
+                'pending_add_order': True,
+                'pending_add_type': add_type,
+                'pending_add_qty': qty,
+                'pending_add_ord_no': ord_no,
+                'pending_add_requested_at': now_ts,
+                'add_order_time': now_ts,
+            }
             if ord_no:
-                stock['add_odno'] = ord_no
+                set_fields['add_odno'] = ord_no
+            _mutate_stock_state(stock, set_fields=set_fields)
 
-            print(
+            log_info(
                 f"✅ [{stock.get('name')}] 추가매수 주문 전송 완료. "
                 f"type={add_type}, qty={qty}, ord_no={ord_no}"
             )
@@ -5089,14 +5241,14 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             )
             return res
 
-        print(f"❌ [{stock.get('name')}] 추가매수 주문 거절: {res.get('return_msg')}")
+        log_error(f"❌ [{stock.get('name')}] 추가매수 주문 거절: {res.get('return_msg')}")
         log_info(
             "[ADD_ORDER_SENT] "
             f"{stock.get('name')}({code}) failed=reject msg={res.get('return_msg')}"
         )
         return None
 
-    print(f"❌ [{stock.get('name')}] 추가매수 주문 전송 실패 (응답 파싱 실패)")
+    log_error(f"❌ [{stock.get('name')}] 추가매수 주문 전송 실패 (응답 파싱 실패)")
     log_info(f"[ADD_ORDER_SENT] {stock.get('name')}({code}) failed=parse_error")
     return None
 
@@ -5117,32 +5269,39 @@ def handle_buy_ordered_state(stock, code):
     strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
 
     if stock.get('target_buy_price', 0) > 0:
-        timeout_sec = getattr(TRADING_RULES, 'RESERVE_TIMEOUT_SEC', 1200)
+        timeout_sec = _rule_int('RESERVE_TIMEOUT_SEC', 1200)
     else:
-        timeout_sec = 20 if strategy == 'SCALPING' else getattr(TRADING_RULES, 'ORDER_TIMEOUT_SEC', 30)
+        timeout_sec = 20 if strategy == 'SCALPING' else _rule_int('ORDER_TIMEOUT_SEC', 30)
 
     if _has_open_pending_entry_orders(stock) and time_elapsed > timeout_sec:
         _reconcile_pending_entry_orders(stock, code, strategy)
         return
 
     if time_elapsed > timeout_sec:
-        print(f"⚠️ [{stock['name']}] 매수 대기 {timeout_sec}초 초과. 취소 절차 진입.")
+        log_info(f"⚠️ [{stock['name']}] 매수 대기 {timeout_sec}초 초과. 취소 절차 진입.")
         orig_ord_no = stock.get('odno')
 
         if not orig_ord_no:
-            stock['status'] = 'WATCHING'
-            stock.pop('order_time', None)
-            stock.pop('odno', None)
-            stock.pop('pending_buy_msg', None)
-            stock.pop('target_buy_price', None)
-            stock.pop('order_price', None)
-            stock.pop('buy_qty', None)
+            _mutate_stock_state(
+                stock,
+                set_fields={'status': 'WATCHING'},
+                pop_fields=[
+                    'order_time',
+                    'odno',
+                    'pending_buy_msg',
+                    'target_buy_price',
+                    'order_price',
+                    'buy_qty',
+                ],
+            )
             _clear_pending_entry_meta(stock)
-            highest_prices.pop(code, None)
-            alerted_stocks.discard(code)
+            with ENTRY_LOCK:
+                highest_prices.pop(code, None)
+                alerted_stocks.discard(code)
 
             if strategy == 'SCALPING':
-                cooldowns[code] = time.time() + 1200
+                with ENTRY_LOCK:
+                    cooldowns[code] = time.time() + 1200
 
             try:
                 with DB.get_session() as session:
@@ -5152,7 +5311,7 @@ def handle_buy_ordered_state(stock, code):
                         "buy_qty": 0,
                     })
             except Exception as e:
-                print(f"🚨 [DB 에러] {stock['name']} 매수 타임아웃 복구 실패: {e}")
+                log_error(f"🚨 [DB 에러] {stock['name']} 매수 타임아웃 복구 실패: {e}")
             return
 
         process_order_cancellation(stock, code, orig_ord_no, DB, strategy)
@@ -5165,33 +5324,33 @@ def handle_sell_ordered_state(stock, code):
     sell_order_time = stock.get('sell_order_time', 0)
 
     if sell_order_time == 0:
-        stock['sell_order_time'] = time.time()
+        _mutate_stock_state(stock, set_fields={'sell_order_time': time.time()})
         return
 
     time_elapsed = time.time() - sell_order_time
     target_id = stock.get('id')
-    timeout_sec = getattr(TRADING_RULES, 'SELL_TIMEOUT_SEC', 40)
+    timeout_sec = _rule_int('SELL_TIMEOUT_SEC', 40)
 
     if time_elapsed > timeout_sec:
-        print(
+        log_error(
             f"⚠️ [{stock['name']}] 매도 대기 {timeout_sec}초 초과. 호가 꼬임/VI 의심 ➡️ "
             "취소 후 HOLDING 롤백 절차 진입."
         )
         orig_ord_no = stock.get('sell_odno')
 
         if not orig_ord_no:
-            print(f"🚨 [{stock['name']}] 취소할 원주문번호(odno)가 없습니다. 상태만 HOLDING으로 강제 롤백합니다.")
-            stock['status'] = 'HOLDING'
-            stock.pop('sell_order_time', None)
-            stock.pop('sell_odno', None)
-            stock.pop('pending_sell_msg', None)
-            stock.pop('sell_target_price', None)
+            log_error(f"🚨 [{stock['name']}] 취소할 원주문번호(odno)가 없습니다. 상태만 HOLDING으로 강제 롤백합니다.")
+            _mutate_stock_state(
+                stock,
+                set_fields={'status': 'HOLDING'},
+                pop_fields=['sell_order_time', 'sell_odno', 'pending_sell_msg', 'sell_target_price'],
+            )
 
             try:
                 with DB.get_session() as session:
                     session.query(RecommendationHistory).filter_by(id=target_id).update({"status": "HOLDING"})
             except Exception as e:
-                print(f"🚨 [DB 에러] {stock['name']} 매도 타임아웃 복구 실패: {e}")
+                log_error(f"🚨 [DB 에러] {stock['name']} 매도 타임아웃 복구 실패: {e}")
             return
 
         process_sell_cancellation(stock, code, orig_ord_no, DB)
@@ -5214,12 +5373,12 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
         is_success = True
 
     if is_success:
-        print(f"✅ [{stock['name']}] 미체결 매도 주문 취소 성공! HOLDING(보유) 상태로 복귀합니다.")
-        stock['status'] = 'HOLDING'
-        stock.pop('sell_odno', None)
-        stock.pop('sell_order_time', None)
-        stock.pop('pending_sell_msg', None)
-        stock.pop('sell_target_price', None)
+        log_info(f"✅ [{stock['name']}] 미체결 매도 주문 취소 성공! HOLDING(보유) 상태로 복귀합니다.")
+        _mutate_stock_state(
+            stock,
+            set_fields={'status': 'HOLDING'},
+            pop_fields=['sell_odno', 'sell_order_time', 'pending_sell_msg', 'sell_target_price'],
+        )
 
         try:
             with DB.get_session() as session:
@@ -5228,17 +5387,18 @@ def process_sell_cancellation(stock, code, orig_ord_no, db):
             log_error(f"🚨 [DB 에러] {stock['name']} 매도 취소 후 HOLDING 복구 실패: {e}")
         return True
 
-    print(f"🚨 [{stock['name']}] 매도 취소 실패! (사유: {err_msg})")
+    log_error(f"🚨 [{stock['name']}] 매도 취소 실패! (사유: {err_msg})")
     if any(keyword in err_msg for keyword in ['취소가능수량', '잔고', '주문없음', '체결']):
-        print(f"💡 [{stock['name']}] 간발의 차이로 이미 매도 체결된 것으로 판단합니다. COMPLETED로 전환.")
-        stock['status'] = 'COMPLETED'
-        HIGHEST_PRICES.pop(code, None)
+        log_info(f"💡 [{stock['name']}] 간발의 차이로 이미 매도 체결된 것으로 판단합니다. COMPLETED로 전환.")
+        _mutate_stock_state(stock, set_fields={'status': 'COMPLETED'})
+        with ENTRY_LOCK:
+            HIGHEST_PRICES.pop(code, None)
 
         try:
             with DB.get_session() as session:
                 session.query(RecommendationHistory).filter_by(id=target_id).update({"status": "COMPLETED"})
-        except Exception:
-            pass
+        except Exception as exc:
+            log_error(f"🚨 [DB 에러] {stock['name']} 매도 취소 후 COMPLETED 복구 실패: {exc}")
     return False
 
 
@@ -5256,15 +5416,21 @@ def process_order_cancellation(stock, code, orig_ord_no, db, strategy):
     if _has_open_pending_entry_orders(stock):
         result = _cancel_pending_entry_orders(stock, code, force=True)
         if result != 'failed':
-            stock['status'] = 'WATCHING'
-            stock.pop('odno', None)
-            stock.pop('order_time', None)
-            stock.pop('pending_buy_msg', None)
-            stock.pop('target_buy_price', None)
-            stock.pop('order_price', None)
-            stock.pop('buy_qty', None)
+            _mutate_stock_state(
+                stock,
+                set_fields={'status': 'WATCHING'},
+                pop_fields=[
+                    'odno',
+                    'order_time',
+                    'pending_buy_msg',
+                    'target_buy_price',
+                    'order_price',
+                    'buy_qty',
+                ],
+            )
             _clear_entry_arm(stock)
-            highest_prices.pop(code, None)
+            with ENTRY_LOCK:
+                highest_prices.pop(code, None)
 
             try:
                 with DB.get_session() as session:
@@ -5276,7 +5442,8 @@ def process_order_cancellation(stock, code, orig_ord_no, db, strategy):
             except Exception as e:
                 log_error(f"🚨 [DB 에러] {stock['name']} 매수 취소 후 WATCHING 복구 실패: {e}")
 
-            if strategy in ['SCALPING', 'SCALP']:
+        if strategy in ['SCALPING', 'SCALP']:
+            with ENTRY_LOCK:
                 alerted_stocks.discard(code)
                 cooldowns[code] = time.time() + 1200
             return True
@@ -5294,16 +5461,22 @@ def process_order_cancellation(stock, code, orig_ord_no, db, strategy):
         is_success = True
 
     if is_success:
-        print(f"✅ [{stock['name']}] 미체결 매수 취소 성공. 감시 상태로 복귀합니다.")
-        stock['status'] = 'WATCHING'
-        stock.pop('odno', None)
-        stock.pop('order_time', None)
-        stock.pop('pending_buy_msg', None)
-        stock.pop('target_buy_price', None)
-        stock.pop('order_price', None)
-        stock.pop('buy_qty', None)
+        log_info(f"✅ [{stock['name']}] 미체결 매수 취소 성공. 감시 상태로 복귀합니다.")
+        _mutate_stock_state(
+            stock,
+            set_fields={'status': 'WATCHING'},
+            pop_fields=[
+                'odno',
+                'order_time',
+                'pending_buy_msg',
+                'target_buy_price',
+                'order_price',
+                'buy_qty',
+            ],
+        )
         _clear_pending_entry_meta(stock)
-        highest_prices.pop(code, None)
+        with ENTRY_LOCK:
+            highest_prices.pop(code, None)
 
         try:
             with DB.get_session() as session:
@@ -5316,15 +5489,16 @@ def process_order_cancellation(stock, code, orig_ord_no, db, strategy):
             log_error(f"🚨 [DB 에러] {stock['name']} 매수 취소 후 WATCHING 복구 실패: {e}")
 
         if strategy in ['SCALPING', 'SCALP']:
-            alerted_stocks.discard(code)
-            cooldowns[code] = time.time() + 1200
-            print(f"♻️ [{stock['name']}] 스캘핑 취소 완료. 20분 쿨타임 진입.")
+            with ENTRY_LOCK:
+                alerted_stocks.discard(code)
+                cooldowns[code] = time.time() + 1200
+            log_info(f"♻️ [{stock['name']}] 스캘핑 취소 완료. 20분 쿨타임 진입.")
         return True
 
-    print(f"🚨 [{stock['name']}] 매수 취소 실패! (사유: {err_msg})")
+    log_error(f"🚨 [{stock['name']}] 매수 취소 실패! (사유: {err_msg})")
     if any(keyword in err_msg for keyword in ['취소가능수량', '잔고', '주문없음']):
-        print(f"💡 [{stock['name']}] 이미 전량 체결된 것으로 판단. HOLDING으로 전환.")
-        stock['status'] = 'HOLDING'
+        log_info(f"💡 [{stock['name']}] 이미 전량 체결된 것으로 판단. HOLDING으로 전환.")
+        _mutate_stock_state(stock, set_fields={'status': 'HOLDING'})
 
         try:
             with DB.get_session() as session:

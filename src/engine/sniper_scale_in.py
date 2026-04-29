@@ -1,6 +1,32 @@
-from datetime import datetime
+import statistics
+from datetime import datetime, time as dt_time
 
 from src.utils.constants import TRADING_RULES
+
+_DEFAULT_SCALE_IN_RATIO = 0.50
+_DEFAULT_SWING_PYRAMID_RATIO = 0.30
+_SCALE_IN_RULES = {
+    ("SCALPING", "AVG_DOWN", "reversal_add_ok"): {
+        "ratio_rule": "REVERSAL_ADD_SIZE_RATIO",
+        "default_ratio": 0.33,
+        "floor_rule": "REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED",
+        "floor_default": True,
+    },
+    ("SCALPING", "AVG_DOWN", "default"): {
+        "ratio": _DEFAULT_SCALE_IN_RATIO,
+    },
+    ("SCALPING", "PYRAMID", "default"): {
+        "ratio": _DEFAULT_SCALE_IN_RATIO,
+        "floor_rule": "SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED",
+        "floor_default": False,
+    },
+    ("DEFAULT", "AVG_DOWN", "default"): {
+        "ratio": _DEFAULT_SCALE_IN_RATIO,
+    },
+    ("DEFAULT", "PYRAMID", "default"): {
+        "ratio": _DEFAULT_SWING_PYRAMID_RATIO,
+    },
+}
 
 
 def _base_result():
@@ -13,25 +39,69 @@ def _base_result():
     }
 
 
-def _calc_held_minutes(stock):
-    if stock.get('order_time'):
-        return (datetime.now().timestamp() - float(stock['order_time'])) / 60.0
-    if stock.get('buy_time'):
+def _resolve_buy_time_as_datetime(raw_buy_time, now_dt):
+    if isinstance(raw_buy_time, datetime):
+        return raw_buy_time
+    if isinstance(raw_buy_time, dt_time):
+        return datetime.combine(now_dt.date(), raw_buy_time)
+    if isinstance(raw_buy_time, (int, float)):
+        return datetime.fromtimestamp(float(raw_buy_time))
+    if isinstance(raw_buy_time, str):
+        bt_str = raw_buy_time.strip()
+        if not bt_str:
+            return None
         try:
-            bt = stock['buy_time']
-            if isinstance(bt, datetime):
-                b_dt = bt
-            else:
-                bt_str = str(bt)
-                try:
-                    b_dt = datetime.fromisoformat(bt_str)
-                except Exception:
-                    b_time = datetime.strptime(bt_str, '%H:%M:%S').time()
-                    b_dt = datetime.combine(datetime.now().date(), b_time)
-            return (datetime.now() - b_dt).total_seconds() / 60.0
-        except Exception:
+            return datetime.fromisoformat(bt_str)
+        except ValueError:
+            try:
+                return datetime.combine(now_dt.date(), datetime.strptime(bt_str, '%H:%M:%S').time())
+            except ValueError:
+                return None
+    return None
+
+
+def resolve_buy_time_as_datetime(raw_buy_time, now_dt):
+    """공용 buy_time 파서. state handler와 scale-in이 동일 규칙을 공유한다."""
+    return _resolve_buy_time_as_datetime(raw_buy_time, now_dt)
+
+
+def _calc_held_minutes(stock):
+    now_dt = datetime.now()
+    raw_order_time = stock.get('order_time')
+    if raw_order_time:
+        try:
+            return max(0.0, (now_dt.timestamp() - float(raw_order_time)) / 60.0)
+        except (TypeError, ValueError):
             pass
+
+    raw_buy_time = stock.get('buy_time')
+    if raw_buy_time:
+        buy_dt = _resolve_buy_time_as_datetime(raw_buy_time, now_dt)
+        if buy_dt is not None:
+            return max(0.0, (now_dt - buy_dt).total_seconds() / 60.0)
     return 0.0
+
+
+def resolve_holding_elapsed_sec(stock, *, now_dt=None, now_ts=None):
+    """보유 경과초 계산을 공용화해 scale-in/holding handler가 같은 기준을 쓴다."""
+    current_dt = now_dt or datetime.now()
+    current_ts = float(now_ts if now_ts is not None else current_dt.timestamp())
+
+    raw_order_time = stock.get("order_time")
+    if raw_order_time not in (None, "", 0, "0"):
+        try:
+            return max(0, int(current_ts - float(raw_order_time)))
+        except (TypeError, ValueError):
+            pass
+
+    raw_buy_time = stock.get("buy_time")
+    if not raw_buy_time:
+        return 0
+
+    buy_dt = resolve_buy_time_as_datetime(raw_buy_time, current_dt)
+    if buy_dt is None:
+        return 0
+    return max(0, int((current_dt - buy_dt).total_seconds()))
 
 
 def evaluate_scalping_avg_down(stock, profit_rate):
@@ -51,9 +121,9 @@ def evaluate_scalping_avg_down(stock, profit_rate):
         result["reason"] = "avg_down_count_limit"
         return result
 
-    min_drop = float(getattr(TRADING_RULES, 'SCALPING_AVG_DOWN_MIN_DROP_PCT', -3.0))
-    max_drop = float(getattr(TRADING_RULES, 'SCALPING_AVG_DOWN_MAX_DROP_PCT', -6.0))
-    if not (profit_rate <= min_drop and profit_rate >= max_drop):
+    max_loss_pct = float(getattr(TRADING_RULES, 'SCALPING_AVG_DOWN_MIN_DROP_PCT', -3.0))
+    min_loss_pct = float(getattr(TRADING_RULES, 'SCALPING_AVG_DOWN_MAX_DROP_PCT', -6.0))
+    if not (profit_rate <= max_loss_pct and profit_rate >= min_loss_pct):
         result["reason"] = "drop_range_not_met"
         return result
 
@@ -115,8 +185,8 @@ def evaluate_swing_avg_down(stock, profit_rate, market_regime):
         result["reason"] = "avg_down_count_limit"
         return result
 
-    min_drop = float(getattr(TRADING_RULES, 'SWING_AVG_DOWN_MIN_DROP_PCT', -7.0))
-    if profit_rate > min_drop:
+    min_loss_pct = float(getattr(TRADING_RULES, 'SWING_AVG_DOWN_MIN_DROP_PCT', -7.0))
+    if profit_rate > min_loss_pct:
         result["reason"] = "drop_not_enough"
         return result
 
@@ -155,13 +225,80 @@ def evaluate_swing_pyramid(stock, profit_rate, peak_profit):
     return result
 
 
+def _check_reversal_add_pnl_range(profit_rate):
+    pnl_min = float(getattr(TRADING_RULES, 'REVERSAL_ADD_PNL_MIN', -0.45))
+    pnl_max = float(getattr(TRADING_RULES, 'REVERSAL_ADD_PNL_MAX', -0.10))
+    if pnl_min <= profit_rate <= pnl_max:
+        return None
+    return f"pnl_out_of_range({profit_rate:.2f})"
+
+
+def _check_reversal_add_hold_sec(held_sec):
+    min_hold = int(getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_HOLD_SEC', 20))
+    max_hold = int(getattr(TRADING_RULES, 'REVERSAL_ADD_MAX_HOLD_SEC', 120))
+    if min_hold <= held_sec <= max_hold:
+        return None
+    return f"hold_sec_out_of_range({held_sec}s)"
+
+
+def _check_reversal_add_low_floor(stock, profit_rate):
+    floor = float(stock.get('reversal_add_profit_floor', 0.0))
+    margin = float(getattr(TRADING_RULES, 'REVERSAL_ADD_STAGNATION_LOW_FLOOR_MARGIN', 0.05))
+    if profit_rate < floor - margin:
+        return "low_broken"
+    return None
+
+
+def _check_reversal_add_ai_recovery(stock, current_ai_score):
+    min_ai = int(getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_AI_SCORE', 60))
+    if current_ai_score < min_ai:
+        return f"ai_score_too_low({current_ai_score})"
+
+    ai_bottom = int(stock.get('reversal_add_ai_bottom', 100))
+    recovery_delta = int(getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_AI_RECOVERY_DELTA', 15))
+    ai_hist = list(stock.get('reversal_add_ai_history', []))
+    recovering_delta = current_ai_score >= ai_bottom + recovery_delta
+    recovering_consec = len(ai_hist) >= 2 and ai_hist[-1] > ai_hist[-2] and current_ai_score > ai_hist[-1]
+    if not (recovering_delta or recovering_consec):
+        return "ai_not_recovering"
+
+    if len(ai_hist) >= 4:
+        try:
+            std = statistics.stdev(ai_hist)
+            avg = sum(ai_hist) / len(ai_hist)
+            if std <= 2 and avg < 45:
+                return "ai_stuck_at_bottom"
+        except statistics.StatisticsError:
+            pass
+    return None
+
+
+def _check_reversal_add_supply(stock):
+    feat = stock.get('last_reversal_features', {})
+    min_buy_pressure = getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_BUY_PRESSURE', 55)
+    if feat:
+        checks = [
+            feat.get('buy_pressure_10t', 0) >= min_buy_pressure,
+            feat.get('tick_acceleration_ratio', 0) >= getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_TICK_ACCEL', 0.95),
+            not feat.get('large_sell_print_detected', True),
+            feat.get('curr_vs_micro_vwap_bp', -999) >= getattr(TRADING_RULES, 'REVERSAL_ADD_VWAP_BP_MIN', -5.0),
+        ]
+        passed_checks = sum(checks)
+        if passed_checks < 3:
+            return f"supply_conditions_not_met({passed_checks}/4)"
+        return None
+
+    bp = float(stock.get('last_reversal_features', {}).get('buy_pressure_10t', 50.0))
+    if bp < min_buy_pressure:
+        return "buy_pressure_not_met(no_features)"
+    return None
+
+
 def evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_sec):
     """
     역전 확인 추가매수(reversal_add) 평가.
     저점 미갱신 + AI 회복 + 수급 재개가 동시 확인될 때 1회 실행.
     """
-    import statistics as _statistics
-
     result = _base_result()
 
     if not getattr(TRADING_RULES, 'REVERSAL_ADD_ENABLED', False):
@@ -172,69 +309,15 @@ def evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_se
         result["reason"] = "reversal_add_used"
         return result
 
-    pnl_min = float(getattr(TRADING_RULES, 'REVERSAL_ADD_PNL_MIN', -0.45))
-    pnl_max = float(getattr(TRADING_RULES, 'REVERSAL_ADD_PNL_MAX', -0.10))
-    if not (pnl_min <= profit_rate <= pnl_max):
-        result["reason"] = f"pnl_out_of_range({profit_rate:.2f})"
-        return result
-
-    min_hold = int(getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_HOLD_SEC', 20))
-    max_hold = int(getattr(TRADING_RULES, 'REVERSAL_ADD_MAX_HOLD_SEC', 120))
-    if not (min_hold <= held_sec <= max_hold):
-        result["reason"] = f"hold_sec_out_of_range({held_sec}s)"
-        return result
-
-    # 저점 미갱신 확인
-    floor = float(stock.get('reversal_add_profit_floor', 0.0))
-    margin = float(getattr(TRADING_RULES, 'REVERSAL_ADD_STAGNATION_LOW_FLOOR_MARGIN', 0.05))
-    if profit_rate < floor - margin:
-        result["reason"] = "low_broken"
-        return result
-
-    # AI 점수 최소 기준
-    min_ai = int(getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_AI_SCORE', 60))
-    if current_ai_score < min_ai:
-        result["reason"] = f"ai_score_too_low({current_ai_score})"
-        return result
-
-    # AI 회복 방향성 (바닥 대비 +15pt OR 2연속 상승)
-    ai_bottom = int(stock.get('reversal_add_ai_bottom', 100))
-    recovery_delta = int(getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_AI_RECOVERY_DELTA', 15))
-    ai_hist = list(stock.get('reversal_add_ai_history', []))
-    recovering_delta = (current_ai_score >= ai_bottom + recovery_delta)
-    recovering_consec = (len(ai_hist) >= 2 and ai_hist[-1] > ai_hist[-2] and current_ai_score > ai_hist[-1])
-    if not (recovering_delta or recovering_consec):
-        result["reason"] = "ai_not_recovering"
-        return result
-
-    # AI 고착 저점 차단
-    if len(ai_hist) >= 4:
-        try:
-            std = _statistics.stdev(ai_hist)
-            avg = sum(ai_hist) / len(ai_hist)
-            if std <= 2 and avg < 45:
-                result["reason"] = "ai_stuck_at_bottom"
-                return result
-        except Exception:
-            pass
-
-    # 수급 재개 조건 (4개 중 3개, 피처 없으면 buy_pressure만 확인)
-    feat = stock.get('last_reversal_features', {})
-    if feat:
-        checks = [
-            feat.get('buy_pressure_10t', 0) >= getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_BUY_PRESSURE', 55),
-            feat.get('tick_acceleration_ratio', 0) >= getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_TICK_ACCEL', 0.95),
-            not feat.get('large_sell_print_detected', True),
-            feat.get('curr_vs_micro_vwap_bp', -999) >= getattr(TRADING_RULES, 'REVERSAL_ADD_VWAP_BP_MIN', -5.0),
-        ]
-        if sum(checks) < 3:
-            result["reason"] = f"supply_conditions_not_met({sum(checks)}/4)"
-            return result
-    else:
-        # 피처 미사용 엔진: buy_pressure만 확인
-        bp = float(stock.get('last_reversal_features', {}).get('buy_pressure_10t', 50.0))
-        if bp < getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_BUY_PRESSURE', 55):
-            result["reason"] = "buy_pressure_not_met(no_features)"
+    for reason in (
+        _check_reversal_add_pnl_range(profit_rate),
+        _check_reversal_add_hold_sec(held_sec),
+        _check_reversal_add_low_floor(stock, profit_rate),
+        _check_reversal_add_ai_recovery(stock, current_ai_score),
+        _check_reversal_add_supply(stock),
+    ):
+        if reason:
+            result["reason"] = reason
             return result
 
     result["should_add"] = True
@@ -260,73 +343,97 @@ def calc_scale_in_qty(stock, curr_price, deposit, add_type, strategy, add_reason
     return int(details["qty"])
 
 
+def _zero_scale_in_details(*, remaining_budget=0, cap_qty=0, floor_applied=False):
+    return {
+        "qty": 0,
+        "template_qty": 0,
+        "cap_qty": cap_qty,
+        "remaining_budget": remaining_budget,
+        "floor_applied": floor_applied,
+    }
+
+
+def _resolve_scale_in_ratio(raw_strategy, add_type, add_reason):
+    rule = _resolve_scale_in_rule(raw_strategy, add_type, add_reason)
+    ratio_rule = rule.get("ratio_rule")
+    if ratio_rule:
+        default_ratio = float(rule.get("default_ratio", _DEFAULT_SCALE_IN_RATIO) or _DEFAULT_SCALE_IN_RATIO)
+        ratio = float(getattr(TRADING_RULES, ratio_rule, default_ratio) or default_ratio)
+        return ratio if ratio > 0 else default_ratio
+    return float(rule.get("ratio", _DEFAULT_SCALE_IN_RATIO))
+
+
+def _resolve_scale_in_rule(raw_strategy, add_type, add_reason):
+    normalized_reason = add_reason if add_reason == "reversal_add_ok" else "default"
+    if raw_strategy == "SCALPING":
+        key = (raw_strategy, add_type, normalized_reason)
+        if key in _SCALE_IN_RULES:
+            return _SCALE_IN_RULES[key]
+        return _SCALE_IN_RULES[(raw_strategy, add_type, "default")]
+    return _SCALE_IN_RULES[("DEFAULT", add_type, "default")]
+
+
+def _apply_scale_in_template_floor(*, raw_strategy, add_type, add_reason, template_qty, cap_qty):
+    floor_applied = False
+    adjusted_template_qty = template_qty
+    rule = _resolve_scale_in_rule(raw_strategy, add_type, add_reason)
+
+    floor_rule = rule.get("floor_rule")
+    if (
+        floor_rule
+        and bool(
+            getattr(
+                TRADING_RULES,
+                floor_rule,
+                rule.get("floor_default", False),
+            )
+        )
+        and adjusted_template_qty <= 0
+        and cap_qty >= 1
+    ):
+        adjusted_template_qty = 1
+        floor_applied = True
+
+    return adjusted_template_qty, floor_applied
+
+
 def describe_scale_in_qty(stock, curr_price, deposit, add_type, strategy, add_reason=None):
     """추가매수 수량과 zero_qty 원인을 함께 반환한다."""
     if curr_price <= 0 or deposit <= 0:
-        return {
-            "qty": 0,
-            "template_qty": 0,
-            "cap_qty": 0,
-            "remaining_budget": 0,
-            "floor_applied": False,
-        }
+        return _zero_scale_in_details()
 
     buy_qty = int(float(stock.get('buy_qty', 0) or 0))
     if buy_qty <= 0:
-        return {
-            "qty": 0,
-            "template_qty": 0,
-            "cap_qty": 0,
-            "remaining_budget": 0,
-            "floor_applied": False,
-        }
+        return _zero_scale_in_details()
 
     max_pos_pct = float(getattr(TRADING_RULES, 'MAX_POSITION_PCT', 0.30) or 0.30)
     max_budget = deposit * max_pos_pct
     current_value = buy_qty * curr_price
     remaining_budget = max(max_budget - current_value, 0)
     if remaining_budget <= 0:
-        return {
-            "qty": 0,
-            "template_qty": 0,
-            "cap_qty": 0,
-            "remaining_budget": remaining_budget,
-            "floor_applied": False,
-        }
+        return _zero_scale_in_details(remaining_budget=remaining_budget)
 
     raw_strategy = (strategy or "").upper()
     add_type = (add_type or "").upper()
+    add_reason = (add_reason or '')
 
-    if raw_strategy == 'SCALPING':
-        if add_type == 'AVG_DOWN' and (add_reason or '') == 'reversal_add_ok':
-            ratio = float(getattr(TRADING_RULES, 'REVERSAL_ADD_SIZE_RATIO', 0.33) or 0.33)
-            if ratio <= 0:
-                ratio = 0.33
-        else:
-            ratio = 0.50
-    else:
-        ratio = 0.50 if add_type == 'AVG_DOWN' else 0.30
+    ratio = _resolve_scale_in_ratio(raw_strategy, add_type, add_reason)
 
     template_qty = int(buy_qty * ratio)
     cap_qty = int((remaining_budget * 0.95) // curr_price)
-    floor_applied = False
-    if (
-        raw_strategy == 'SCALPING'
-        and add_type == 'PYRAMID'
-        and bool(getattr(TRADING_RULES, 'SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED', False))
-        and template_qty <= 0
-        and cap_qty >= 1
-    ):
-        template_qty = 1
-        floor_applied = True
+    template_qty, floor_applied = _apply_scale_in_template_floor(
+        raw_strategy=raw_strategy,
+        add_type=add_type,
+        add_reason=add_reason,
+        template_qty=template_qty,
+        cap_qty=cap_qty,
+    )
     if template_qty <= 0:
-        return {
-            "qty": 0,
-            "template_qty": 0,
-            "cap_qty": cap_qty,
-            "remaining_budget": remaining_budget,
-            "floor_applied": floor_applied,
-        }
+        return _zero_scale_in_details(
+            remaining_budget=remaining_budget,
+            cap_qty=cap_qty,
+            floor_applied=floor_applied,
+        )
 
     qty = min(template_qty, cap_qty)
     return {

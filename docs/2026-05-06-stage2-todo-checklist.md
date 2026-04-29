@@ -7,6 +7,7 @@
 - `ka10095`, 신호 기반 재포착, 시간대별 소스 분기, composite score, DB/WS 경계 재설계를 같은 날 동시 반영하지 않도록 change set을 분리한다.
 - 거래대금/VI freshness를 승격 gate에 어떻게 반영할지 정량 기준을 먼저 고정한다.
 - `2026-05-05` 어린이날 휴장으로 실행할 수 없던 latency price guard / NaN cast / resolver 후속 항목을 다음 KRX 운영일 기준으로 이관해 닫는다.
+- `REVERSAL_ADD`와 `PYRAMID` 수량 산식이 현재 고정 비율+cap 구조에 머무르는지 점검하고, 동적 수량화는 observe-only/counterfactual 설계로 먼저 분리한다.
 
 ## 오늘 강제 규칙
 
@@ -31,11 +32,11 @@
 
 - 없음
 
-## 장후 체크리스트 (16:00~20:55)
+## 장후 체크리스트 (16:00~21:55)
 
 - [ ] `[ScalpingScannerTxnBoundary0506] DB/WS 경계 재설계와 rollback guard 확정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 16:00~16:20`, `Track: ScalpingLogic`)
   - Source: [2026-04-28-scalping-scanner-enhancement-proposal.md](/home/ubuntu/KORStockScan/docs/2026-04-28-scalping-scanner-enhancement-proposal.md), [scalping_scanner.py](/home/ubuntu/KORStockScan/src/scanners/scalping_scanner.py:281)
-  - 판정 기준: `DB 저장 -> recent_picks 기억 -> COMMAND_WS_REG 발행` 경계에서 발생할 수 있는 부분 커밋/미발행 불일치 케이스를 `failure matrix`, `rollback guard`, `canary-only 적용 범위`로 문서화하고, `일괄 커밋`, `후행 WS 발행`, `outbox`, `shadow-only 계측` 중 다음 change set 1개만 고른다.
+  - 판정 기준: `DB 저장 -> recent_picks 기억 -> COMMAND_WS_REG 발행` 경계에서 발생할 수 있는 부분 커밋/미발행 불일치 케이스를 `failure matrix`, `rollback guard`, `canary-only 적용 범위`로 문서화하고, `일괄 커밋`, `후행 WS 발행`, `outbox`, `observe-only 계측` 중 다음 change set 1개만 고른다.
   - why: 현재 구조는 런타임 중단 위험은 줄였지만 완전한 정합성 보장은 없다. 이 경계를 먼저 잠그지 않으면 후속 구조 변경의 원인귀속이 흐려진다.
   - 다음 액션: 선택한 경계 재설계안이 `same-day code/test/restart` 가능하면 `2026-05-07 PREOPEN` carry-over로 넘기고, 아니면 막힌 조건과 단일 조작점을 같은 항목에 남긴다.
 
@@ -59,9 +60,9 @@
 
 - [ ] `[ScalpingScannerCompositeScore0506] composite score 표준화와 canary 적용 순서 확정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:30`, `Track: ScalpingLogic`)
   - Source: [scalping-scanner-improvement-proposal.md](/home/ubuntu/KORStockScan/docs/scalping-scanner-improvement-proposal.md:173), [2026-04-28-scalping-scanner-enhancement-proposal.md](/home/ubuntu/KORStockScan/docs/2026-04-28-scalping-scanner-enhancement-proposal.md)
-  - 판정 기준: 기존 `_freshness_score` 대비 `z-score` 또는 동등한 standardized composite score의 입력 필드, 시장 분포 기준, shadow-only 계측 기간, pass/fail 기준, full/partial 분리 평가 규칙을 문서화한다.
+  - 판정 기준: 기존 `_freshness_score` 대비 `z-score` 또는 동등한 standardized composite score의 입력 필드, 시장 분포 기준, observe-only 계측 기간, pass/fail 기준, full/partial 분리 평가 규칙을 문서화한다.
   - why: 점수 체계를 바꾸면 승격 순서 전체가 바뀌므로 source/gate 변경과 같은 날 겹치면 기대값 개선 원인귀속이 깨진다.
-  - 다음 액션: composite score는 source/gate 변경 이후 독립 canary로만 올리고, 표준화 분포가 비어 있으면 `shadow-only 계측`부터 연다.
+  - 다음 액션: composite score는 source/gate 변경 이후 독립 canary로만 올리고, 표준화 분포가 비어 있으면 `observe-only 분포 계측`부터 연다.
 
 - [ ] `[StateHandlersContext0506] sniper_state_handlers globals/context 경계 재설계` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 17:30~17:50`, `Track: ScalpingLogic`)
   - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py:58), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
@@ -97,7 +98,7 @@
   - Source: [2026-05-05-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-05-stage2-todo-checklist.md), [2026-04-29-daehan-cable-entry-price-audit-rereport.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-29-daehan-cable-entry-price-audit-rereport.md)
   - 판정 기준: fixed tick 대신 저가주/중가주/고가주 가격대별 bps 부담을 반영한 defensive table을 설계한다.
   - why: 동일 3틱이라도 가격대별 bps 비용이 달라 기대값/체결률 trade-off가 왜곡될 수 있다.
-  - 다음 액션: v2 승인 전까지 v1 3틱은 임시값으로만 유지하고, table 후보는 shadow/counterfactual 로그부터 추가한다.
+  - 다음 액션: v2 승인 전까지 v1 3틱은 임시값으로만 유지하고, table 후보는 observe-only/counterfactual 로그부터 추가한다.
 
 - [ ] `[LatencyExitPriceGuardReview0506HolidayCarry] 매도/청산 latency 가격가드 현황 명문화` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 19:20~19:35`, `Track: ScalpingLogic`)
   - Source: [2026-05-05-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-05-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
@@ -134,3 +135,27 @@
   - 판정 기준: P1 승인 전 단계(`backtest -> observe-only -> canary`)와 각 단계 산출물(`가격차 분포`, `resolver divergence rate`, `submitted_but_unfilled_rate`, `slippage_bps`, `time_to_fill_p50/p90`)을 확정하고, `record_id=4219`가 backtest/observe-only에서 abort되는지 unit test anchor case로 고정한다.
   - why: ingress gate가 없으면 P1이 기술 판단이 아니라 운영 승인 사안으로 변질된다.
   - 다음 액션: gate가 잠기면 `LatencyEntryPriceGuardV2`와 분리된 독립 change set으로 resolver 검증축을 연다.
+
+- [ ] `[ExecutionReceiptsThreadSafety0506] receipt lock/snapshot 경계 재설계` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 20:55~21:10`, `Track: RuntimeStability`)
+  - Source: [code-review-20260430-sniper-engine.md](/home/ubuntu/KORStockScan/docs/code-review-20260430-sniper-engine.md), [sniper_execution_receipts.py](/home/ubuntu/KORStockScan/src/engine/sniper_execution_receipts.py:38), [sniper_execution_receipts.py](/home/ubuntu/KORStockScan/src/engine/sniper_execution_receipts.py:1046)
+  - 판정 기준: 1차 반영된 `RECEIPT_LOCK` 분리, `state_lock` 주입, `snapshot` 인자화 이후에도 `active order binding`, `BUY/ADD/SELL` 체결, `BROKER_RECOVER` 보정 경로에서 race 또는 truth drift가 없는지 점검한다. `weighted_avg_price` vs `_weighted_avg` canonical 단일화는 `2026-04-30`에 receipt 모듈 정밀 평균가 고정으로 닫혔고, `_find_execution_target` 매칭 우선순위도 `bundle -> terminal -> BUY_ORDERED exact -> pending_add exact -> single candidate` 테스트로 고정됐다. 남은 결정사항은 `RECEIPT_LOCK`/`ENTRY_LOCK` 운영상 ownership guide와 residual race review다.
+  - why: 설계 여부 자체는 이미 일부 코드로 굳었다. 이제 남은 리스크는 `락을 왜 나눴는지`, `어떤 경로가 어느 락을 소유하는지`, `주석/테스트로 고정한 규칙과 실제 장중 event order가 어긋나는지`를 운영 기준으로 재검토하지 않은 점이다. 실전 체결 truth 품질이 흔들리면 entry/holding 개선의 원인귀속이 깨진다.
+  - 다음 액션: `1) lock ownership guide 문서화`, `2) residual race review`, `3) 장중 anomaly case와 테스트 우선순위 대조` 순서로 닫는다.
+
+- [ ] `[HoldingNetProfitExitRegression0506] holding_state net-profit sell decision 회귀 원인 격리` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 21:10~21:25`, `Track: RuntimeStability`)
+  - Source: [test_live_trade_profit_rate.py](/home/ubuntu/KORStockScan/src/tests/test_live_trade_profit_rate.py:540), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
+  - 판정 기준: `test_holding_state_uses_net_profit_rate_for_sell_decision`가 왜 `sell_calls` 없이 끝나는지 원인을 분해하고, `KOSPI_ML` 보유 청산 결정 경로에서 `net profit rate` 기반 sell trigger가 여전히 살아있는지 확인한다. 최소 기준은 failing test 재현, 분기 원인 식별, 수정 또는 의도적 정책 변경 중 하나를 문서로 잠그는 것이다.
+  - why: 이번 change set의 타깃 테스트는 green이지만 broader regression 기준으로는 holding exit 경로 1건이 여전히 실패한다. 이 상태를 문서화하지 않으면 `타깃 검증 통과`가 `전체 hold/exit 회귀 없음`으로 오해될 수 있다.
+  - 다음 액션: 원인이 기존 정책 변경이면 테스트 기대값을 Plan Rebase 기준으로 재정의하고, 실제 회귀면 별도 patch로 분리해 고친다.
+
+- [ ] `[ReversalAddDynamicQty0506] REVERSAL_ADD 동적 수량 산식 observe-only 설계` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 21:25~21:40`, `Track: ScalpingLogic`)
+  - Source: [personal-decision-flow-notes.md](/home/ubuntu/KORStockScan/docs/personal-decision-flow-notes.md), [sniper_scale_in.py](/home/ubuntu/KORStockScan/src/engine/sniper_scale_in.py:400), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - 판정 기준: 현재 `REVERSAL_ADD` 수량이 `buy_qty * REVERSAL_ADD_SIZE_RATIO` + `MAX_POSITION_PCT` cap + 1주 floor에 머무르는지 확인하고, `AI 회복폭`, `수급 3/4~4/4`, `soft/hard stop 거리`, `peak_profit never-green`, `remaining_budget`, `volatility`를 반영한 `would_qty` counterfactual 산식을 설계한다. live 수량 변경은 이 항목에서 켜지 않는다.
+  - why: 유효 진입 회수형 추가매수라면 수량도 현재 상태 기반으로 재산정하는 편이 EV 관점에서 자연스럽다. 다만 `REVERSAL_ADD` 자체가 신규 holding canary라 수량까지 동시에 바꾸면 같은 단계 다축 변경이 되어 손익/soft stop tail 원인귀속이 깨진다.
+  - 다음 액션: 산식 후보가 잠기면 `actual_qty`, `would_qty`, `qty_reason`, `post_add_mfe`, `post_add_stop_rate`, `COMPLETED + valid profit_rate`를 observe-only 로그로 먼저 남기고, 최소 표본 확보 후 별도 단일축 canary로 승격 여부를 판단한다.
+
+- [ ] `[PyramidDynamicQty0506] PYRAMID 불타기 동적 수량 산식 observe-only 설계` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 21:40~21:55`, `Track: ScalpingLogic`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [personal-decision-flow-notes.md](/home/ubuntu/KORStockScan/docs/personal-decision-flow-notes.md), [sniper_scale_in.py](/home/ubuntu/KORStockScan/src/engine/sniper_scale_in.py:142), [sniper_scale_in.py](/home/ubuntu/KORStockScan/src/engine/sniper_scale_in.py:400)
+  - 판정 기준: 현재 스캘핑 `PYRAMID` 수량이 `buy_qty * 0.50` + `MAX_POSITION_PCT` cap + 선택적 zero-qty floor 구조에 머무르는지 확인하고, `is_new_high`, `peak_profit - profit_rate <= 0.3`, 수익률 레벨, AI/수급 지속성, trailing giveback 여유, 당일 same-symbol reentry 여부를 반영한 `pyramid_would_qty` counterfactual 산식을 설계한다. live 수량 변경은 이 항목에서 켜지 않는다.
+  - why: 불타기는 손실 회수형 `REVERSAL_ADD`보다 winner size-up 효과가 직접적이라 EV 개선 여지가 크다. 그러나 `initial-only`, `pyramid-activated`, `REVERSAL_ADD`, `soft_stop` 표본을 섞으면 원인귀속이 깨지므로 불타기 수량 동적화는 독립 observe-only 축으로만 연다.
+  - 다음 액션: 산식 후보가 잠기면 `actual_qty`, `pyramid_would_qty`, `qty_reason`, `post_add_mfe`, `trailing_exit`, `COMPLETED + valid profit_rate`, `soft_stop` 전환율을 분리 로깅하고, 최소 표본 확보 후 별도 단일축 canary 후보로만 승격 검토한다.

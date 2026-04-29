@@ -43,6 +43,7 @@ from src.database.db_manager import DBManager
 from src.core.event_bus import EventBus
 from src.database.models import RecommendationHistory
 from src.engine.trade_profit import calculate_net_profit_rate
+from src.engine.sniper_entry_state import ENTRY_LOCK
 from src.engine.sniper_config import CONF
 from src.engine.sniper_time import (
     _rule_time,
@@ -302,6 +303,7 @@ bind_execution_dependencies(
     get_fast_state=_get_fast_state,
     weighted_avg=_weighted_avg,
     now_ts=_now_ts,
+    state_lock=ENTRY_LOCK,
 )
 
 _STATE_HANDLER_DEPS = {}
@@ -1151,6 +1153,7 @@ def run_sniper(is_test_mode=False):
     bind_condition_dependencies(active_targets=ACTIVE_TARGETS)
     bind_analysis_dependencies(active_targets=ACTIVE_TARGETS)
     bind_state_dependencies(active_targets=ACTIVE_TARGETS)
+    sniper_state_handlers.sanitize_pending_add_states(ACTIVE_TARGETS)
     bind_execution_dependencies(active_targets=ACTIVE_TARGETS)
     bind_overnight_dependencies(active_targets=ACTIVE_TARGETS)
     _restore_armed_candidates_from_db()

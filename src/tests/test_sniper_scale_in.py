@@ -1,5 +1,5 @@
 from dataclasses import replace
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time
 import time
 
 import src.engine.sniper_scale_in as scale_in
@@ -59,6 +59,50 @@ def test_swing_avg_down_bear_blocked():
     result = scale_in.evaluate_swing_avg_down(stock, profit_rate=-8.0, market_regime="BEAR")
     assert result["should_add"] is False
     assert result["reason"] == "bear_avg_down_blocked"
+
+
+def test_calc_held_minutes_prefers_order_time_epoch():
+    now = datetime.now().timestamp()
+
+    held_min = scale_in._calc_held_minutes({"order_time": now - 180})
+
+    assert 2.9 <= held_min <= 3.1
+
+
+def test_calc_held_minutes_supports_datetime_buy_time():
+    held_min = scale_in._calc_held_minutes({"buy_time": datetime.now() - timedelta(minutes=7)})
+
+    assert 6.9 <= held_min <= 7.1
+
+
+def test_calc_held_minutes_supports_time_only_buy_time():
+    buy_time = (datetime.now() - timedelta(minutes=11)).time().replace(microsecond=0)
+
+    held_min = scale_in._calc_held_minutes({"buy_time": buy_time})
+
+    assert 10.8 <= held_min <= 11.2
+
+
+def test_calc_held_minutes_returns_zero_for_unsupported_buy_time():
+    held_min = scale_in._calc_held_minutes({"buy_time": "not-a-datetime"})
+
+    assert held_min == 0.0
+
+
+def test_resolve_holding_elapsed_sec_supports_time_only_buy_time():
+    buy_time = (datetime.now() - timedelta(minutes=9)).time().replace(microsecond=0)
+
+    held_sec = scale_in.resolve_holding_elapsed_sec({"buy_time": buy_time})
+
+    assert 530 <= held_sec <= 550
+
+
+def test_state_handler_resolve_holding_elapsed_sec_uses_shared_parser():
+    buy_time = (datetime.now() - timedelta(minutes=6)).time().replace(microsecond=0)
+
+    held_sec = state_handlers._resolve_holding_elapsed_sec({"buy_time": buy_time})
+
+    assert 350 <= held_sec <= 370
 
 
 def test_weighted_avg_price():
@@ -241,7 +285,7 @@ def test_update_db_for_add_does_not_touch_detached_record_after_commit(monkeypat
         exec_price=9500,
         exec_qty=3,
         now=datetime(2026, 4, 15, 9, 31, 54),
-        target_stock={
+        receipt_snapshot={
             "name": "TEST",
             "code": "123456",
             "strategy": "SCALPING",
@@ -379,6 +423,50 @@ def test_describe_scale_in_qty_stage1_applies_one_share_floor_when_enabled():
         assert details["template_qty"] == 1
         assert details["cap_qty"] >= 1
         assert details["floor_applied"] is True
+    finally:
+        scale_in.TRADING_RULES = original
+
+
+def test_describe_scale_in_qty_applies_reversal_add_floor_for_two_share_cap():
+    from src.utils.constants import TRADING_RULES as CONFIG
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(
+        CONFIG,
+        MAX_POSITION_PCT=1.0,
+        REVERSAL_ADD_SIZE_RATIO=0.33,
+        REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED=True,
+    )
+    try:
+        details = scale_in.describe_scale_in_qty(
+            {"buy_qty": 2},
+            curr_price=10_000,
+            deposit=1_000_000,
+            add_type="AVG_DOWN",
+            strategy="SCALPING",
+            add_reason="reversal_add_ok",
+        )
+        assert details["qty"] == 1
+        assert details["floor_applied"] is True
+    finally:
+        scale_in.TRADING_RULES = original
+
+
+def test_describe_scale_in_qty_uses_non_scalping_pyramid_ratio():
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(CONFIG, MAX_POSITION_PCT=1.0)
+    try:
+        details = scale_in.describe_scale_in_qty(
+            {"buy_qty": 10},
+            curr_price=10_000,
+            deposit=1_000_000,
+            add_type="PYRAMID",
+            strategy="KOSPI_ML",
+        )
+        assert details["qty"] == 3
+        assert details["template_qty"] == 3
+        assert details["floor_applied"] is False
     finally:
         scale_in.TRADING_RULES = original
 
@@ -1249,6 +1337,115 @@ def test_execution_receipt_accumulates_fallback_bundle_fills(monkeypatch):
     assert stock.get("pending_entry_orders") is None
 
 
+def test_find_execution_target_prefers_exact_buy_order_match_over_pending_add():
+    receipts.ACTIVE_TARGETS = [
+        {
+            "id": 1,
+            "code": "123456",
+            "status": "BUY_ORDERED",
+            "odno": "O1",
+        },
+        {
+            "id": 2,
+            "code": "123456",
+            "status": "HOLDING",
+            "pending_add_order": True,
+            "pending_add_ord_no": "O1",
+        },
+    ]
+
+    target = receipts._find_execution_target("123456", "BUY", "O1")
+
+    assert target["id"] == 1
+
+
+def test_find_execution_target_prefers_single_pending_add_candidate_without_order_no():
+    receipts.ACTIVE_TARGETS = [
+        {
+            "id": 1,
+            "code": "123456",
+            "status": "BUY_ORDERED",
+            "odno": "O1",
+        },
+        {
+            "id": 2,
+            "code": "123456",
+            "status": "HOLDING",
+            "pending_add_order": True,
+            "pending_add_ord_no": "A1",
+        },
+    ]
+
+    target = receipts._find_execution_target("123456", "BUY", "")
+
+    assert target["id"] == 2
+
+
+def test_find_execution_target_prefers_bundle_ord_no_over_buy_ordered_status_match():
+    receipts.ACTIVE_TARGETS = [
+        {
+            "id": 1,
+            "code": "123456",
+            "status": "BUY_ORDERED",
+            "odno": "O1",
+        },
+        {
+            "id": 2,
+            "code": "123456",
+            "status": "BUY_ORDERED",
+            "pending_entry_orders": [
+                {"tag": "fallback_main", "ord_no": "O1", "status": "OPEN"},
+            ],
+        },
+    ]
+
+    target = receipts._find_execution_target("123456", "BUY", "O1")
+
+    assert target["id"] == 2
+
+
+def test_find_execution_target_prefers_exact_sell_order_match():
+    receipts.ACTIVE_TARGETS = [
+        {
+            "id": 1,
+            "code": "123456",
+            "status": "SELL_ORDERED",
+            "sell_odno": "S1",
+        },
+        {
+            "id": 2,
+            "code": "123456",
+            "status": "SELL_ORDERED",
+            "sell_odno": "S2",
+        },
+    ]
+
+    target = receipts._find_execution_target("123456", "SELL", "S2")
+
+    assert target["id"] == 2
+
+
+def test_find_execution_target_returns_none_for_ambiguous_buy_order_without_order_no():
+    receipts.ACTIVE_TARGETS = [
+        {
+            "id": 1,
+            "code": "123456",
+            "status": "BUY_ORDERED",
+            "odno": "O1",
+        },
+        {
+            "id": 2,
+            "code": "123456",
+            "status": "BUY_ORDERED",
+            "odno": "O2",
+        },
+    ]
+
+    target = receipts._find_execution_target("123456", "BUY", "")
+
+    assert target is None
+
+
 def test_late_fill_after_cancel_matches_terminal_entry_order(monkeypatch):
     receipts.ACTIVE_TARGETS = []
     receipts.highest_prices = {}
@@ -1426,6 +1623,124 @@ def test_stage_buy_order_submission_preserves_early_fill_state(monkeypatch):
     assert stock["pending_entry_orders"][0]["ord_no"] == "O1"
     assert stock["pending_entry_orders"][0]["filled_qty"] == 1
     assert stock["pending_entry_orders"][0]["status"] == "FILLED"
+
+
+def test_buy_execution_thread_receives_snapshot_and_clears_live_notify_state(monkeypatch):
+    receipts.ACTIVE_TARGETS = []
+    receipts.highest_prices = {}
+    receipts._get_fast_state = lambda code: None
+    receipts.DB = _DummyDB()
+
+    thread_calls = []
+
+    class DummyThread:
+        def __init__(self, target=None, args=(), daemon=None):
+            thread_calls.append((target, args, daemon))
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(receipts.threading, "Thread", DummyThread)
+
+    stock = {
+        "id": 11,
+        "code": "123456",
+        "name": "TEST",
+        "status": "BUY_ORDERED",
+        "strategy": "KOSPI_ML",
+        "buy_price": 0,
+        "buy_qty": 0,
+        "pending_buy_msg": "그물망 투척!",
+        "msg_audience": "ADMIN_ONLY",
+    }
+    receipts.ACTIVE_TARGETS.append(stock)
+
+    receipts.handle_real_execution({"code": "123456", "type": "BUY", "order_no": "B1", "price": 10000, "qty": 1})
+
+    assert stock["buy_execution_notified"] is True
+    assert "pending_buy_msg" not in stock
+    assert thread_calls
+    _, args, _ = thread_calls[0]
+    snapshot = args[3]
+    assert snapshot is not stock
+    assert snapshot["pending_buy_msg"] == "그물망 투척!"
+    assert snapshot["buy_execution_notified"] is False
+    assert snapshot["buy_qty"] == 1
+
+    stock["buy_qty"] = 999
+    assert snapshot["buy_qty"] == 1
+
+
+def test_sell_execution_thread_receives_snapshot_and_clears_live_notify_state(monkeypatch):
+    receipts.ACTIVE_TARGETS = []
+    receipts.highest_prices = {}
+    receipts._get_fast_state = lambda code: None
+
+    thread_calls = []
+
+    class SellRecord:
+        buy_price = 10000.0
+        strategy = "KOSPI_ML"
+
+    class SellQuery:
+        def filter_by(self, **kwargs):
+            return self
+
+        def first(self):
+            return SellRecord()
+
+    class SellSession:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def query(self, *args, **kwargs):
+            return SellQuery()
+
+    class SellDB:
+        def get_session(self):
+            return SellSession()
+
+    class DummyThread:
+        def __init__(self, target=None, args=(), daemon=None):
+            thread_calls.append((target, args, daemon))
+
+        def start(self):
+            return None
+
+    receipts.DB = SellDB()
+    monkeypatch.setattr(receipts.threading, "Thread", DummyThread)
+
+    stock = {
+        "id": 12,
+        "code": "123456",
+        "name": "TEST",
+        "status": "SELL_ORDERED",
+        "strategy": "KOSPI_ML",
+        "sell_odno": "S1",
+        "buy_qty": 3,
+        "pending_sell_msg": "[익절 주문] 매도 전송",
+        "last_exit_rule": "scalp_take_profit",
+        "msg_audience": "ADMIN_ONLY",
+    }
+    receipts.ACTIVE_TARGETS.append(stock)
+
+    receipts.handle_real_execution({"code": "123456", "type": "SELL", "order_no": "S1", "price": 10100, "qty": 3})
+
+    assert stock["status"] == "COMPLETED"
+    assert "pending_sell_msg" not in stock
+    assert thread_calls
+    _, args, _ = thread_calls[0]
+    snapshot = args[3]
+    assert snapshot is not stock
+    assert snapshot["pending_sell_msg"] == "[익절 주문] 매도 전송"
+    assert snapshot["last_exit_rule"] == "scalp_take_profit"
+    assert snapshot["buy_qty"] == 3
+
+    stock["buy_qty"] = 999
+    assert snapshot["buy_qty"] == 3
 
 
 def test_scalp_preset_tp_refreshes_to_latest_filled_qty(monkeypatch):
@@ -2403,6 +2718,70 @@ def test_scalp_soft_stop_micro_grace_delays_exit(monkeypatch):
     assert not exit_calls
 
 
+def test_bad_entry_block_observe_logs_never_green_ai_fade(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED=True,
+        SCALP_BAD_ENTRY_BLOCK_MIN_HOLD_SEC=60,
+        SCALP_BAD_ENTRY_BLOCK_MIN_LOSS_PCT=-0.70,
+        SCALP_BAD_ENTRY_BLOCK_MAX_PEAK_PROFIT_PCT=0.20,
+        SCALP_BAD_ENTRY_BLOCK_AI_SCORE_LIMIT=45,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 10005}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    pipeline_logs = []
+
+    def fake_log_holding_pipeline(stock, code, stage, **fields):
+        pipeline_logs.append((stage, fields))
+
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", fake_log_holding_pipeline)
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+
+    stock = {
+        "id": 1601,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 2,
+        "rt_ai_prob": 0.40,
+        "order_time": state_handlers.time.time() - 90,
+        "last_reversal_features": {
+            "buy_pressure_10t": 42.0,
+            "tick_acceleration_ratio": 0.80,
+            "large_sell_print_detected": True,
+            "curr_vs_micro_vwap_bp": -12.0,
+        },
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 9920, "orderbook": {"bids": [{"price": 9920, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    observed = [fields for stage, fields in pipeline_logs if stage == "bad_entry_block_observed"]
+    assert observed
+    assert observed[-1]["observe_only"] is True
+    assert observed[-1]["classifier"] == "never_green_ai_fade"
+    assert stock["status"] == "HOLDING"
+
+
 def test_scalp_soft_stop_micro_grace_expires_to_soft_stop(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
@@ -3018,9 +3397,15 @@ def _reversal_add_rules(**kwargs):
 # TC-1: 토글 OFF → 미트리거
 def test_reversal_add_tc1_toggle_off():
     stock = _reversal_add_stock()
-    result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.25, current_ai_score=65, held_sec=50)
-    assert result["should_add"] is False
-    assert result["reason"] == "reversal_add_disabled"
+    from src.utils.constants import TRADING_RULES as CONFIG
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(CONFIG, REVERSAL_ADD_ENABLED=False)
+    try:
+        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.25, current_ai_score=65, held_sec=50)
+        assert result["should_add"] is False
+        assert result["reason"] == "reversal_add_disabled"
+    finally:
+        scale_in.TRADING_RULES = original
 
 
 # TC-2: PnL 범위 이탈 → 미트리거
