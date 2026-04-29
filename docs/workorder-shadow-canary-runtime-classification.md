@@ -188,6 +188,8 @@ cohort 분류 공통 규칙은 아래로 고정한다.
 | `post-restart cohort` | `active-canary-decision` | replacement 이후 same-day 제출 회복 관찰 | replacement 당일 판정이 닫히고 후속 축이 새 `post-change` cohort로 넘어가면 종료. 익일 이후 지속 baseline으로 쓰지 않음 | `2026-04-29 checklist` |
 | `soft_stop qualifying cohort` | `provisional-stage-disjoint` | 보유/청산 live 예외 canary 후보 | `soft_stop_rebound_split` 승인 또는 보류+재시각이 닫히고, qualifying rule이 live 조작점으로 승격되거나 폐기될 때 종료 | `2026-04-27 checklist` |
 | `soft_stop_micro_grace` | `active-canary-decision` | soft_stop 최초 터치 후 짧은 휩쏘 확인유예 | `scalp_soft_stop_pct` 손실/반등 개선이 확인되어 baseline 승격되거나, emergency/hard_stop 악화 또는 soft_stop 지연 부작용으로 OFF 확정될 때 종료 | `2026-04-27 checklist` |
+| `reversal_add` | `active-canary-decision` | 유효 진입 초반 눌림을 1주 소형 추가매수로 회수하는 보유/청산 canary | `reversal_add_candidate`, `scale_in_executed add_type=AVG_DOWN`, `reversal_add_used`, 후속 `soft_stop/trailing/COMPLETED`로 손익/soft stop tail 개선 여부가 닫히면 유지/종료/승격 결정 | `Plan Rebase`, `2026-04-30 checklist` |
+| `bad_entry_block` | `observe-only` | never-green/AI fade 불량 진입 후보를 실전 차단 전 관찰 | `bad_entry_block_observed`와 후속 `soft_stop/hard_stop/GOOD_EXIT/MISSED_UPSIDE`가 최소 10건 이상 연결되고 missed winner 위험이 낮다고 확인되기 전까지 live block 금지 | `Plan Rebase`, `2026-04-30 checklist` |
 | `hard_stop_whipsaw_aux` | `observe-only` | severe-loss guard 보조 관찰 | 하드스탑을 보조 관찰로만 둔다는 원칙이 유지되는 동안 유지. `MISSED_UPSIDE/GOOD_EXIT/NEUTRAL`과 반등 지표가 독립 판단가치를 잃거나 hard stop 완화 의제가 공식 폐기되면 제거 | `Plan Rebase`, `2026-04-27 checklist` |
 | `same_symbol_reentry` | `observe-only` | 동일종목 재진입 손실/guard 필요성 관찰 | `same_symbol_reentry_loss_count`가 독립 guard 후보성을 잃거나, soft stop/position context 축에 완전히 흡수되어 별도 재진입 cohort가 필요 없을 때 제거 | `holding_exit_observation`, `2026-04-27 checklist` |
 | `trailing_continuation` | `observe-only` | upside capture 개선 후보 관찰 | `MISSED_UPSIDE rate >= 60%`, `GOOD_EXIT rate <= 30%`로 2순위 live 후보 요건을 충족해 canary로 승격되거나, 반대로 upside 개선 후보성이 약해져 후순위 폐기가 확정되면 제거/재분류 | `holding_exit_observation`, `2026-04-27 checklist` |
@@ -238,6 +240,8 @@ inventory 운영 규칙은 아래로 고정한다.
 | `latency_signal_quality_quote_composite` | `observe-only` | `guarded-off` | 2026-04-29 12:21~12:50 KST same-day replacement 후 효과 미약 종료 |
 | `mechanical_momentum_latency_relief` | `active-canary` | `limited-live` | current entry live replacement canary |
 | `initial_entry_qty_cap_2share` | `active-canary` | `limited-live` | current initial entry size guard. 3주 확대는 별도 승인 전 observe-only |
+| `reversal_add` | `active-canary` | `limited-live` | valid-entry early pullback recovery. 2주 cap에서도 1주 floor로 소형 canary |
+| `bad_entry_block` | `observe-only` | `none` | never-green/AI fade 후보 분류. live entry block 아님 |
 | `ai_cache_hit_miss` | `observe-only` | `none` | structured join gap으로 보조지표 유지 |
 | `execution_receipt_binding_quality` | `observe-only` | `none` | SK이노베이션 BUY/SELL `EXEC_IGNORED` 사례로 runtime truth 품질축 유지 |
 | `gemini_schema_registry_flag_off` | `observe-only` | `guarded-off` | flag-off contract/load observability. live enable 아님 |
@@ -400,6 +404,48 @@ inventory 운영 규칙은 아래로 고정한다.
 - 다음 액션:
   1. `soft_stop_micro_grace`, `scalp_soft_stop_pct`, `scalp_hard_stop_pct`, `COMPLETED + valid profit_rate`, `full_fill/partial_fill`을 분리 관찰
   2. hard stop 전환이나 grace 후 악화가 확인되면 canary OFF
+
+### 4.4A-2 `reversal_add`
+
+- 판정: `active-canary-decision`
+- live 영향도: `limited-live`
+- 튜닝 모니터링 가치: `High`
+  - 이유: `micro grace 20초`는 손절 시점 지연에 그친다. `reversal_add`는 진입 판단이 틀리지 않았고 초반 눌림만 과도한 케이스를 1주 추가매수로 회수하는 별도 전략 가설이다.
+  - 상향 조건: `reversal_add_used` cohort에서 `COMPLETED + valid profit_rate`가 baseline 대비 비악화이고, `scalp_soft_stop_pct` 전환율과 hard stop 전환이 늘지 않을 때
+  - 하향 조건: `reversal_add_used` 후 soft stop/hard stop으로 이어지거나, cohort 평균 손익이 `<= -0.30%`일 때
+- EV 판정 기여도: `High`
+- 대체 가능성: `Low`
+- 운영 부하/지연 비용: `Low`
+- 코드 유지비: `Medium`
+- 향후 재개 가능성: `High`
+- 근거:
+  1. 기존 `evaluate_scalping_reversal_add()`는 AI 회복, 저점 미갱신, 매수압/틱가속/micro VWAP 조건을 이미 갖고 있어 새 진입축이 아니라 보유 중 회수축으로 제한할 수 있다.
+  2. 2주 cap 환경에서는 `REVERSAL_ADD_SIZE_RATIO=0.33`이 0주가 될 수 있으므로 `REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED=True`로 1주 소형 canary를 허용한다.
+  3. 추가매수 체결 후에는 `soft_stop_micro_grace` 상태를 초기화해 기존 손절 유예 상태가 새 평단 판단을 오염시키지 않게 한다.
+- 다음 액션:
+  1. `reversal_add_candidate`, `reversal_add_blocked_reason`, `scale_in_executed add_type=AVG_DOWN`, `reversal_add_used`, 후속 `soft_stop/trailing/COMPLETED`를 분리한다.
+  2. 내일 오전 1건이라도 체결되면 anchor case로 고정하고, 체결이 없으면 `zero_qty/position_at_cap/supply_conditions_not_met/ai_not_recovering` 중 병목을 닫는다.
+
+### 4.4A-3 `bad_entry_block`
+
+- 판정: `observe-only`
+- live 영향도: `none`
+- 튜닝 모니터링 가치: `High`
+  - 이유: soft stop이 많은 종목을 무조건 더 버티거나 물타기할 수는 없다. never-green, 낮은 peak, 낮은 AI 상태로 60초 이상 손실이 지속되는 표본은 애초에 막아야 할 불량 진입 후보일 수 있다.
+  - 상향 조건: `bad_entry_block_observed` 표본이 10건 이상이고 후속 `soft_stop/hard_stop` 전환이 높으며 `GOOD_EXIT/MISSED_UPSIDE` 놓침 위험이 낮을 때
+  - 하향 조건: observe 후보가 이후 자주 회복하거나 `MISSED_UPSIDE`로 끝나 live block이 기회비용을 키울 가능성이 확인될 때
+- EV 판정 기여도: `High`
+- 대체 가능성: `Medium`
+- 운영 부하/지연 비용: `Low`
+- 코드 유지비: `Low`
+- 향후 재개 가능성: `High`
+- 근거:
+  1. 초기 조건은 `held_sec>=60`, `profit_rate<=-0.70%`, `peak_profit<=+0.20%`, `current_ai_score<=45`로 제한한다.
+  2. 내일은 `bad_entry_block_observed`만 남기고 주문 차단/청산 변경은 하지 않는다.
+  3. feature는 `buy_pressure_10t`, `tick_acceleration_ratio`, `large_sell_print_detected`, `curr_vs_micro_vwap_bp`를 같이 남겨 `불량 진입`과 `일시 눌림`을 분리한다.
+- 다음 액션:
+  1. 후속 `soft_stop/hard_stop/GOOD_EXIT/MISSED_UPSIDE`와 연결 가능한 형태로만 해석한다.
+  2. live block 승격은 별도 날짜 checklist에서 단일축 canary로만 연다.
 
 ### 4.4B `partial_only_timeout_shadow`
 

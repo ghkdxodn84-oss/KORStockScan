@@ -10,9 +10,10 @@
 | entry live owner | `mechanical_momentum_latency_relief`. `latency_quote_fresh_composite`는 `2026-04-29 08:29 KST` OFF + restart 완료, `latency_signal_quality_quote_composite`는 `2026-04-29 12:50 KST` 효과 미약으로 OFF |
 | submitted 상태 | 운영상 급한 drought는 완화됐다. `12:57 restart -> 14:00` 고유 기준 `budget_pass=38`, `submitted=20`, `filled=7`; `13:15 hotfix -> 14:00` 기준 `budget_pass=32`, `submitted=17`, `filled=7`이다. 단, baseline-lock 전까지는 관찰 대상이다. |
 | entry 수량축 | 스캘핑 신규 BUY는 임시 `2주 cap` 유지. `3주 cap`은 기술적으로 가능하지만 `mechanical_momentum_latency_relief`와 같은 entry 단계 live 변경이므로, `2026-04-30` 장후 승인조건 판정 전에는 적용하지 않는다. |
-| 보유/청산 live owner | `soft_stop_micro_grace` active. 1순위 관찰축은 `soft_stop_rebound_split`, 2순위 후보는 `trailing_continuation_micro_canary`다. |
+| 보유/청산 live owner | `soft_stop_micro_grace` active에 더해 `2026-04-30`은 `REVERSAL_ADD` 1주 소형 canary와 `bad_entry_block` observe-only classifier를 병행 준비했다. 단계가 entry가 아니라 holding/exit라 `mechanical_momentum_latency_relief`와 cohort를 분리한다. |
 | soft stop 해석 | 4월 soft stop post-sell 61건 중 10분 내 매도가 재상회 57건, +0.5% 이상 반등 43건, +1.0% 이상 반등 23건, 매수가 회복 16건이다. 즉 휩쏘 가능성은 높지만 무조건 더 오래 버티는 결론은 아니다. |
 | 2026-04-29 soft stop 표본 | `올릭스`는 `GOOD_EXIT`, `덕산하이메탈`은 `NEUTRAL`, `지앤비에스 에코`는 `MISSED_UPSIDE + 고가 재진입 체결 + 익절 완료`, `코오롱`은 `GOOD_EXIT`지만 고가 재진입 제출 흔적이 있다. |
+| 2026-04-30 보유/청산 실험 | `REVERSAL_ADD`는 유효 진입 초반 눌림을 1주 추가매수로 회수하는 active canary다. `bad_entry_block`은 never-green/AI fade 후보를 관찰만 하며 주문 차단은 하지 않는다. |
 | runtime truth 이슈 | `SK이노베이션(096770)`은 BUY/SELL 모두 WS 실제체결이 들어왔으나 `EXEC_IGNORED`가 발생했고, 정기 계좌동기화가 HOLDING/COMPLETED를 복구했다. 수동 HTS 매도 기준 실손익은 비용 반영 약 `+4.2%`다. 핵심 후속은 order-binding 품질이다. |
 | 휴장 보정 | `2026-05-01`은 근로자의 날 KRX 휴장, 다음 운영일은 `2026-05-04`. `2026-05-05`는 어린이날 휴장, 이월 작업은 `2026-05-06` checklist가 소유한다. |
 
@@ -116,6 +117,25 @@
 | 하드스탑 위치 | `scalp_preset_hard_stop_pct`, `scalp_hard_stop_pct`, `protect_hard_stop`은 soft_stop보다 완화 우선순위를 낮춘다. 하드스탑은 극단 손실 방어선이므로 반등 사례가 있어도 `hard_stop_whipsaw_aux` 보조 관찰로만 두고, 바로 완화 canary로 올리지 않는다. |
 | 하방카운트 위치 | `ai_low_score_hits`/`scalp_ai_early_exit`는 2026-04-27 기준 live 경로에서 제거했다. 기존 하방카운트는 가격 휩쏘 필터가 아니라 후행 AI 조기손절이라 soft_stop 보호장치로서 실효성이 낮았다. |
 | 4월 로그 해석 | 4월 하방카운트 `0/3` 또는 `0/4` 편중과 `3/3` 희소성은 제거 판단 근거로만 보존한다. 현재 soft_stop 해석은 `rebound_above_sell/buy`, `mfe_ge_*`, `same_symbol_reentry`, `hard_stop_auxiliary` 중심으로 고정한다. |
+
+### 소프트손절 튜닝 전략 메모
+
+| 항목 | 내용 |
+| --- | --- |
+| 왜 물타기를 선택했나 | 목적은 손실 방어가 아니라 `기대값/순이익 극대화`다. 4월 soft stop 표본은 직접 손실 기여가 컸지만, post-sell 기준 10분 내 매도가 재상회와 +0.5% 이상 반등이 많아 `진입 자체는 유효했지만 초반 눌림 뒤 회복한 표본`이 섞여 있다고 본다. 그래서 전역 손절 완화가 아니라 `valid_entry_reversal_add`로 유효 진입 회수 가능성을 좁게 검증한다. |
+| 단순 유예 연장을 우선하지 않는 이유 | `soft_stop_micro_grace_extend`를 바로 켜면 정당 컷이어야 할 never-green/AI fade 표본까지 더 오래 들고 갈 수 있다. EV 관점에서는 손실을 늦추는 것보다 `회복 전조가 확인된 표본만 평단을 낮춰 회수`하는 쪽이 원인귀속과 롤백이 선명하다. |
+| REVERSAL_ADD 해석 | 일반 물타기가 아니라 `profit_rate -0.45%~-0.10%`, `held_sec 20~120`, `AI>=60`, 저점 미갱신, AI bottom 대비 `+15pt` 또는 연속회복, 수급 3/4 충족일 때만 1회 허용하는 소형 canary다. 수량은 `REVERSAL_ADD_SIZE_RATIO=0.33`, 2주 cap 환경에서는 `REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED=True`로 1주 floor를 허용한다. |
+| 수량 산식의 현재 한계 | 현재 수량은 `buy_qty * REVERSAL_ADD_SIZE_RATIO`를 기본 템플릿으로 두고 `MAX_POSITION_PCT` 기반 남은 예산 cap과 1주 floor만 반영한다. 즉 현재가/예수금/보유수량/포지션 cap은 반영하지만, AI 회복 강도, 손실폭 위치, soft/hard stop까지의 거리, 수급 회복 강도, realized volatility를 직접 반영하는 완전 동적 산식은 아니다. |
+| 수량 동적화 방향 | EV 관점에서는 `회복 확률`과 `추가 노출 리스크`를 같이 반영하는 동적 수량이 더 자연스럽다. 후보 공식은 `base_floor 1주 + confidence_multiplier(AI 회복, 수급 3/4~4/4, 저점 미갱신) - risk_discount(soft/hard stop 거리, peak_profit never-green, 포지션 cap 근접)` 형태로 두되, live 적용 전에는 counterfactual/observe-only로 `would_qty`, `actual_qty`, `post_add_mfe`, `post_add_stop_rate`를 먼저 남긴다. |
+| 불타기 수량 현재값 | `PYRAMID`도 `describe_scale_in_qty()` 공통 경로를 탄다. 스캘핑 `PYRAMID`는 `buy_qty * 0.50` 템플릿, `MAX_POSITION_PCT` 기반 cap, `SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED` floor 옵션을 쓴다. 현재 기본값은 floor off라 `buy_qty=1`이면 `int(1*0.5)=0`으로 막히고, `buy_qty=2`부터 1주 불타기가 가능하다. |
+| 불타기 동적화 방향 | 불타기는 손실 회수형 `REVERSAL_ADD`보다 동적 수량화 필요성이 더 크다. `is_new_high`, `peak_profit - profit_rate <= 0.3`, 수익률 레벨, AI/수급 지속성, trailing giveback 여유, 당일 종목 재진입 여부를 반영해 `winner size-up`을 해야 한다. 다만 현재는 `initial-only`와 `pyramid-activated` 표본 분리가 우선이고, 수량 동적화는 `REVERSAL_ADD`와 별도 축으로 설계해야 한다. |
+| 물타기 후 손절 기준 | 추가매수 체결 시 receipt 경로에서 `buy_price`를 새 가중평균가로 갱신한다. HOLDING 루프는 매번 `profit_rate = calculate_net_profit_rate(buy_price, curr_price)`로 다시 계산하고, `scalp_soft_stop_pct`, `scalp_hard_stop_pct`, `reversal_add_post_eval_fail`도 이 갱신된 평단 기준 수익률을 사용한다. 즉 최초 진입가 기준으로 계속 판별하는 구조가 아니라 `현재 보유 평단` 기준이다. |
+| 물타기 후 즉시 실패 가드 | `reversal_add_state == POST_ADD_EVAL` 동안 `REVERSAL_ADD_POST_EVAL_SEC=25` 창에서 AI가 55 미만, 수익률이 기존 `reversal_add_profit_floor - 0.05%p` 아래, 대량 매도 체결, tick acceleration 약화가 나오면 `reversal_add_post_eval_fail`로 즉시 손절 신호를 만든다. |
+| EV 관점 추가전략 1 | `bad_entry_block`: `held_sec>=60`, `profit_rate<=-0.70%`, `peak_profit<=+0.20%`, `AI<=45`인 never-green/AI fade를 observe-only로 로깅한다. 표본이 쌓이고 soft/hard stop 전환율이 비후보보다 높으면 다음 운영일 live entry block 후보로만 검토한다. |
+| EV 관점 추가전략 2 | `recovery recapture`: soft stop 후 동일종목 고가 재진입 또는 매수가 회복을 별도 라벨로 분리한다. 목적은 손절 유예가 아니라 `청산 후 회수 경로`가 독립 alpha인지 확인하는 것이다. |
+| EV 관점 추가전략 3 | `same-symbol soft stop cooldown`: soft stop 직후 같은 종목을 더 높은 가격에 재진입해 손실과 재진입 슬리피지를 동시에 만드는 패턴을 차단 후보로 둔다. 다만 현재는 shadow/observe 성격으로만 해석하고 live 차단은 별도 단일축이 필요하다. |
+| EV 관점 추가전략 4 | `trailing_continuation_micro_canary`: trailing 익절 후 `MISSED_UPSIDE + same_symbol_reentry`가 반복되면 이익을 너무 빨리 끊는 문제다. 현재는 soft stop 다음 2순위 후보로 유지한다. |
+| 롤백 기준 | `REVERSAL_ADD` 체결 cohort의 `COMPLETED + valid profit_rate` 평균이 `<= -0.30%`이거나 `reversal_add_used` 후 soft stop 전환율이 baseline 대비 `+5.0%p` 이상이면 OFF하고, `bad_entry_block` 관찰만 유지한다. |
 
 ## ID 명명 규칙
 
@@ -342,6 +362,19 @@
 | 2026-04-29 표본 보정 | `올릭스(226950)`은 `GOOD_EXIT`, `덕산하이메탈(077360)`은 `NEUTRAL`, `지앤비에스 에코(382800)`는 `MISSED_UPSIDE`이며 soft stop 후 고가 재진입 체결과 익절이 확인됐다. `코오롱(002020)`은 `GOOD_EXIT`지만 soft stop 후 고가 재진입 제출이 있었다. 따라서 지금 결론은 `micro grace 유지 + recovery recapture 라벨/로그 필요성 관찰`이지, 즉시 `soft_stop_micro_grace_extend` ON이 아니다. |
 | trailing과의 관계 | `trailing_continuation_micro_canary`는 2순위다. `MISSED_UPSIDE rate >= 60%`, `GOOD_EXIT rate <= 30%`를 충족하고 soft stop 축이 오염되지 않을 때만 다음 후보로 다시 연다. |
 | Source | [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
+
+### DF-HOLDING-003 `REVERSAL_ADD + bad_entry_block` 전략 분리
+
+| 항목 | 내용 |
+| --- | --- |
+| ID | `DF-HOLDING-003` |
+| 문제 인식 | soft stop 감소를 `20초 안에 회복하길 기다린다`로만 접근하면 전략 가설이 약하다. 같은 soft stop 후보라도 `진입은 유효했지만 초반 눌림이 과도한 케이스`와 `처음부터 never-green/AI fade였던 불량 진입`은 다른 처리가 필요하다. |
+| active canary | `REVERSAL_ADD`: `-0.45%~-0.10%`, 보유 20~120초, AI 회복, 저점 미갱신, 매수압/틱가속/micro VWAP 조건을 통과한 경우 1주 소형 추가매수로 평단 회수를 실험한다. |
+| observe-only classifier | `bad_entry_block`: 보유 60초 이상, 손익 `<= -0.70%`, peak `<= +0.20%`, AI score `<=45`인 never-green 후보를 `bad_entry_block_observed`로만 남긴다. 내일은 live block 금지다. |
+| rollback guard | `REVERSAL_ADD` 체결 후 soft stop/hard stop으로 이어지거나, 체결 cohort 평균 손익이 `<= -0.30%`이면 OFF 후보로 본다. |
+| 승격 조건 | `bad_entry_block_observed`가 최소 10건 이상 누적되고 후속 손실 전환이 높으며 `GOOD_EXIT/MISSED_UPSIDE` 놓침 위험이 낮을 때만 별도 live block canary로 연다. |
+| 다음 액션 | `2026-04-30 08:55~09:00` 장전 로드 확인, `10:30~10:45` 오전 1차 관찰, 장후 cohort 판정으로 닫는다. |
+| Source | [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
 
 ## 항목 간 연결 관계
 

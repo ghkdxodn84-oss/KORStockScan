@@ -14,6 +14,7 @@
 4. 현재 live 운용 원칙은 `동일 단계 내 1축 canary`다. 진입병목축과 보유/청산축은 서로 다른 단계이므로 양쪽 canary 동시 존재가 가능하지만, 같은 단계 안에서 canary 중복은 금지한다.
 5. 현재 entry live 축은 `mechanical_momentum_latency_relief`다. `latency_quote_fresh_composite`는 `2026-04-29 08:29 KST` 기준 OFF + restart 반영까지 완료됐고, `latency_signal_quality_quote_composite`는 `2026-04-29 12:50 KST` 운영 override로 효과 미약 판정 후 OFF 했다. 같은 시각 제출 drought를 방치하지 않기 위해 `mechanical_momentum_latency_relief`를 same-day 1축 replacement로 ON 했다. 이 판정은 hard baseline 승격이 아니라 EV/거래수 회복 우선의 운영 override이며, 이후 성과판정은 새 restart 이후 cohort로 분리한다.
 6. 현재 보유/청산 live 축은 `soft_stop_micro_grace`다. `gatekeeper_fast_reuse signature/window`는 same-day `종료된 보조 진단축`이며 active 후보가 아니다.
+7. `2026-04-30`부터 soft stop 감소 접근은 단순 유예가 아니라 `valid_entry_reversal_add`와 `bad_entry_block` 가설로 분리한다. `REVERSAL_ADD`는 손실 초기 구간에서 저점 미갱신, AI 회복, 수급 재개가 같이 확인될 때 1주 floor까지 허용하는 소형 포지션 증감 canary이고, `bad_entry_block`은 never-green/AI fade 유형을 관찰만 하는 classifier다.
 
 ## 2. 용어 범례
 
@@ -36,6 +37,9 @@
 | `mechanical_momentum_latency_relief` | AI score 50/70 같은 mechanical fallback 상태라도 `budget_pass` 이후 수급/강도와 quote freshness 조건이 충분하면 latency DANGER를 normal 주문으로 넘기는 entry replacement 축 | `2026-04-29 12:50 KST` 운영 override로 live ON. 조건은 `signal_score<=75`, `latest_strength>=110`, `buy_pressure_10t>=50`, `ws_age<=1200ms`, `ws_jitter<=500ms`, `spread<=0.0085`, `quote_stale=False`이며, 성과는 post-restart cohort에서 `mechanical_momentum_relief_canary_applied`, `submitted/full/partial`, `COMPLETED + valid profit_rate`, `fallback_regression=0`로 분리한다 |
 | `holding_exit_observation` | 보유/청산 후보를 saved snapshot, post-sell, pipeline event로 분해하는 리포트 축 | live canary가 아니라 관찰/후보 고정용. `partial/full`, `initial/pyramid` 합산 결론 금지 |
 | `soft_stop_micro_grace_extend` | soft stop 최초 유예 20초가 너무 짧을 때 threshold 근처에서 1회 추가 유예하는 보조 파라미터 | standby/off. `soft_stop_micro_grace` 20초 축의 hard stop/동일종목 손실/미체결 비악화가 확인되고도 반등 포착이 부족할 때만 검토한다 |
+| `valid_entry_reversal_add` | 진입 판단은 유효했지만 초반 눌림이 발생한 표본에서 저점 미갱신, AI 회복, 수급 재개가 확인될 때 평단을 낮추는 소형 추가매수 canary | `2026-04-30` 소형 canary. 기본 조건은 `REVERSAL_ADD_ENABLED=True`, `profit_rate -0.45%~-0.10%`, `held_sec 20~120`, `AI>=60`, bottom 대비 `+15pt` 또는 연속회복, 수급 3/4 충족, 1회만 허용 |
+| `pyramid_dynamic_qty_observe` | 수익 중인 포지션의 `PYRAMID` 불타기 수량을 고정 50% 템플릿이 아니라 추세/수급/트레일링 여유 기반으로 재산정하는 후보 | standby/observe-only. 현재 `PYRAMID`는 유지하되 `initial-only`와 `pyramid-activated` 표본을 분리한다. 동적 수량화는 `REVERSAL_ADD`와 같은 날 live 변경하지 않고 `would_qty` counterfactual부터 설계한다 |
+| `bad_entry_block` | soft stop으로 이어질 가능성이 큰 never-green/AI fade 유형을 진입 차단 후보로 분류하는 observe-only classifier | `2026-04-30` observe-only. `held_sec>=60`, `profit_rate<=-0.70%`, `peak_profit<=+0.20%`, `AI<=45`를 기본 anchor로 로깅하며 실전 차단은 하지 않는다 |
 | `nan_cast_guard_followup` | 주문·체결·DB 복원 숫자 필드에 `NaN/inf`가 유입될 때 런타임 중단과 상태전이 실패를 막기 위한 숫자 정규화/업스트림 source 재분해 계획 | live canary 아님. 런타임 안정화/집계 품질 보강용 follow-up으로만 관리하고, 기대값 해석 입력은 재발건수·영향경로·미진입/미청산 기회비용 분해를 함께 남긴다 |
 
 ## 3. 튜닝 원칙
@@ -137,6 +141,8 @@
 | `buy_drought_persist` | canary 후에도 BUY count가 baseline 하위 3분위수 미만이고 `blocked_ai_score_share` 개선 없음 | `buy_recovery_canary` | canary 유지 금지, score/prompt 재교정 |
 | `recovery_false_positive_rate` | canary로 회복된 BUY 중 soft_stop 비율이 `normal_only` baseline 대비 `+5.0%p` 이상 증가 | `buy_recovery_canary` | canary OFF, score/prompt 재교정 |
 | `initial_entry_qty_cap` | prompt 재교정 이후 신규 BUY 변동성이 커질 때 스캘핑 초기 진입은 임시로 `2주` cap 적용 | entry/holding/exit 관찰 기간 | 초기 진입 risk tail은 제한하되 `buy_qty=1 -> pyramid zero_qty`로 추가매수가 사실상 막히는 왜곡은 줄이고, `PYRAMID`는 여전히 별도 축으로 분리 관찰 |
+| `reversal_add_loss_cap` | `REVERSAL_ADD` 체결 cohort의 당일 `COMPLETED + valid profit_rate` 평균이 `<= -0.30%`, 또는 `reversal_add_used` 후 soft stop 전환율이 baseline 대비 `+5.0%p` 이상 | `valid_entry_reversal_add` | canary OFF, `bad_entry_block` 관찰만 유지 |
+| `bad_entry_block_promote_gate` | observe-only 표본 `>=10`에서 classifier 후보의 soft stop/하드스탑 전환율이 비후보 대비 `+10.0%p` 이상이고 missed winner 비율이 낮음 | `bad_entry_block` | 다음 운영일에 live entry block 후보로만 승격 검토 |
 
 ## 7. 매매단계별 Pain Point
 
@@ -150,7 +156,7 @@
 | 보유 | 포지션 맥락 부족 | 보유 AI가 수익률/고점/보유시간을 직접 입력으로 받는지 미완. `2026-04-23` 덕산하이메탈(`077360`)은 `ID 3331`이 `10:11:09 KST` `scalp_trailing_take_profit`으로 `+0.67%` 완료된 뒤, `ID 3404`가 `10:39:13 KST` 더 높은 가격대에서 `entry_armed -> budget_pass`, `10:39:15 KST` `+매수` 접수로 다시 열렸다. 이어 `ID 3419`는 `12:00:24 KST` `17,520원` 3차 진입 후 `12:02:42 KST` `LOSS soft stop`으로 `-1.6%` 종료됐고, 사용자 관찰 기준으론 그 직후 가격이 다시 `17,520원` 위로 반등했다. | 트레일링 익절 직후 동일종목 고가 재진입과 soft stop 직후 V-shape 반등을 분리하지 못하면, upside를 너무 일찍 끊고 더 나쁜 가격으로 재진입한 뒤 저점 청산하는 이중 기대값 훼손이 반복될 수 있다. | 현재 확정: `position_context` 스키마 설계 유지 + trailing 익절 후 동일종목 재진입 사례와 `soft stop 직후 rebound` 사례를 HOLDING 재판정 입력에 포함 |
 | 보유/청산 | 4월 trailing/soft_stop 관찰축 공백 | 4월 `COMPLETED + valid profit_rate` 225건, 실현손익 `-429,425원`, `partial_trade` 평균 `-0.347%`, `full_trade` 평균 `-0.013%`. post-fallback normal 표본은 11건, 전부 full fill, 평균 `-0.069%`. post-sell 4월 191건 중 `MISSED_UPSIDE 54`, `GOOD_EXIT 72`; `2026-04-24` 생성 리포트 기준 `scalp_soft_stop_pct completed_valid=53`, 평균 `-1.669%`, 실현손익 `-651,680원`, `scalp_trailing_take_profit completed_valid=54`, 평균 `+1.041%`, 실현손익 `+280,742원`. 4월 soft_stop post-sell 61건은 10분 내 매도가 재상회 57건(`93.4%`), +0.5% 이상 반등 43건(`70.5%`), +1.0% 이상 반등 23건(`37.7%`), 매수가 회복 16건(`26.2%`)이다. hard stop 계열은 `scalp_preset_hard_stop_pct` post-sell 28건(`MISSED_UPSIDE 4`, `GOOD_EXIT 8`, `NEUTRAL 16`)으로 보조 관찰에 둔다. 하방카운트/`scalp_ai_early_exit`는 2026-04-27 기준 폐기 완료된 historical-only 축이다. | soft_stop은 직접 손익 훼손 1순위이고, 휩쏘 가능성이 높다. trailing은 upside capture 개선 후보지만 월간 기준 live 우선순위가 낮다. 하드스탑은 severe-loss guard라 완화 우선순위를 낮춘다. submitted가 회복되면 `soft_stop_rebound/whipsaw_windows`, `hard_stop_auxiliary`, `same_symbol_reentry`, `trailing_continuation`, `EOD/NXT`를 독립 후보로 고정해야 한다. | 현재 확정: `soft_stop_rebound_split` 1순위, 단일 조작점은 `soft_stop micro grace`로 승인. `SCALP_SOFT_STOP_MICRO_GRACE_ENABLED=True`, `SEC=20`, `EMERGENCY_PCT=-2.0`을 적용하고 hard stop `-2.5%`는 유지한다. `trailing_continuation_micro_canary`는 2순위. `hard_stop_whipsaw_aux`는 parking. `gatekeeper_fast_reuse`, `other_danger`, `ws_jitter`는 same-day latency residual 평가축으로 종료했지만, 진입병목 자체는 미해소 상태로 둔다 |
 | 청산 | EOD/NXT 및 exit_rule 혼선 | NXT 가능/불가능 종목의 EOD 판단 분리 필요 | 청산 원인별 기대값 개선 지점 불명확 | 현재 확정: 후순위 설계 |
-| 포지션 증감 | 물타기/불타기/분할진입 축 혼재 | 불타기 수익 확대 관찰, fallback 오염 존재 | 추가진입 기대값 판단 오염 | 현재 확정: `position_addition_policy` 후순위 |
+| 포지션 증감 | 물타기/불타기/분할진입 축 혼재 | 불타기 수익 확대 관찰, fallback 오염 존재. `pyramid-activated`는 11건 평균 `+1.084%`로 힌트가 있고, soft stop은 10분 내 매도가 재상회가 높지만 매수가 회복은 일부에 그친다. 현재 스캘핑 `PYRAMID` 수량은 `buy_qty * 0.50` + 포지션 cap 구조라 추세 지속성/AI/수급/trailing 여유를 직접 반영하지 않는다. | 추가진입 기대값 판단 오염. 단순 soft stop 유예보다 유효 진입의 초반 눌림을 회수하는 쪽이 EV 개선 가설로 더 명확하지만, winner size-up인 `PYRAMID`도 EV 개선 여지가 커서 별도 observe-only 수량 산식이 필요하다. | 현재 확정: `2026-04-30` `valid_entry_reversal_add` 소형 canary + `bad_entry_block` observe-only classifier를 병행한다. `REVERSAL_ADD`는 1회, 소형 수량, 별도 rollback guard로 제한하고, `bad_entry_block`은 실전 차단 없이 유형 표본만 수집한다. `PYRAMID` 동적 수량화는 같은 단계 live 변경으로 보지 않고 다음 체크리스트에서 `would_qty` counterfactual 설계로만 연다 |
 | 운영/데이터 | 리포트 basis 혼선 | 문서 파생값과 DB 실필드 혼용 위험 | 잘못된 승격/롤백 위험 | 현재 확정: DB 우선, 체크리스트 동기화 |
 
 ## 8. 현재 Open 상태 요약

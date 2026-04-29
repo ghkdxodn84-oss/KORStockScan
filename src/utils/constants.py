@@ -236,7 +236,7 @@ class TradingConfig:
     SCALP_TRAILING_LIMIT_WEAK = 0.4    # 💡 [신규] AI 점수가 75점 미만(수급 애매)일 때 타이트하게 끊어내는 고점 대비 눌림폭 (%)
 
     # ── reversal_add ────────────────────────────────────────
-    REVERSAL_ADD_ENABLED: bool = False             # 역전 확인 추가매수 토글
+    REVERSAL_ADD_ENABLED: bool = True              # 2026-04-30 canary: 역전 확인 추가매수 소형 실험
     REVERSAL_ADD_PNL_MIN: float = -0.45            # 허용 손실 하한 (%)
     REVERSAL_ADD_PNL_MAX: float = -0.10            # 허용 손실 상한 (%)
     REVERSAL_ADD_MIN_HOLD_SEC: int = 20            # 최소 보유시간(초)
@@ -247,6 +247,7 @@ class TradingConfig:
     REVERSAL_ADD_MIN_TICK_ACCEL: float = 0.95      # 최소 틱 가속도 비율
     REVERSAL_ADD_VWAP_BP_MIN: float = -5.0         # 최소 Micro-VWAP 대비 (bp)
     REVERSAL_ADD_SIZE_RATIO: float = 0.33          # 추가매수 수량 비율 (기존 보유 대비)
+    REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED: bool = True  # 2주 cap에서도 reversal_add 1주 소형 canary 허용
     REVERSAL_ADD_POST_EVAL_SEC: int = 25           # POST_ADD_EVAL 감시 시간(초)
     REVERSAL_ADD_SESSION_CUTOFF: str = "14:30"     # 허용 시간대 상한
     REVERSAL_ADD_BOX_RANGE_MAX_PCT: float = 0.20   # 박스 폭 허용 최대치 (%p)
@@ -255,6 +256,12 @@ class TradingConfig:
     SCALP_LOSS_FALLBACK_OBSERVE_ONLY: bool = True   # True면 후보만 기록하고 실전 실행하지 않음
     SCALP_LOSS_FALLBACK_ALLOWED_REASONS: tuple = ("reversal_add_ok",)  # 손절 fallback 허용 reason
     SCALP_LOSS_FALLBACK_MIN_AI_SCORE: int = 65      # 손절 fallback 후보 최소 AI 점수
+    SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED: bool = True  # soft_stop 선행 불량진입 유형 observe-only
+    SCALP_BAD_ENTRY_BLOCK_MIN_HOLD_SEC: int = 60
+    SCALP_BAD_ENTRY_BLOCK_MIN_LOSS_PCT: float = -0.70
+    SCALP_BAD_ENTRY_BLOCK_MAX_PEAK_PROFIT_PCT: float = 0.20
+    SCALP_BAD_ENTRY_BLOCK_AI_SCORE_LIMIT: int = 45
+    SCALP_BAD_ENTRY_BLOCK_LOG_INTERVAL_SEC: int = 30
 
     # 💡 [신규] 코스닥 스캐너 설정
     KOSDAQ_TARGET: float = 4.0  # 코스닥은 조금 더 높게 목표 (예: 4.0%)
@@ -661,6 +668,10 @@ def _build_trading_rules() -> TradingConfig:
     env_partial_fill_min_preset = _env_float("KORSTOCKSCAN_SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP")
     env_pre_submit_price_guard_enabled = _env_bool("KORSTOCKSCAN_SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED")
     env_pre_submit_max_below_bid_bps = _env_int("KORSTOCKSCAN_SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS")
+    env_reversal_add_enabled = _env_bool("KORSTOCKSCAN_REVERSAL_ADD_ENABLED")
+    env_reversal_add_size_ratio = _env_float("KORSTOCKSCAN_REVERSAL_ADD_SIZE_RATIO")
+    env_reversal_add_min_qty_floor_enabled = _env_bool("KORSTOCKSCAN_REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED")
+    env_bad_entry_observe_enabled = _env_bool("KORSTOCKSCAN_SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED")
     if (
         env_dynamic_strength_enabled is not None
         or env_dynamic_strength_tags is not None
@@ -674,6 +685,10 @@ def _build_trading_rules() -> TradingConfig:
         or env_partial_fill_min_preset is not None
         or env_pre_submit_price_guard_enabled is not None
         or env_pre_submit_max_below_bid_bps is not None
+        or env_reversal_add_enabled is not None
+        or env_reversal_add_size_ratio is not None
+        or env_reversal_add_min_qty_floor_enabled is not None
+        or env_bad_entry_observe_enabled is not None
     ):
         config = replace(
             config,
@@ -713,6 +728,18 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS=env_pre_submit_max_below_bid_bps
             if env_pre_submit_max_below_bid_bps is not None
             else config.SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS,
+            REVERSAL_ADD_ENABLED=env_reversal_add_enabled
+            if env_reversal_add_enabled is not None
+            else config.REVERSAL_ADD_ENABLED,
+            REVERSAL_ADD_SIZE_RATIO=env_reversal_add_size_ratio
+            if env_reversal_add_size_ratio is not None
+            else config.REVERSAL_ADD_SIZE_RATIO,
+            REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED=env_reversal_add_min_qty_floor_enabled
+            if env_reversal_add_min_qty_floor_enabled is not None
+            else config.REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED,
+            SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED=env_bad_entry_observe_enabled
+            if env_bad_entry_observe_enabled is not None
+            else config.SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED,
         )
 
     env_scalping_enable_avg_down = _env_bool("KORSTOCKSCAN_SCALPING_ENABLE_AVG_DOWN")
