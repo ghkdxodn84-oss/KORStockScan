@@ -17,11 +17,19 @@ import threading
 import json
 import re
 import hashlib
+import queue
+import uuid
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from itertools import cycle
+from typing import Any
 from openai import OpenAI, RateLimitError
 
+from src.engine.ai_response_contracts import (
+    AI_RESPONSE_SCHEMA_REGISTRY,
+    build_openai_response_text_format,
+)
 from src.engine.scalping_feature_packet import (
     build_scalping_feature_audit_fields,
     extract_scalping_feature_packet,
@@ -108,6 +116,261 @@ DUAL_PERSONA_CONSERVATIVE_PROMPT = """
 """
 
 
+OPENAI_RESPONSES_WS_ENDPOINTS = {
+    "analyze_target",
+    "analyze_target_shadow_prompt",
+    "condition_entry",
+    "condition_exit",
+}
+OPENAI_RESPONSE_SCHEMA_REGISTRY = AI_RESPONSE_SCHEMA_REGISTRY
+
+
+class OpenAIWSLateResponseError(TimeoutError):
+    pass
+
+
+class OpenAIWSRequestIdMismatchError(RuntimeError):
+    pass
+
+
+@dataclass
+class OpenAIResponseRequest:
+    prompt: str | None
+    user_input: str
+    require_json: bool
+    context_name: str
+    model_name: str
+    temperature: float | None
+    schema_name: str | None
+    endpoint_name: str
+    request_id: str
+    symbol: str
+    cache_key: str
+    submitted_at_perf: float
+    timeout_ms: int
+    metadata: dict[str, str] = field(default_factory=dict)
+
+    @property
+    def deadline_perf(self) -> float:
+        return self.submitted_at_perf + (max(1, int(self.timeout_ms)) / 1000.0)
+
+    def remaining_timeout_sec(self) -> float:
+        return max(0.0, self.deadline_perf - time.perf_counter())
+
+    def build_provider_payload(self, *, use_schema_registry: bool) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": self.model_name,
+            "input": self.user_input,
+            "store": False,
+            "metadata": dict(self.metadata or {}),
+        }
+        if self.prompt:
+            payload["instructions"] = self.prompt
+        if self.temperature is not None:
+            payload["temperature"] = float(self.temperature)
+        if self.require_json:
+            if use_schema_registry and self.schema_name:
+                payload["text"] = {
+                    "format": build_openai_response_text_format(self.schema_name),
+                    "verbosity": "low",
+                }
+            else:
+                payload["text"] = {
+                    "format": {"type": "json_object"},
+                    "verbosity": "low",
+                }
+        return payload
+
+    def build_ws_event(self, *, use_schema_registry: bool) -> dict[str, Any]:
+        payload = self.build_provider_payload(use_schema_registry=use_schema_registry)
+        payload["type"] = "response.create"
+        return payload
+
+
+@dataclass
+class OpenAITransportResult:
+    payload: dict[str, Any] | str
+    transport_mode: str
+    ws_used: bool = False
+    ws_http_fallback: bool = False
+    queue_wait_ms: int = 0
+    roundtrip_ms: int = 0
+
+
+@dataclass
+class OpenAIWSJob:
+    request: OpenAIResponseRequest
+    use_schema_registry: bool
+    done: threading.Event = field(default_factory=threading.Event)
+    cancelled: threading.Event = field(default_factory=threading.Event)
+    result: OpenAITransportResult | None = None
+    error: Exception | None = None
+
+
+class OpenAIResponsesWSWorker:
+    def __init__(self, *, worker_id: int, api_key: str, metrics_callback):
+        self.worker_id = int(worker_id)
+        self.api_key = str(api_key)
+        self._metrics_callback = metrics_callback
+        self._queue: queue.Queue[OpenAIWSJob | None] = queue.Queue()
+        self._stop_event = threading.Event()
+        self._connection = None
+        self._client = OpenAI(api_key=self.api_key)
+        self._thread = threading.Thread(target=self._run, daemon=True, name=f"openai-responses-ws-{worker_id}")
+        self._thread.start()
+
+    def submit(self, job: OpenAIWSJob):
+        self._queue.put(job)
+        wait_timeout = max(0.05, job.request.remaining_timeout_sec() + 0.05)
+        if not job.done.wait(timeout=wait_timeout):
+            job.cancelled.set()
+            raise TimeoutError(f"OpenAI Responses WS timeout before worker completion ({job.request.context_name})")
+        if job.error is not None:
+            raise job.error
+        if job.result is None:
+            raise RuntimeError(f"OpenAI Responses WS empty result ({job.request.context_name})")
+        return job.result
+
+    def close(self):
+        self._stop_event.set()
+        self._queue.put(None)
+        self._thread.join(timeout=1.0)
+        self._close_connection()
+
+    def _record(self, metric_name, value=1):
+        if self._metrics_callback:
+            self._metrics_callback(metric_name, value)
+
+    def _run(self):
+        while not self._stop_event.is_set():
+            job = self._queue.get()
+            if job is None:
+                continue
+            if job.cancelled.is_set():
+                job.done.set()
+                continue
+            try:
+                queue_wait_ms = max(0, int((time.perf_counter() - job.request.submitted_at_perf) * 1000))
+                self._record("openai_ws_queue_wait_ms", queue_wait_ms)
+                if job.request.remaining_timeout_sec() <= 0:
+                    raise TimeoutError(f"OpenAI Responses WS queue deadline exceeded ({job.request.context_name})")
+                result = self._execute(job.request, queue_wait_ms=queue_wait_ms, use_schema_registry=job.use_schema_registry)
+                job.result = result
+            except Exception as exc:
+                job.error = exc
+            finally:
+                job.done.set()
+
+    def _ensure_connection(self):
+        if self._connection is not None:
+            return self._connection
+        manager = self._client.responses.connect(on_reconnecting=self._on_reconnecting)
+        self._connection = manager.enter()
+        return self._connection
+
+    def _close_connection(self):
+        connection, self._connection = self._connection, None
+        if connection is not None:
+            try:
+                connection.close()
+            except Exception:
+                pass
+
+    def _on_reconnecting(self, event):
+        self._record("openai_ws_reconnects", 1)
+        return None
+
+    def _recv_event(self, connection, timeout_sec):
+        raw = connection._connection.recv(timeout=timeout_sec, decode=False)
+        return connection.parse_event(raw)
+
+    def _execute(self, request: OpenAIResponseRequest, *, queue_wait_ms: int, use_schema_registry: bool):
+        started_at = time.perf_counter()
+        self._record("openai_ws_requests", 1)
+        connection = self._ensure_connection()
+        try:
+            connection.send(request.build_ws_event(use_schema_registry=use_schema_registry))
+            while True:
+                remaining = request.remaining_timeout_sec()
+                if remaining <= 0:
+                    raise TimeoutError(f"OpenAI Responses WS timeout ({request.context_name})")
+                event = self._recv_event(connection, timeout_sec=remaining)
+                event_type = str(getattr(event, "type", "") or "")
+                if event_type == "response.completed":
+                    response = getattr(event, "response", None)
+                    metadata = dict(getattr(response, "metadata", {}) or {})
+                    response_request_id = str(metadata.get("request_id", "") or "")
+                    if response_request_id != request.request_id:
+                        self._record("openai_ws_request_id_mismatch", 1)
+                        raise OpenAIWSRequestIdMismatchError(
+                            f"OpenAI Responses WS request_id mismatch: expected={request.request_id} actual={response_request_id or '-'}"
+                        )
+                    if request.remaining_timeout_sec() <= 0 and bool(
+                        getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_LATE_DISCARD_ENABLED", True)
+                    ):
+                        self._record("openai_ws_late_discard", 1)
+                        raise OpenAIWSLateResponseError(
+                            f"OpenAI Responses WS late discard ({request.context_name})"
+                        )
+                    raw_text = str(getattr(response, "output_text", "") or "").strip()
+                    if request.require_json:
+                        try:
+                            payload = json.loads(raw_text)
+                            if not isinstance(payload, dict):
+                                raise ValueError("OpenAI Responses WS JSON root must be object")
+                        except Exception as exc:
+                            self._record("openai_ws_parse_fail", 1)
+                            raise RuntimeError(f"OpenAI Responses WS JSON parse failed: {exc}") from exc
+                    else:
+                        payload = raw_text
+                    roundtrip_ms = max(0, int((time.perf_counter() - started_at) * 1000))
+                    self._record("openai_ws_completed", 1)
+                    self._record("openai_ws_roundtrip_ms", roundtrip_ms)
+                    return OpenAITransportResult(
+                        payload=payload,
+                        transport_mode="responses_ws",
+                        ws_used=True,
+                        ws_http_fallback=False,
+                        queue_wait_ms=queue_wait_ms,
+                        roundtrip_ms=roundtrip_ms,
+                    )
+                if event_type in {"error", "response.failed", "response.incomplete"}:
+                    self._record("openai_ws_parse_fail", 1)
+                    raise RuntimeError(f"OpenAI Responses WS event failure ({event_type})")
+        except Exception:
+            self._close_connection()
+            raise
+
+
+class OpenAIResponsesWSPool:
+    def __init__(self, *, api_keys, pool_size, metrics_callback):
+        keys = list(api_keys or [])
+        if not keys:
+            raise ValueError("OpenAIResponsesWSPool requires at least one API key")
+        worker_count = max(1, int(pool_size or 1))
+        self._workers = [
+            OpenAIResponsesWSWorker(
+                worker_id=index,
+                api_key=keys[index % len(keys)],
+                metrics_callback=metrics_callback,
+            )
+            for index in range(worker_count)
+        ]
+        self._rr_index = 0
+        self._rr_lock = threading.Lock()
+
+    def submit(self, request: OpenAIResponseRequest, *, use_schema_registry: bool):
+        with self._rr_lock:
+            worker = self._workers[self._rr_index % len(self._workers)]
+            self._rr_index += 1
+        job = OpenAIWSJob(request=request, use_schema_registry=use_schema_registry)
+        return worker.submit(job)
+
+    def close(self):
+        for worker in self._workers:
+            worker.close()
+
+
 class GPTSniperEngine:
     """
     OpenAI API 기반 스나이퍼 엔진.
@@ -152,6 +415,21 @@ class GPTSniperEngine:
         self.gatekeeper_cache_ttl = getattr(TRADING_RULES, 'AI_GATEKEEPER_RESULT_CACHE_TTL_SEC', 12.0)
         self._analysis_cache = {}
         self._gatekeeper_cache = {}
+        self._transport_local = threading.local()
+        self._ws_metrics_lock = threading.Lock()
+        self._ws_metrics = {
+            "openai_ws_requests": 0,
+            "openai_ws_completed": 0,
+            "openai_ws_timeout_reject": 0,
+            "openai_ws_late_discard": 0,
+            "openai_ws_parse_fail": 0,
+            "openai_ws_reconnects": 0,
+            "openai_ws_http_fallback": 0,
+            "openai_ws_request_id_mismatch": 0,
+            "openai_ws_queue_wait_ms_values": [],
+            "openai_ws_roundtrip_ms_values": [],
+        }
+        self._responses_ws_pool = None
 
         if announce_startup:
             print(
@@ -201,6 +479,140 @@ class GPTSniperEngine:
 
     def _get_tier3_model(self):
         return getattr(self, "model_tier3_deep", self._get_tier2_model())
+
+    def _record_ws_metric(self, metric_name, value=1):
+        if not hasattr(self, "_ws_metrics_lock"):
+            self._ws_metrics_lock = threading.Lock()
+        if not hasattr(self, "_ws_metrics"):
+            self._ws_metrics = {
+                "openai_ws_requests": 0,
+                "openai_ws_completed": 0,
+                "openai_ws_timeout_reject": 0,
+                "openai_ws_late_discard": 0,
+                "openai_ws_parse_fail": 0,
+                "openai_ws_reconnects": 0,
+                "openai_ws_http_fallback": 0,
+                "openai_ws_request_id_mismatch": 0,
+                "openai_ws_queue_wait_ms_values": [],
+                "openai_ws_roundtrip_ms_values": [],
+            }
+        with self._ws_metrics_lock:
+            if metric_name == "openai_ws_queue_wait_ms":
+                values = self._ws_metrics.setdefault("openai_ws_queue_wait_ms_values", [])
+                values.append(int(value))
+                del values[:-512]
+                return
+            if metric_name == "openai_ws_roundtrip_ms":
+                values = self._ws_metrics.setdefault("openai_ws_roundtrip_ms_values", [])
+                values.append(int(value))
+                del values[:-512]
+                return
+            self._ws_metrics[metric_name] = int(self._ws_metrics.get(metric_name, 0) or 0) + int(value)
+
+    def _set_last_transport_meta(self, meta):
+        if not hasattr(self, "_transport_local"):
+            self._transport_local = threading.local()
+        self._transport_local.last_meta = dict(meta or {})
+
+    def _consume_last_transport_meta(self):
+        if not hasattr(self, "_transport_local"):
+            self._transport_local = threading.local()
+        meta = dict(getattr(self._transport_local, "last_meta", {}) or {})
+        self._transport_local.last_meta = {}
+        return meta
+
+    def _get_openai_timeout_ms(self, *, endpoint_name, require_json):
+        if not require_json:
+            return max(1, int(getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_TIMEOUT_MS", 700) or 700))
+        if endpoint_name in OPENAI_RESPONSES_WS_ENDPOINTS:
+            return max(1, int(getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_TIMEOUT_MS", 700) or 700))
+        return max(1, int(getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_TIMEOUT_MS", 700) or 700))
+
+    def _should_use_openai_schema_registry(self, *, require_json, schema_name):
+        return bool(
+            require_json
+            and schema_name
+            and getattr(TRADING_RULES, "OPENAI_RESPONSE_SCHEMA_REGISTRY_ENABLED", False)
+        )
+
+    def _resolve_openai_temperature(self, *, require_json, temperature_override):
+        if temperature_override is not None:
+            return float(temperature_override)
+        if require_json:
+            if getattr(TRADING_RULES, "OPENAI_JSON_DETERMINISTIC_CONFIG_ENABLED", False):
+                return 0.0
+            return 0.0
+        return 0.7
+
+    def _build_openai_request_id(self, *, endpoint_name, symbol):
+        ts_ms = int(time.time() * 1000)
+        suffix = uuid.uuid4().hex[:8]
+        return f"{endpoint_name}:{symbol}:{ts_ms}:{suffix}"
+
+    def _build_openai_response_request(
+        self,
+        *,
+        prompt,
+        user_input,
+        require_json,
+        context_name,
+        model_name,
+        temperature,
+        schema_name,
+        endpoint_name,
+        symbol,
+        cache_key,
+    ):
+        request_id = self._build_openai_request_id(endpoint_name=endpoint_name, symbol=symbol or "-")
+        metadata = {
+            "request_id": request_id,
+            "endpoint_name": str(endpoint_name or "generic"),
+            "schema_name": str(schema_name or "-"),
+            "symbol": str(symbol or "-"),
+            "cache_key": str(cache_key or "-"),
+        }
+        return OpenAIResponseRequest(
+            prompt=prompt,
+            user_input=user_input,
+            require_json=bool(require_json),
+            context_name=str(context_name or "Unknown"),
+            model_name=str(model_name or self.current_model_name),
+            temperature=temperature,
+            schema_name=str(schema_name or "").strip() or None,
+            endpoint_name=str(endpoint_name or "generic"),
+            request_id=request_id,
+            symbol=str(symbol or "-"),
+            cache_key=str(cache_key or "-"),
+            submitted_at_perf=time.perf_counter(),
+            timeout_ms=self._get_openai_timeout_ms(
+                endpoint_name=str(endpoint_name or "generic"),
+                require_json=bool(require_json),
+            ),
+            metadata=metadata,
+        )
+
+    def _should_use_responses_ws(self, request: OpenAIResponseRequest):
+        transport_mode = str(getattr(TRADING_RULES, "OPENAI_TRANSPORT_MODE", "http") or "http").strip().lower()
+        if transport_mode != "responses_ws":
+            return False
+        if not bool(getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_ENABLED", False)):
+            return False
+        if not request.require_json:
+            return False
+        if request.endpoint_name not in OPENAI_RESPONSES_WS_ENDPOINTS:
+            return False
+        return True
+
+    def _get_responses_ws_pool(self):
+        if not hasattr(self, "_responses_ws_pool"):
+            self._responses_ws_pool = None
+        if self._responses_ws_pool is None:
+            self._responses_ws_pool = OpenAIResponsesWSPool(
+                api_keys=self.api_keys,
+                pool_size=getattr(TRADING_RULES, "OPENAI_RESPONSES_WS_POOL_SIZE", 2),
+                metrics_callback=self._record_ws_metric,
+            )
+        return self._responses_ws_pool
 
     # ==========================================
     # 캐시 유틸리티 (GeminiSniperEngine 동일 복사)
@@ -510,6 +922,19 @@ class GPTSniperEngine:
         payload["reason"] = reason[:120]
         return payload
 
+    def _merge_last_transport_meta(self, payload):
+        meta = self._consume_last_transport_meta()
+        if isinstance(payload, dict) and meta:
+            payload.update(meta)
+        return payload
+
+    def _build_buy_side_timeout_reject(self, *, prompt_type, strategy, reason):
+        if prompt_type in {"scalping_holding", "scalping_exit"}:
+            return {"action": "WAIT", "score": 50, "reason": reason}
+        if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
+            return {"action": "WAIT", "score": 50, "reason": reason}
+        return {"action": "DROP", "score": 0, "reason": reason}
+
     def _remote_buy_risk_flags(self, ws_data, recent_ticks, recent_candles):
         if hasattr(self, "_extract_scalping_features"):
             try:
@@ -595,9 +1020,106 @@ class GPTSniperEngine:
 
         raise ValueError(f"JSON 형식을 찾을 수 없음: {text[:500]}...")
 
+    def _extract_openai_response_text(self, response) -> str:
+        raw_text = str(getattr(response, "output_text", "") or "").strip()
+        if raw_text:
+            return raw_text
+
+        fragments = []
+        for item in list(getattr(response, "output", []) or []):
+            if isinstance(item, dict):
+                content_items = list(item.get("content", []) or [])
+            else:
+                content_items = list(getattr(item, "content", []) or [])
+
+            for content in content_items:
+                if isinstance(content, dict):
+                    text_value = (
+                        content.get("text")
+                        or content.get("value")
+                        or ((content.get("output_text") or {}).get("text") if isinstance(content.get("output_text"), dict) else None)
+                    )
+                else:
+                    text_value = (
+                        getattr(content, "text", None)
+                        or getattr(content, "value", None)
+                    )
+                    output_text = getattr(content, "output_text", None)
+                    if not text_value and output_text is not None:
+                        text_value = getattr(output_text, "text", None)
+                if text_value:
+                    fragments.append(str(text_value))
+
+        return "\n".join(fragment.strip() for fragment in fragments if str(fragment).strip()).strip()
+
     # ==========================================
     # 핵심 API 호출기: _call_openai_safe
     # ==========================================
+
+    def _parse_openai_transport_payload(self, raw_text, *, require_json):
+        if require_json:
+            return self._parse_json_response_text(raw_text)
+        return str(raw_text or "").strip()
+
+    def _call_openai_responses_http(self, request: OpenAIResponseRequest):
+        use_schema_registry = self._should_use_openai_schema_registry(
+            require_json=request.require_json,
+            schema_name=request.schema_name,
+        )
+        last_error = ""
+        for attempt in range(len(self.api_keys)):
+            try:
+                response = self.client.responses.create(
+                    **request.build_provider_payload(use_schema_registry=use_schema_registry),
+                    timeout=max(0.05, request.remaining_timeout_sec()),
+                )
+                self._rotate_client()
+                raw_text = self._extract_openai_response_text(response)
+                payload = self._parse_openai_transport_payload(raw_text, require_json=request.require_json)
+                roundtrip_ms = max(0, int((time.perf_counter() - request.submitted_at_perf) * 1000))
+                return OpenAITransportResult(
+                    payload=payload,
+                    transport_mode="http",
+                    ws_used=False,
+                    ws_http_fallback=False,
+                    queue_wait_ms=0,
+                    roundtrip_ms=roundtrip_ms,
+                )
+            except RateLimitError as e:
+                last_error = str(e)
+                old_key = self.current_key[-5:]
+                self._rotate_client()
+                warn_msg = (
+                    f"⚠️ [OpenAI 한도 초과] {request.context_name} | "
+                    f"{old_key} 교체 -> {self.current_key[-5:]} ({attempt+1}/{len(self.api_keys)})"
+                )
+                print(warn_msg)
+                log_error(warn_msg)
+                time.sleep(0.8)
+                continue
+            except Exception as e:
+                last_error = str(e).lower()
+                if any(x in last_error for x in ["429", "quota", "503", "unavailable", "timeout", "server", "too_many_requests"]):
+                    old_key = self.current_key[-5:]
+                    self._rotate_client()
+                    print(
+                        f"⚠️ [OpenAI 서버 에러] {request.context_name} | "
+                        f"{old_key} 교체 -> {self.current_key[-5:]} ({attempt+1}/{len(self.api_keys)})"
+                    )
+                    time.sleep(0.8)
+                    continue
+                raise RuntimeError(f"OpenAI Responses HTTP 응답/파싱 실패: {e}") from e
+        fatal_msg = f"🚨 [AI 고갈] 모든 OpenAI API 키 사용 불가. 마지막 에러: {last_error}"
+        log_error(fatal_msg)
+        raise RuntimeError(fatal_msg)
+
+    def _call_openai_responses_ws(self, request: OpenAIResponseRequest):
+        pool = self._get_responses_ws_pool()
+        use_schema_registry = self._should_use_openai_schema_registry(
+            require_json=request.require_json,
+            schema_name=request.schema_name,
+        )
+        return pool.submit(request, use_schema_registry=use_schema_registry)
 
     def _call_openai_safe(
         self,
@@ -607,65 +1129,104 @@ class GPTSniperEngine:
         context_name="Unknown",
         model_override=None,
         temperature_override=None,
+        schema_name=None,
+        endpoint_name="generic",
+        symbol="-",
+        cache_key="-",
     ):
-        """키 로테이션, 예외 처리, 모델 덮어쓰기를 모두 전담하는 중앙 집중식 호출기"""
+        """Responses API HTTP/WS transport와 예외 처리를 전담하는 중앙 호출기."""
         with self.api_call_lock:
-            messages = []
-            if prompt:
-                messages.append({"role": "system", "content": prompt})
-            messages.append({"role": "user", "content": user_input})
-
-            config_kwargs = {}
-            if require_json:
-                config_kwargs['response_format'] = {"type": "json_object"}
-
             target_model = model_override if model_override else self.current_model_name
-            target_temp = temperature_override if temperature_override is not None else (0.0 if require_json else 0.7)
-            last_error = ""
-
-            for attempt in range(len(self.api_keys)):
+            target_temp = self._resolve_openai_temperature(
+                require_json=bool(require_json),
+                temperature_override=temperature_override,
+            )
+            request = self._build_openai_response_request(
+                prompt=prompt,
+                user_input=user_input,
+                require_json=bool(require_json),
+                context_name=context_name,
+                model_name=target_model,
+                temperature=target_temp,
+                schema_name=schema_name,
+                endpoint_name=endpoint_name,
+                symbol=symbol,
+                cache_key=cache_key,
+            )
+            transport_meta = {
+                "openai_transport_mode": "http",
+                "openai_ws_used": False,
+                "openai_ws_http_fallback": False,
+                "openai_ws_queue_wait_ms": 0,
+                "openai_ws_roundtrip_ms": 0,
+                "openai_request_id": request.request_id,
+                "openai_endpoint_name": request.endpoint_name,
+                "openai_schema_name": request.schema_name or "-",
+            }
+            result = None
+            if self._should_use_responses_ws(request):
                 try:
-                    response = self.client.chat.completions.create(
-                        model=target_model,
-                        messages=messages,
-                        temperature=target_temp,
-                        **config_kwargs
+                    result = self._call_openai_responses_ws(request)
+                    transport_meta.update(
+                        {
+                            "openai_transport_mode": result.transport_mode,
+                            "openai_ws_used": bool(result.ws_used),
+                            "openai_ws_http_fallback": bool(result.ws_http_fallback),
+                            "openai_ws_queue_wait_ms": int(result.queue_wait_ms),
+                            "openai_ws_roundtrip_ms": int(result.roundtrip_ms),
+                        }
                     )
-
-                    # 성공 시 다음 호출을 위해 키 순환 (부하 분산)
-                    self._rotate_client()
-
-                    raw_text = response.choices[0].message.content
-                    if require_json:
-                        return self._parse_json_response_text(raw_text)
-                    else:
-                        return str(raw_text or "").strip()
-
-                except RateLimitError as e:
-                    last_error = str(e)
-                    old_key = self.current_key[-5:]
-                    self._rotate_client()
-
-                    warn_msg = f"⚠️ [OpenAI 한도 초과] {context_name} | {old_key} 교체 -> {self.current_key[-5:]} ({attempt+1}/{len(self.api_keys)})"
-                    print(warn_msg)
-                    log_error(warn_msg)
-                    time.sleep(0.8)
-                    continue
-
                 except Exception as e:
-                    last_error = str(e).lower()
-                    if any(x in last_error for x in ["429", "quota", "503", "unavailable", "timeout", "server", "too_many_requests"]):
-                        old_key = self.current_key[-5:]
-                        self._rotate_client()
-                        print(f"⚠️ [OpenAI 서버 에러] {context_name} | {old_key} 교체 -> {self.current_key[-5:]} ({attempt+1}/{len(self.api_keys)})")
-                        time.sleep(0.8)
-                        continue
-                    else:
-                        raise RuntimeError(f"OpenAI API 응답/파싱 실패: {e}")
-
-            fatal_msg = f"🚨 [AI 고갈] 모든 OpenAI API 키 사용 불가. 마지막 에러: {last_error}"
-            log_error(fatal_msg)
-            raise RuntimeError(fatal_msg)
+                    remaining = request.remaining_timeout_sec()
+                    self._record_ws_metric("openai_ws_http_fallback", 1)
+                    if isinstance(e, TimeoutError):
+                        self._record_ws_metric("openai_ws_timeout_reject", 1)
+                    if remaining <= 0.05:
+                        self._set_last_transport_meta(transport_meta)
+                        raise
+                    fallback_request = OpenAIResponseRequest(
+                        prompt=request.prompt,
+                        user_input=request.user_input,
+                        require_json=request.require_json,
+                        context_name=request.context_name,
+                        model_name=request.model_name,
+                        temperature=request.temperature,
+                        schema_name=request.schema_name,
+                        endpoint_name=request.endpoint_name,
+                        request_id=request.request_id,
+                        symbol=request.symbol,
+                        cache_key=request.cache_key,
+                        submitted_at_perf=time.perf_counter(),
+                        timeout_ms=max(50, int(remaining * 1000)),
+                        metadata=dict(request.metadata or {}),
+                    )
+                    result = self._call_openai_responses_http(fallback_request)
+                    result.ws_http_fallback = True
+                    transport_meta.update(
+                        {
+                            "openai_transport_mode": result.transport_mode,
+                            "openai_ws_used": False,
+                            "openai_ws_http_fallback": True,
+                            "openai_ws_queue_wait_ms": transport_meta.get("openai_ws_queue_wait_ms", 0),
+                            "openai_ws_roundtrip_ms": int(result.roundtrip_ms),
+                        }
+                    )
+                    log_error(f"⚠️ [OpenAI WS fallback] {context_name}: {e}")
+            else:
+                result = self._call_openai_responses_http(request)
+                transport_meta.update(
+                    {
+                        "openai_transport_mode": result.transport_mode,
+                        "openai_ws_used": False,
+                        "openai_ws_http_fallback": False,
+                        "openai_ws_queue_wait_ms": 0,
+                        "openai_ws_roundtrip_ms": int(result.roundtrip_ms),
+                    }
+                )
+            self._set_last_transport_meta(transport_meta)
+            if isinstance(result.payload, dict):
+                return result.payload
+            return str(result.payload or "").strip()
 
     # ==========================================
     # 데이터 포맷팅 (ai_engine.py 동일 복사)
@@ -1161,6 +1722,8 @@ class GPTSniperEngine:
                     require_json=False,
                     context_name=request["context_name"],
                     model_override=self._get_tier2_model(),
+                    endpoint_name="realtime_report",
+                    symbol=stock_code,
                 )
             except Exception as e:
                 report_error = str(e)
@@ -1304,7 +1867,12 @@ class GPTSniperEngine:
                 require_json=True,
                 context_name=f"{target_name}({strategy}:{prompt_type})",
                 model_override=target_model,
+                schema_name="entry_v1" if prompt_type not in {"scalping_holding", "scalping_exit"} else "holding_exit_v1",
+                endpoint_name="analyze_target",
+                symbol=target_name,
+                cache_key=cache_key,
             )
+            result = self._merge_last_transport_meta(result)
 
             if strategy not in ["KOSPI_ML", "KOSDAQ_ML"]:
                 result = self._apply_remote_entry_guard(
@@ -1346,8 +1914,18 @@ class GPTSniperEngine:
                 self.ai_disabled = True
                 log_error(f"🚨 OpenAI 엔진 비활성화 (연속 실패 {self.consecutive_failures}회 초과, API키 인덱스 {self.current_api_key_index})")
 
+            fallback_payload = (
+                self._build_buy_side_timeout_reject(
+                    prompt_type=prompt_type,
+                    strategy=strategy,
+                    reason=f"에러: {e}",
+                )
+                if getattr(TRADING_RULES, "OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED", True)
+                else {"action": "WAIT", "score": 50, "reason": f"에러: {e}"}
+            )
+            fallback_payload = self._merge_last_transport_meta(fallback_payload)
             return self._annotate_analysis_result(
-                {"action": "WAIT", "score": 50, "reason": f"에러: {e}"},
+                fallback_payload,
                 prompt_type=prompt_type,
                 prompt_version=prompt_version,
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),
@@ -1455,7 +2033,12 @@ class GPTSniperEngine:
                 require_json=True,
                 context_name=f"{target_name}(shadow:{prompt_type})",
                 model_override=self._get_tier1_model(),
+                schema_name="entry_v1" if prompt_type not in {"scalping_holding", "scalping_exit"} else "holding_exit_v1",
+                endpoint_name="analyze_target_shadow_prompt",
+                symbol=target_name,
+                cache_key=cache_key,
             )
+            result = self._merge_last_transport_meta(result)
 
             self._cache_set(
                 "_analysis_cache",
@@ -1518,6 +2101,8 @@ class GPTSniperEngine:
                     require_json=False,
                     context_name="시장 브리핑",
                     model_override=self._get_tier3_model(),
+                    endpoint_name="scanner_report",
+                    symbol="-",
                 )
             except Exception as e:
                 log_error(f"🚨 [시장 브리핑] OpenAI 에러: {e}")
@@ -1633,6 +2218,9 @@ class GPTSniperEngine:
                     require_json=True,
                     context_name=f"SCALP_OVERNIGHT:{stock_name}",
                     model_override=self._get_tier2_model(),
+                    schema_name="overnight_v1",
+                    endpoint_name="overnight",
+                    symbol=stock_code,
                 )
                 action = str(result.get('action', 'SELL_TODAY') or 'SELL_TODAY').upper()
                 if action not in {'SELL_TODAY', 'HOLD_OVERNIGHT'}:
@@ -1671,6 +2259,9 @@ class GPTSniperEngine:
                     require_json=True,
                     context_name=f"COND_ENTRY:{stock_name}",
                     model_override=self._get_tier1_model(),
+                    schema_name="condition_entry_v1",
+                    endpoint_name="condition_entry",
+                    symbol=stock_code,
                 )
                 return result
             except Exception as e:
@@ -1698,6 +2289,9 @@ class GPTSniperEngine:
                     require_json=True,
                     context_name=f"COND_EXIT:{stock_name}",
                     model_override=self._get_tier1_model(),
+                    schema_name="condition_exit_v1",
+                    endpoint_name="condition_exit",
+                    symbol=stock_code,
                 )
                 return result
             except Exception as e:
@@ -1772,6 +2366,9 @@ class GPTSniperEngine:
                     require_json=True,
                     context_name="종가베팅 TOP5 JSON",
                     model_override=self._get_tier3_model(),
+                    schema_name="eod_top5_v1",
+                    endpoint_name="eod_top5",
+                    symbol="-",
                 )
 
                 raw_top5 = result.get("top5", []) or []
@@ -1949,6 +2546,8 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
             context_name=context_name,
             model_override=self.fast_model_name,
             temperature_override=0.05,
+            endpoint_name=f"dual_persona_{decision_type}",
+            symbol=stock_code if (stock_code := str(payload.get('stock_code', '') or '-')) else "-",
         )
         return self._normalize_shadow_result(raw_result, decision_type)
 
@@ -2192,6 +2791,9 @@ class OpenAIDualPersonaShadowEngine(GPTSniperEngine):
                 context_name=f"WATCHING-SHARED:{stock_name}",
                 model_override=self.fast_model_name,
                 temperature_override=0.1,
+                schema_name="entry_v1",
+                endpoint_name="watching_shared_shadow",
+                symbol=stock_code,
             )
             normalized = self._normalize_shared_prompt_result(result)
             gemini_action = str((gemini_result or {}).get("action", "WAIT") or "WAIT").upper()

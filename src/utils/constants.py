@@ -373,6 +373,15 @@ class TradingConfig:
     GPT_REPORT_MODEL = "gpt-5.4-nano"
     GPT_ENABLE_SCALPING_DEEP_RECHECK: bool = False
     GPT_ENGINE_MIN_INTERVAL: float = 0.5 # OpenAI 서버에 쏘는 최소 간격 (초 단위, 0.5초 = 500ms)
+    OPENAI_JSON_DETERMINISTIC_CONFIG_ENABLED: bool = False  # JSON path에만 deterministic temperature 적용
+    OPENAI_RESPONSE_SCHEMA_REGISTRY_ENABLED: bool = False  # endpoint별 OpenAI structured output schema 적용 토글
+    OPENAI_TRANSPORT_MODE: str = "http"  # http | responses_ws
+    OPENAI_RESPONSES_WS_ENABLED: bool = False  # Responses WebSocket shadow-first 토글
+    OPENAI_RESPONSES_WS_POOL_SIZE: int = 2  # persistent Responses WebSocket worker 수
+    OPENAI_RESPONSES_WS_TIMEOUT_MS: int = 700  # hot path 판단 timeout
+    OPENAI_RESPONSES_WS_LATE_DISCARD_ENABLED: bool = True  # deadline 초과 응답 discard
+    OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED: bool = True  # buy-side hot path timeout/parse failure 시 reject fallback
+    OPENAI_PREVIOUS_RESPONSE_ID_ENABLED: bool = False  # phase1: stateless 유지
     OPENAI_DUAL_PERSONA_ENABLED: bool = False  # Plan Rebase: AI 엔진 A/B/shadow 비교는 기본 튜닝 로직 정렬 이후 재개
     OPENAI_DUAL_PERSONA_SHADOW_MODE: bool = True
     OPENAI_DUAL_PERSONA_APPLY_GATEKEEPER: bool = False  # 장중 긴급 완화: Gatekeeper dual-persona shadow 일시 비활성화
@@ -777,6 +786,55 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED=env_scalping_pyramid_zero_qty_stage1_enabled
             if env_scalping_pyramid_zero_qty_stage1_enabled is not None
             else config.SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED,
+        )
+
+    env_openai_json_deterministic = _env_bool("KORSTOCKSCAN_OPENAI_JSON_DETERMINISTIC_CONFIG_ENABLED")
+    env_openai_schema_registry = _env_bool("KORSTOCKSCAN_OPENAI_RESPONSE_SCHEMA_REGISTRY_ENABLED")
+    env_openai_transport_mode = str(os.getenv("KORSTOCKSCAN_OPENAI_TRANSPORT_MODE", "") or "").strip().lower()
+    env_openai_ws_enabled = _env_bool("KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED")
+    env_openai_ws_pool_size = _env_int("KORSTOCKSCAN_OPENAI_RESPONSES_WS_POOL_SIZE")
+    env_openai_ws_timeout_ms = _env_int("KORSTOCKSCAN_OPENAI_RESPONSES_WS_TIMEOUT_MS")
+    env_openai_ws_late_discard = _env_bool("KORSTOCKSCAN_OPENAI_RESPONSES_WS_LATE_DISCARD_ENABLED")
+    env_openai_entry_timeout_reject = _env_bool("KORSTOCKSCAN_OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED")
+    env_openai_previous_response_id = _env_bool("KORSTOCKSCAN_OPENAI_PREVIOUS_RESPONSE_ID_ENABLED")
+    if (
+        env_openai_json_deterministic is not None
+        or env_openai_schema_registry is not None
+        or env_openai_transport_mode
+        or env_openai_ws_enabled is not None
+        or env_openai_ws_pool_size is not None
+        or env_openai_ws_timeout_ms is not None
+        or env_openai_ws_late_discard is not None
+        or env_openai_entry_timeout_reject is not None
+        or env_openai_previous_response_id is not None
+    ):
+        config = replace(
+            config,
+            OPENAI_JSON_DETERMINISTIC_CONFIG_ENABLED=env_openai_json_deterministic
+            if env_openai_json_deterministic is not None
+            else config.OPENAI_JSON_DETERMINISTIC_CONFIG_ENABLED,
+            OPENAI_RESPONSE_SCHEMA_REGISTRY_ENABLED=env_openai_schema_registry
+            if env_openai_schema_registry is not None
+            else config.OPENAI_RESPONSE_SCHEMA_REGISTRY_ENABLED,
+            OPENAI_TRANSPORT_MODE=env_openai_transport_mode or config.OPENAI_TRANSPORT_MODE,
+            OPENAI_RESPONSES_WS_ENABLED=env_openai_ws_enabled
+            if env_openai_ws_enabled is not None
+            else config.OPENAI_RESPONSES_WS_ENABLED,
+            OPENAI_RESPONSES_WS_POOL_SIZE=env_openai_ws_pool_size
+            if env_openai_ws_pool_size is not None
+            else config.OPENAI_RESPONSES_WS_POOL_SIZE,
+            OPENAI_RESPONSES_WS_TIMEOUT_MS=env_openai_ws_timeout_ms
+            if env_openai_ws_timeout_ms is not None
+            else config.OPENAI_RESPONSES_WS_TIMEOUT_MS,
+            OPENAI_RESPONSES_WS_LATE_DISCARD_ENABLED=env_openai_ws_late_discard
+            if env_openai_ws_late_discard is not None
+            else config.OPENAI_RESPONSES_WS_LATE_DISCARD_ENABLED,
+            OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED=env_openai_entry_timeout_reject
+            if env_openai_entry_timeout_reject is not None
+            else config.OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED,
+            OPENAI_PREVIOUS_RESPONSE_ID_ENABLED=env_openai_previous_response_id
+            if env_openai_previous_response_id is not None
+            else config.OPENAI_PREVIOUS_RESPONSE_ID_ENABLED,
         )
     return config
 

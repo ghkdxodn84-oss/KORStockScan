@@ -203,6 +203,7 @@ cohort 분류 공통 규칙은 아래로 고정한다.
 | `execution_receipt_binding_quality` | `observe-only` | WS 실제체결과 active order binding 정합성 관찰 | BUY/SELL `EXEC_IGNORED` 원인이 order number race인지 visibility 문제인지 닫힐 때까지 EV 판정 전제 품질축으로 유지 | `2026-04-29`, `2026-04-30 checklist` |
 | `gemini_schema_registry_flag_off` | `observe-only` | Gemini 6 endpoint response schema registry의 flag-off contract 관찰 | `holding_exit_v1/eod_top5_v1` contract gap이 닫히고 live enable 항목이 별도 승인되기 전까지 flag-off 유지 | `2026-04-29`, `2026-04-30 checklist` |
 | `deepseek_retry_acceptance_flag_off` | `observe-only` | DeepSeek retry/backoff acceptance snapshot 관찰 | `api_call_lock`, retry log visibility, live-sensitive sleep guard가 문서/테스트로 닫히기 전까지 live enable 금지 | `2026-04-29`, `2026-04-30 checklist` |
+| `openai_responses_ws_shadow_flag_off` | `observe-only` | OpenAI Responses WS transport parity/load/timeout/http-fallback 관찰 | `request_id mismatch=0`, `late_discard=0`, `http fallback<=2%`, `parse_fail<=0.5%`가 shadow 기준으로 닫히고 별도 entry transport canary가 승인되기 전까지 flag-off 유지 | `2026-05-04 checklist` |
 
 inventory 운영 규칙은 아래로 고정한다.
 
@@ -246,6 +247,7 @@ inventory 운영 규칙은 아래로 고정한다.
 | `execution_receipt_binding_quality` | `observe-only` | `none` | SK이노베이션 BUY/SELL `EXEC_IGNORED` 사례로 runtime truth 품질축 유지 |
 | `gemini_schema_registry_flag_off` | `observe-only` | `guarded-off` | flag-off contract/load observability. live enable 아님 |
 | `deepseek_retry_acceptance_flag_off` | `observe-only` | `guarded-off` | flag-off retry acceptance observability. live enable 아님 |
+| `openai_responses_ws_shadow_flag_off` | `observe-only` | `guarded-off` | OpenAI Responses WS parity/timeout/fallback observability. live enable 아님 |
 | `orderbook_stability_observation` | `observe-only` | `none` | FR/quote-age/print-alignment 관찰. live gate 아님 |
 | `spread_relief_canary` | `active-canary` | `guarded-off` | parking 상태 |
 | `ws_jitter_relief_canary` | `active-canary` | `guarded-off` | same-day 종료된 replacement 축 |

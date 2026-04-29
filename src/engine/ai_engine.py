@@ -22,115 +22,17 @@ from src.engine.scalping_feature_packet import (
 from src.utils.logger import log_error
 from src.utils.constants import TRADING_RULES
 from src.engine.macro_briefing_complete import build_scanner_data_input
+from src.engine.ai_response_contracts import (
+    AI_RESPONSE_SCHEMA_REGISTRY,
+    resolve_ai_response_schema,
+)
 from src.engine.sniper_position_tags import normalize_position_tag
 
-
-GEMINI_RESPONSE_SCHEMA_REGISTRY = {
-    "entry_v1": {
-        "type": "object",
-        "properties": {
-            "action": {"type": "string", "enum": ["BUY", "WAIT", "DROP"]},
-            "score": {"type": "integer"},
-            "reason": {"type": "string"},
-        },
-        "required": ["action", "score", "reason"],
-    },
-    "holding_exit_v1": {
-        "type": "object",
-        "properties": {
-            "action": {"type": "string", "enum": ["HOLD", "TRIM", "EXIT"]},
-            "score": {"type": "integer"},
-            "reason": {"type": "string"},
-        },
-        "required": ["action", "score", "reason"],
-    },
-    "overnight_v1": {
-        "type": "object",
-        "properties": {
-            "action": {"type": "string", "enum": ["SELL_TODAY", "HOLD_OVERNIGHT"]},
-            "confidence": {"type": "integer"},
-            "reason": {"type": "string"},
-            "risk_note": {"type": "string"},
-        },
-        "required": ["action", "confidence", "reason", "risk_note"],
-    },
-    "condition_entry_v1": {
-        "type": "object",
-        "properties": {
-            "decision": {"type": "string", "enum": ["BUY", "WAIT", "SKIP"]},
-            "confidence": {"type": "integer"},
-            "order_type": {"type": "string", "enum": ["MARKET", "LIMIT_TOP", "NONE"]},
-            "position_size_ratio": {"type": "number"},
-            "invalidation_price": {"type": "integer"},
-            "reasons": {"type": "array", "items": {"type": "string"}},
-            "risks": {"type": "array", "items": {"type": "string"}},
-        },
-        "required": [
-            "decision",
-            "confidence",
-            "order_type",
-            "position_size_ratio",
-            "invalidation_price",
-            "reasons",
-            "risks",
-        ],
-    },
-    "condition_exit_v1": {
-        "type": "object",
-        "properties": {
-            "decision": {"type": "string", "enum": ["HOLD", "TRIM", "EXIT"]},
-            "confidence": {"type": "integer"},
-            "trim_ratio": {"type": "number"},
-            "new_stop_price": {"type": "integer"},
-            "reason_primary": {"type": "string"},
-            "warning": {"type": "string"},
-        },
-        "required": [
-            "decision",
-            "confidence",
-            "trim_ratio",
-            "new_stop_price",
-            "reason_primary",
-            "warning",
-        ],
-    },
-    "eod_top5_v1": {
-        "type": "object",
-        "properties": {
-            "market_summary": {"type": "string"},
-            "one_point_lesson": {"type": "string"},
-            "top5": {
-                "type": "array",
-                "items": {
-                    "type": "object",
-                    "properties": {
-                        "rank": {"type": "integer"},
-                        "stock_name": {"type": "string"},
-                        "stock_code": {"type": "string"},
-                        "close_price": {"type": "integer"},
-                        "reason": {"type": "string"},
-                        "entry_plan": {"type": "string"},
-                    "target_price_guide": {"type": "string"},
-                    "stop_price_guide": {"type": "string"},
-                    "confidence": {"type": "number"},
-                    },
-                    "required": ["rank", "stock_name", "stock_code", "close_price", "reason"],
-                },
-            },
-        },
-        "required": ["market_summary", "one_point_lesson", "top5"],
-    },
-}
+GEMINI_RESPONSE_SCHEMA_REGISTRY = AI_RESPONSE_SCHEMA_REGISTRY
 
 
 def _resolve_gemini_response_schema(schema_name):
-    normalized = str(schema_name or "").strip()
-    if not normalized:
-        return None
-    schema = GEMINI_RESPONSE_SCHEMA_REGISTRY.get(normalized)
-    if schema is None:
-        raise ValueError(f"Unknown Gemini response schema: {normalized}")
-    return schema
+    return resolve_ai_response_schema(schema_name)
 
 
 # ==========================================
