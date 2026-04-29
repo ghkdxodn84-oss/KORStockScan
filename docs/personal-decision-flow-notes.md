@@ -225,7 +225,7 @@
 | 13:00 장중 판정 | offline bundle `latency_1300` 기준 `budget_pass=5628`, `submitted=9`, `budget_pass_to_submitted_rate=0.2%`, `latency_block=5619`, `latency_state_danger=5290`, `full_fill=4`, `partial_fill=0`이었다. `11:00` 대비 absolute `submitted/full_fill`는 늘었지만 비율 개선이 없고 `latency_state_danger` 비중도 유지 또는 악화돼, `other_danger-only normal override` 효과를 유의미한 제출 회복으로 보지는 않는다. |
 | 15:00 장중 판정 | offline bundle `ws_jitter_1500` 기준 `budget_pass=7568`, `submitted=11`, `budget_pass_to_submitted_rate=0.1%`, `latency_block=7557`, `latency_state_danger=7178`, `full_fill=7`, `partial_fill=0`이었다. `13:00` 대비 absolute `submitted/full_fill`는 늘었지만 효율 비율은 악화됐고 danger 분해도 `other_danger=3256`, `ws_age_too_high=2224`, `ws_jitter_too_high=2203` 순으로 유지돼 `ws_jitter-only relief`도 제출 회복축으로는 닫았다. |
 | 금지 조건 | `gatekeeper_fast_reuse_ratio` 개선, `gatekeeper_eval_ms_p95` 하락, signature/window blocker 감소만으로 live 승격/유지 판정을 하지 않는다. 이 값들은 `submitted/full/partial` 또는 `latency_state_danger` 감소와 함께 움직일 때만 보조 근거로 쓴다. `other_danger-only normal override` 적용 후에도 `submitted` 개선이 없다면 `gatekeeper_fast_reuse`로 판정을 되돌리지 않는다. |
-| 복합축 적용 | 단일 `gatekeeper_fast_reuse`, `other_danger-only normal override`, `ws_jitter-only relief replacement`는 모두 same-day latency residual 평가축으로 종료됐다. 이는 진입병목이 충분해졌다는 뜻이 아니라, 단일 사유 완화가 실패했다는 뜻이다. 15:00 분해에서 `other_danger=3256`, `ws_age_too_high=2224`, `ws_jitter_too_high=2203`가 동시에 커졌으므로 다음 entry live 축은 `latency_quote_fresh_composite`로 연다. 조건은 `signal>=88`, `ws_age<=950ms`, `ws_jitter<=450ms`, `spread<=0.0075`, `quote_stale=False`, fallback/split-entry 금지, normal override만 허용이다. |
+| 복합축 적용 | 단일 `gatekeeper_fast_reuse`, `other_danger-only normal override`, `ws_jitter-only relief replacement`는 모두 same-day latency residual 평가축으로 종료됐다. 이후 `latency_quote_fresh_composite`를 live로 열었지만 `2026-04-29 08:29 KST` OFF + restart로 닫혔고, `latency_signal_quality_quote_composite`도 `2026-04-29 12:21~12:50 KST` replacement 후 후보 0건으로 종료됐다. 현재 entry live 축은 `mechanical_momentum_latency_relief`다. 조건은 `signal_score<=75`, `latest_strength>=110`, `buy_pressure_10t>=50`, `ws_age<=1200ms`, `ws_jitter<=500ms`, `spread<=0.0085`, `quote_stale=False`, fallback/split-entry 금지, normal override만 허용이다. |
 | fallback/split-entry 정합화 | `CAUTION -> ALLOW_FALLBACK`은 더 이상 실전 주문 경로를 만들지 않도록 `latency_fallback_deprecated` reject로만 남긴다. split-entry follow-up shadow도 기본 OFF로 두고, runtime에서 재개 후보처럼 읽히는 문구를 제거한다. 남는 것은 과거 로그/감리용 helper와 폐기 경로 감지뿐이다. |
 | 다음 액션 | 이후 판정은 `quote_fresh_composite_canary_applied`, `submitted/full/partial`, `budget_pass_to_submitted_rate`, `latency_state_danger`, `normal_slippage_exceeded`, `COMPLETED + valid profit_rate`로 닫는다. `gatekeeper_fast_reuse_ratio`는 계속 보조 진단값이고, `other_danger/ws_jitter/spread` 단일축으로 되돌아가지 않는다. |
 
@@ -246,15 +246,30 @@
 | rollback guard | `budget_pass_to_submitted_rate`가 baseline 대비 `+1.0%p` 이상 개선하지 못하면 `composite_no_recovery`로 OFF한다. `full/partial` 품질 악화, `normal_slippage_exceeded` 증가, `fallback_regression` 재유입도 즉시 OFF 사유다. |
 | 감리 검토 포인트 | baseline이 `same bundle + canary_applied=False`로 잠겼는지, `04-27 15:00 offline bundle`이 참고선으로만 분리됐는지, 성공 기준과 rollback guard가 뒤섞이지 않았는지, baseline 부족 또는 shadow diff 미해소 시 `direction-only`로 격하한다는 규칙이 문서에 남아 있는지를 같이 본다. |
 | 금지 조건 | 같은 entry 단계에서 다른 canary를 동시에 두지 않는다. `other_danger/ws_jitter/spread` 단일축으로 되돌아가 개별 attribution을 시도하지 않는다. `gatekeeper_fast_reuse_ratio` 개선만으로 유지 판정을 하지 않는다. |
-| 현재 상태 | `2026-04-27` 기준 active entry canary로 연 상태다. same-day 판정은 `QuoteFreshReview0428`에서 묶음 기준선과 `composite_no_recovery` guard를 함께 잠그는 것으로 이어진다. |
-| 후속 연결 | 제출 회복이 확인되면 `DF-HOLDING-001`의 HOLDING/청산 품질 검증으로 넘어가고, 회복 실패면 다음 entry replacement 축 또는 새 복합축 설계로 닫는다. |
+| 현재 상태 | historical/reference 축으로 전환됐다. `2026-04-29 08:29 KST` 기준 OFF + restart가 반영됐고, 현재는 active entry live canary가 아니다. |
+| 후속 연결 | 제출 회복이 확인되지 않아 `latency_signal_quality_quote_composite` same-day replacement를 거쳤고, 다시 효과 미약으로 닫힌 뒤 `DF-ENTRY-007 mechanical_momentum_latency_relief`로 넘어갔다. |
+
+### DF-ENTRY-007 `mechanical_momentum_latency_relief` 운영 override
+
+| 항목 | 내용 |
+| --- | --- |
+| ID | `DF-ENTRY-007` |
+| 판정항목 | `latency_quote_fresh_composite`와 `latency_signal_quality_quote_composite` 종료 후, AI 50/70 mechanical fallback 상태까지 포함해 제출 drought를 직접 완화하는 replacement 축을 same-day 운영 override로 관리 |
+| 문제 인식 | `2026-04-29 12:21:28~12:45:59 KST` `latency_signal_quality_quote_composite` post-restart cohort는 `budget_pass=972`, `submitted=0`, 후보 통과 0건이었다. `signal>=90` 전제는 AI 50/70 fallback 상태를 열지 못해, submitted 회복 직접성이 낮았다. |
+| live 정의 | `signal_score<=75`, `latest_strength>=110`, `buy_pressure_10t>=50`, `ws_age<=1200ms`, `ws_jitter<=500ms`, `spread<=0.0085`, `quote_stale=False`, fallback/split-entry 금지, normal override만 허용 |
+| 왜 이 축인가 | 같은 post-restart 창 counterfactual 기준으로는 약 `91`건 후보가 보여, 기존 복합축이 버리던 `mechanical fallback` 표본을 제한적으로 열 수 있다. 즉 지금 필요한 것은 `high score only`가 아니라 `기계 fallback이라도 microstructure가 충분한 후보`를 살리는 것이다. |
+| 판정 원칙 | hard baseline 승격이 아니라 same-day 운영 override다. 따라서 새 restart 이후 cohort만 분리해 보고, 기존 `h1200`이나 `QuoteFresh` historical cohort와 직접 합산하지 않는다. |
+| 현재 상태 | `2026-04-29 12:50 KST` ON, `12:57 KST` restart 반영 완료. main PID는 `30566 -> 35539`로 교체됐다. 현재 entry live 1축은 이 축이다. |
+| 핵심 KPI | `mechanical_momentum_relief_canary_applied`, `latency_mechanical_momentum_relief_normal_override`, `submitted`, `full fill`, `partial fill`, `COMPLETED + valid profit_rate`, `fallback_regression=0` |
+| rollback guard | post-restart cohort에서 `budget_pass >= 150`인데 `submitted <= 2`, `pre_submit_price_guard_block_rate > 2.0%`, `normal_slippage_exceeded` 반복, 또는 canary cohort 일간 손익이 NAV 대비 `<= -0.35%`이면 OFF 후보로 본다. |
+| 다음 액션 | 먼저 same-day post-restart cohort에서 제출 회복 여부를 본다. 회복이 확인되면 `DF-HOLDING-001`의 HOLDING/청산 품질 판정으로 넘어가고, 실패하면 다음 replacement 축 또는 entry price/P0 guard 축과 연결해 다시 닫는다. |
 
 ### 플로우차트 진행 위치
 
 - 현재 플로우는 여전히 `entry_armed -> budget_pass -> latency_block -> submitted` 구간(플로우차트 단계 7~8)에 고정돼 있다.
 - upstream 단계인 `감시종목/AI 판정`(`DF-ENTRY-001`, `DF-ENTRY-002`)은 `보류`가 아니라 `선결 조건 충족` 상태다. 지금 흔들면 안 되는 것은 upstream이 아니라 downstream 세부축 선택이다.
 - `spread_relief`, `ws_jitter-only relief`, `other_danger residual`까지 `quote_fresh family`는 한 차례 장중 잠금됐다. 그 뒤 `gatekeeper_fast_reuse`로 넘어간 것이 매몰 지점이었고, DF-ENTRY-005는 이를 철회해 `latency_state_danger -> other_danger relief` 직접 병목으로 되돌리는 항목이다.
-- 따라서 현재 위치는 `gatekeeper_fast_reuse` 재관찰 대기가 아니라 `latency_state_danger` direct blocker replacement 이후 `DF-ENTRY-006 latency_quote_fresh_composite` live canary 관찰 흐름이다. `other_danger`와 `ws_jitter` 단일축이 실패했으므로, 현재는 `latency_quote_fresh_composite`에서 `submitted/full/partial`과 `latency_state_danger` 감소를 본다.
+- 따라서 현재 위치는 `gatekeeper_fast_reuse` 재관찰 대기가 아니라, `latency_quote_fresh_composite` historical/reference 종료와 `latency_signal_quality_quote_composite` same-day 종료를 거친 뒤 `DF-ENTRY-007 mechanical_momentum_latency_relief` live 관찰 흐름이다. 지금은 `mechanical fallback` 표본을 포함한 post-restart cohort에서 `submitted/full/partial`과 `COMPLETED + valid profit_rate`를 본다.
 
 ## 제출축 판정 후 다음 단계
 
@@ -263,8 +278,8 @@
 | 항목 | 내용 |
 | --- | --- |
 | ID | `DF-HOLDING-001` |
-| 시작 조건 | `latency_quote_fresh_composite` 또는 후속 downstream 1축에서 `submitted` 회복이 확인된 뒤 hard pass/fail을 시작한다. |
-| 현재 상태 | `15:00` offline bundle까지 포함하면 `budget_pass_events=7568`, `submitted=11`, `full_fill_events=7`, `partial_fill_events=0`, `budget_pass_to_submitted_rate=0.1%`, `latency_state_danger_events=7178`였다. absolute 표본은 늘었지만 제출 회복 효율은 악화됐고 entry 단일축 3개가 모두 종료됐다. 따라서 hard pass/fail 기준으로는 미충족이지만, 동일 단계 원칙상 entry 복합축과 보유/청산 `soft_stop_micro_grace`는 분리 병렬 canary로 운용할 수 있다. |
+| 시작 조건 | `mechanical_momentum_latency_relief` 또는 후속 downstream 1축에서 `submitted` 회복이 확인된 뒤 hard pass/fail을 시작한다. |
+| 현재 상태 | `latency_quote_fresh_composite`는 OFF, `latency_signal_quality_quote_composite`는 후보 0건으로 종료됐고 현재 entry live는 `mechanical_momentum_latency_relief`다. 따라서 HOLDING/청산 hard pass/fail의 선결조건은 과거 `quote_fresh`가 아니라 현 live replacement 축의 `submitted/full/partial` 회복 여부다. 다만 동일 단계 원칙상 entry live 1축과 보유/청산 `soft_stop_micro_grace`는 여전히 분리 병렬 canary로 운용할 수 있다. |
 | 다음 단계 목적 | 제출량 증가가 실제 기대값 개선으로 이어지는지 `HOLDING/청산 품질`로 검증한다. 단, 진입 조건은 `submitted` 회복이 먼저다. |
 | 핵심 검증축 | `soft_stop/trailing/good_exit`, `holding_action_applied`, `holding_force_exit_triggered`, `exit_rule` 분포, `full/partial` 분리, `COMPLETED + valid profit_rate` |
 | 분리 원칙 | `initial-only`와 `pyramid-activated` 표본을 섞지 않는다. `full fill`과 `partial fill`도 합치지 않는다. |
@@ -319,6 +334,7 @@
 | `DF-ENTRY-002` | upstream 표본 생성 유효, 유지/고정 | `DF-ENTRY-003` | `BUY 부족`보다는 `entry_armed -> submitted` 제출 병목이 다음 공식 판정축으로 넘어갔음을 의미 |
 | `DF-ENTRY-003` | 제출축 live 검증 진행 후 원인 위치 고정 | `DF-ENTRY-004` | `spread relief canary`는 downstream 병목 위치 확인까지는 완료했고, 실효성 승인 실패 후 `quote_fresh` replacement 후보로 연결됐다는 의미 |
 | `DF-ENTRY-004` | same-day 보조축을 `quote_fresh`로 고정 후 `spread/ws_jitter/other_danger residual`을 순차 검증 | `DF-ENTRY-005` | `quote_fresh family`가 제출 회복을 만들지 못한 뒤, `gatekeeper_fast_reuse` 후보로 새지 않고 `latency_state_danger` 직접 blocker로 복귀해야 한다는 의미 |
-| `DF-ENTRY-005` | `gatekeeper_fast_reuse` 매몰을 철회하고 `latency_state_danger -> other_danger relief`로 pivot | `DF-ENTRY-006` | pivot 설명과 실제 active entry canary를 분리해, `latency_quote_fresh_composite`를 독립 판정항목으로 추적한다는 의미 |
-| `DF-ENTRY-006` | `latency_quote_fresh_composite`를 묶음 ON/OFF 기준의 active entry canary로 관리 | `DF-HOLDING-001` | 제출 회복이 확인되면 HOLDING/청산 품질 판정으로 넘어가고, 회복 실패면 다음 entry replacement 축 또는 새 복합축 설계로 닫는다는 의미 |
+| `DF-ENTRY-005` | `gatekeeper_fast_reuse` 매몰을 철회하고 `latency_state_danger -> other_danger relief`로 pivot | `DF-ENTRY-006` | pivot 설명과 `latency_quote_fresh_composite` 복합축을 분리해 historical/reference 근거까지 추적한다는 의미 |
+| `DF-ENTRY-006` | `latency_quote_fresh_composite`를 묶음 ON/OFF 기준의 entry 복합축으로 관리했지만 현재는 OFF historical/reference 상태 | `DF-ENTRY-007` | same-day replacement(`latency_signal_quality_quote_composite`) 실패 후 `mechanical_momentum_latency_relief`로 현재 live owner가 이동했다는 의미 |
+| `DF-ENTRY-007` | `mechanical_momentum_latency_relief`를 현재 entry live replacement 축으로 관리 | `DF-HOLDING-001` | 제출 회복이 확인되면 HOLDING/청산 품질 판정으로 넘어가고, 회복 실패면 다음 entry replacement 축 또는 entry price/P0 guard 계열로 닫는다는 의미 |
 | `DF-HOLDING-001` | 제출 회복 이후 HOLDING/청산 품질 판정 축 유지 | `DF-HOLDING-002` | 4월 손익 훼손 기준으로 soft stop을 1순위 live 후보로 분리하고, 10시 중간점검/11시 1차 판정으로 조기 오염을 잡는다는 의미 |

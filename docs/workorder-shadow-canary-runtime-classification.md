@@ -173,8 +173,10 @@ cohort 분류 공통 규칙은 아래로 고정한다.
 | `wait6579_ev_cohort` | `observe-only` | BUY recovery 후보 EV/blocked_ai_score/제출 전환 관찰 | `buy_recovery_canary` 축이 remove 또는 baseline 승격으로 닫히고, `recovery_check -> promoted -> submitted` 설명력이 다른 live/report 축으로 완전히 대체될 때 제거 가능 | `2026-04-21~22 checklist` |
 | `buy_recovery_canary applied cohort` | `guarded-off` | `WAIT65~79` live canary 효과/rollback 판정 | 코드 경로는 회귀/재개 가능성 때문에 유지하되, Plan Rebase 단일 live canary 기간에는 OFF로 유지. 재개 시 새 승인 항목과 rollback guard 필요 | `2026-04-21~23 checklist` |
 | `wait6579_probe_canary_applied` | `guarded-off` | 소량 probe 적용 표본 분리 | `soft_stop_micro_grace` live 관찰 중에는 OFF. 재개하려면 단일 live canary slot을 다시 확보하고 `submitted/full/partial` 회복 기준을 새로 문서화 | `wait6579_ev_cohort`, `2026-04-21 checklist` |
-| `latency_quote_fresh_composite` | `active-canary-decision` | 진입병목 quote freshness 복합 residual 완화 | `submitted/full/partial` 회복과 `latency_state_danger` 감소가 확인되어 유지/확대되거나, 미개선이면 OFF 확정될 때 종료 | `Plan Rebase`, `2026-04-27 checklist` |
-| `post-restart cohort` | `active-canary-decision` | replacement 이후 same-day 제출 회복 관찰 | replacement 당일 판정이 닫히고 후속 축이 새 `post-change` cohort로 넘어가면 종료. 익일 이후 지속 baseline으로 쓰지 않음 | `2026-04-24 checklist` |
+| `latency_quote_fresh_composite` | `observe-only` | 2026-04-29 이전 live였던 quote freshness 복합 residual 축의 historical/reference cohort | `2026-04-29 08:29 KST` OFF + restart 이후에는 historical/reference 및 감리 비교용으로만 유지. 재개 시 새 승인 항목과 rollback guard 필요 | `Plan Rebase`, `2026-04-29 checklist` |
+| `latency_signal_quality_quote_composite` | `observe-only` | `latency_quote_fresh_composite` replacement로 same-day 시험한 예비 복합축의 post-restart cohort | `2026-04-29 12:21~12:50 KST` replacement cohort 분리와 효과 미약 판정 보존이 끝나면 historical-only로 유지. baseline/live 승격 금지 | `Plan Rebase`, `2026-04-29 checklist` |
+| `mechanical_momentum_latency_relief` | `active-canary-decision` | AI 50/70 mechanical fallback 상태를 포함하는 현재 entry replacement live cohort | `mechanical_momentum_relief_canary_applied`, `submitted/full/partial`, `COMPLETED + valid profit_rate`, `fallback_regression=0`로 post-restart 분리 판정 후 유지/종료/승격을 결정 | `Plan Rebase`, `2026-04-29 checklist` |
+| `post-restart cohort` | `active-canary-decision` | replacement 이후 same-day 제출 회복 관찰 | replacement 당일 판정이 닫히고 후속 축이 새 `post-change` cohort로 넘어가면 종료. 익일 이후 지속 baseline으로 쓰지 않음 | `2026-04-29 checklist` |
 | `soft_stop qualifying cohort` | `provisional-stage-disjoint` | 보유/청산 live 예외 canary 후보 | `soft_stop_rebound_split` 승인 또는 보류+재시각이 닫히고, qualifying rule이 live 조작점으로 승격되거나 폐기될 때 종료 | `2026-04-27 checklist` |
 | `soft_stop_micro_grace` | `active-canary-decision` | soft_stop 최초 터치 후 짧은 휩쏘 확인유예 | `scalp_soft_stop_pct` 손실/반등 개선이 확인되어 baseline 승격되거나, emergency/hard_stop 악화 또는 soft_stop 지연 부작용으로 OFF 확정될 때 종료 | `2026-04-27 checklist` |
 | `hard_stop_whipsaw_aux` | `observe-only` | severe-loss guard 보조 관찰 | 하드스탑을 보조 관찰로만 둔다는 원칙이 유지되는 동안 유지. `MISSED_UPSIDE/GOOD_EXIT/NEUTRAL`과 반등 지표가 독립 판단가치를 잃거나 hard stop 완화 의제가 공식 폐기되면 제거 | `Plan Rebase`, `2026-04-27 checklist` |
@@ -217,7 +219,9 @@ inventory 운영 규칙은 아래로 고정한다.
 | `wait6579_probe_canary` | `active-canary` | `guarded-off` | soft_stop live canary 관찰 중 entry probe OFF |
 | `fallback_qty_canary` | `remove` | `guarded-off` | historical label only, live fallback 경로와 함께 종료 |
 | `latency_guard_canary` | `active-canary` | `guarded-off` | broad fallback override legacy 축 |
-| `latency_quote_fresh_composite` | `active-canary` | `limited-live` | current entry live canary |
+| `latency_quote_fresh_composite` | `observe-only` | `guarded-off` | 2026-04-29 08:29 KST OFF + restart 완료. historical/reference 축 |
+| `latency_signal_quality_quote_composite` | `observe-only` | `guarded-off` | 2026-04-29 12:21~12:50 KST same-day replacement 후 효과 미약 종료 |
+| `mechanical_momentum_latency_relief` | `active-canary` | `limited-live` | current entry live replacement canary |
 | `orderbook_stability_observation` | `observe-only` | `none` | FR/quote-age/print-alignment 관찰. live gate 아님 |
 | `spread_relief_canary` | `active-canary` | `guarded-off` | parking 상태 |
 | `ws_jitter_relief_canary` | `active-canary` | `guarded-off` | same-day 종료된 replacement 축 |
@@ -608,25 +612,66 @@ inventory 운영 규칙은 아래로 고정한다.
 
 ### 4.9A-1 `latency_quote_fresh_composite`
 
+- 판정: `observe-only`
+- live 영향도: `guarded-off`
+- 튜닝 모니터링 가치: `Medium`
+  - 이유: `2026-04-29 08:29 KST` OFF + restart가 확정됐고 현재는 live owner가 아니지만, `quote_fresh_composite_canary_applied` historical cohort와 `composite_no_recovery` 근거는 replacement 축 선택의 reference로 남는다.
+  - 상향 조건: 동일 단계 live 축이 비워지고, 새 승인 항목에서 `signal/ws_age/ws_jitter/spread/quote_stale` 묶음 전체를 다시 1축으로 재승인할 때
+  - 하향 조건: historical/reference 비교도 더 이상 쓰지 않고 완전히 archive로 내릴 때
+- EV 판정 기여도: `Medium`
+- 대체 가능성: `Medium`
+- 운영 부하/지연 비용: `Low`
+- 코드 유지비: `Medium`
+- 향후 재개 가능성: `Medium`
+- 근거:
+  1. `Plan Rebase`와 `2026-04-29 checklist`에서 현재 entry live 축은 `mechanical_momentum_latency_relief`로 고정됐다.
+  2. `latency_quote_fresh_composite`는 제출 회복 hard baseline을 만들지 못했고, OFF 값과 restart provenance까지 확보됐다.
+- 다음 액션:
+  1. 장중/번들 판정에서는 historical/reference 축으로만 집계한다.
+  2. 재개 없이는 baseline/live 승격 후보로 취급하지 않는다.
+
+### 4.9A-2 `latency_signal_quality_quote_composite`
+
+- 판정: `observe-only`
+- live 영향도: `guarded-off`
+- 튜닝 모니터링 가치: `Medium`
+  - 이유: same-day replacement로 실제 켰던 축이라 `post-restart cohort` 분리는 남길 가치가 있지만, `budget_pass=972`, `submitted=0`, 후보 통과 0건으로 현재 live owner는 아니다.
+  - 상향 조건: future replacement 후보가 다시 `high AI score + quote freshness` 쪽으로 좁혀지고, 새 승인 항목에서 same-day 재승인될 때
+  - 하향 조건: `signal>=90` 계열 예비 복합축을 완전히 폐기하고 historical cohort도 더 이상 쓰지 않을 때
+- EV 판정 기여도: `Low`
+- 대체 가능성: `High`
+- 운영 부하/지연 비용: `Low`
+- 코드 유지비: `Medium`
+- 향후 재개 가능성: `Low`
+- 근거:
+  1. `2026-04-29 12:21~12:50 KST` replacement 이후 `low_signal=770`, `quote_stale=76`, 통과 후보 0건으로 효과 미약 종료가 문서화됐다.
+  2. AI score 50/70 mechanical fallback 상태를 열지 못해 제출 drought 완화 직접성이 낮았다.
+- 다음 액션:
+  1. `post-restart cohort`의 historical comparison과 실패 근거만 유지한다.
+  2. 새 문서 승인 없이 live 재개 후보로 읽지 않게 `observe-only`로 고정한다.
+
+### 4.9A-3 `mechanical_momentum_latency_relief`
+
 - 판정: `active-canary-decision`
 - live 영향도: `limited-live`
 - 튜닝 모니터링 가치: `High`
-  - 이유: 단일 `gatekeeper_fast_reuse`, `other_danger`, `ws_jitter`가 제출 회복을 만들지 못했고, `2026-04-27 15:00` 분해에서 `other_danger=3256`, `ws_age_too_high=2224`, `ws_jitter_too_high=2203`가 동시에 커져 quote freshness family 복합 병목 가능성이 가장 높다.
-  - 상향 조건: `quote_fresh_composite_canary_applied` 표본에서 `submitted/full/partial` 회복, `budget_pass_to_submitted_rate` 개선, `latency_state_danger` 감소, `fallback_regression=0`
-  - 하향 조건: 적용 표본이 없거나 제출 회복 없이 `latency_state_danger` 비중이 유지/악화될 때
+  - 이유: `latency_quote_fresh_composite`와 `latency_signal_quality_quote_composite`를 닫은 뒤, AI 50/70 mechanical fallback 상태까지 포함해 제출 drought를 직접 완화하는 현재 entry live replacement 축이다.
+  - 상향 조건: `mechanical_momentum_relief_canary_applied` cohort에서 `submitted/full/partial` 회복, `budget_pass_to_submitted_rate` 개선, `fallback_regression=0`, `COMPLETED + valid profit_rate` 비악화가 확인될 때
+  - 하향 조건: post-restart cohort에서 `budget_pass >= 150`인데 `submitted <= 2`, `pre_submit_price_guard_block_rate > 2.0%`, `normal_slippage_exceeded` 반복, 또는 일간 canary 손익이 NAV 대비 `<= -0.35%`일 때
 - EV 판정 기여도: `High`
-- 대체 가능성: `Medium`
+- 대체 가능성: `Low`
 - 운영 부하/지연 비용: `Low`
 - 코드 유지비: `Medium`
 - 향후 재개 가능성: `High`
 - 근거:
-  1. fallback/split-entry는 계속 OFF이며, `REJECT_DANGER -> ALLOW_NORMAL` normal override만 허용한다.
-  2. 조건은 `signal>=88`, `ws_age<=950ms`, `ws_jitter<=450ms`, `spread<=0.0075`, `quote_stale=False`로 제한한다.
+  1. `2026-04-29 12:50 KST` 운영 override로 `latency_signal_quality_quote_composite=False`, `mechanical_momentum_latency_relief=True` replacement가 반영됐다.
+  2. same-day counterfactual 기준 약 `91`건 후보가 확인돼, AI score 50/70 기계 fallback 표본을 완전히 버리지 않는 현재 가장 직접적인 제출 회복 축이다.
+  3. `2026-04-29 12:57 KST` restart 후 main PID `30566 -> 35539` 교체 provenance가 확보됐다.
 - 다음 액션:
-  1. 장중/번들 판정에서 `latency_canary_reason=quote_fresh_composite_canary_applied`를 별도 집계한다.
-  2. `submitted/full/partial`, `latency_state_danger`, `normal_slippage_exceeded`, `COMPLETED + valid profit_rate`를 단계별로 분리 판정한다.
+  1. `mechanical_momentum_relief_canary_applied`, `latency_mechanical_momentum_relief_normal_override`, `submitted/full/partial`, `COMPLETED + valid profit_rate`, `fallback_regression=0`를 post-restart cohort로 분리한다.
+  2. baseline 승격 전까지는 same-day 운영 override 1축으로만 유지한다.
 
-### 4.9A-2 `orderbook_stability_observation`
+### 4.9A-4 `orderbook_stability_observation`
 
 - 판정: `observe-only`
 - live 영향도: `none`
@@ -707,11 +752,12 @@ inventory 운영 규칙은 아래로 고정한다.
    - `dynamic_strength_canary` (`dynamic_strength_relief`)
    - `partial_fill_ratio_canary` (`partial_fill_ratio_guard`)
 4. `active-canary 운영/parking 판정`
-   - `buy_recovery_canary`
-   - `wait6579_probe_canary`
-   - `latency_guard_canary`
-   - `spread_relief_canary`
-   - `ws_jitter_relief_canary`
-   - `other_danger_relief_canary`
+  - `buy_recovery_canary`
+  - `wait6579_probe_canary`
+  - `latency_guard_canary`
+  - `mechanical_momentum_latency_relief`
+  - `spread_relief_canary`
+  - `ws_jitter_relief_canary`
+  - `other_danger_relief_canary`
 
 이 순서를 지켜 `remove`, `observe-only`, `baseline-promote`, `active-canary`를 섞어 동시에 건드리지 않는다.

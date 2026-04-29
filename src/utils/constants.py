@@ -179,7 +179,7 @@ class TradingConfig:
     SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_AGE_MS: int = 950  # 복합축 최대 ws_age
     SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_WS_JITTER_MS: int = 450  # 복합축 최대 ws_jitter
     SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_MAX_SPREAD_RATIO: float = 0.0075  # 복합축 최대 spread_ratio
-    SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED: bool = True  # 2026-04-29 운영 override: 강한 수급 x quote freshness
+    SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED: bool = False  # 2026-04-29 12:50 운영 override 종료
     SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_TAGS: tuple = ("SCANNER", "VWAP_RECLAIM", "OPEN_RECLAIM")
     SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MIN_SIGNAL_SCORE: float = 90.0
     SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MIN_STRENGTH: float = 110.0
@@ -187,6 +187,14 @@ class TradingConfig:
     SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MAX_WS_AGE_MS: int = 1200
     SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MAX_WS_JITTER_MS: int = 500
     SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_MAX_SPREAD_RATIO: float = 0.0085
+    SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED: bool = True  # 2026-04-29 운영 override: AI 50/70 mechanical momentum x quote freshness
+    SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_TAGS: tuple = ("SCANNER", "VWAP_RECLAIM", "OPEN_RECLAIM")
+    SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_SIGNAL_SCORE: float = 75.0
+    SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MIN_STRENGTH: float = 110.0
+    SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MIN_BUY_PRESSURE: float = 50.0
+    SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_WS_AGE_MS: int = 1200
+    SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_WS_JITTER_MS: int = 500
+    SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_SPREAD_RATIO: float = 0.0085
     SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED: bool = False  # replacement 완료: spread-only relief는 parking 유지
     SCALP_LATENCY_SPREAD_RELIEF_TAGS: tuple = ("SCANNER", "VWAP_RECLAIM", "OPEN_RECLAIM")  # spread relief 적용 태그
     SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE: float = 85.0  # spread relief 최소 AI 점수
@@ -466,6 +474,30 @@ def _build_trading_rules() -> TradingConfig:
     env_spread_relief_tags = _env_csv_tuple("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_TAGS")
     env_spread_relief_min_signal = _env_float("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MIN_SIGNAL_SCORE")
     env_spread_relief_max_spread = _env_float("KORSTOCKSCAN_SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO")
+    env_mechanical_momentum_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED"
+    )
+    env_mechanical_momentum_tags = _env_csv_tuple(
+        "KORSTOCKSCAN_SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_TAGS"
+    )
+    env_mechanical_momentum_max_signal = _env_float(
+        "KORSTOCKSCAN_SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_SIGNAL_SCORE"
+    )
+    env_mechanical_momentum_min_strength = _env_float(
+        "KORSTOCKSCAN_SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MIN_STRENGTH"
+    )
+    env_mechanical_momentum_min_buy_pressure = _env_float(
+        "KORSTOCKSCAN_SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MIN_BUY_PRESSURE"
+    )
+    env_mechanical_momentum_max_ws_age = _env_int(
+        "KORSTOCKSCAN_SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_WS_AGE_MS"
+    )
+    env_mechanical_momentum_max_ws_jitter = _env_int(
+        "KORSTOCKSCAN_SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_WS_JITTER_MS"
+    )
+    env_mechanical_momentum_max_spread = _env_float(
+        "KORSTOCKSCAN_SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_SPREAD_RATIO"
+    )
     if (
         env_ws_jitter is not None
         or env_ws_age is not None
@@ -475,6 +507,14 @@ def _build_trading_rules() -> TradingConfig:
         or env_spread_relief_tags is not None
         or env_spread_relief_min_signal is not None
         or env_spread_relief_max_spread is not None
+        or env_mechanical_momentum_enabled is not None
+        or env_mechanical_momentum_tags is not None
+        or env_mechanical_momentum_max_signal is not None
+        or env_mechanical_momentum_min_strength is not None
+        or env_mechanical_momentum_min_buy_pressure is not None
+        or env_mechanical_momentum_max_ws_age is not None
+        or env_mechanical_momentum_max_ws_jitter is not None
+        or env_mechanical_momentum_max_spread is not None
     ):
         config = replace(
             config,
@@ -502,6 +542,30 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO=env_spread_relief_max_spread
             if env_spread_relief_max_spread is not None
             else config.SCALP_LATENCY_SPREAD_RELIEF_MAX_SPREAD_RATIO,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=env_mechanical_momentum_enabled
+            if env_mechanical_momentum_enabled is not None
+            else config.SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_TAGS=env_mechanical_momentum_tags
+            if env_mechanical_momentum_tags is not None
+            else config.SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_TAGS,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_SIGNAL_SCORE=env_mechanical_momentum_max_signal
+            if env_mechanical_momentum_max_signal is not None
+            else config.SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_SIGNAL_SCORE,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MIN_STRENGTH=env_mechanical_momentum_min_strength
+            if env_mechanical_momentum_min_strength is not None
+            else config.SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MIN_STRENGTH,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MIN_BUY_PRESSURE=env_mechanical_momentum_min_buy_pressure
+            if env_mechanical_momentum_min_buy_pressure is not None
+            else config.SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MIN_BUY_PRESSURE,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_WS_AGE_MS=env_mechanical_momentum_max_ws_age
+            if env_mechanical_momentum_max_ws_age is not None
+            else config.SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_WS_AGE_MS,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_WS_JITTER_MS=env_mechanical_momentum_max_ws_jitter
+            if env_mechanical_momentum_max_ws_jitter is not None
+            else config.SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_WS_JITTER_MS,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_SPREAD_RATIO=env_mechanical_momentum_max_spread
+            if env_mechanical_momentum_max_spread is not None
+            else config.SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_SPREAD_RATIO,
         )
 
     env_main_buy_recovery_enabled = _env_bool("KORSTOCKSCAN_MAIN_BUY_RECOVERY_CANARY_ENABLED")

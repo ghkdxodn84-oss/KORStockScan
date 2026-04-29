@@ -995,6 +995,122 @@ def test_latency_signal_quality_quote_composite_backup_blocks_weak_buy_pressure(
     assert result["decision"] == "REJECT_DANGER"
 
 
+def test_latency_mechanical_momentum_relief_overrides_low_ai_score_quote_family(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=True,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_TAGS=("SCANNER",),
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_SIGNAL_SCORE=75.0,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MIN_STRENGTH=110.0,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MIN_BUY_PRESSURE=50.0,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_WS_AGE_MS=1200,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_WS_JITTER_MS=500,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_SPREAD_RATIO=0.0085,
+        ),
+    )
+    monkeypatch.setattr(entry_latency_module._CACHE, "update", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        entry_latency_module._CACHE,
+        "get_quote_health",
+        lambda code: SimpleNamespace(
+            ws_age_ms=204,
+            ws_jitter_ms=383,
+            quote_stale=False,
+            spread_ratio=0.0080,
+        ),
+    )
+
+    stock = {"name": "TEST", "position_tag": "SCANNER"}
+    result = evaluate_live_buy_entry(
+        stock=stock,
+        code="123456_mechanical_momentum_quote_pass",
+        ws_data={
+            "curr": 10_020,
+            "v_pw": 119.0,
+            "buy_ratio": 54.2,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_030, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=2,
+        signal_price=10_000,
+        signal_strength=0.50,
+    )
+
+    assert result["latency_state"] == "DANGER"
+    assert result["latency_canary_applied"] is True
+    assert result["latency_canary_reason"] == "mechanical_momentum_relief_canary_applied"
+    assert result["allowed"] is True
+    assert result["decision"] == "ALLOW_NORMAL"
+    assert result["reason"] == "latency_mechanical_momentum_relief_normal_override"
+
+
+def test_latency_mechanical_momentum_relief_blocks_high_ai_score_to_avoid_axis_overlap(monkeypatch):
+    monkeypatch.setattr(
+        entry_latency_module,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALP_LATENCY_QUOTE_FRESH_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=True,
+            SCALP_LATENCY_SPREAD_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_WS_JITTER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_OTHER_DANGER_RELIEF_CANARY_ENABLED=False,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_TAGS=("SCANNER",),
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_SIGNAL_SCORE=75.0,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MIN_STRENGTH=110.0,
+            SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MIN_BUY_PRESSURE=50.0,
+        ),
+    )
+    monkeypatch.setattr(entry_latency_module._CACHE, "update", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        entry_latency_module._CACHE,
+        "get_quote_health",
+        lambda code: SimpleNamespace(
+            ws_age_ms=204,
+            ws_jitter_ms=383,
+            quote_stale=False,
+            spread_ratio=0.0080,
+        ),
+    )
+
+    stock = {"name": "TEST", "position_tag": "SCANNER"}
+    result = evaluate_live_buy_entry(
+        stock=stock,
+        code="123456_mechanical_momentum_high_ai_block",
+        ws_data={
+            "curr": 10_020,
+            "v_pw": 119.0,
+            "buy_ratio": 54.2,
+            "last_ws_update_ts": datetime.now(UTC).timestamp(),
+            "orderbook": {
+                "asks": [{"price": 10_030, "volume": 100}],
+                "bids": [{"price": 10_020, "volume": 100}],
+            },
+        },
+        strategy_id="SCALPING",
+        planned_qty=2,
+        signal_price=10_000,
+        signal_strength=0.90,
+    )
+
+    assert result["latency_canary_applied"] is False
+    assert result["latency_canary_reason"] == "signal_not_mechanical"
+    assert result["decision"] == "REJECT_DANGER"
+
+
 def test_latency_danger_reasons_are_allowlist_controllable(monkeypatch):
     monkeypatch.setattr(
         entry_latency_module,

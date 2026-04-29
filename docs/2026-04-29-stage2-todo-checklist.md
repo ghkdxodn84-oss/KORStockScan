@@ -15,7 +15,7 @@
 - live 변경은 동일 단계 내 `1축 canary`만 허용한다. 진입병목축과 보유/청산축은 별개 단계이므로 병렬 canary가 가능하지만, 같은 단계 안에서는 canary 중복을 금지한다.
 - 동일 단계 replacement는 `기존 축 OFF -> restart.flag -> 새 축 ON` 순서만 쓴다.
 - 손익은 `COMPLETED + valid profit_rate`만 사용하고 `full fill`과 `partial fill`은 분리한다.
-- `latency_signal_quality_quote_composite`는 `ShadowDiff` 재검증 전에는 auto-ON 하지 않는다. 단, `2026-04-29 12:21 KST` 사용자 운영 override로 제출 drought 지속 방치가 불허돼 same-day 1축 replacement로 ON 했다. 이후 판정은 hard baseline이 아니라 post-restart cohort 기준으로 분리한다.
+- `latency_signal_quality_quote_composite`는 `ShadowDiff` 재검증 전에는 auto-ON 하지 않는다. 단, `2026-04-29 12:21 KST` 사용자 운영 override로 제출 drought 지속 방치가 불허돼 same-day 1축 replacement로 ON 했다가, `12:50 KST` post-restart 효과 미약으로 OFF 했다. 현재 entry live 축은 `mechanical_momentum_latency_relief` 운영 override 1축이며, 이후 판정은 hard baseline이 아니라 post-restart cohort 기준으로 분리한다.
 - EC2 인스턴스 상향 직후 하루는 `QuoteFresh`, `latency_state_danger`, `gatekeeper_eval_ms_p95`를 전략 개선이 아니라 `infra basis shift` 후보로 먼저 본다.
 - `soft_stop_micro_grace_extend`는 `씨아이에스(222080)` post-sell 평가 확인 전에는 승인하지 않는다.
 - 전일 post-sell evaluation 존재 여부만 확인하면 되는 항목은 장후로 넘기지 않고 PREOPEN에서 먼저 닫는다. evaluation이 없으면 `candidate 존재`, `evaluation 생성 경로`, `막힌 원인`을 남긴 뒤에만 장중/장후로 이관한다.
@@ -164,12 +164,33 @@
     - [2026-04-28-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-28-stage2-todo-checklist.md:370)
   - 다음 액션: 다음 구현 change set에서는 `post_sell/snapshot` 스키마 보강만 올리고, `follow-through failure` live 후보 재판정은 표본 `20건` 도달 전까지 열지 않는다.
 
-- [ ] `[SignalQualityQuoteComposite0429-PostRestart] latency_signal_quality_quote_composite 운영 override 후 post-restart cohort 1차 점검` (`Due: 2026-04-29`, `Slot: INTRADAY`, `TimeWindow: 13:05~13:25`, `Track: ScalpingLogic`)
+- [x] `[SignalQualityQuoteComposite0429-PostRestart] latency_signal_quality_quote_composite 운영 override 후 post-restart cohort 1차 점검` (`Due: 2026-04-29`, `Slot: INTRADAY`, `TimeWindow: 13:05~13:25`, `Track: ScalpingLogic`)
   - Source: [2026-04-29-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-29-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
   - 판정 기준: `restart.flag` 이후 새 PID 기준 `SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=True` 로드 여부, `latency_signal_quality_quote_composite_normal_override`, `signal_quality_quote_composite_canary_applied`, `submitted`, `full_fill`, `partial_fill`, `COMPLETED + valid profit_rate`, `fallback_regression=0`를 확인한다.
   - why: 이번 ON은 hard baseline 승격이 아니라 사용자 운영 override다. 따라서 기존 `h1200` baseline과 합치지 말고 post-restart cohort만 분리해 기대값/거래수 회복 여부를 봐야 한다.
+  - 실행 메모 (`2026-04-29 12:45~12:50 KST`): `12:21:28~12:45:59` post-restart cohort raw 기준 `budget_pass=972`, `latency_block=972`, `submitted=0`이었다. `latency_block` 사유는 `latency_state_danger=846`, `latency_fallback_deprecated=126`이고, canary 사유는 `low_signal=770`, `quote_stale=76`으로 `signal_quality_quote_composite` 통과 후보가 0건이었다.
+  - 판정 결과: `완료 / 효과 미약, 운영 override 종료`
+  - 근거: 이 축은 `signal>=90` 전제라 AI score 50/70 mechanical fallback 상태의 대량 `budget_pass`를 열 수 없다. 실제 post-restart 후보도 0건이므로 제출 drought를 풀 가능성이 낮다. 사용자 운영판정에 따라 동일 entry 단계 복합축을 모두 닫고 새 1축으로 교체한다.
   - rollback guard: post-restart `budget_pass >= 150`인데 `submitted <= 2`면 효과 미약으로 장후 rollback 검토를 연다. `fallback_regression > 0`, `normal_slippage_exceeded` 반복, 또는 canary cohort 일간 합산 손익이 당일 스캘핑 배정 NAV 대비 `<= -0.35%`이면 즉시 OFF 후보로 본다.
-  - 다음 액션: 13:25까지 표본이 부족하면 장후 같은 항목에 `표본 부족`, `막힌 원인`, `다음 판정시각`을 남긴다.
+  - 테스트/검증:
+    - `PYTHONPATH=. .venv/bin/python` raw 집계로 `12:21:28~12:45:59` `budget_pass/submitted/latency_block/canary_reason` 확인
+    - `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_entry_latency.py -k "signal_quality_quote_composite"`
+  - 다음 액션: `latency_signal_quality_quote_composite`를 OFF하고 `mechanical_momentum_latency_relief`를 ON한 뒤 restart provenance와 새 cohort를 분리한다.
+
+- [x] `[MechanicalMomentumLatencyRelief0429-Now] mechanical_momentum_latency_relief 운영 override 즉시 ON` (`Due: 2026-04-29`, `Slot: INTRADAY`, `TimeWindow: 12:50~13:05`, `Track: ScalpingLogic`)
+  - Source: [2026-04-29-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-29-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - 판정 기준: 동일 entry 단계의 기존 복합축 `latency_quote_fresh_composite=False`, `latency_signal_quality_quote_composite=False`를 확인하고 `SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=True`로 새 1축만 켠다. 조건은 `signal_score<=75`, `latest_strength>=110`, `buy_pressure_10t>=50`, `quote_stale=False`, `ws_age<=1200ms`, `ws_jitter<=500ms`, `spread<=0.0085`다.
+  - why: post-restart `latency_signal_quality_quote_composite`는 `budget_pass=972`에서도 후보 0건이라 운영상 제출 회복 가능성이 낮다. 반면 같은 창 counterfactual로 `mechanical_momentum_latency_relief` 후보는 약 91건이며, AI score 50/70 mechanical fallback 상태라도 수급/강도와 quote freshness가 맞는 후보만 제한적으로 연다.
+  - 판정 결과: `완료 / 운영 override로 ON 승인`
+  - 실행 메모 (`2026-04-29 12:50 KST`): [src/utils/constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:182) 기준 `SCALP_LATENCY_SIGNAL_QUALITY_QUOTE_COMPOSITE_CANARY_ENABLED=False`, `SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=True`로 교체했다. [src/engine/sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/engine/sniper_entry_latency.py:365)에 새 canary 조건과 `latency_mechanical_momentum_relief_normal_override` 경로를 추가했다.
+  - 실행 메모 (`2026-04-29 12:57 KST`): `restart.flag`를 생성해 우아한 재시작을 수행했다. `restart.flag`는 소모됐고 main PID는 `30566 -> 35539`, 새 PID 시작시각은 `2026-04-29 12:57:02 KST`였다. `logs/bot_history.log`에는 `12:57:14 KST` 웹소켓 연결/로그인/조건식 초기화 로그가 남았다.
+  - rollback guard: 새 restart 이후 `budget_pass >= 150`인데 `submitted <= 2`면 효과 미약으로 장후 rollback 검토를 연다. `pre_submit_price_guard_block_rate > 2.0%`, `fallback_regression > 0`, `normal_slippage_exceeded` 반복, 또는 canary cohort 일간 합산 손익이 당일 스캘핑 배정 NAV 대비 `<= -0.35%`이면 즉시 OFF 후보로 본다.
+  - 테스트/검증:
+    - `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_entry_latency.py -k "mechanical_momentum or signal_quality_quote_composite"`
+    - `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_sniper_entry_latency.py src/tests/test_sniper_scale_in.py` -> `102 passed`
+    - `PYTHONPATH=. .venv/bin/python` import check로 `quote_fresh=False`, `signal_quality=False`, `mechanical_momentum=True` 확인
+    - `PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500` -> parser count `46`, `2026-04-29` checklist task `11`, `2026-04-30` checklist task `5`
+  - 다음 액션: 이후 cohort에서는 `mechanical_momentum_relief_canary_applied`, `latency_mechanical_momentum_relief_normal_override`, `submitted/full/partial`, `COMPLETED + valid profit_rate`, `fallback_regression=0`를 분리한다.
 
 - [ ] `[GeminiEngineCarry0429-1305] Gemini P1/P2 live 승인 전제와 schema 매트릭스 carry-over 판정` (`Due: 2026-04-29`, `Slot: INTRADAY`, `TimeWindow: 13:05~13:20`, `Track: ScalpingLogic`)
   - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_gemini_engine_review.md), [2026-04-28-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-28-stage2-todo-checklist.md)
@@ -258,18 +279,6 @@
   - 근거: 현재 코드상 `normal_defensive_order_price=50400` 산출 후 `target_buy_price=48800`이 `min(defensive_order_price, target_buy_price)`로 최종 주문가를 낮춘다. `best_bid=50500` 대비 하향 괴리는 약 `337bps`로, 유동성 부족보다 가격결정 권한 충돌이 미체결의 직접 원인이다.
   - 다음 액션: P0는 `pre-submit sanity guard + pipeline_events 가격 스냅샷 분리`로 즉시 보강한다. P1 `strategy-aware resolver/SCALPING timeout table`과 P2 `microstructure-adaptive band/reprice loop`는 별도 승인축으로 이관한다.
   - 테스트/검증: `src/tests/test_sniper_entry_latency.py`, `src/tests/test_sniper_scale_in.py`에 대한전선형 cap/guard 케이스를 추가한다.
-
-- [ ] `[DynamicEntryPriceP0Guard0430-Preopen] pre-submit price guard + price snapshot split 구현/검증` (`Due: 2026-04-30`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:55`, `Track: ScalpingLogic`)
-  - Source: [2026-04-29-daehan-cable-entry-price-audit-rereport.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-29-daehan-cable-entry-price-audit-rereport.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
-  - 판정 기준: main bot restart provenance를 확인하고, `SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED=True`, `SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS=80` 로드 여부와 `latency_pass/order_leg_request/order_bundle_submitted/pre_submit_price_guard_block` 가격 스냅샷 필드 기록 여부를 확인한다.
-  - why: 대한전선 케이스는 신규 alpha canary가 아니라 비정상 저가 제출을 막는 안전가드와 감리 추적성 보강이다. PREOPEN에서는 same-day submitted/fill 성과가 아니라 코드 로드, restart, 이벤트 필드 기록 가능성만 확인한다.
-  - 다음 액션: 장전 로드가 확인되면 장중에는 `pre_submit_price_guard_block` 발생 여부와 `submitted_order_price`, `best_bid_at_submit`, `price_below_bid_bps`, `resolution_reason` 품질만 관찰한다. 로드 실패 시 P0 guard를 OFF한 채로 두지 말고 restart/provenance 원인을 우선 수정한다.
-
-- [ ] `[DynamicEntryPriceP0Guard0430-Postclose] P0 guard KPI/rollback 1차 점검` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 16:00~16:20`, `Track: ScalpingLogic`)
-  - Source: [2026-04-29-daehan-cable-entry-price-audit-rereport.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-29-daehan-cable-entry-price-audit-rereport.md), [2026-04-29-daehan-cable-entry-price-audit-followup.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-29-daehan-cable-entry-price-audit-followup.md)
-  - 판정 기준: same-day `pre_submit_price_guard_block_rate`, 전략별 제출 시도 수, `(best_bid - submitted_price)/best_bid` 분포 `p99`, `block 없이 통과한 deep bid` 재발 여부를 확인한다. 일간 차단율 `>0.5%`면 review trigger, `>2.0%`면 rollback 또는 threshold 완화 검토, `=0%`면 가드 비활성/로깅 누락 점검으로 닫는다.
-  - why: P0는 가드를 켰다는 사실만으로 충분하지 않다. 운영 기준에서는 가드가 `너무 많이 막는지`, `아예 안 막는지`, `본 사고 유형을 실제로 막았는지`를 day-1부터 같이 봐야 한다.
-  - 다음 액션: 차단율이 과도하면 `80bps` 임계를 provisional 값으로 재조정하고, 무차단 재발이 있으면 임계 강화 또는 resolver 우선 구현 검토로 승격한다. 전략별 표본이 부족하면 `2026-05-05` 분포 부록 항목과 연결해 rolling 7d 기준으로 재판정한다.
 
 - [ ] `[SoftStopDuksan0429-Postclose] 덕산하이메탈(077360) soft stop post-sell 라벨 및 micro grace 품질 판정` (`Due: 2026-04-29`, `Slot: POSTCLOSE`, `TimeWindow: 19:15~19:30`, `Track: Plan`)
   - Source: [2026-04-29-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-29-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
