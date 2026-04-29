@@ -7,6 +7,7 @@
 - OpenAI 엔진에 Gemini parity 범위의 schema registry 개선과 Responses API transport 추상화가 반영되었다.
 - phase 1 범위의 Responses WebSocket 후보 경로는 `analyze_target`, `analyze_target_shadow_prompt`, `evaluate_condition_entry`, `evaluate_condition_exit`로 제한되며, `realtime_report`, `gatekeeper`, `overnight`, `scanner_report`, `EOD` 텍스트 경로는 HTTP 유지로 분리되었다.
 - 운영 기본값은 여전히 `OPENAI_TRANSPORT_MODE=http`, `OPENAI_RESPONSES_WS_ENABLED=False`로 닫혀 있어 same-day live behavior 변경은 없다.
+- 리뷰 보완으로 WS `request_id` mismatch와 late response는 HTTP fallback으로 재해석하지 않고 fail-closed로 닫도록 수정했다.
 
 ## 2. 변경 범위
 
@@ -95,14 +96,17 @@
 - OpenAI schema registry wiring 스모크 통과
 - WS -> HTTP fallback 스모크 통과
 - buy-side timeout reject 스모크 통과
+- WS `request_id` mismatch fail-closed 회귀 테스트 통과
 - checklist parser 검증 통과
 - env override 스모크 통과
+- 로컬 SDK 확인: `openai==2.29.0`, `OpenAI().responses.connect(...).enter()` 경로 존재, `ResponsesConnection.send(event)`는 flat `response.create` event를 받는다.
 
 검증에 사용한 대표 확인값:
 
 - schema mock 응답 fallback extractor 확인: `BUY True json_object`
 - WS fallback meta 확인: `BUY True http`
 - buy-side timeout reject 확인: `DROP 0 True`
+- WS request_id mismatch 확인: `DROP responses_ws OpenAIWSRequestIdMismatchError`
 - env override 확인: `responses_ws True 4`
 
 ## 5. 테스트 상태
@@ -116,11 +120,14 @@
   - buy-side timeout reject
   - WS worker round-robin
   - WS -> HTTP fallback
+  - WS `request_id` mismatch fail-closed
 
-제약:
+실행 결과:
 
-- `.venv`에 `pytest`가 없어 실제 `pytest` 실행은 이번 턴에 수행하지 못했다.
-- 확인 결과: `pytest_installed False`
+- `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_ai_engine_openai_transport.py`
+  - `7 passed, 1 warning`
+- `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_ai_engine_api_config.py src/tests/test_ai_engine_cache.py`
+  - `23 passed`
 
 ## 6. 잔여 리스크
 
@@ -128,14 +135,14 @@
   - 현재 구현은 `client.responses.connect()`를 우선 사용하지만, 내부 수신은 `_connection.recv(...)`를 사용한다.
   - SDK minor change 시 회귀 가능성이 있어 shadow-only 관측이 선행되어야 한다.
 - 실제 live 부하에서 queue wait / reconnect storm / parse_fail 분포는 아직 검증 전이다.
-- `pytest` 부재로 테스트 파일의 정식 회귀는 아직 CI 또는 서버 환경에서 다시 확인해야 한다.
+- `_call_openai_safe()`는 여전히 엔진 단위 `api_call_lock` 안에서 실행되므로 WS pool의 병렬성은 phase 1에서 latency provenance 확인용으로만 해석한다.
 
 ## 7. 추천 검토 순서
 
 1. `src/tests/test_ai_engine_openai_transport.py` 기준으로 schema/transport 계약 검토
 2. `src/engine/ai_engine_openai.py`의 `_call_openai_safe()`, `OpenAIResponseRequest`, `OpenAIResponsesWSPool` 구현 검토
 3. `docs/2026-05-04-stage2-todo-checklist.md`의 shadow pass/fail 기준 검토
-4. 서버 환경에서 `pytest` 및 shadow 관측값 확인 후 main 병합 여부 결정
+4. 서버 환경에서 shadow 관측값 확인 후 live flag 전환 여부 결정
 
 ## 8. 다음 액션
 
@@ -145,4 +152,5 @@
   - `http fallback<=2%`
   - `parse_fail<=0.5%`
   - HTTP baseline 대비 roundtrip 개선 여부
-- main 병합 전에는 `pytest` 가능한 환경에서 `src/tests/test_ai_engine_openai_transport.py`와 기존 OpenAI audit/config 테스트를 함께 재실행하는 것을 권장한다.
+- `request_id mismatch` 또는 `late_discard`가 1건이라도 발생하면 HTTP fallback 성과와 무관하게 live 전환을 금지한다.
+- WS pool 병렬성은 `api_call_lock` 분리 전까지 alpha 판단이 아니라 provenance/roundtrip 관측값으로만 쓴다.

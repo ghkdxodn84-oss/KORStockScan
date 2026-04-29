@@ -1178,12 +1178,24 @@ class GPTSniperEngine:
                     )
                 except Exception as e:
                     remaining = request.remaining_timeout_sec()
-                    self._record_ws_metric("openai_ws_http_fallback", 1)
                     if isinstance(e, TimeoutError):
                         self._record_ws_metric("openai_ws_timeout_reject", 1)
+                    transport_meta.update(
+                        {
+                            "openai_transport_mode": "responses_ws",
+                            "openai_ws_used": True,
+                            "openai_ws_http_fallback": False,
+                            "openai_ws_error_type": type(e).__name__,
+                        }
+                    )
+                    if isinstance(e, (OpenAIWSRequestIdMismatchError, OpenAIWSLateResponseError)):
+                        self._set_last_transport_meta(transport_meta)
+                        log_error(f"🚨 [OpenAI WS fail-closed] {context_name}: {e}")
+                        raise
                     if remaining <= 0.05:
                         self._set_last_transport_meta(transport_meta)
                         raise
+                    self._record_ws_metric("openai_ws_http_fallback", 1)
                     fallback_request = OpenAIResponseRequest(
                         prompt=request.prompt,
                         user_input=request.user_input,

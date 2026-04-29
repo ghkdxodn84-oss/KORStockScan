@@ -9,6 +9,7 @@ from src.engine.ai_engine_openai import (
     OpenAIResponseRequest,
     OpenAIResponsesWSPool,
     OpenAITransportResult,
+    OpenAIWSRequestIdMismatchError,
 )
 
 
@@ -320,3 +321,45 @@ def test_openai_call_falls_back_from_ws_to_http(monkeypatch):
     assert result["action"] == "BUY"
     assert meta["openai_ws_http_fallback"] is True
     assert meta["openai_transport_mode"] == "http"
+
+
+def test_openai_ws_request_id_mismatch_fails_closed_without_http_fallback(monkeypatch):
+    engine = _build_engine()
+
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_TRANSPORT_MODE="responses_ws",
+            OPENAI_RESPONSES_WS_ENABLED=True,
+            OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED=True,
+        ),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_responses_ws",
+        lambda request: (_ for _ in ()).throw(OpenAIWSRequestIdMismatchError("request_id mismatch")),
+    )
+
+    def _unexpected_http_fallback(request):
+        raise AssertionError("request_id mismatch must not be converted to HTTP fallback")
+
+    monkeypatch.setattr(engine, "_call_openai_responses_http", _unexpected_http_fallback)
+
+    result = engine.analyze_target(
+        "테스트",
+        _sample_ws_data(),
+        _sample_ticks(),
+        _sample_candles(),
+        strategy="SCALPING",
+        prompt_profile="watching",
+    )
+
+    assert result["action"] == "DROP"
+    assert result["score"] == 0
+    assert result["ai_parse_fail"] is True
+    assert result["openai_transport_mode"] == "responses_ws"
+    assert result["openai_ws_used"] is True
+    assert result["openai_ws_http_fallback"] is False
+    assert result["openai_ws_error_type"] == "OpenAIWSRequestIdMismatchError"
