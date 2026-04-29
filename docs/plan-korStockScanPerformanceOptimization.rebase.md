@@ -161,7 +161,7 @@
 | entry data-quality gate | `ShadowDiff0428` open | [2026-04-28 checklist](./2026-04-28-stage2-todo-checklist.md) `ShadowDiff0428` | submitted/full/partial mismatch가 닫혀야 hard pass/fail 가능 |
 | holding/exit live canary | `soft_stop_micro_grace` active | 날짜별 checklist + holding audit/report | stage-disjoint 예외로 entry 축과 병렬 존재 가능 |
 | holding/exit observation | `holding_exit_observation` 유지 | checklist + observation report | `soft_stop/trailing/same_symbol/EOD-NXT` 분해 입력 소유 |
-| runtime stabilization follow-up | `nan_cast_guard_followup` open | [2026-05-05 checklist](./2026-05-05-stage2-todo-checklist.md) `NaNCastGuard0505` | canary 아님. 메인 기준 최소 safe cast 범위와 upstream source 추적 계획만 잠금 |
+| runtime stabilization follow-up | `nan_cast_guard_followup` open | [2026-05-06 checklist](./2026-05-06-stage2-todo-checklist.md) `NaNCastGuard0506HolidayCarry` | canary 아님. `2026-05-05` 어린이날 휴장 이월 후 메인 기준 최소 safe cast 범위와 upstream source 추적 계획만 잠금 |
 | retired entry axes | `gatekeeper_fast_reuse`, `other_danger`, `ws_jitter`, `fallback/split-entry` closed | `execution-delta` + audit/report | historical-only. 재개는 새 workorder + rollback guard 필요 |
 
 ## 9. 델타/Q&A 라우팅

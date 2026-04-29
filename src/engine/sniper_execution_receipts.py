@@ -551,7 +551,7 @@ def _update_db_for_add(target_id, exec_price, exec_qty, now, target_stock, add_t
             _strategy_kr = {'SCALPING': '스캘핑', 'SWING': '스윙'}.get(
                 target_stock.get('strategy', ''), target_stock.get('strategy', ''))
             msg = (
-                f"📉 추가매수 체결\n"
+                f"➕ 추가매수 체결\n"
                 f"종목: {target_stock.get('name')} ({target_stock.get('code')})\n"
                 f"전략: {_strategy_kr} | 유형: {_type_kr}\n"
                 f"기존 평단가: {int(old_price):,}원 → 체결가: {int(exec_price):,}원\n"

@@ -29,6 +29,7 @@
 9. 소스는 항상 GitHub, 캘린더는 표시/알림 레이어
 10. 휴장일에는 `PREOPEN/POSTCLOSE`의 `TimeWindow`와 제목 명시시간도 무시하고 `INTRADAY` 기준으로 재매핑한다
 11. 즉 휴장일 운영큐는 사실상 `INTRADAY` 단일 시간축으로 본다
+12. 단, KRX 휴장일이 사전에 확인된 경우에는 새 실전 작업의 `Due`를 휴장일에 두지 않고 다음 KRX 운영일로 보정한다. 예: `2026-05-01` 근로자의 날은 `2026-05-04`, `2026-05-05` 어린이날은 `2026-05-06`로 이관한다.
 
 문서 backlog 반영 동작:
 
@@ -70,6 +71,7 @@
 1. 지금 즉시 처리하지 않는 작업, 특정 시각에 실행할 작업, 익일/장후 재확인 작업은 답변 텍스트에만 남기지 않고 반드시 문서 backlog 항목으로 남긴다.
 2. 시간 정보가 있으면 `Due`, `Slot`, `TimeWindow`까지 함께 잡아 `Project -> Calendar` 자동화 대상이 되게 유지한다.
 3. env/권한이 있는 세션에서는 문서 수정 후 같은 턴에 `sync_docs_backlog_to_project`와 가능하면 `sync_github_project_calendar`까지 이어서 실행한다.
+4. same-day late INTRADAY 항목은 운영상 `Build Codex Daily Workorder`를 `workflow_dispatch(slot=ALL, target_date=오늘)`로 수동 재실행해도 된다. 이 수동 경로에서 누락이 재현되면 `자동 스케줄 부족`만으로 닫지 말고 `target_date/ref/branch 기준 생성본`과 workflow summary를 같이 확인한다.
 
 ---
 
@@ -231,7 +233,7 @@ Codex 일일 작업지시서 자동 생성:
 1. 워크플로우 `Build Codex Daily Workorder`를 수동 실행(`workflow_dispatch`)하거나
    슬롯별 스케줄 자동 실행 사용
    - `PREOPEN`: `20 23 * * *` (KST 08:20)
-   - `INTRADAY`: `0 1,4 * * *` (KST 10:00, 13:00)
+   - `INTRADAY`: `0 1,4 * * *`, `20 5 * * *` (KST 10:00, 13:00, 14:20)
    - `POSTCLOSE`: `40 6 * * *` (KST 15:40)
 2. 수동 실행 시 `target_date`를 비우면 KST 오늘 기준으로 생성하고, 필요하면 `YYYY-MM-DD`로 날짜를 직접 고정한다
 3. `include_overdue=true`가 기본이며, target date 이전 미완료 항목까지 함께 포함한다
@@ -241,12 +243,14 @@ Codex 일일 작업지시서 자동 생성:
    - 본문에는 `Source`, `Section`, `Project Item ID`가 함께 포함돼 바로 Codex 지시문으로 사용할 수 있다
 7. 복사한 본문을 Codex 대화에 붙여 실행 지시
 8. 수동 실행 시 `slot`, `target_date`, `include_overdue` 입력을 함께 사용할 수 있다.
+9. `13:00 KST` 이후 same-day `INTRADAY` 항목을 새로 sync한 경우, 자동 생성본 반영은 `14:20 KST` rerun 또는 수동 `workflow_dispatch(slot=INTRADAY)` 이후에 보인다.
 
 슬롯 운영 원칙:
 
 1. Project 항목 생성 시 `Slot`을 반드시 지정한다.
 2. 슬롯이 비어있는 항목은 슬롯 자동 작업지시서에 포함되지 않는다.
 3. 휴장일에는 문서상 원래 슬롯과 무관하게 실행 큐는 `INTRADAY`로 본다.
+4. 사전 인지된 휴장일은 작업지시서에서 재분류하기보다 날짜별 checklist 단계에서 다음 운영일로 이동시키는 것을 우선한다.
 
 ---
 

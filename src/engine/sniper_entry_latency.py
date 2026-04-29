@@ -47,6 +47,28 @@ def _best_ask_bid_from_ws(ws_data: dict[str, Any] | None) -> tuple[int, int]:
     return best_ask, best_bid
 
 
+def _compute_price_below_bid_bps(price: int, best_bid: int) -> int:
+    try:
+        normalized_price = int(price or 0)
+        normalized_best_bid = int(best_bid or 0)
+    except Exception:
+        return 0
+    if normalized_price <= 0 or normalized_best_bid <= 0 or normalized_price >= normalized_best_bid:
+        return 0
+    return int(round(((normalized_best_bid - normalized_price) / normalized_best_bid) * 10000))
+
+
+def _can_apply_target_buy_price_cap(*, target_buy_price: int, best_bid: int) -> bool:
+    if target_buy_price <= 0:
+        return False
+    if not bool(getattr(TRADING_RULES, "SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED", True)):
+        return True
+    max_below_bid_bps = int(
+        getattr(TRADING_RULES, "SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS", 80) or 80
+    )
+    return _compute_price_below_bid_bps(target_buy_price, best_bid) <= max_below_bid_bps
+
+
 def _to_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(str(value).replace(",", "").replace("+", "").strip())
@@ -944,8 +966,9 @@ def evaluate_live_buy_entry(
         order_price = int(defensive_order.price)
         if int(target_buy_price or 0) > 0:
             target_cap = int(target_buy_price)
-            order_price = min(order_price, target_cap)
             counterfactual_order_price_1tick = min(counterfactual_order_price_1tick, target_cap)
+            if _can_apply_target_buy_price_cap(target_buy_price=target_cap, best_bid=best_bid):
+                order_price = min(order_price, target_cap)
         result["allowed"] = True
         result["mode"] = "normal"
         result["order_price"] = order_price

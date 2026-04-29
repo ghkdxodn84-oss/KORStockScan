@@ -4,6 +4,7 @@
 
 - `pre-submit price guard`와 `price snapshot split`이 장전 restart 후 메인 런타임에 정상 로드됐는지 닫는다.
 - `mechanical_momentum_latency_relief` 운영 override가 전일 장중 반영된 상태라면 장전에는 코드/런타임 provenance만 확인하고, 실전 성과는 장중 post-restart cohort로 분리한다.
+- 이번주 다음 운영일은 `2026-05-01`이 아니라 `2026-05-04`다. KRX는 근로자의 날(5/1) 휴장이고, `2026-05-05` 어린이날도 휴장이므로 다음주 휴장 이월 항목은 `2026-05-06` checklist가 소유한다.
 - 대한전선 진입가 후속조치는 신규 alpha 진입축이 아니라 비정상 저가 제출 차단과 감리 추적성 보강으로만 해석한다.
 - `P0` 가드의 day-1 KPI와 rollback trigger를 장후 바로 잠가, 임의 임계값 고착을 막는다.
 - `P1 resolver`와 `schema split`은 same-day live 확장이 아니라 observe/backtest ingress 조건 확정으로만 넘긴다.
@@ -46,16 +47,82 @@
   - why: 이 축은 거래수 회복을 위한 운영 override라 오전 1시간 안에 최소 방향성은 나와야 한다. `submitted`가 움직이지 않으면 같은 날 추가 유지 근거가 약하다.
   - 다음 액션: 제출 회복이 있으면 12시 full 창으로 유지판정하고, `budget_pass >= 150`인데 `submitted <= 2`면 장중 OFF/다음축 재분해를 연다.
 
-## 장후 체크리스트 (16:00~16:35)
+## 장후 체크리스트 (16:00~19:40)
 
 - [ ] `[DynamicEntryPriceP0Guard0430-Postclose] P0 guard KPI/rollback 1차 점검` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 16:00~16:20`, `Track: ScalpingLogic`)
   - Source: [2026-04-29-daehan-cable-entry-price-audit-rereport.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-29-daehan-cable-entry-price-audit-rereport.md), [2026-04-29-daehan-cable-entry-price-audit-followup.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-29-daehan-cable-entry-price-audit-followup.md)
   - 판정 기준: same-day `pre_submit_price_guard_block_rate`, 전략별 제출 시도 수, `(best_bid - submitted_price)/best_bid` 분포 `p99`, `block 없이 통과한 deep bid` 재발 여부를 확인한다. 일간 차단율 `>0.5%`면 review trigger, `>2.0%`면 rollback 또는 threshold 완화 검토, `=0%`면 가드 비활성/로깅 누락 점검으로 닫는다.
   - why: P0는 가드를 켰다는 사실만으로 충분하지 않다. 운영 기준에서는 가드가 `너무 많이 막는지`, `아예 안 막는지`, `본 사고 유형을 실제로 막았는지`를 day-1부터 같이 봐야 한다.
-  - 다음 액션: 차단율이 과도하면 `80bps` 임계를 provisional 값으로 재조정하고, 무차단 재발이 있으면 임계 강화 또는 resolver 우선 구현 검토로 승격한다. 전략별 표본이 부족하면 `2026-05-05` 분포 부록 항목과 연결해 rolling 7d 기준으로 재판정한다.
+  - 다음 액션: 차단율이 과도하면 `80bps` 임계를 provisional 값으로 재조정하고, 무차단 재발이 있으면 임계 강화 또는 resolver 우선 구현 검토로 승격한다. 전략별 표본이 부족하면 `2026-05-06` 분포 부록 항목과 연결해 rolling 7d 기준으로 재판정한다.
 
 - [ ] `[CodeDebt0430] shadow/canary/cohort 런타임 분류/정리 판정` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 16:20~16:35`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
   - 판정 기준: 대한전선 후속조치와 `pre-submit price guard`를 기준으로 `remove`, `observe-only`, `baseline-promote`, `active-canary` 중 변동이 필요한 항목이 있는지 닫고, entry price 후속 검증에 쓰는 cohort도 `baseline cohort / candidate live cohort / observe-only cohort / excluded cohort / rollback owner / cross-contamination check`로 잠근다.
   - why: 이번 P0는 신규 alpha canary가 아니라 BUY 제출 안전가드다. cohort 분류를 문서와 같이 잠가야 `P0 guard`, `P1 resolver`, `P2 microstructure`가 서로 섞이지 않는다.
   - 다음 액션: 상태 변경이 있으면 checklist와 관련 기준문서에 함께 반영하고, 변경이 없으면 `변동 없음`과 근거를 남긴다.
+
+- [ ] `[GeminiSchemaIngress0430] Gemini flag-off schema registry 로드/contract 관찰` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 16:35~16:55`, `Track: ScalpingLogic`)
+  - Source: [2026-04-29-gemini-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/2026-04-29-gemini-enable-acceptance-spec.md), [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_gemini_engine_review.md)
+  - 판정 기준: `GEMINI_RESPONSE_SCHEMA_REGISTRY_ENABLED=False` 기본값 유지, 6개 endpoint `schema_name` 연결 유지, `json.loads -> regex fallback` 회귀 없음, `test_ai_engine_api_config/test_ai_engine_cache` 통과 여부를 확인한다. `GEMINI_SYSTEM_INSTRUCTION_JSON_ENABLED`, `GEMINI_JSON_DETERMINISTIC_CONFIG_ENABLED`, `GEMINI_RESPONSE_SCHEMA_REGISTRY_ENABLED` live enable은 이 항목에서 켜지 않는다.
+  - why: `main` Gemini는 실전 기준 엔진이라 오늘 반영한 묶음은 live enable이 아니라 flag-off load/contract 관찰 대상이다.
+  - 다음 액션: 로드와 테스트가 정상이고 parse_fail 증가 근거가 없으면 `flag-off 유지 / 관찰 완료`로 닫는다. live enable 검토는 별도 canary 항목을 새로 만들어야 한다.
+
+- [ ] `[DeepSeekRemoteAcceptance0430] DeepSeek retry acceptance log field 관찰` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 16:55~17:15`, `Track: Plan`)
+  - Source: [2026-04-29-deepseek-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/2026-04-29-deepseek-enable-acceptance-spec.md), [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_deepseek_engine_review.md)
+  - 판정 기준: `DEEPSEEK_CONTEXT_AWARE_BACKOFF_ENABLED=False` 기본값 유지, retry 발생 시 `retry_acceptance={context_aware_backoff_enabled, live_sensitive, max_sleep_sec, lock_scope}` 로그 필드가 남는지 확인한다. gatekeeper structured-output은 여전히 `flag-off + text fallback + contract test` 없이는 구현 승격하지 않는다.
+  - why: DeepSeek는 `remote` 경로라 오늘 반영한 묶음은 enable이 아니라 retry acceptance 관찰성 보강이다.
+  - 다음 액션: 로그 필드가 확인되면 `flag-off 유지 / 관찰 완료`로 닫는다. retry 표본이 없으면 코드 로드와 테스트만 확인하고 다음 retry 발생 시 확인으로 이관한다.
+
+- [ ] `[GeminiSchemaContractCarry0430] Gemini schema contract 충돌 항목 최종 판정` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:35`, `Track: ScalpingLogic`)
+  - Source: [2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md](/home/ubuntu/KORStockScan/docs/2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md), [2026-04-29-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-29-stage2-todo-checklist.md)
+  - 판정 기준: `holding_exit_v1.action.enum`이 `HOLD/TRIM/EXIT`으로 정렬되고 `ai_engine.py:957` 정규화 경로와 충돌하지 않는지 확인한다. `eod_top5_v1` 필수 항목에 `rank`, `close_price`가 반영된 상태에서 `condition_*` 파싱 테스트가 무결한지, `test_ai_engine_api_config` 전체 통과를 확인한다.
+  - why(필수): 실전 enable 시 `holding_exit_v1` 값 미스매칭은 `action_v2` fallback 오인을 유발해 관측 실패를 만들 수 있다.
+  - 다음 액션: 정합성 확인 후 [2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md](/home/ubuntu/KORStockScan/docs/2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md) 기준 close 처리하고, 추적성 로그에서 동일 건(holding_exit/eod_top5)만 따로 추적해 잔차가 있는지 확인한다.
+
+- [ ] `[DeepSeekAcceptanceCarry0430] DeepSeek retry acceptance 단일 스냅샷 경로 점검` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 17:35~17:55`, `Track: Plan`)
+  - Source: [2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md](/home/ubuntu/KORStockScan/docs/2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md), [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_deepseek_engine_review.md)
+  - 판정 기준: `_build_retry_acceptance_snapshot()`과 `_call_deepseek_safe()`에서 `live_sensitive` 계산이 중복 없이 일관되게 유지되는지 확인하고, retry 외 경로의 노이즈 증분이 없는지 코드/테스트로 입증한다.
+  - why(권장): 현재는 저위험 정합성 개선이므로, 내일 장후 창에서 코드 정리 여유를 두고 패치 대기 가능하다.
+  - 다음 액션: 중복 계산이 제거되면 `flag-off acceptance` 목표 유지 상태로 코드 정리 PR을 한 번에 반영한다.
+
+- [ ] `[DeepSeekInterfaceGap0430] DeepSeek 공통 인터페이스 일치 점검` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 17:55~18:10`, `Track: Plan`)
+  - Source: [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_deepseek_engine_review.md), [2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md](/home/ubuntu/KORStockScan/docs/2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md)
+  - 판정 기준: `GeminiSniperEngine`에만 존재하는 `analyze_condition_target`, `evaluate_condition_gatekeeper`를 호출부 관점에서 점검해 DeepSeek에서 동일 호출 패턴이 필요한지, 필요 시 wrapper/adapter 없이 진행 중인 caller를 분리하는지 확인한다.
+  - why(권장): 인터페이스 차이는 즉시 장애보다 운영 관측 경로 혼재를 유발할 수 있으나, 현재는 증상성이 낮아 우선 순위 낮음.
+  - 다음 액션: 공통 caller에서 실제 동시 호출이 확인되면 다음 운영일인 `2026-05-04`로 follow-up 축으로 넘기고, 아니면 관찰-only로 종료한다.
+
+- [ ] `[TrailingContinuation0430] trailing continuation EV 재판정 및 candidate 승격 여부 확정` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 18:10~18:25`, `Track: Plan`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [2026-04-29-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-29-stage2-todo-checklist.md)
+  - 판정 기준: `제룡전기(033100)` trailing 익절, `덕산하이메탈(077360)` trailing 후 same-symbol reentry, 당일 `post_sell_evaluation` 생성 표본을 묶어 `GOOD_EXIT/MISSED_UPSIDE`, `same_symbol reentry`, `mfe_10m`, `peak-to-exit giveback`를 비교한다. 그 결과를 기준으로 `trailing_continuation_micro_canary`를 여전히 `2순위 candidate`로 둘지, `soft_stop_rebound_split` 다음 active 후보로 끌어올릴지 확정한다.
+  - why: Rebase에는 trailing EV 문제가 이미 포함돼 있지만, 현재는 observe/candidate 단계에 머물러 있다. `제룡전기`처럼 추가매수 후 소폭 이익 잠금이 나온 표본과 `덕산하이메탈`처럼 trailing 후 고가 재진입이 뒤따른 표본을 같이 봐야 과보수 여부를 단일 사례 오판 없이 닫을 수 있다.
+  - 다음 액션: `MISSED_UPSIDE + same_symbol reentry`가 반복되면 다음 운영일인 `2026-05-04` checklist에 trailing 전용 observe-only 또는 canary 준비항목을 올린다. 반대로 `GOOD_EXIT` 우세면 trailing은 2순위 candidate로 유지하고 soft stop 축을 계속 우선한다.
+
+- [ ] `[ExecutionReceiptBinding0430] WS 실제체결 order-binding 누락과 계좌동기화 의존도 점검` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 18:25~18:40`, `Track: RuntimeStability`)
+  - Source: [2026-04-29-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-29-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - 판정 기준: `ORDER_NOTICE_BOUND -> WS 실제체결 -> active order binding` 경로에서 `EXEC_IGNORED`가 왜 발생하는지 `BUY`/`SELL`를 분리해 재현 로그와 코드 조건을 대조하고, `BROKER_RECOVER`/`정기 동기화 COMPLETED 강제전환` 의존도를 계량화한다.
+  - why: `SK이노베이션(096770)`은 `2026-04-29 13:28:19 BUY`, `15:06:28 SELL` 모두 `WS 실제체결`이 들어왔는데 active order binding이 붙지 않아 `EXEC_IGNORED`로 빠졌고, 상태 복구를 `BROKER_RECOVER`와 `정기 계좌동기화`가 대신했다. 이 경로가 반복되면 보유/청산 판단보다 먼저 runtime truth 품질이 흔들린다.
+  - 다음 액션: 원인이 order number binding timing/race면 runtime fix 후보로, 단순 log visibility 문제면 observe-only로 분리한다. 결과에 따라 다음 운영일인 `2026-05-04` checklist에 patch 또는 관찰축을 올린다.
+
+- [ ] `[ShadowDiffSyntheticExclusion0430] historical shadow diff TEST synthetic row 제외 규칙 확정` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: ScalpingLogic`)
+  - Source: [2026-04-29-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-29-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - 판정 기준: `2026-04-27` historical mismatch의 주원인으로 확인된 `record_id=1 / TEST(123456)` synthetic `position_rebased_after_fill`를 비교 리포트에서 어떤 필터로 안정적으로 제외할지 규칙을 고정하고, raw/analytics/report 경로가 같은 exclusion rule을 쓰는지 확인한다.
+  - why: same-day 장후 판정으로 원인은 닫혔지만, exclusion rule이 문서/집계에 고정되지 않으면 이후 historical `submitted/full/partial` 비교가 다시 오염된다.
+  - 다음 액션: exclusion rule이 확정되면 다음 historical report부터 기본 적용하고, 미확정이면 observe-only 임시 필터라도 먼저 잠근다.
+
+- [ ] `[ReentryPriceEscalationSample0430] same-day reentry price escalation 표본 추가 수집` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 18:55~19:10`, `Track: ScalpingLogic`)
+  - Source: [2026-04-29-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-29-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - 판정 기준: `same record_id 기준 1차 submitted 후 미체결/만료 -> 2차 submitted 가격 상승` 케이스를 1일 더 누적해 표본이 `3건 이상` 되는지 확인하고, `덕산하이메탈(077360)` anchor case가 일반 패턴인지 개별 예외인지 닫는다.
+  - why: 2026-04-29는 `덕산하이메탈` 1건만 남아 일반화에 표본이 부족했다.
+  - 다음 액션: 표본이 3건 이상이면 observe-only 축으로 승격하고, 계속 1~2건이면 anchor case 유지로 끝낸다.
+
+- [ ] `[SoftStopReboundSplit0430] soft stop rebound/recovery recapture 표본으로 micro grace 후속축 재판정` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 19:10~19:25`, `Track: Plan`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [2026-04-29-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-29-stage2-todo-checklist.md)
+  - 판정 기준: `올릭스(226950) GOOD_EXIT`, `덕산하이메탈(077360) NEUTRAL + reentry escalation`, `지앤비에스 에코(382800) same-day 고가 재진입 체결 + 익절`, `코오롱(002020) soft stop 후 고가 재진입 제출`을 묶어 `rebound_above_sell`, `rebound_above_buy`, `mfe_10m`, `same_symbol_soft_stop_cooldown_would_block`, `recovery recapture`를 비교한다. 그 결과를 기준으로 `soft_stop_micro_grace` 유지, `soft_stop_micro_grace_extend` standby 유지, 또는 `recovery recapture` observe-only 라벨/로그 보강 중 하나를 닫는다.
+  - why: Rebase 기준 보유/청산 1순위는 여전히 `soft_stop_rebound_split`이며, 2026-04-29 표본은 `정당 컷`, `혼합형 rebound`, `same-day 회수형 recovery recapture`가 함께 나왔다. 지금 단계에서 바로 live 파라미터를 더 열면 원인귀속이 흐려지고, 반대로 이 표본을 독립 분해하지 않으면 EV 훼손 패턴을 놓칠 수 있다.
+  - 다음 액션: `MISSED_UPSIDE/recovery recapture`가 누적되면 다음 운영일인 `2026-05-04` checklist에 `observe-only label/log patch` 또는 `extend acceptance` 항목을 올린다. `GOOD_EXIT` 우세면 live 파라미터는 그대로 두고 `soft_stop_micro_grace`만 유지한다.
+
+- [ ] `[InitialQtyCap3Share0430-Postclose] 스캘핑 신규 BUY 3주 cap 전환 승인조건 판정` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 19:25~19:40`, `Track: ScalpingLogic`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [2026-04-29-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-29-stage2-todo-checklist.md)
+  - 판정 기준: 2주 cap cohort의 `initial_entry_qty_cap_applied`, `initial-only`, `pyramid-activated`, `ADD_BLOCKED reason=zero_qty`, `full_fill`, `partial_fill`, `soft_stop`, `COMPLETED + valid profit_rate`, `same-symbol reentry`, `order_failed`를 재집계한다. `3주 cap`은 `mechanical_momentum_latency_relief` entry canary와 같은 단계 live 변경이므로, 제출 회복과 P0 price guard가 안정적이고 soft stop tail이 악화되지 않은 경우에만 익일 이후 canary 후보로 본다.
+  - why: 2주 cap은 `buy_qty=1 -> pyramid zero_qty` 왜곡을 줄이는 임시 운영가드로 승인됐지만, 3주 확대는 exposure와 soft stop tail을 직접 키운다. submitted 회복이 관찰 중인 상태에서 수량축을 바로 올리면 entry 효과와 holding/exit 손실 tail 원인귀속이 섞인다.
+  - 다음 액션: 승인조건을 만족하면 다음 운영일인 `2026-05-04`에 `3주 cap canary` 항목을 새로 만들고, 미충족이면 `2주 cap 유지`로 닫는다. live 전환 방식은 `KORSTOCKSCAN_SCALPING_INITIAL_ENTRY_MAX_QTY=3` 또는 상수 변경 중 하나로 고정하되, 같은 날 다른 entry live 축과 병행하지 않는다.

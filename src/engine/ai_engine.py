@@ -25,6 +25,114 @@ from src.engine.macro_briefing_complete import build_scanner_data_input
 from src.engine.sniper_position_tags import normalize_position_tag
 
 
+GEMINI_RESPONSE_SCHEMA_REGISTRY = {
+    "entry_v1": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["BUY", "WAIT", "DROP"]},
+            "score": {"type": "integer"},
+            "reason": {"type": "string"},
+        },
+        "required": ["action", "score", "reason"],
+    },
+    "holding_exit_v1": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["HOLD", "TRIM", "EXIT"]},
+            "score": {"type": "integer"},
+            "reason": {"type": "string"},
+        },
+        "required": ["action", "score", "reason"],
+    },
+    "overnight_v1": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["SELL_TODAY", "HOLD_OVERNIGHT"]},
+            "confidence": {"type": "integer"},
+            "reason": {"type": "string"},
+            "risk_note": {"type": "string"},
+        },
+        "required": ["action", "confidence", "reason", "risk_note"],
+    },
+    "condition_entry_v1": {
+        "type": "object",
+        "properties": {
+            "decision": {"type": "string", "enum": ["BUY", "WAIT", "SKIP"]},
+            "confidence": {"type": "integer"},
+            "order_type": {"type": "string", "enum": ["MARKET", "LIMIT_TOP", "NONE"]},
+            "position_size_ratio": {"type": "number"},
+            "invalidation_price": {"type": "integer"},
+            "reasons": {"type": "array", "items": {"type": "string"}},
+            "risks": {"type": "array", "items": {"type": "string"}},
+        },
+        "required": [
+            "decision",
+            "confidence",
+            "order_type",
+            "position_size_ratio",
+            "invalidation_price",
+            "reasons",
+            "risks",
+        ],
+    },
+    "condition_exit_v1": {
+        "type": "object",
+        "properties": {
+            "decision": {"type": "string", "enum": ["HOLD", "TRIM", "EXIT"]},
+            "confidence": {"type": "integer"},
+            "trim_ratio": {"type": "number"},
+            "new_stop_price": {"type": "integer"},
+            "reason_primary": {"type": "string"},
+            "warning": {"type": "string"},
+        },
+        "required": [
+            "decision",
+            "confidence",
+            "trim_ratio",
+            "new_stop_price",
+            "reason_primary",
+            "warning",
+        ],
+    },
+    "eod_top5_v1": {
+        "type": "object",
+        "properties": {
+            "market_summary": {"type": "string"},
+            "one_point_lesson": {"type": "string"},
+            "top5": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "rank": {"type": "integer"},
+                        "stock_name": {"type": "string"},
+                        "stock_code": {"type": "string"},
+                        "close_price": {"type": "integer"},
+                        "reason": {"type": "string"},
+                        "entry_plan": {"type": "string"},
+                    "target_price_guide": {"type": "string"},
+                    "stop_price_guide": {"type": "string"},
+                    "confidence": {"type": "number"},
+                    },
+                    "required": ["rank", "stock_name", "stock_code", "close_price", "reason"],
+                },
+            },
+        },
+        "required": ["market_summary", "one_point_lesson", "top5"],
+    },
+}
+
+
+def _resolve_gemini_response_schema(schema_name):
+    normalized = str(schema_name or "").strip()
+    if not normalized:
+        return None
+    schema = GEMINI_RESPONSE_SCHEMA_REGISTRY.get(normalized)
+    if schema is None:
+        raise ValueError(f"Unknown Gemini response schema: {normalized}")
+    return schema
+
+
 # ==========================================
 # 1. 🎯 시스템 프롬프트 (스캘핑 전용 - V2.0 틱 가속도 반영)
 # ==========================================
@@ -1020,6 +1128,7 @@ class GeminiSniperEngine:
                 require_json=True,
                 context_name=f"{target_name}({prompt_type})",
                 model_override=self._get_tier1_model(),
+                schema_name="entry_v1",
             )
             self._cache_set(
                 "_analysis_cache",
@@ -1187,6 +1296,7 @@ class GeminiSniperEngine:
         context_name="Unknown",
         model_override=None,
         use_google_search=False,
+        schema_name=None,
     ):
         """키 로테이션, 예외 처리, 모델 덮어쓰기를 모두 전담하는 중앙 집중식 호출기"""
         use_system_instruction = bool(
@@ -1211,6 +1321,10 @@ class GeminiSniperEngine:
                     config_kwargs["top_p"] = float(top_p)
                 if top_k is not None:
                     config_kwargs["top_k"] = int(top_k)
+            if getattr(TRADING_RULES, "GEMINI_RESPONSE_SCHEMA_REGISTRY_ENABLED", False):
+                response_schema = _resolve_gemini_response_schema(schema_name)
+                if response_schema is not None:
+                    config_kwargs["response_schema"] = response_schema
 
         if use_google_search:
             config_kwargs["tools"] = [
@@ -1632,7 +1746,8 @@ class GeminiSniperEngine:
                 formatted_data,
                 require_json=True,
                 context_name=f"{target_name}({strategy}:{prompt_type})",
-                model_override=target_model
+                model_override=target_model,
+                schema_name="entry_v1" if prompt_type not in {"scalping_holding", "scalping_exit"} else "holding_exit_v1",
             )
 
             if strategy not in ["KOSPI_ML", "KOSDAQ_ML"]:
@@ -2022,7 +2137,8 @@ class GeminiSniperEngine:
                     user_input,
                     require_json=True,
                     context_name=f"SCALP_OVERNIGHT:{stock_name}",
-                    model_override=self._get_tier2_model()
+                    model_override=self._get_tier2_model(),
+                    schema_name="overnight_v1",
                 )
                 action = str(result.get('action', 'SELL_TODAY') or 'SELL_TODAY').upper()
                 if action not in {'SELL_TODAY', 'HOLD_OVERNIGHT'}:
@@ -2060,7 +2176,8 @@ class GeminiSniperEngine:
                     user_input,
                     require_json=True,
                     context_name=f"COND_ENTRY:{stock_name}",
-                    model_override=self._get_tier1_model()
+                    model_override=self._get_tier1_model(),
+                    schema_name="condition_entry_v1",
                 )
                 return result
             except Exception as e:
@@ -2089,7 +2206,8 @@ class GeminiSniperEngine:
                     user_input,
                     require_json=True,
                     context_name=f"COND_EXIT:{stock_name}",
-                    model_override=self._get_tier1_model()
+                    model_override=self._get_tier1_model(),
+                    schema_name="condition_exit_v1",
                 )
                 return result
             except Exception as e:
@@ -2165,7 +2283,8 @@ class GeminiSniperEngine:
                     require_json=True,
                     context_name="종가베팅 TOP5 JSON",
                     model_override=self._get_tier3_model(),
-                    use_google_search=True
+                    use_google_search=True,
+                    schema_name="eod_top5_v1",
                 )
 
                 raw_top5 = result.get("top5", []) or []

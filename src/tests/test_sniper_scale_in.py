@@ -258,6 +258,7 @@ def test_update_db_for_add_does_not_touch_detached_record_after_commit(monkeypat
     assert record.__dict__["buy_price"] == 9800
     assert record.__dict__["buy_qty"] == 8
     assert len(receipts.event_bus.published) == 1
+    assert receipts.event_bus.published[0][1]["message"].startswith("➕ 추가매수 체결")
     assert "누적 추가매수: 2회" in receipts.event_bus.published[0][1]["message"]
 
 

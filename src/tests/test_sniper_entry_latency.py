@@ -773,7 +773,8 @@ def test_scalping_target_buy_price_can_override_defensive_order_price_for_daehan
     assert result["normal_defensive_order_price"] == 50_400
     assert result["latency_guarded_order_price"] == 50_400
     assert result["target_buy_price"] == 48_800
-    assert result["order_price"] == 48_800
+    assert result["counterfactual_order_price_1tick"] == 48_800
+    assert result["order_price"] == 50_400
 
 
 def test_latency_quote_fresh_composite_price_guard_uses_valid_tick_at_price_boundary(monkeypatch):

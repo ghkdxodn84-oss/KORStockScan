@@ -323,6 +323,7 @@ class TradingConfig:
     GEMINI_ENGINE_MIN_INTERVAL: float = 0.5 # 구글 서버에 쏘는 최소 간격 (초 단위, 0.5초 = 500ms)
     GEMINI_SYSTEM_INSTRUCTION_JSON_ENABLED: bool = False  # JSON 경로에서만 system_instruction 분리 적용
     GEMINI_JSON_DETERMINISTIC_CONFIG_ENABLED: bool = False  # JSON 경로 deterministic config 적용 토글
+    GEMINI_RESPONSE_SCHEMA_REGISTRY_ENABLED: bool = False  # endpoint별 response_schema registry 적용 토글
     GEMINI_JSON_TEMPERATURE: float = 0.0  # deterministic JSON 응답 기본 temperature
     GEMINI_JSON_TOP_P: float = 0.1  # deterministic JSON 응답 기본 top_p
     GEMINI_JSON_TOP_K: int = 1  # deterministic JSON 응답 기본 top_k

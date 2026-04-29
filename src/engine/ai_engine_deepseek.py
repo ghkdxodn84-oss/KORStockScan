@@ -542,6 +542,29 @@ class DeepSeekSniperEngine:
         backoff = base_sleep * (2 ** max(0, int(attempt)))
         return min(cap, backoff + random.uniform(0.0, jitter_max))
 
+    def _build_retry_acceptance_snapshot(self, *, context_name, target_model):
+        target_model = target_model if target_model else self.current_model_name
+        live_sensitive = target_model != self._get_tier3_model()
+        return {
+            "context_name": str(context_name or "Unknown"),
+            "target_model": target_model,
+            "context_aware_backoff_enabled": bool(
+                getattr(TRADING_RULES, "DEEPSEEK_CONTEXT_AWARE_BACKOFF_ENABLED", False)
+            ),
+            "live_sensitive": bool(live_sensitive),
+            "base_sleep_sec": float(getattr(TRADING_RULES, "DEEPSEEK_RETRY_BASE_SLEEP_SEC", 0.4) or 0.4),
+            "jitter_max_sec": float(getattr(TRADING_RULES, "DEEPSEEK_RETRY_JITTER_MAX_SEC", 0.25) or 0.25),
+            "max_sleep_sec": float(
+                getattr(
+                    TRADING_RULES,
+                    "DEEPSEEK_RETRY_LIVE_MAX_SLEEP_SEC" if live_sensitive else "DEEPSEEK_RETRY_REPORT_MAX_SLEEP_SEC",
+                    0.8 if live_sensitive else 4.0,
+                )
+                or (0.8 if live_sensitive else 4.0)
+            ),
+            "lock_scope": "api_call_lock",
+        }
+
     def _call_deepseek_safe(
         self,
         prompt,
@@ -565,6 +588,10 @@ class DeepSeekSniperEngine:
             target_model = model_override if model_override else self.current_model_name
             target_temp = temperature_override if temperature_override is not None else (0.0 if require_json else 0.7)
             live_sensitive = target_model != self._get_tier3_model()
+            retry_acceptance = self._build_retry_acceptance_snapshot(
+                context_name=context_name,
+                target_model=target_model,
+            )
             last_error = ""
 
             for attempt in range(len(self.api_keys)):
@@ -598,7 +625,7 @@ class DeepSeekSniperEngine:
 
                     warn_msg = f"⚠️ [DeepSeek 한도 초과] {context_name} | {old_key} 교체 -> {self.current_key[-5:]} ({attempt+1}/{len(self.api_keys)})"
                     print(warn_msg)
-                    log_error(warn_msg)
+                    log_error(f"{warn_msg} | retry_acceptance={retry_acceptance}")
                     time.sleep(self._compute_retry_sleep(attempt, live_sensitive=live_sensitive))
                     continue
 
@@ -607,7 +634,12 @@ class DeepSeekSniperEngine:
                     if any(x in last_error for x in ["429", "quota", "503", "unavailable", "timeout", "server", "too_many_requests"]):
                         old_key = self.current_key[-5:]
                         self._rotate_client()
-                        print(f"⚠️ [DeepSeek 서버 에러] {context_name} | {old_key} 교체 -> {self.current_key[-5:]} ({attempt+1}/{len(self.api_keys)})")
+                        warn_msg = (
+                            f"⚠️ [DeepSeek 서버 에러] {context_name} | "
+                            f"{old_key} 교체 -> {self.current_key[-5:]} ({attempt+1}/{len(self.api_keys)})"
+                        )
+                        print(warn_msg)
+                        log_error(f"{warn_msg} | retry_acceptance={retry_acceptance}")
                         time.sleep(self._compute_retry_sleep(attempt, live_sensitive=live_sensitive))
                         continue
                     else:

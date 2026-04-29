@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from src.engine import ai_engine as ai_engine_module
 from src.engine import ai_engine_deepseek as ai_engine_deepseek_module
-from src.engine.ai_engine import GeminiSniperEngine
+from src.engine.ai_engine import GeminiSniperEngine, GEMINI_RESPONSE_SCHEMA_REGISTRY
 from src.engine.ai_engine_deepseek import DeepSeekSniperEngine
 
 
@@ -119,6 +119,53 @@ def test_call_gemini_safe_uses_system_instruction_and_deterministic_json_config(
     assert captured["config"].top_k == 2
 
 
+def test_call_gemini_safe_applies_endpoint_response_schema_when_flag_enabled(monkeypatch):
+    engine = _build_gemini_call_engine()
+    captured = {}
+
+    def _fake_generate_content(*, model, contents, config):
+        captured["config"] = config
+        return SimpleNamespace(
+            text='{"decision":"BUY","confidence":88,"order_type":"LIMIT_TOP","position_size_ratio":0.1,"invalidation_price":1000,"reasons":["ok"],"risks":[]}'
+        )
+
+    engine.client = SimpleNamespace(
+        models=SimpleNamespace(generate_content=_fake_generate_content)
+    )
+
+    monkeypatch.setattr(
+        ai_engine_module,
+        "TRADING_RULES",
+        replace(
+            ai_engine_module.TRADING_RULES,
+            GEMINI_RESPONSE_SCHEMA_REGISTRY_ENABLED=True,
+        ),
+    )
+
+    result = GeminiSniperEngine._call_gemini_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="test",
+        schema_name="condition_entry_v1",
+    )
+
+    assert result["decision"] == "BUY"
+    assert captured["config"].response_schema == GEMINI_RESPONSE_SCHEMA_REGISTRY["condition_entry_v1"]
+
+
+def test_gemini_response_schema_registry_covers_required_endpoints():
+    assert set(GEMINI_RESPONSE_SCHEMA_REGISTRY) == {
+        "entry_v1",
+        "holding_exit_v1",
+        "overnight_v1",
+        "condition_entry_v1",
+        "condition_exit_v1",
+        "eod_top5_v1",
+    }
+
+
 def test_call_deepseek_safe_parses_plain_json_without_regex_cleanup():
     engine = _build_deepseek_call_engine()
     engine.client = SimpleNamespace(
@@ -168,3 +215,38 @@ def test_deepseek_context_aware_backoff_caps_live_and_report_paths(monkeypatch):
     assert DeepSeekSniperEngine._compute_retry_sleep(engine, 0, live_sensitive=True) == 0.4
     assert DeepSeekSniperEngine._compute_retry_sleep(engine, 3, live_sensitive=True) == 0.8
     assert DeepSeekSniperEngine._compute_retry_sleep(engine, 3, live_sensitive=False) == 3.2
+
+
+def test_deepseek_retry_acceptance_snapshot_separates_live_and_report_paths(monkeypatch):
+    engine = _build_deepseek_call_engine()
+
+    monkeypatch.setattr(
+        ai_engine_deepseek_module,
+        "TRADING_RULES",
+        replace(
+            ai_engine_deepseek_module.TRADING_RULES,
+            DEEPSEEK_CONTEXT_AWARE_BACKOFF_ENABLED=True,
+            DEEPSEEK_RETRY_BASE_SLEEP_SEC=0.4,
+            DEEPSEEK_RETRY_JITTER_MAX_SEC=0.1,
+            DEEPSEEK_RETRY_LIVE_MAX_SLEEP_SEC=0.8,
+            DEEPSEEK_RETRY_REPORT_MAX_SLEEP_SEC=4.0,
+        ),
+    )
+
+    live = DeepSeekSniperEngine._build_retry_acceptance_snapshot(
+        engine,
+        context_name="ENTRY:test",
+        target_model="tier1-model",
+    )
+    report = DeepSeekSniperEngine._build_retry_acceptance_snapshot(
+        engine,
+        context_name="EOD:test",
+        target_model="tier3-model",
+    )
+
+    assert live["context_aware_backoff_enabled"] is True
+    assert live["live_sensitive"] is True
+    assert live["max_sleep_sec"] == 0.8
+    assert live["lock_scope"] == "api_call_lock"
+    assert report["live_sensitive"] is False
+    assert report["max_sleep_sec"] == 4.0

@@ -6,6 +6,7 @@
 - `candidate_pool -> enrich -> promoted_watchlist` 3단 구조 전환 범위와 rollback guard를 문서 기준으로 확정한다.
 - `ka10095`, 신호 기반 재포착, 시간대별 소스 분기, composite score, DB/WS 경계 재설계를 같은 날 동시 반영하지 않도록 change set을 분리한다.
 - 거래대금/VI freshness를 승격 gate에 어떻게 반영할지 정량 기준을 먼저 고정한다.
+- `2026-05-05` 어린이날 휴장으로 실행할 수 없던 latency price guard / NaN cast / resolver 후속 항목을 다음 KRX 운영일 기준으로 이관해 닫는다.
 
 ## 오늘 강제 규칙
 
@@ -20,6 +21,7 @@
 - live 승인, replacement, stage-disjoint 예외, 관찰 개시 판정에는 `cohort`를 같이 잠근다. 최소 `baseline cohort`, `candidate live cohort`, `observe-only cohort`, `excluded cohort`를 구분하고 `partial/full`, `initial/pyramid`, `fallback` 혼합 결론을 금지한다.
 - `ApplyTarget`은 문서에 명시된 값만 사용하고, parser/workorder가 `remote`를 추정하지 않도록 유지한다.
 - 다축 동시 변경 금지, 승인 전 `main` 실주문 변경 금지 규칙을 유지한다.
+- 휴장일 이월 항목은 원래 Due가 아니라 실제 KRX 운영일 Due를 기준으로 Project/Calendar에 등록한다.
 
 ## 장전 체크리스트 (08:50~09:00)
 
@@ -29,7 +31,7 @@
 
 - 없음
 
-## 장후 체크리스트 (16:00~17:30)
+## 장후 체크리스트 (16:00~20:55)
 
 - [ ] `[ScalpingScannerTxnBoundary0506] DB/WS 경계 재설계와 rollback guard 확정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 16:00~16:20`, `Track: ScalpingLogic`)
   - Source: [2026-04-28-scalping-scanner-enhancement-proposal.md](/home/ubuntu/KORStockScan/docs/2026-04-28-scalping-scanner-enhancement-proposal.md), [scalping_scanner.py](/home/ubuntu/KORStockScan/src/scanners/scalping_scanner.py:281)
@@ -84,3 +86,51 @@
   - 판정 기준: 스캐너 구조 변경 후보를 `remove`, `observe-only`, `baseline-promote`, `active-canary` 중 어디에 둘지 닫고, `baseline cohort`, `candidate live cohort`, `observe-only cohort`, `excluded cohort`, `rollback owner`, `cross-contamination check`를 같이 잠근다.
   - why: 스캐너 구조 변경은 진입병목축 판정에 직접 들어가므로 cohort 분류를 먼저 잠그지 않으면 다음 실전 축에서 원인귀속이 흐려진다.
   - 다음 액션: 상태 변경이 있으면 관련 기준문서와 구현 체크리스트를 같은 change set에서 갱신하고, 변동이 없으면 `변동 없음`과 근거를 남긴다.
+
+- [ ] `[LatencyEntryPriceGuard0506HolidayCarry] 3틱 v1 fill/slippage/profit 재튜닝 판정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 18:45~19:05`, `Track: ScalpingLogic`)
+  - Source: [2026-05-05-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-05-stage2-todo-checklist.md), [analysis/offline_live_canary_bundle/README.md](/home/ubuntu/KORStockScan/analysis/offline_live_canary_bundle/README.md)
+  - 판정 기준: `latency_override_defensive_ticks=3` 적용 cohort와 기존/비적용 normal cohort를 `fill_rate`, `realized_slippage`, `full_fill`, `partial_fill`, `COMPLETED + valid profit_rate`, `normal_slippage_exceeded`로 비교한다.
+  - why: `2026-05-05`는 어린이날 휴장이라 실전 표본을 추가할 수 없다. 실제 운영일인 `2026-05-06` 기준으로 3틱 v1의 유지/재튜닝 여부를 닫는다.
+  - 다음 액션: 우위가 확인되면 유지 또는 v2 전환 설계로 넘기고, fill 손실/기회비용이 크면 1틱/2틱/가격대별 table 재튜닝 후보를 연다.
+
+- [ ] `[LatencyEntryPriceGuardV2_0506HolidayCarry] bps/가격대별 defensive table 설계` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 19:05~19:20`, `Track: ScalpingLogic`)
+  - Source: [2026-05-05-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-05-stage2-todo-checklist.md), [2026-04-29-daehan-cable-entry-price-audit-rereport.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-29-daehan-cable-entry-price-audit-rereport.md)
+  - 판정 기준: fixed tick 대신 저가주/중가주/고가주 가격대별 bps 부담을 반영한 defensive table을 설계한다.
+  - why: 동일 3틱이라도 가격대별 bps 비용이 달라 기대값/체결률 trade-off가 왜곡될 수 있다.
+  - 다음 액션: v2 승인 전까지 v1 3틱은 임시값으로만 유지하고, table 후보는 shadow/counterfactual 로그부터 추가한다.
+
+- [ ] `[LatencyExitPriceGuardReview0506HolidayCarry] 매도/청산 latency 가격가드 현황 명문화` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 19:20~19:35`, `Track: ScalpingLogic`)
+  - Source: [2026-05-05-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-05-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - 판정 기준: 이번 변경은 BUY 진입가 전용이다. SELL/청산가에 latency 위험 대칭 정책이 있는지 확인하고, 기존 정책 유지/별도 canary/observe-only 중 하나로 명문화한다.
+  - why: 진입 방어폭만 강화하고 청산가 정책을 불명확하게 두면 realized slippage와 missed upside 해석이 섞인다.
+  - 다음 액션: 매도 측 정책 변경이 필요하면 진입가 v1 재튜닝과 별도 축으로 분리하고, 같은 날 한 축 canary 원칙을 유지한다.
+
+- [ ] `[NaNCastGuard0506HolidayCarry] NaN cast runtime 안정화 후속계획 확정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 19:35~19:55`, `Track: RuntimeStability`)
+  - Source: [2026-05-05-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-05-stage2-todo-checklist.md), [2026-04-28-nan-cast-guard-hotfix-report.md](/home/ubuntu/KORStockScan/docs/2026-04-28-nan-cast-guard-hotfix-report.md)
+  - 판정 기준: 원격과 동일 patch set 복제 여부가 아니라 메인 코드베이스 기준 `NaN/inf` 안전 캐스팅 최소 범위, 재발건수, 상태전이 실패 경로, upstream source 후보(`buy_qty/buy_price/target_buy_price/marcap/preset_tp_*`, websocket `curr/ask_tot/bid_tot`, 체결 `price/qty`)를 확정한다.
+  - why: `NaN cast`는 루프 중단과 체결 후 상태전이 실패를 만들어 기대값과 미진입/미청산 기회비용을 직접 훼손한다. 휴장일 이월 후에도 메인 기준 수정범위와 재발 방지 계획을 비워두지 않는다.
+  - 다음 액션: 메인 기준 최소 safe cast patch 범위와 테스트(`pytest`/`py_compile`)를 잠그고, 재발이 있으면 source 추적 작업을 다음 거래일 PREOPEN/POSTCLOSE checklist로 승격한다.
+
+- [ ] `[PreSubmitGuardDist0506HolidayCarry] 80bps 임계 분포 부록 및 percentile 재앵커` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 19:55~20:10`, `Track: ScalpingLogic`)
+  - Source: [2026-05-05-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-05-stage2-todo-checklist.md), [2026-04-29-daehan-cable-entry-price-audit-rereport.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-29-daehan-cable-entry-price-audit-rereport.md)
+  - 판정 기준: 최근 `30~60` 영업일 `submitted` 코호트를 대상으로 `(best_bid - submitted_price) / best_bid * 10000` 분포를 재구성해 histogram과 `p90/p95/p99/p99.5`를 확정하고, `80bps`가 어느 percentile에 위치하는지 문서 부록으로 고정한다. 현재 `2026-04-28~2026-04-29` stage-paired 표본 `8건`은 provisional reference로만 사용한다.
+  - why: 대한전선 단일 사례는 `337~412bps` outlier를 보여주지만, `80bps` 자체의 적정성은 분포 기반으로 다시 잠가야 한다.
+  - 다음 액션: `80bps`가 너무 타이트하면 완화 후보를, 너무 느슨하면 강화 후보를 열고, 결정값은 `PreSubmitGuardKPI`와 함께 SLO로 고정한다.
+
+- [ ] `[PreSubmitGuardObserve0506HolidayCarry] 비-SCALPING observe-only guard logging 범위 확정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 20:10~20:25`, `Track: ScalpingLogic`)
+  - Source: [2026-05-05-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-05-stage2-todo-checklist.md), [2026-04-29-daehan-cable-entry-price-audit-followup.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-29-daehan-cable-entry-price-audit-followup.md)
+  - 판정 기준: `BREAKOUT/PULLBACK/RESERVE` 등 비-`SCALPING` 전략에 대해 차단 없는 `pre_submit_price_guard_observe` 이벤트를 기록할지, 기록한다면 동일 임계(`80bps`)와 어떤 필드(`submitted_order_price`, `best_bid_at_submit`, `price_below_bid_bps`, strategy`)를 남길지 확정한다.
+  - why: 차단 없는 observe-only는 회귀 위험이 거의 없으면서도 P1 resolver 설계의 사각지대를 줄인다.
+  - 다음 액션: 구현 범위가 잠기면 1~2주 누적 후 전략별 pathology 존재 여부를 닫고, 차단 확대 여부는 분포 기준으로만 결정한다.
+
+- [ ] `[BuyPriceSchemaSplitP1_0506HolidayCarry] submitted_order_price canonical 승격 조건 확정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 20:25~20:40`, `Track: ScalpingLogic`)
+  - Source: [2026-05-05-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-05-stage2-todo-checklist.md), [2026-04-29-daehan-cable-entry-price-audit-followup.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-29-daehan-cable-entry-price-audit-followup.md)
+  - 판정 기준: `BUY_ORDERED.buy_price`를 언제 `submitted_order_price` canonical로 승격할지 closing condition을 문서로 고정한다. 최소 조건은 `P1 resolver 도입`, downstream 손익/보유/리포트 경로 영향도 목록화, migration/alias 정책 확정이다.
+  - why: schema 보존은 P0에서는 맞는 결정이지만, closing condition 없이 두면 영구 부채가 된다.
+  - 다음 액션: trigger가 잠기면 P1 change set에 schema split을 묶고, trigger가 아직 모호하면 막힌 조건을 명시한다.
+
+- [ ] `[DynamicEntryResolverIngress0506HolidayCarry] P1 resolver ingress gate와 anchor case 확정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 20:40~20:55`, `Track: ScalpingLogic`)
+  - Source: [2026-05-05-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-05-stage2-todo-checklist.md), [2026-04-29-daehan-cable-entry-price-audit-rereport.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-29-daehan-cable-entry-price-audit-rereport.md)
+  - 판정 기준: P1 승인 전 단계(`backtest -> observe-only -> canary`)와 각 단계 산출물(`가격차 분포`, `resolver divergence rate`, `submitted_but_unfilled_rate`, `slippage_bps`, `time_to_fill_p50/p90`)을 확정하고, `record_id=4219`가 backtest/observe-only에서 abort되는지 unit test anchor case로 고정한다.
+  - why: ingress gate가 없으면 P1이 기술 판단이 아니라 운영 승인 사안으로 변질된다.
+  - 다음 액션: gate가 잠기면 `LatencyEntryPriceGuardV2`와 분리된 독립 change set으로 resolver 검증축을 연다.

@@ -26,6 +26,7 @@ on:
   schedule:
     - cron: "20 23 * * *"
     - cron: "0 1,4 * * *"
+    - cron: "20 5 * * *"
     - cron: "40 6 * * *"
 
 permissions:
@@ -45,6 +46,8 @@ jobs:
             cron: "20 23 * * *"
           - slot: INTRADAY
             cron: "0 1,4 * * *"
+          - slot: INTRADAY
+            cron: "20 5 * * *"
           - slot: POSTCLOSE
             cron: "40 6 * * *"
     steps:
