@@ -169,3 +169,9 @@
   - 판정 기준: 2주 cap cohort의 `initial_entry_qty_cap_applied`, `initial-only`, `pyramid-activated`, `ADD_BLOCKED reason=zero_qty`, `full_fill`, `partial_fill`, `soft_stop`, `COMPLETED + valid profit_rate`, `same-symbol reentry`, `order_failed`를 재집계한다. `3주 cap`은 `mechanical_momentum_latency_relief` entry canary와 같은 단계 live 변경이므로, 제출 회복과 P0 price guard가 안정적이고 soft stop tail이 악화되지 않은 경우에만 익일 이후 canary 후보로 본다.
   - why: 2주 cap은 `buy_qty=1 -> pyramid zero_qty` 왜곡을 줄이는 임시 운영가드로 승인됐지만, 3주 확대는 exposure와 soft stop tail을 직접 키운다. submitted 회복이 관찰 중인 상태에서 수량축을 바로 올리면 entry 효과와 holding/exit 손실 tail 원인귀속이 섞인다.
   - 다음 액션: 승인조건을 만족하면 다음 운영일인 `2026-05-04`에 `3주 cap canary` 항목을 새로 만들고, 미충족이면 `2주 cap 유지`로 닫는다. live 전환 방식은 `KORSTOCKSCAN_SCALPING_INITIAL_ENTRY_MAX_QTY=3` 또는 상수 변경 중 하나로 고정하되, 같은 날 다른 entry live 축과 병행하지 않는다.
+
+- [ ] `[OpenAIParityRestart0430-Postclose] OpenAI parity 병합본 장후 bot 재기동` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 20:00~20:10`, `Track: RuntimeStability`)
+  - Source: [2026-04-30-openai-parity-responses-ws-review-report.md](/home/ubuntu/KORStockScan/docs/2026-04-30-openai-parity-responses-ws-review-report.md), [2026-05-04-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-04-stage2-todo-checklist.md)
+  - 판정 기준: `main` 병합본 기준으로 bot PID가 장후 재기동되고, OpenAI import/config 로드 에러 없이 기동 로그가 남아야 한다. `OPENAI_TRANSPORT_MODE=http`, `OPENAI_RESPONSES_WS_ENABLED=False` 기본값 유지 상태에서 새 PID provenance만 우선 확인한다.
+  - why: 이번 change set은 런타임 import 대상 코드(`ai_engine_openai.py`, `ai_engine.py`, `ai_response_contracts.py`, `constants.py`)를 포함하므로 장기 프로세스는 재기동 전까지 구버전 로직을 유지한다. 장중 원인귀속을 섞지 않기 위해 재기동은 장후에 고정한다.
+  - 다음 액션: 재기동 후 `logs/bot_history.log`와 main bot PID를 확인하고, `2026-05-04` PREOPEN에서는 OpenAI schema registry/transport flag 로드 항목으로 이어서 provenance를 닫는다.

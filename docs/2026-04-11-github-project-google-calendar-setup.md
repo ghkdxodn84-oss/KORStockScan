@@ -244,6 +244,7 @@ Codex 일일 작업지시서 자동 생성:
 7. 복사한 본문을 Codex 대화에 붙여 실행 지시
 8. 수동 실행 시 `slot`, `target_date`, `include_overdue` 입력을 함께 사용할 수 있다.
 9. `13:00 KST` 이후 same-day `INTRADAY` 항목을 새로 sync한 경우, 자동 생성본 반영은 `14:20 KST` rerun 또는 수동 `workflow_dispatch(slot=INTRADAY)` 이후에 보인다.
+10. 수동 `workflow_dispatch(slot=INTRADAY)` 또는 `slot=ALL`은 `INTRADAY` summary를 한 번만 생성한다. `14:20 KST` rerun은 schedule 전용으로 유지하고, 수동 실행에서 같은 `INTRADAY` 본문을 중복 생성하지 않는다.
 
 슬롯 운영 원칙:
 

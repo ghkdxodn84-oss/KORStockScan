@@ -41,6 +41,7 @@
 | `pyramid_dynamic_qty_observe` | 수익 중인 포지션의 `PYRAMID` 불타기 수량을 고정 50% 템플릿이 아니라 추세/수급/트레일링 여유 기반으로 재산정하는 후보 | standby/observe-only. 현재 `PYRAMID`는 유지하되 `initial-only`와 `pyramid-activated` 표본을 분리한다. 동적 수량화는 `REVERSAL_ADD`와 같은 날 live 변경하지 않고 `would_qty` counterfactual부터 설계한다 |
 | `bad_entry_block` | soft stop으로 이어질 가능성이 큰 never-green/AI fade 유형을 진입 차단 후보로 분류하는 observe-only classifier | `2026-04-30` observe-only. `held_sec>=60`, `profit_rate<=-0.70%`, `peak_profit<=+0.20%`, `AI<=45`를 기본 anchor로 로깅하며 실전 차단은 하지 않는다 |
 | `nan_cast_guard_followup` | 주문·체결·DB 복원 숫자 필드에 `NaN/inf`가 유입될 때 런타임 중단과 상태전이 실패를 막기 위한 숫자 정규화/업스트림 source 재분해 계획 | live canary 아님. 런타임 안정화/집계 품질 보강용 follow-up으로만 관리하고, 기대값 해석 입력은 재발건수·영향경로·미진입/미청산 기회비용 분해를 함께 남긴다 |
+| `openai_transport_parity_flag_off` | OpenAI가 Gemini와 같은 endpoint schema registry/contract 기준을 공유하되, transport는 HTTP baseline과 WS shadow를 분리 관찰하는 acceptance 축 | `2026-04-30` 기준 flag-off observe-only. `response schema registry`, `deterministic JSON config`, `Responses WS transport`는 모두 rollback owner와 cohort를 잠근 뒤에만 다음 슬롯으로 넘긴다 |
 
 ## 3. 튜닝 원칙
 
@@ -168,6 +169,7 @@
 | holding/exit live canary | `soft_stop_micro_grace` active | 날짜별 checklist + holding audit/report | stage-disjoint 예외로 entry 축과 병렬 존재 가능 |
 | holding/exit observation | `holding_exit_observation` 유지 | checklist + observation report | `soft_stop/trailing/same_symbol/EOD-NXT` 분해 입력 소유 |
 | runtime stabilization follow-up | `nan_cast_guard_followup` open | [2026-05-06 checklist](./2026-05-06-stage2-todo-checklist.md) `NaNCastGuard0506HolidayCarry` | canary 아님. `2026-05-05` 어린이날 휴장 이월 후 메인 기준 최소 safe cast 범위와 upstream source 추적 계획만 잠금 |
+| engine parity / transport observation | `openai_transport_parity_flag_off` observe-only | [2026-04-30-openai-enable-acceptance-spec.md](./2026-04-30-openai-enable-acceptance-spec.md), [2026-05-04-stage2-todo-checklist.md](./2026-05-04-stage2-todo-checklist.md) | Gemini/DeepSeek acceptance와 같은 문서 구조로 유지. live 라우팅 승격이 아니라 schema/transport provenance 잠금이 목적 |
 | retired entry axes | `gatekeeper_fast_reuse`, `other_danger`, `ws_jitter`, `fallback/split-entry` closed | `execution-delta` + audit/report | historical-only. 재개는 새 workorder + rollback guard 필요 |
 
 ## 9. 델타/Q&A 라우팅
