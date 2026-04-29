@@ -395,6 +395,16 @@
     - `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_sniper_scale_in.py -k update_db_for_add`
   - 다음 액션: 운영 중 추가매수/손절/익절 텔레그램 3종이 시각적으로 즉시 구분되는지 실메시지 표본으로 한 번 더 확인한다.
 
+- [x] `[TelegramEntryMetricsSummaryRemoval0429-Postclose] 진입지표요약 텔레그램 발송기능 삭제` (`Due: 2026-04-29`, `Slot: POSTCLOSE`, `TimeWindow: 21:30~21:40`, `Track: RuntimeStability`)
+  - Source: [2026-04-29-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-29-stage2-todo-checklist.md), [README.md](/home/ubuntu/KORStockScan/README.md)
+  - 실행 메모 (`2026-04-29`): [bot_main.py](/home/ubuntu/KORStockScan/src/bot_main.py) 의 `15:40` 진입 지표 + shadow + post-sell 관리자 브로드캐스트 스케줄과 전송 함수를 삭제했다. [telegram_manager.py](/home/ubuntu/KORStockScan/src/notify/telegram_manager.py) 의 관리자 `/entry_metrics`, `/진입지표`, `📊 진입 지표` 버튼 응답도 삭제했다.
+  - 판정 결과: `완료 / 진입지표요약 텔레그램 메시지 발송 경로 제거`
+  - 근거: 해당 메시지는 현재 Plan Rebase 판정 입력이 아니라 운영 노이즈가 되고 있으며, 진입/청산 분석은 monitor snapshot, checklist, report 기준으로 충분히 대체된다. 로그 집계 모듈 [sniper_entry_metrics.py](/home/ubuntu/KORStockScan/src/engine/sniper_entry_metrics.py) 는 오프라인 분석/테스트 재사용 가능성이 있어 남겼다.
+  - 테스트/검증:
+    - `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_sniper_entry_metrics.py src/tests/test_telegram_buy_pause_guard.py src/tests/test_sniper_scale_in.py -q`
+    - `PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500`
+  - 다음 액션: 운영 브로드캐스트는 추천종목, 체결/상태 알림, 모니터 스냅샷 저장 완료 등 실제 대응이 필요한 알림만 유지한다.
+
 - [x] `[TrailingJeryong0429-Postclose] 제룡전기(033100) 추가매수 체결 후 트레일링 익절 분석` (`Due: 2026-04-29`, `Slot: POSTCLOSE`, `TimeWindow: 20:25~20:35`, `Track: ScalpingLogic`)
   - Source: [2026-04-29-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-29-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
   - 실행 메모 (`2026-04-29`): `record_id=4266` 기준 `13:58:59` 초기 `FULL_FILL 2주 @ 63,400원`, `14:34:26` `scale_in_executed add_type=PYRAMID fill_price=64,600 fill_qty=1 new_avg_price=63,800 new_buy_qty=3`, `14:35:47` `exit_signal sell_reason_type=TRAILING profit_rate=+0.86 peak_profit=+1.33`, `14:35:48` `sell_completed sell_price=64,500 revive=True new_watch_id=4415`를 확인했다.

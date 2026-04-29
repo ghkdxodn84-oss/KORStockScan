@@ -34,18 +34,6 @@ from src.database.db_manager import DBManager
 from src.core.event_bus import EventBus
 import src.engine.kiwoom_sniper_v2 as kiwoom_sniper_v2
 import src.notify.telegram_manager as telegram_manager # 우리가 완성한 텔레그램 수신탑
-from src.engine.sniper_entry_metrics import (
-    format_entry_metrics_summary,
-    summarize_today_entry_metrics,
-)
-from src.engine.sniper_strength_shadow_feedback import (
-    evaluate_shadow_candidates,
-    format_shadow_feedback_summary,
-)
-from src.engine.sniper_post_sell_feedback import (
-    evaluate_post_sell_candidates,
-    format_post_sell_feedback_summary,
-)
 from src.engine.daily_report_service import save_daily_report, build_daily_report
 from src.engine.log_archive_service import archive_target_date_logs, save_monitor_snapshots_for_date
 from src.engine.strategy_position_performance_report import sync_trade_performance_for_date
@@ -183,30 +171,6 @@ def crisis_monitor_loop():
         time.sleep(3600)
 
 
-def broadcast_entry_metrics_job():
-    """장 마감 후 관리자에게 latency-aware entry 요약을 1회 전송합니다."""
-    try:
-        event_bus = EventBus()
-        summary = summarize_today_entry_metrics()
-        today = _today_string()
-        shadow_summary = evaluate_shadow_candidates(today)
-        post_sell_summary = evaluate_post_sell_candidates(today)
-        msg = (
-            f"{format_entry_metrics_summary(summary)}\n\n"
-            f"{format_shadow_feedback_summary(shadow_summary)}\n\n"
-            f"{format_post_sell_feedback_summary(post_sell_summary)}"
-        )
-        event_bus.publish(
-            'TELEGRAM_BROADCAST',
-            {'message': msg, 'audience': 'ADMIN_ONLY', 'parse_mode': None},
-        )
-        print("📊 [시스템] 장 마감 진입 지표 + shadow + post-sell 피드백 요약을 관리자에게 전송했습니다.")
-    except Exception as e:
-        from src.utils.logger import log_error
-
-        log_error(f"장 마감 진입 지표 브로드캐스트 실패: {e}")
-
-
 def generate_daily_report_job(target_date: str | None = None):
     """웹/API용 일일 리포트 JSON을 생성합니다."""
     try:
@@ -326,7 +290,6 @@ if __name__ == '__main__':
     
     # 💡 [아키텍처 포인트 4] 메인 쓰레드는 오직 시스템 스케줄링과 예외 종료 감시만 수행합니다.
     morning_report_sent = False
-    entry_metrics_report_sent = False
     daily_report_sent = False
     monitor_archive_sent = False
 
@@ -342,7 +305,6 @@ if __name__ == '__main__':
             # 자정이 지나면 내일 아침 리포트를 위해 플래그 초기화
             if now.hour == 0 and now.minute == 1:
                 morning_report_sent = False
-                entry_metrics_report_sent = False
                 daily_report_sent = False
                 monitor_archive_sent = False
 
@@ -351,12 +313,7 @@ if __name__ == '__main__':
                 generate_daily_report_job()
                 daily_report_sent = True
 
-            # [스케줄러 1-1] 장 마감 후 진입 지표 요약 관리자 전송
-            if now.hour == 15 and now.minute == 40 and not entry_metrics_report_sent:
-                broadcast_entry_metrics_job()
-                entry_metrics_report_sent = True
-
-            # [스케줄러 1-2] 장 마감 후 모니터 요약/로그 아카이브 저장
+            # [스케줄러 1-1] 장 마감 후 모니터 요약/로그 아카이브 저장
             if now.hour == 15 and now.minute == 45 and not monitor_archive_sent:
                 generate_monitor_archive_job()
                 monitor_archive_sent = True

@@ -2,6 +2,20 @@
 
 주의: 이 문서는 개인 정리용이며 다른 문서에서 참조하지 않는다. 개인문서는 다른 문서를 참조할 수 있다.
 
+## 현재 기준 스냅샷
+
+| 항목 | 현재 기준 |
+| --- | --- |
+| 기준일 | `2026-04-29 KST` 장후 반영 기준 |
+| entry live owner | `mechanical_momentum_latency_relief`. `latency_quote_fresh_composite`는 `2026-04-29 08:29 KST` OFF + restart 완료, `latency_signal_quality_quote_composite`는 `2026-04-29 12:50 KST` 효과 미약으로 OFF |
+| submitted 상태 | 운영상 급한 drought는 완화됐다. `12:57 restart -> 14:00` 고유 기준 `budget_pass=38`, `submitted=20`, `filled=7`; `13:15 hotfix -> 14:00` 기준 `budget_pass=32`, `submitted=17`, `filled=7`이다. 단, baseline-lock 전까지는 관찰 대상이다. |
+| entry 수량축 | 스캘핑 신규 BUY는 임시 `2주 cap` 유지. `3주 cap`은 기술적으로 가능하지만 `mechanical_momentum_latency_relief`와 같은 entry 단계 live 변경이므로, `2026-04-30` 장후 승인조건 판정 전에는 적용하지 않는다. |
+| 보유/청산 live owner | `soft_stop_micro_grace` active. 1순위 관찰축은 `soft_stop_rebound_split`, 2순위 후보는 `trailing_continuation_micro_canary`다. |
+| soft stop 해석 | 4월 soft stop post-sell 61건 중 10분 내 매도가 재상회 57건, +0.5% 이상 반등 43건, +1.0% 이상 반등 23건, 매수가 회복 16건이다. 즉 휩쏘 가능성은 높지만 무조건 더 오래 버티는 결론은 아니다. |
+| 2026-04-29 soft stop 표본 | `올릭스`는 `GOOD_EXIT`, `덕산하이메탈`은 `NEUTRAL`, `지앤비에스 에코`는 `MISSED_UPSIDE + 고가 재진입 체결 + 익절 완료`, `코오롱`은 `GOOD_EXIT`지만 고가 재진입 제출 흔적이 있다. |
+| runtime truth 이슈 | `SK이노베이션(096770)`은 BUY/SELL 모두 WS 실제체결이 들어왔으나 `EXEC_IGNORED`가 발생했고, 정기 계좌동기화가 HOLDING/COMPLETED를 복구했다. 수동 HTS 매도 기준 실손익은 비용 반영 약 `+4.2%`다. 핵심 후속은 order-binding 품질이다. |
+| 휴장 보정 | `2026-05-01`은 근로자의 날 KRX 휴장, 다음 운영일은 `2026-05-04`. `2026-05-05`는 어린이날 휴장, 이월 작업은 `2026-05-06` checklist가 소유한다. |
+
 ## 감시종목 -> 보유/청산 완료 흐름
 
 ### 단계 요약표
@@ -261,6 +275,7 @@
 | 판정 원칙 | hard baseline 승격이 아니라 same-day 운영 override다. 따라서 새 restart 이후 cohort만 분리해 보고, 기존 `h1200`이나 `QuoteFresh` historical cohort와 직접 합산하지 않는다. |
 | 현재 상태 | `2026-04-29 12:50 KST` ON, `12:57 KST` restart 반영 완료. main PID는 `30566 -> 35539`로 교체됐다. 현재 entry live 1축은 이 축이다. |
 | 핵심 KPI | `mechanical_momentum_relief_canary_applied`, `latency_mechanical_momentum_relief_normal_override`, `submitted`, `full fill`, `partial fill`, `COMPLETED + valid profit_rate`, `fallback_regression=0` |
+| 14시 관찰 결과 | `12:57 restart -> 14:00` 고유 기준 `budget_pass=38`, `mechanical_unique=22`, `submitted=20`, `guard_block=2`, `order_failed=2`, `filled=7`이었다. `13:15 hotfix -> 14:00` 기준으로도 `budget_pass=32`, `submitted=17`, `filled=7`이라 제출 drought는 완화됐지만, fill quality와 청산 품질까지 baseline-lock 할 단계는 아니다. |
 | rollback guard | post-restart cohort에서 `budget_pass >= 150`인데 `submitted <= 2`, `pre_submit_price_guard_block_rate > 2.0%`, `normal_slippage_exceeded` 반복, 또는 canary cohort 일간 손익이 NAV 대비 `<= -0.35%`이면 OFF 후보로 본다. |
 | 다음 액션 | 먼저 same-day post-restart cohort에서 제출 회복 여부를 본다. 회복이 확인되면 `DF-HOLDING-001`의 HOLDING/청산 품질 판정으로 넘어가고, 실패하면 다음 replacement 축 또는 entry price/P0 guard 축과 연결해 다시 닫는다. |
 
@@ -284,6 +299,7 @@
 | 핵심 검증축 | `soft_stop/trailing/good_exit`, `holding_action_applied`, `holding_force_exit_triggered`, `exit_rule` 분포, `full/partial` 분리, `COMPLETED + valid profit_rate` |
 | 분리 원칙 | `initial-only`와 `pyramid-activated` 표본을 섞지 않는다. `full fill`과 `partial fill`도 합치지 않는다. |
 | 수량정책 메모 | `2026-04-28` 기준 스캘핑 초기 진입 `initial_entry_qty_cap`은 임시 `2주`로 완화한다. 이유는 `1주 cap`이 `buy_qty=1 -> template_qty=int(1*0.5)=0`을 만들어 `PYRAMID zero_qty`를 구조적으로 만들 수 있기 때문이다. 다음 판정도 `2주` 자체의 손익보다 `zero_qty 감소`, `pyramid-activated 표본 회복`, `initial-only vs pyramid-activated` 분리 유지 여부를 먼저 본다. |
+| 2주 cap 최신 메모 | `2026-04-29` full-day 기준 `initial_entry_qty_cap_applied=38`, `ADD_BLOCKED reason=zero_qty=0`, `completed_valid_count=17`, `completed_valid_avg_profit_rate=+0.0535%`, `pyramid_activated=3`이다. `2주 cap`은 유지 방향성은 확인됐지만 `3주 cap` 확대는 별도 entry live 축이므로 `2026-04-30` 장후 승인조건 전에는 열지 않는다. |
 | VM 기준선 메모 | `m7g.xlarge` 상향 직후 첫 거래일은 `runtime basis shift day`로 본다. 이 날의 `gatekeeper_eval_ms_p95`, `latency_state_danger share`, `ws_age/ws_jitter`, `budget_pass_to_submitted_rate` 변화는 전략 개선과 infra 처리속도 개선이 섞일 수 있으므로, 기존 baseline과 바로 hard 비교하지 않고 `VM 이후 provisional baseline` 후보로만 둔다. |
 | 관찰축 흔들림 메모 | VM 상향 직후에는 `QuoteFresh`, `latency_state_danger`, `gatekeeper_eval_ms_p95`가 동시에 흔들릴 수 있다. 이때 `latency_state_danger` 감소나 `p95` 하락만으로 entry 축 회복으로 판정하지 않는다. 최소 `submitted/full/partial` 회복이 같이 붙어야 하고, 그렇지 않으면 `infra-only improvement` 또는 `observation wobble`로 분리한다. |
 | 성공 판정 | 제출 증가와 함께 체결 품질/청산 품질 악화가 없고 `COMPLETED + valid profit_rate`가 유지 또는 개선 |
@@ -323,6 +339,7 @@
 | 10시 중간점검 | `2026-04-27 10:00~10:10 KST`에는 pass/fail이 아니라 조기 오염을 본다. `soft_stop qualifying cohort`, `submitted/full/partial/completed_valid`, `fallback_regression=0`, 진입 canary와 cohort tag 분리 여부, `rebound_above_sell_1m/3m`, `mfe_ge_0_5`를 먼저 잠근다. |
 | 11시 1차 판정 | `2026-04-27 11:00~11:15 KST`에는 `유지/축소/OFF/판정유예` 중 하나로 잠근다. `COMPLETED + valid profit_rate >= 10` 전에는 hard pass/fail이 아니라 방향성 판정으로만 두며, `rebound_above_sell_10m`, `rebound_above_buy_10m`, `mfe_ge_0_5`, `mfe_ge_1_0`로 휩쏘 여부를 같이 본다. |
 | 15시 최종 선택 | `soft_stop qualifying cohort`는 `micro grace`로 승인한다. 기본값은 `enabled=True`, `grace_sec=20`, `emergency_pct=-2.0`이며, hard stop `-2.5%`는 그대로 둔다. soft stop 최초 터치 후 20초 안에 emergency를 넘지 않으면 `soft_stop_micro_grace`로 지연하고, 회복 시 grace state를 제거한다. |
+| 2026-04-29 표본 보정 | `올릭스(226950)`은 `GOOD_EXIT`, `덕산하이메탈(077360)`은 `NEUTRAL`, `지앤비에스 에코(382800)`는 `MISSED_UPSIDE`이며 soft stop 후 고가 재진입 체결과 익절이 확인됐다. `코오롱(002020)`은 `GOOD_EXIT`지만 soft stop 후 고가 재진입 제출이 있었다. 따라서 지금 결론은 `micro grace 유지 + recovery recapture 라벨/로그 필요성 관찰`이지, 즉시 `soft_stop_micro_grace_extend` ON이 아니다. |
 | trailing과의 관계 | `trailing_continuation_micro_canary`는 2순위다. `MISSED_UPSIDE rate >= 60%`, `GOOD_EXIT rate <= 30%`를 충족하고 soft stop 축이 오염되지 않을 때만 다음 후보로 다시 연다. |
 | Source | [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
 

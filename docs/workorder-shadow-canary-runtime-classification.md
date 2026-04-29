@@ -6,6 +6,15 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 
 이 문서는 체크리스트/Project/Calendar 자동관리 대상이 아닌 독립 workorder다. 목적은 `shadow/canary` 경로를 일괄 삭제하는 것이 아니라, `지속 모니터링 가치`와 `운영/코드 부채`를 함께 평가해 각 경로를 `remove / observe-only / baseline-promote / active-canary` 중 하나로 고정하고, live 전환/병렬 관찰 시 섞이면 안 되는 `cohort`도 함께 분류 기준으로 잠그는 것이다.
 
+현재 스냅샷:
+
+1. entry live owner는 `mechanical_momentum_latency_relief`다. `latency_quote_fresh_composite`와 `latency_signal_quality_quote_composite`는 `observe-only/historical-reference`로 내린다.
+2. 보유/청산 live owner는 `soft_stop_micro_grace`다. `soft_stop_rebound_split`은 1순위 관찰축이고, `trailing_continuation`은 2순위 후보로 유지한다.
+3. `Gemini response schema registry`와 `DeepSeek retry acceptance snapshot`은 flag-off observability 묶음이다. live enable 또는 active canary가 아니다.
+4. `AI cache hit/miss`는 영향도가 중간 이상일 수 있으나, 현재 structured join 필드가 부족해 `observe-only schema gap`으로 분류한다.
+5. `Execution receipt binding`은 BUY/SELL 체결 truth 품질 이슈다. EV 판정 전제 품질축으로 보되, alpha canary로 분류하지 않는다.
+6. `2026-05-01` 근로자의 날과 `2026-05-05` 어린이날은 KRX 휴장으로, 휴장일 Due 작업은 다음 운영일 체크리스트로 이관한다.
+
 ---
 
 ## 1. 배경
@@ -182,10 +191,16 @@ cohort 분류 공통 규칙은 아래로 고정한다.
 | `hard_stop_whipsaw_aux` | `observe-only` | severe-loss guard 보조 관찰 | 하드스탑을 보조 관찰로만 둔다는 원칙이 유지되는 동안 유지. `MISSED_UPSIDE/GOOD_EXIT/NEUTRAL`과 반등 지표가 독립 판단가치를 잃거나 hard stop 완화 의제가 공식 폐기되면 제거 | `Plan Rebase`, `2026-04-27 checklist` |
 | `same_symbol_reentry` | `observe-only` | 동일종목 재진입 손실/guard 필요성 관찰 | `same_symbol_reentry_loss_count`가 독립 guard 후보성을 잃거나, soft stop/position context 축에 완전히 흡수되어 별도 재진입 cohort가 필요 없을 때 제거 | `holding_exit_observation`, `2026-04-27 checklist` |
 | `trailing_continuation` | `observe-only` | upside capture 개선 후보 관찰 | `MISSED_UPSIDE rate >= 60%`, `GOOD_EXIT rate <= 30%`로 2순위 live 후보 요건을 충족해 canary로 승격되거나, 반대로 upside 개선 후보성이 약해져 후순위 폐기가 확정되면 제거/재분류 | `holding_exit_observation`, `2026-04-27 checklist` |
-| `initial-only` | `observe-only` | 신규 진입만의 체결/손익/청산 품질 분리 | `1주 cap` 유지/해제 판정이 닫히고 initial/pyramid가 더 이상 다른 EV를 보이지 않아 분리 해석 가치가 사라질 때만 제거 | `2026-04-24`, `2026-04-27 checklist` |
-| `pyramid-activated` | `observe-only` | 추가매수 활성 표본 분리 | `1주 cap` 및 추가매수 정책 재판정이 닫히고 별도 손익/청산 특성이 없다고 확인될 때만 제거 | `2026-04-24`, `2026-04-27 checklist` |
+| `initial-only` | `observe-only` | 신규 진입만의 체결/손익/청산 품질 분리 | 임시 `2주 cap` 유지/해제와 `3주 cap` 승인조건 판정이 닫히고 initial/pyramid가 더 이상 다른 EV를 보이지 않아 분리 해석 가치가 사라질 때만 제거 | `2026-04-29`, `2026-04-30 checklist` |
+| `pyramid-activated` | `observe-only` | 추가매수 활성 표본 분리 | `2주 cap` 이후 `zero_qty=0` 유지와 pyramid 손익/청산 품질이 충분히 닫히고 별도 특성이 없다고 확인될 때만 제거 | `2026-04-29`, `2026-04-30 checklist` |
 | `full_fill` | `observe-only` | 체결 품질 우수 표본 분리 | `partial_fill`과 EV/청산 품질 차이가 더 이상 의사결정 의미를 잃지 않는 한 유지. full/partial 합산 허용 정책으로 바뀌기 전에는 제거 금지 | `Plan Rebase`, performance/report/checklist |
 | `partial_fill` | `observe-only` | partial 전용 손익/재베이스/soft-stop 악화 관찰 | partial 악화 여부가 더 이상 독립 리스크가 아니라고 확인되기 전까지 유지. full/partial 합산 정책 변경 전에는 제거 금지 | `Plan Rebase`, performance/report/checklist |
+| `initial_entry_qty_cap_2share` | `active-canary-decision` | 신규 BUY 초기 수량 tail 제한과 pyramid zero_qty 왜곡 완화 | `initial_entry_qty_cap_applied`, `zero_qty`, `pyramid_activated`, `soft_stop`, `COMPLETED + valid profit_rate`로 2주 cap 유지/해제를 닫을 때까지 유지 | `2026-04-29`, `2026-04-30 checklist` |
+| `initial_entry_qty_cap_3share_candidate` | `observe-only` | 3주 cap 전환 승인조건 관찰 | `2주 cap` cohort가 제출/체결/soft_stop tail 비악화를 보이고, 동일 entry 단계 live 축 충돌 없이 canary slot을 확보할 때만 active 후보로 승격 | `2026-04-30 checklist` |
+| `ai_cache_hit_miss` | `observe-only` | gatekeeper/holding AI cache hit vs miss 영향도 관찰 | structured join 필드가 `submitted/full/partial/COMPLETED`와 안정적으로 연결될 때까지 live go/no-go 입력 금지 | `2026-04-29 checklist` |
+| `execution_receipt_binding_quality` | `observe-only` | WS 실제체결과 active order binding 정합성 관찰 | BUY/SELL `EXEC_IGNORED` 원인이 order number race인지 visibility 문제인지 닫힐 때까지 EV 판정 전제 품질축으로 유지 | `2026-04-29`, `2026-04-30 checklist` |
+| `gemini_schema_registry_flag_off` | `observe-only` | Gemini 6 endpoint response schema registry의 flag-off contract 관찰 | `holding_exit_v1/eod_top5_v1` contract gap이 닫히고 live enable 항목이 별도 승인되기 전까지 flag-off 유지 | `2026-04-29`, `2026-04-30 checklist` |
+| `deepseek_retry_acceptance_flag_off` | `observe-only` | DeepSeek retry/backoff acceptance snapshot 관찰 | `api_call_lock`, retry log visibility, live-sensitive sleep guard가 문서/테스트로 닫히기 전까지 live enable 금지 | `2026-04-29`, `2026-04-30 checklist` |
 
 inventory 운영 규칙은 아래로 고정한다.
 
@@ -222,6 +237,11 @@ inventory 운영 규칙은 아래로 고정한다.
 | `latency_quote_fresh_composite` | `observe-only` | `guarded-off` | 2026-04-29 08:29 KST OFF + restart 완료. historical/reference 축 |
 | `latency_signal_quality_quote_composite` | `observe-only` | `guarded-off` | 2026-04-29 12:21~12:50 KST same-day replacement 후 효과 미약 종료 |
 | `mechanical_momentum_latency_relief` | `active-canary` | `limited-live` | current entry live replacement canary |
+| `initial_entry_qty_cap_2share` | `active-canary` | `limited-live` | current initial entry size guard. 3주 확대는 별도 승인 전 observe-only |
+| `ai_cache_hit_miss` | `observe-only` | `none` | structured join gap으로 보조지표 유지 |
+| `execution_receipt_binding_quality` | `observe-only` | `none` | SK이노베이션 BUY/SELL `EXEC_IGNORED` 사례로 runtime truth 품질축 유지 |
+| `gemini_schema_registry_flag_off` | `observe-only` | `guarded-off` | flag-off contract/load observability. live enable 아님 |
+| `deepseek_retry_acceptance_flag_off` | `observe-only` | `guarded-off` | flag-off retry acceptance observability. live enable 아님 |
 | `orderbook_stability_observation` | `observe-only` | `none` | FR/quote-age/print-alignment 관찰. live gate 아님 |
 | `spread_relief_canary` | `active-canary` | `guarded-off` | parking 상태 |
 | `ws_jitter_relief_canary` | `active-canary` | `guarded-off` | same-day 종료된 replacement 축 |
@@ -691,6 +711,87 @@ inventory 운영 규칙은 아래로 고정한다.
 - 다음 액션:
   1. offline bundle summary에서 `unstable_quote_observed_count/share`, `unstable_reason_breakdown`, `unstable_vs_submitted/fill/latency_danger`를 본다.
   2. live gate 승격 전까지는 분석 지표로만 유지한다.
+
+### 4.9A-5 `initial_entry_qty_cap_2share` / `initial_entry_qty_cap_3share_candidate`
+
+- 판정: `2share=active-canary-decision`, `3share=observe-only`
+- live 영향도: `2share=limited-live`, `3share=none`
+- 튜닝 모니터링 가치: `High`
+  - 이유: `2주 cap`은 `buy_qty=1 -> pyramid template_qty=0` 왜곡을 줄이는 현재 수량 가드이고, `3주 cap`은 exposure와 soft stop tail을 직접 키우는 다음 후보라 별도 cohort로 분리해야 한다.
+  - 상향 조건: `2주 cap` cohort에서 `zero_qty=0` 유지, `pyramid_activated` 표본 증가, `soft_stop` tail 비악화, `COMPLETED + valid profit_rate` 비악화가 확인될 때
+  - 하향 조건: `3주 cap` 후보가 entry live 축과 충돌하거나, 2주 cap 상태에서 soft stop/partial/order_failed가 악화될 때
+- EV 판정 기여도: `High`
+- 대체 가능성: `Low`
+- 운영 부하/지연 비용: `Low`
+- 코드 유지비: `Low`
+- 향후 재개 가능성: `High`
+- 근거:
+  1. `2026-04-29` full-day 기준 `initial_entry_qty_cap_applied=38`, `ADD_BLOCKED reason=zero_qty=0`, `completed_valid_count=17`, `completed_valid_avg_profit_rate=+0.0535%`, `pyramid_activated=3`이 확인됐다.
+  2. `3주 cap`은 `KORSTOCKSCAN_SCALPING_INITIAL_ENTRY_MAX_QTY=3` 또는 상수 변경으로 가능하지만, 현재 `mechanical_momentum_latency_relief`와 같은 entry 단계 변경이므로 같은 날 병행 live 승인 대상이 아니다.
+- 다음 액션:
+  1. `initial-only`, `pyramid-activated`, `full_fill`, `partial_fill`, `soft_stop`, `order_failed`를 계속 분리한다.
+  2. `3주 cap`은 별도 승인조건이 닫히기 전까지 observe-only 후보로만 유지한다.
+
+### 4.9A-6 `ai_cache_hit_miss`
+
+- 판정: `observe-only`
+- live 영향도: `none`
+- 튜닝 모니터링 가치: `Medium`
+  - 이유: holding cache hit/miss는 호출량과 decision freshness에 영향을 줄 수 있지만, 현재 structured field가 `submitted/full/partial/COMPLETED`와 안정적으로 조인되지 않는다.
+  - 상향 조건: gatekeeper/holding cache hit/miss가 raw event에 canonical field로 남고, `submitted`, `soft_stop`, `COMPLETED + valid profit_rate`와 조인 가능한 schema가 생길 때
+  - 하향 조건: cache miss/hit 차이가 호출비용 외 EV/청산 품질과 무관하다고 확인될 때
+- EV 판정 기여도: `Medium`
+- 대체 가능성: `Medium`
+- 운영 부하/지연 비용: `Low`
+- 코드 유지비: `Medium`
+- 향후 재개 가능성: `Medium`
+- 근거:
+  1. `2026-04-29` 기준 `AI 보유감시` 로그는 `MISS=2260`, `HIT=67`로 관측량은 충분했다.
+  2. 그러나 pipeline event에는 `gatekeeper_cache`/`ai_cache`가 제출/체결/손익과 직접 조인되는 structured field로 남아 있지 않아 live go/no-go 근거로 쓸 수 없다.
+- 다음 액션:
+  1. cache 축은 영향도 0이 아니라 `schema gap`으로 둔다.
+  2. canary가 아니라 structured logging 보강 후보로만 유지한다.
+
+### 4.9A-7 `execution_receipt_binding_quality`
+
+- 판정: `observe-only`
+- live 영향도: `none`
+- 튜닝 모니터링 가치: `High`
+  - 이유: WS 실제체결이 들어왔는데 active order binding이 실패하면 보유/청산 판단보다 먼저 runtime truth가 흔들린다.
+  - 상향 조건: BUY/SELL `EXEC_IGNORED`가 반복되고, 계좌동기화가 HOLDING/COMPLETED 복구를 대신하는 빈도가 늘 때
+  - 하향 조건: order number binding race가 해결되고 정기 계좌동기화 의존도가 낮아졌을 때
+- EV 판정 기여도: `High`
+- 대체 가능성: `Low`
+- 운영 부하/지연 비용: `Low`
+- 코드 유지비: `Medium`
+- 향후 재개 가능성: `High`
+- 근거:
+  1. `SK이노베이션(096770)`은 `2026-04-29 13:28:19 BUY`, `15:06:28 SELL` 모두 WS 실제체결이 있었지만 `[EXEC_IGNORED] no matching active order`로 빠졌다.
+  2. 정기 계좌동기화가 `BROKER_RECOVER -> HOLDING`, 이후 `잔고 없음 -> COMPLETED`를 대신 수행했다.
+  3. 사용자는 단절 리스크 때문에 HTS에서 수동 매도했고, 실제 체결 기준 수익률은 비용 반영 약 `+4.2%`였다.
+- 다음 액션:
+  1. 이 축은 alpha canary가 아니라 `EV 판정 전제 품질축`으로 유지한다.
+  2. `ORDER_NOTICE_BOUND -> WS 실제체결 -> active order binding` 경로를 BUY/SELL로 분리해 추적한다.
+
+### 4.9A-8 `gemini_schema_registry_flag_off` / `deepseek_retry_acceptance_flag_off`
+
+- 판정: `observe-only`
+- live 영향도: `guarded-off`
+- 튜닝 모니터링 가치: `Medium`
+  - 이유: 둘 다 live enable이 아니라 flag-off load/contract/log visibility 묶음이다. 기본 live 동작을 바꾸지 않지만, 이후 AI engine enable acceptance의 전제다.
+  - 상향 조건: Gemini schema registry가 endpoint별 response_schema ingress와 fallback/test matrix를 갖추고, DeepSeek retry acceptance가 `api_call_lock`/rate-limit/server-error 경로에서 충분히 관찰될 때
+  - 하향 조건: live enable 계획이 폐기되거나 기존 text fallback만으로 충분하다고 확정될 때
+- EV 판정 기여도: `Medium`
+- 대체 가능성: `Medium`
+- 운영 부하/지연 비용: `Low`
+- 코드 유지비: `Medium`
+- 향후 재개 가능성: `Medium`
+- 근거:
+  1. Gemini `holding_exit_v1` enum/normalization contract와 `eod_top5_v1` required field gap은 live enable 전 필수 정합성 항목으로 남아 있다.
+  2. DeepSeek context-aware backoff guard는 준비됐지만, retry acceptance 문서화와 로그 확인 전에는 enable 불가다.
+- 다음 액션:
+  1. flag 기본값 OFF를 유지한다.
+  2. `GeminiSchemaContractCarry0430`, `DeepSeekAcceptanceCarry0430`, `DeepSeekInterfaceGap0430`에서 contract/test/log visibility만 닫는다.
 
 ### 4.9B `latency_guard_canary`
 

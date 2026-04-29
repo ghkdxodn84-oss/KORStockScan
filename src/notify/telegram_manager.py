@@ -35,11 +35,6 @@ from src.engine.buy_pause_guard import (
     get_buy_pause_guard_status,
     reject_buy_pause_guard,
 )
-from src.engine.sniper_entry_metrics import (
-    format_entry_metrics_summary_compact,
-    format_entry_metrics_summary,
-    summarize_today_entry_metrics,
-)
 from src.market_regime import MarketRegimeService, summarize_market_regime_snapshot
 
 
@@ -289,15 +284,6 @@ def _reply_pause_status(message):
     bot.reply_to(message, text)
 
 
-def _reply_entry_metrics(message):
-    if not _is_admin_message(message):
-        bot.reply_to(message, "⛔ 권한이 없습니다.")
-        return
-
-    summary = summarize_today_entry_metrics()
-    bot.reply_to(message, format_entry_metrics_summary_compact(summary))
-
-
 def _publish_pause_state(status):
     event_bus.publish('TRADING_PAUSED', {'status': status})
 
@@ -378,7 +364,6 @@ def get_main_keyboard(chat_id=None):
     if chat_id is not None and _is_admin_chat_id(chat_id):
         markup.add(_get_admin_pause_status_label(), "📛 현재 매매 상태")
         markup.add("🛑 긴급 매매 중단", "▶️ 매매 재개")
-        markup.add("📊 진입 지표")
     return markup
 
 def get_user_badge(chat_id):
@@ -539,11 +524,6 @@ def cmd_trading_status(message):
     _reply_pause_status(message)
 
 
-@bot.message_handler(commands=['entry_metrics', '진입지표'])
-def cmd_entry_metrics(message):
-    _reply_entry_metrics(message)
-
-
 @bot.message_handler(func=lambda message: message.text == "🛑 긴급 매매 중단")
 def handle_pause_button(message):
     cmd_pause_buy_side(message)
@@ -569,10 +549,6 @@ def handle_trading_status_button(message):
         return
     _reply_pause_status(message)
 
-
-@bot.message_handler(func=lambda message: message.text == "📊 진입 지표")
-def handle_entry_metrics_button(message):
-    _reply_entry_metrics(message)
 
 @bot.message_handler(func=lambda message: message.text == "🔍 실시간 종목분석")
 def handle_analyze_btn(message):
