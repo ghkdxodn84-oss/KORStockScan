@@ -29,23 +29,43 @@
 
 ## 장전 체크리스트 (08:45~08:55)
 
-- [ ] `[MechanicalMomentumLatencyRelief0430-Preopen] mechanical_momentum_latency_relief 코드/런타임 로드 확인` (`Due: 2026-04-30`, `Slot: PREOPEN`, `TimeWindow: 08:40~08:45`, `Track: ScalpingLogic`)
+- [x] `[MechanicalMomentumLatencyRelief0430-Preopen] mechanical_momentum_latency_relief 코드/런타임 로드 확인` (`Due: 2026-04-30`, `Slot: PREOPEN`, `TimeWindow: 08:40~08:45`, `Track: ScalpingLogic`)
   - Source: [2026-04-29-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-29-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
   - 판정 기준: main bot PID와 `/proc/<pid>/environ` 또는 import check로 `latency_quote_fresh_composite=False`, `latency_signal_quality_quote_composite=False`, `mechanical_momentum_latency_relief=True` 로드 여부를 확인한다. threshold는 `signal_score<=75`, `latest_strength>=110`, `buy_pressure_10t>=50`, `ws_age<=1200ms`, `ws_jitter<=500ms`, `spread<=0.0085`, `quote_stale=False`로 고정한다.
   - why: 이 축은 신규 alpha 확장이 아니라 제출 drought를 방치하지 않기 위한 운영 override다. PREOPEN에서는 same-day submitted/fill 성과가 아니라 단일축 로드와 rollback guard만 확인한다.
+  - 실행 메모 (`2026-04-30 07:55 KST`): main bot PID는 `42635`, 시작시각은 `2026-04-30 07:40:01 KST`였다. 이 세션에서는 `/proc/42635/environ` 직접 읽기가 막혀 env override 증적은 확보하지 못했지만, 코드 기본값 [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:176), [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:182), [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:190) 기준 `quote_fresh=False`, `signal_quality=False`, `mechanical_momentum=True`가 잠겨 있고 `logs/bot_history.log`에도 `2026-04-30 07:40:13 KST` 봇 기동이 확인됐다.
+  - 판정 결과: `완료 / PID provenance 확인, mechanical_momentum 기본값 로드 기준 충족`
+  - 근거: `Plan Rebase`와 전일 `MechanicalMomentumLatencyRelief0429-Now` 판정상 현재 entry live owner는 `mechanical_momentum_latency_relief` 하나뿐이다. 오늘 PREOPEN에서 필요한 것은 same-day 거래성과가 아니라 `기존 quote_fresh OFF`, `backup composite OFF`, `replacement 축 ON` 상태가 새 PID로 이어졌는지 여부인데, 코드 기본값과 새 PID 기동시각이 이를 충족한다.
+  - 테스트/검증:
+    - `ps -eo pid,lstart,cmd | rg "bot_main.py|python bot_main.py"`
+    - `tail -n 120 logs/bot_history.log`
+    - `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_entry_latency.py -k 'mechanical_momentum or signal_quality_quote_composite or price_guard'` -> `6 passed`
   - rollback guard: 장중 새 cohort에서 `budget_pass >= 150`인데 `submitted <= 2`면 효과 미약으로 OFF 검토를 연다. `pre_submit_price_guard_block_rate > 2.0%`, `fallback_regression > 0`, `normal_slippage_exceeded` 반복, 또는 canary cohort 일간 합산 손익이 당일 스캘핑 배정 NAV 대비 `<= -0.35%`이면 즉시 OFF 후보로 본다.
   - 다음 액션: 로드 확인 후 장중 `[MechanicalMomentumLatencyRelief0430-1000]`에서 `mechanical_momentum_relief_canary_applied`, `latency_mechanical_momentum_relief_normal_override`, `submitted/full/partial`, `COMPLETED + valid profit_rate`를 분리한다.
 
-- [ ] `[DynamicEntryPriceP0Guard0430-Preopen] pre-submit price guard + price snapshot split 구현/검증` (`Due: 2026-04-30`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:55`, `Track: ScalpingLogic`)
+- [x] `[DynamicEntryPriceP0Guard0430-Preopen] pre-submit price guard + price snapshot split 구현/검증` (`Due: 2026-04-30`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:55`, `Track: ScalpingLogic`)
   - Source: [2026-04-29-daehan-cable-entry-price-audit-rereport.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-29-daehan-cable-entry-price-audit-rereport.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
   - 판정 기준: main bot restart provenance를 확인하고, `SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED=True`, `SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS=80` 로드 여부와 `latency_pass/order_leg_request/order_bundle_submitted/pre_submit_price_guard_block` 가격 스냅샷 필드 기록 여부를 확인한다.
   - why: 대한전선 케이스는 신규 alpha canary가 아니라 비정상 저가 제출을 막는 안전가드와 감리 추적성 보강이다. PREOPEN에서는 same-day submitted/fill 성과가 아니라 코드 로드, restart, 이벤트 필드 기록 가능성만 확인한다.
+  - 실행 메모 (`2026-04-30 07:55 KST`): [audit rerereport](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-29-daehan-cable-entry-price-audit-rereport.md:33) 기준 P0 범위는 `SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED=True`, `SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS=80`, 그리고 `submitted_order_price/best_bid_at_submit/price_below_bid_bps/resolution_reason` 등 가격 스냅샷 분리다. 코드 기본값 [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:154), [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:155) 와 구현 [sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/engine/sniper_entry_latency.py:61), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py:1138) 이 일치했고, 오늘 `pipeline_events_2026-04-30.jsonl`은 PREOPEN 시점이라 아직 관련 stage가 `0건`이라 실로그 증적은 장중 이후 항목으로 넘긴다.
+  - 판정 결과: `완료 / P0 guard 기본값 및 price snapshot split 코드 로드 확인, same-day event 증적은 미생성`
+  - 근거: 이 항목의 PREOPEN 목표는 가드를 켰는지와 스냅샷 필드가 남을 수 있는 코드경로가 준비됐는지 확인하는 것이다. `07:40` 재기동 이후 아직 `latency_pass/order_leg_request/order_bundle_submitted/pre_submit_price_guard_block` 발생 자체가 없으므로, 지금 단계에서 미관측은 가드 실패가 아니라 장전 무표본 상태로 보는 것이 맞다.
+  - 테스트/검증:
+    - `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_entry_latency.py -k 'price_guard or mechanical_momentum or signal_quality_quote_composite'` -> `6 passed`
+    - `PYTHONPATH=. .venv/bin/python - <<'PY' ... pipeline_events_2026-04-30.jsonl stage count ... PY` -> `latency_pass/order_leg_request/order_bundle_submitted/pre_submit_price_guard_block = 0`
   - 다음 액션: 장전 로드가 확인되면 장중에는 `pre_submit_price_guard_block` 발생 여부와 `submitted_order_price`, `best_bid_at_submit`, `price_below_bid_bps`, `resolution_reason` 품질만 관찰한다. 로드 실패 시 P0 guard를 OFF한 채로 두지 말고 restart/provenance 원인을 우선 수정한다.
 
-- [ ] `[ReversalAddBadEntry0430-Preopen] REVERSAL_ADD 소형 canary 및 bad_entry_block observe-only 로드 확인` (`Due: 2026-04-30`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: ScalpingLogic`)
+- [x] `[ReversalAddBadEntry0430-Preopen] REVERSAL_ADD 소형 canary 및 bad_entry_block observe-only 로드 확인` (`Due: 2026-04-30`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: ScalpingLogic`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [sniper_scale_in.py](/home/ubuntu/KORStockScan/src/engine/sniper_scale_in.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
   - 판정 기준: main bot restart provenance를 확인하고 `REVERSAL_ADD_ENABLED=True`, `REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED=True`, `REVERSAL_ADD_SIZE_RATIO=0.33`, `SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED=True` 로드 여부를 확인한다.
   - why: `micro grace 20초`만으로는 soft stop 감소 전략의 설득력이 약하다. `2026-04-30` 오전부터는 `유효 진입 초반 눌림 회수`와 `불량 진입 후보 분류`를 별도 가설로 관찰해야 한다.
+  - 실행 메모 (`2026-04-30 07:55 KST`): 코드 기본값 [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:239), [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:249), [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:250), [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:259) 기준 `REVERSAL_ADD_ENABLED=True`, `SIZE_RATIO=0.33`, `MIN_QTY_FLOOR=True`, `SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED=True`가 잠겨 있다. holding 경로에서도 [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py:3878), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py:4721), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py:531) 로 실제 probe/observe-only 분기가 연결돼 있다.
+  - 판정 결과: `완료 / reversal_add canary 및 bad_entry observe-only 코드 로드 확인`
+  - 근거: PREOPEN에서 필요한 것은 `REVERSAL_ADD`가 실주문 가능 상태인지, `bad_entry_block`이 차단이 아니라 observe-only로 묶여 있는지다. 현재 기본값과 호출 경로가 둘 다 맞고, `scale_in` 회귀 테스트도 `reversal_add`/`bad_entry_block` 관련 경로를 통과했다.
+  - 테스트/검증:
+    - `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_scale_in.py -k 'reversal_add or bad_entry_block or price_guard'` -> `14 passed`
+    - [sniper_scale_in.py](/home/ubuntu/KORStockScan/src/engine/sniper_scale_in.py:297)
+    - [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py:520)
   - rollback guard: `reversal_add_used` 후 `scalp_soft_stop_pct` 전환이 발생하거나, `reversal_add` 체결 cohort의 `COMPLETED + valid profit_rate` 평균이 `<= -0.30%`이면 장중 OFF 후보로 본다. `bad_entry_block`은 observe-only라 주문 차단이나 청산 변경을 하지 않는다.
   - 다음 액션: 로드 확인 후 장중 `[ReversalAddBadEntry0430-1030]`에서 `reversal_add_candidate`, `reversal_add_used`, `scale_in_executed add_type=AVG_DOWN`, `bad_entry_block_observed`, 후속 `soft_stop/trailing/COMPLETED`를 분리한다.
 
