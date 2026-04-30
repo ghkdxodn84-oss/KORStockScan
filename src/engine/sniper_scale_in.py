@@ -1,4 +1,5 @@
 import statistics
+import math
 from datetime import datetime, time as dt_time
 
 from src.utils.constants import TRADING_RULES
@@ -37,6 +38,27 @@ def _base_result():
         "qty": 0,
         "price": 0,
     }
+
+
+def _safe_float(value, default=0.0):
+    try:
+        if value is None:
+            return default
+        if isinstance(value, str) and value.strip().lower() in {"", "nan", "nat", "none", "inf", "+inf", "-inf"}:
+            return default
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            return default
+        return numeric
+    except Exception:
+        return default
+
+
+def _safe_int(value, default=0):
+    try:
+        return int(_safe_float(value, default))
+    except Exception:
+        return default
 
 
 def _resolve_buy_time_as_datetime(raw_buy_time, now_dt):
@@ -402,7 +424,7 @@ def describe_scale_in_qty(stock, curr_price, deposit, add_type, strategy, add_re
     if curr_price <= 0 or deposit <= 0:
         return _zero_scale_in_details()
 
-    buy_qty = int(float(stock.get('buy_qty', 0) or 0))
+    buy_qty = _safe_int(stock.get('buy_qty'), 0)
     if buy_qty <= 0:
         return _zero_scale_in_details()
 

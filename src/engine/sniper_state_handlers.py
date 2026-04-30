@@ -2,6 +2,7 @@
 
 import re
 import time
+import math
 from datetime import datetime, timedelta
 from uuid import uuid4
 
@@ -71,7 +72,7 @@ _MARCAP_CACHE_MAX_SIZE: int = 512
 
 def _resolve_zero_qty_cooldown_sec(deposit: int) -> int:
     """주문가능금액 0원은 일시 조회 실패일 수 있어 짧게 재조회합니다."""
-    if int(float(deposit or 0)) <= 0:
+    if _safe_int(deposit, 0) <= 0:
         return _rule_int("ZERO_DEPOSIT_RETRY_COOLDOWN_SEC", 20)
     return 1200
 
@@ -158,6 +159,30 @@ def _rule_float(name, default=0.0):
         return float(_rule(name, default) or default)
     except (TypeError, ValueError):
         return float(default)
+
+
+def _safe_float(value, default=0.0):
+    try:
+        if value is None:
+            return default
+        if isinstance(value, str) and value.strip().lower() in {"", "nan", "nat", "none", "inf", "+inf", "-inf"}:
+            return default
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            return default
+        return numeric
+    except Exception:
+        return default
+
+
+def _safe_int(value, default=0):
+    numeric = _safe_float(value, None)
+    if numeric is None:
+        return default
+    try:
+        return int(numeric)
+    except Exception:
+        return default
 
 
 def _coerce_optional_timestamp(value):
@@ -441,8 +466,8 @@ def _publish_buy_signal_submission_notice(
             "buy_signal_telegram_enqueued",
             audience=audience,
             entry_mode=entry_mode,
-            requested_qty=int(requested_qty or 0),
-            liquidity_value=int(float(liquidity_value or 0)),
+            requested_qty=_safe_int(requested_qty, 0),
+            liquidity_value=_safe_int(liquidity_value, 0),
             ai_score=f"{float(ai_score or 0):.1f}",
             latency=latency_gate.get('latency_state'),
             decision=latency_gate.get('decision'),
@@ -676,8 +701,8 @@ def _emit_partial_only_timeout_shadow(
     if timeout_sec <= 0 or held_sec < timeout_sec:
         return
 
-    requested_qty = int(stock.get("entry_requested_qty", 0) or stock.get("requested_buy_qty", 0) or 0)
-    buy_qty = int(stock.get("buy_qty", 0) or 0)
+    requested_qty = _safe_int(stock.get("entry_requested_qty") or stock.get("requested_buy_qty"), 0)
+    buy_qty = _safe_int(stock.get("buy_qty"), 0)
     if requested_qty <= 1 or buy_qty <= 0 or buy_qty > 1 or buy_qty >= requested_qty:
         return
 
@@ -686,7 +711,7 @@ def _emit_partial_only_timeout_shadow(
         return
 
     entry_mode = str(stock.get("entry_mode", "") or "normal").strip().lower() or "normal"
-    rebase_count = int(stock.get("_split_entry_rebase_shadow_count", 0) or 0)
+    rebase_count = _safe_int(stock.get("_split_entry_rebase_shadow_count"), 0)
     if rebase_count >= 2:
         return
 
@@ -716,17 +741,11 @@ def _emit_partial_only_timeout_shadow(
 
 
 def _soft_stop_feature_float(features: dict, key: str, default: float = 0.0) -> float:
-    try:
-        return float(features.get(key, default))
-    except (TypeError, ValueError):
-        return float(default)
+    return _safe_float(features.get(key, default), float(default))
 
 
 def _soft_stop_feature_int(features: dict, key: str, default: int = 0) -> int:
-    try:
-        return int(float(features.get(key, default)))
-    except (TypeError, ValueError):
-        return int(default)
+    return _safe_int(features.get(key, default), int(default))
 
 
 def _soft_stop_expert_time_gate_active(now_ts: float) -> bool:
@@ -827,9 +846,9 @@ def _build_soft_stop_expert_decision(
             - (0.20 if thesis_invalidated else 0.0),
         ),
     )
-    buy_qty = max(0, int(float(stock.get("buy_qty", 0) or 0)))
-    extension_count = max(0, int(stock.get("soft_stop_absorption_extension_count", 0) or 0))
-    extension_started_at = float(stock.get("soft_stop_absorption_extension_started_at", 0.0) or 0.0)
+    buy_qty = max(0, _safe_int(stock.get("buy_qty"), 0))
+    extension_count = max(0, _safe_int(stock.get("soft_stop_absorption_extension_count"), 0))
+    extension_started_at = _safe_float(stock.get("soft_stop_absorption_extension_started_at"), 0.0)
     extension_active = bool(
         extension_started_at > 0
         and extension_sec > 0
@@ -855,7 +874,7 @@ def _build_soft_stop_expert_decision(
         exclusion_reason = "active_sell_pending"
     elif not feature_valid:
         exclusion_reason = "invalid_feature"
-    elif grace_elapsed_sec < max(0, int(grace_sec or 0)):
+    elif grace_elapsed_sec < max(0, _safe_int(grace_sec, 0)):
         exclusion_reason = "base_micro_grace"
     elif thesis_invalidated:
         exclusion_reason = thesis_reason
@@ -890,10 +909,10 @@ def _build_soft_stop_expert_decision(
         "extension_active": bool(extension_active),
         "recovery_prob_shadow": round(recovery_prob_shadow, 3),
         "would_trim_qty": max(0, buy_qty // 2) if buy_qty > 1 else 0,
-        "would_trim_price": int(curr_price or 0),
+        "would_trim_price": _safe_int(curr_price, 0),
         "mae_proxy_pct": round(float(profit_rate or 0.0), 3),
         "mfe_proxy_pct": round(float(peak_profit or 0.0), 3),
-        "held_sec": int(held_sec or 0),
+        "held_sec": _safe_int(held_sec, 0),
     }
 
 
@@ -908,8 +927,8 @@ def _emit_soft_stop_expert_observations(
     current_ai_score: float,
     held_sec: int,
 ) -> None:
-    bucket = int(max(0, int(decision.get("held_sec", held_sec) or 0)) // 10)
-    started_at = int(float(stock.get("soft_stop_micro_grace_started_at", 0.0) or 0.0))
+    bucket = int(max(0, _safe_int(decision.get("held_sec", held_sec), 0)) // 10)
+    started_at = _safe_int(stock.get("soft_stop_micro_grace_started_at"), 0)
     logged_key = f"{started_at}:{bucket}:{decision.get('exclusion_reason', '-')}"
     if stock.get("_soft_stop_expert_shadow_logged_key") == logged_key:
         return
@@ -927,10 +946,10 @@ def _emit_soft_stop_expert_observations(
         mae_proxy_pct=f"{decision.get('mae_proxy_pct', 0.0):+.3f}",
         mfe_proxy_pct=f"{decision.get('mfe_proxy_pct', 0.0):+.3f}",
         recovery_prob_shadow=f"{decision.get('recovery_prob_shadow', 0.0):.3f}",
-        would_trim_qty=int(decision.get("would_trim_qty", 0) or 0),
-        would_trim_price=int(decision.get("would_trim_price", 0) or 0),
+        would_trim_qty=_safe_int(decision.get("would_trim_qty"), 0),
+        would_trim_price=_safe_int(decision.get("would_trim_price"), 0),
         current_ai_score=f"{current_ai_score:.0f}",
-        held_sec=int(held_sec or 0),
+        held_sec=_safe_int(held_sec, 0),
     )
     _log_holding_pipeline(
         stock,
@@ -1048,7 +1067,7 @@ def _emit_scalp_hard_time_stop_shadow(
 ) -> None:
     if not _rule_bool("SCALP_COMMON_HARD_TIME_STOP_SHADOW_ONLY", True):
         return
-    if int(stock.get("buy_qty", 0) or 0) <= 0:
+    if _safe_int(stock.get("buy_qty"), 0) <= 0:
         return
     if str(stock.get("status", "") or "").strip().upper() in {"COMPLETED", "SOLD"}:
         return
@@ -1276,10 +1295,7 @@ def _resolve_gatekeeper_reject_cooldown(action_label: str) -> tuple[int, str]:
 
 def _resolve_stock_marcap(stock, code) -> int:
     """시가총액 조회 (프로세스 레벨 TTL 캐시 + stock 캐시)."""
-    try:
-        existing = int(float(stock.get('marcap', 0) or 0))
-    except Exception:
-        existing = 0
+    existing = _safe_int(stock.get('marcap'), 0)
     if existing > 0:
         return existing
     now_ts = time.time()
@@ -1319,7 +1335,7 @@ def _dispatch_scalp_preset_exit(
     exit_rule,
 ):
     target_id = stock.get('id')
-    expected_qty = int(stock.get('buy_qty', 0) or 0)
+    expected_qty = _safe_int(stock.get('buy_qty'), 0)
     orig_ord_no = stock.get('preset_tp_ord_no', '')
     preset_ai_score = float(stock.get('rt_ai_prob', 0.5) or 0.5) * 100
     preset_held_sec = 0
@@ -1416,12 +1432,12 @@ def _get_best_levels_from_ws(ws_data):
     best_bid = 0
     try:
         if asks:
-            best_ask = int(float(asks[-1].get('price', 0) or 0))
+            best_ask = _safe_int(asks[-1].get('price'), 0)
     except Exception:
         best_ask = 0
     try:
         if bids:
-            best_bid = int(float(bids[0].get('price', 0) or 0))
+            best_bid = _safe_int(bids[0].get('price'), 0)
     except Exception:
             best_bid = 0
     return best_ask, best_bid
@@ -1525,15 +1541,15 @@ def _extract_ai_overlap_snapshot(
         except Exception:
             pass
         try:
-            buy_vol = sum(int(float(tick.get("volume", 0) or 0)) for tick in ticks if str(tick.get("dir") or "").upper() == "BUY")
-            sell_vol = sum(int(float(tick.get("volume", 0) or 0)) for tick in ticks if str(tick.get("dir") or "").upper() == "SELL")
+            buy_vol = sum(_safe_int(tick.get("volume"), 0) for tick in ticks if str(tick.get("dir") or "").upper() == "BUY")
+            sell_vol = sum(_safe_int(tick.get("volume"), 0) for tick in ticks if str(tick.get("dir") or "").upper() == "SELL")
             total_vol = buy_vol + sell_vol
             if total_vol > 0:
                 snapshot["buy_pressure_10t"] = (buy_vol / total_vol) * 100.0
         except Exception:
             pass
 
-    curr_price = int(float(ws_data.get("curr", 0) or 0))
+    curr_price = _safe_int(ws_data.get("curr"), 0)
     if candles and curr_price > 0:
         highs = []
         lows = []
@@ -1757,7 +1773,7 @@ def _resolve_holding_elapsed_sec(stock):
 def _bucket_int(value, bucket):
     try:
         bucket = max(1, int(bucket))
-        return int(float(value or 0) // bucket)
+        return int(_safe_float(value, 0.0) // bucket)
     except Exception:
         return 0
 
@@ -1803,8 +1819,8 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
         max_ratio = config["INVEST_RATIO_SCALPING_MAX"]
         ratio = min_ratio + (current_ai_score / 100.0) * (max_ratio - min_ratio)
 
-        ask_tot = int(float(ws_data.get('ask_tot', 0) or 0))
-        bid_tot = int(float(ws_data.get('bid_tot', 0) or 0))
+        ask_tot = _safe_int(ws_data.get('ask_tot'), 0)
+        bid_tot = _safe_int(ws_data.get('bid_tot'), 0)
         open_price = float(ws_data.get('open', curr_price) or curr_price)
         marcap = _resolve_stock_marcap(stock, code)
         turnover_hint = estimate_turnover_hint(curr_price, ws_data.get('volume', 0))
@@ -2714,7 +2730,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
 
     if real_buy_qty <= 0:
         zero_qty_cooldown_sec = _resolve_zero_qty_cooldown_sec(deposit)
-        is_zero_deposit = int(float(deposit or 0)) <= 0
+        is_zero_deposit = _safe_int(deposit, 0) <= 0
         deposit_errors = kiwoom_orders.get_last_deposit_errors()
         auth_failure = next((err for err in deposit_errors if kiwoom_orders.is_auth_failure_error(err)), None)
         zero_qty_stage = "auth_zero_qty" if is_zero_deposit and auth_failure else "blocked_zero_qty"
@@ -3032,17 +3048,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
 
 
 def _coerce_int_value(value, default=0):
-    try:
-        if value in (None, ""):
-            return default
-        return int(float(value))
-    except Exception:
-        return default
+    return _safe_int(value, default)
 
 
 def _price_bucket_step(price):
     try:
-        price = abs(int(float(price or 0)))
+        price = abs(_safe_int(price, 0))
     except Exception:
         price = 0
     if price >= 200_000:
@@ -3487,7 +3498,7 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
     if result == 'failed':
         return
 
-    buy_qty = int(stock.get('buy_qty', 0) or 0)
+    buy_qty = _safe_int(stock.get('buy_qty'), 0)
     if buy_qty > 0:
         requested_qty = int(stock.get('entry_requested_qty', 0) or stock.get('requested_buy_qty', 0) or buy_qty)
         requested_qty = max(requested_qty, buy_qty, 1)
@@ -3702,7 +3713,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
     if code in alerted_stocks:
         return
 
-    curr_price = int(float(ws_data.get('curr', 0) or 0))
+    curr_price = _safe_int(ws_data.get('curr'), 0)
     if curr_price <= 0:
         return
 
@@ -3793,8 +3804,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
     _mutate_stock_state(stock, set_fields={"position_tag": pos_tag})
     legacy_broker_recovered = bool(stock.get('broker_recovered_legacy'))
 
-    curr_p = int(float(ws_data.get('curr', 0) or 0))
-    buy_p = float(stock.get('buy_price', 0) or 0)
+    curr_p = _safe_int(ws_data.get('curr'), 0)
+    buy_p = _safe_float(stock.get('buy_price'), 0.0)
     _reconcile_pending_entry_orders(stock, code, strategy)
     if curr_p <= 0 or buy_p <= 0:
         return
@@ -4605,11 +4616,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 expert_started_at = float(
                     stock.get('soft_stop_absorption_extension_started_at', 0.0) or 0.0
                 )
-                expert_extension_sec = int(soft_stop_expert_decision.get("extension_sec", 0) or 0)
+                expert_extension_sec = _safe_int(soft_stop_expert_decision.get("extension_sec"), 0)
                 if expert_started_at <= 0:
                     expert_started_at = now_ts
-                    expert_extension_count = int(
-                        stock.get('soft_stop_absorption_extension_count', 0) or 0
+                    expert_extension_count = _safe_int(
+                        stock.get('soft_stop_absorption_extension_count'), 0
                     ) + 1
                     _mutate_stock_state(
                         stock,
@@ -4953,7 +4964,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             held_sec=int(held_time_min * 60),
             curr_price=curr_p,
             buy_price=buy_p,
-            buy_qty=int(stock.get("buy_qty", 0) or 0),
+            buy_qty=_safe_int(stock.get("buy_qty"), 0),
         )
         if _has_open_pending_entry_orders(stock):
             cancel_state = _cancel_pending_entry_orders(stock, code, force=False)
@@ -4977,7 +4988,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         is_success = False
         target_id = stock.get('id')
 
-        mem_buy_qty = int(float(stock.get('buy_qty', 0) or 0))
+        mem_buy_qty = _safe_int(stock.get('buy_qty'), 0)
         buy_qty = mem_buy_qty
         try:
             with DB.get_session() as session:
@@ -4995,8 +5006,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 None,
             )
 
-            if real_stock and int(float(real_stock.get('qty', 0) or 0)) > 0:
-                buy_qty = int(float(real_stock.get('qty', 0) or 0))
+            if real_stock and _safe_int(real_stock.get('qty'), 0) > 0:
+                buy_qty = _safe_int(real_stock.get('qty'), 0)
                 _mutate_stock_state(stock, set_fields={'buy_qty': buy_qty})
                 log_info(
                     f"🔄 [수량 폴백] 실제 계좌에서 총 잔고 {buy_qty}주를 매도합니다. "
@@ -5091,7 +5102,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 new_status = 'COMPLETED'
             else:
                 if '매도가능수량' in err_msg and sellable_qty and sellable_qty > 0:
-                    prev_qty = int(stock.get('buy_qty', 0) or 0)
+                    prev_qty = _safe_int(stock.get('buy_qty'), 0)
                     if prev_qty != sellable_qty:
                         _mutate_stock_state(stock, set_fields={'buy_qty': sellable_qty})
                         log_error(
@@ -5272,8 +5283,8 @@ def can_consider_scale_in(
     if stock.get('scale_in_locked'):
         return {"allowed": False, "reason": "scale_in_locked"}
 
-    buy_p = float(stock.get('buy_price', 0) or 0)
-    buy_q = int(float(stock.get('buy_qty', 0) or 0))
+    buy_p = _safe_float(stock.get('buy_price'), 0.0)
+    buy_q = _safe_int(stock.get('buy_qty'), 0)
     if buy_p <= 0 or buy_q <= 0:
         return {"allowed": False, "reason": "invalid_position"}
 
@@ -5308,7 +5319,7 @@ def can_consider_scale_in(
         return {"allowed": False, "reason": "pending_add_order"}
 
     # 계좌 리스크 게이트(옵션): 예수금 정보가 있을 때만 적용
-    curr_price = int(float(ws_data.get('curr', 0) or 0))
+    curr_price = _safe_int(ws_data.get('curr'), 0)
     deposit_hint = float(stock.get('account_deposit', 0) or stock.get('deposit', 0) or 0)
     if curr_price > 0 and deposit_hint > 0:
         max_pos_pct = _rule_float('MAX_POSITION_PCT', 0.30)
@@ -5601,7 +5612,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         log_info(f"[ADD_BLOCKED] {stock.get('name')}({code}) reason=invalid_add_type")
         return None
 
-    curr_price = int(float(ws_data.get('curr', 0) or 0))
+    curr_price = _safe_int(ws_data.get('curr'), 0)
     if curr_price <= 0:
         log_info(f"[ADD_BLOCKED] {stock.get('name')}({code}) reason=invalid_price")
         return None

@@ -1,5 +1,6 @@
 # src/database/db_manager.py
 import pandas as pd
+import math
 import src.utils.constants as const
 from datetime import datetime
 from datetime import timedelta
@@ -512,13 +513,27 @@ class DBManager:
 
             def _safe_int(value, default=0):
                 try:
-                    return int(float(value or 0))
+                    if value is None:
+                        return default
+                    if isinstance(value, str) and value.strip().lower() in {'', 'nan', 'nat', 'none', 'inf', '+inf', '-inf'}:
+                        return default
+                    numeric = float(value)
+                    if not math.isfinite(numeric):
+                        return default
+                    return int(numeric)
                 except Exception:
                     return default
 
             def _safe_float(value, default=0.0):
                 try:
-                    return float(value or 0.0)
+                    if value is None:
+                        return default
+                    if isinstance(value, str) and value.strip().lower() in {'', 'nan', 'nat', 'none', 'inf', '+inf', '-inf'}:
+                        return default
+                    numeric = float(value)
+                    if not math.isfinite(numeric):
+                        return default
+                    return numeric
                 except Exception:
                     return default
 
@@ -534,8 +549,15 @@ class DBManager:
                     return False
                 return default
             for t in targets:
-                t['prob'] = t.get('prob', default_prob)
-                t['buy_qty'] = t.get('buy_qty', 0)
+                t['prob'] = _safe_float(t.get('prob'), default_prob)
+                t['buy_qty'] = _safe_int(t.get('buy_qty'))
+                t['buy_price'] = _safe_float(t.get('buy_price'))
+                t['ratio'] = _safe_float(t.get('ratio'))
+                t['order_price'] = _safe_int(t.get('order_price'))
+                t['target_buy_price'] = _safe_int(t.get('target_buy_price'))
+                t['marcap'] = _safe_int(t.get('marcap'))
+                t['preset_tp_price'] = _safe_int(t.get('preset_tp_price'))
+                t['preset_tp_qty'] = _safe_int(t.get('preset_tp_qty'))
                 t['strategy'] = normalize_strategy(t.get('strategy', 'KOSPI_ML'))
                 t['position_tag'] = normalize_position_tag(t['strategy'], t.get('position_tag'))
                 t['add_count'] = _safe_int(t.get('add_count'))
@@ -567,7 +589,8 @@ class DBManager:
         try:
             with self.get_session() as session:
                 value = session.execute(query, {"code": target_code}).scalar()
-            return int(value or 0)
+            numeric = float(value or 0)
+            return int(numeric) if math.isfinite(numeric) else 0
         except Exception as e:
             log_error(f"최신 시가총액 조회 실패 [{target_code}]: {e}")
             return 0

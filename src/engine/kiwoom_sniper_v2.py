@@ -32,8 +32,10 @@ import time
 from datetime import datetime
 import threading
 from concurrent.futures import ThreadPoolExecutor
+import math
 import numpy as np
 import json
+import traceback
 
 # 💡 Level 1 & 2 공통 모듈 (경로 및 패키지 구조에 맞게 통일)
 from src.utils import kiwoom_utils
@@ -220,10 +222,7 @@ def _get_swing_gap_threshold(strategy: str) -> float:
 
 def _resolve_stock_marcap(stock, code) -> int:
     """시가총액 조회 (프로세스 레벨 TTL 캐시 + stock 캐시)."""
-    try:
-        existing = int(float(stock.get('marcap', 0) or 0))
-    except Exception:
-        existing = 0
+    existing = _safe_int(stock.get('marcap'), 0)
     if existing > 0:
         return existing
     now_ts = time.time()
@@ -541,7 +540,7 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
     if code in alerted_stocks:
         return "이미 alerted_stocks에 포함됨"
     
-    curr_price = int(float(ws_data.get('curr', 0) or 0))
+    curr_price = _safe_int(ws_data.get('curr'), 0)
     if curr_price <= 0:
         return "현재가 유효하지 않음"
     
@@ -553,8 +552,8 @@ def check_watching_conditions(stock, code, ws_data, admin_id, radar=None, ai_eng
         if pos_tag == 'VCP_CANDID':
             return "VCP_CANDID 태그로 인한 제외"
         
-        ask_tot = int(float(ws_data.get('ask_tot', 0) or 0))
-        bid_tot = int(float(ws_data.get('bid_tot', 0) or 0))
+        ask_tot = _safe_int(ws_data.get('ask_tot'), 0)
+        bid_tot = _safe_int(ws_data.get('bid_tot'), 0)
         open_price = float(ws_data.get('open', curr_price) or curr_price)
         marcap = _resolve_stock_marcap(stock, code)
         turnover_hint = estimate_turnover_hint(curr_price, ws_data.get('volume', 0))
@@ -670,14 +669,28 @@ def _parse_holding_started_at(stock):
 
 def _safe_int(value, default=0):
     try:
-        return int(float(value or 0))
+        if value is None:
+            return default
+        if isinstance(value, str) and value.strip().lower() in {"", "nan", "nat", "none", "inf", "+inf", "-inf"}:
+            return default
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            return default
+        return int(numeric)
     except Exception:
         return default
 
 
 def _safe_float(value, default=0.0):
     try:
-        return float(value or 0.0)
+        if value is None:
+            return default
+        if isinstance(value, str) and value.strip().lower() in {"", "nan", "nat", "none", "inf", "+inf", "-inf"}:
+            return default
+        numeric = float(value)
+        if not math.isfinite(numeric):
+            return default
+        return numeric
     except Exception:
         return default
 
@@ -894,8 +907,8 @@ def check_holding_conditions(stock, code, ws_data, admin_id, market_regime, rada
     raw_strategy = (stock.get('strategy') or 'KOSPI_ML').upper()
     strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
 
-    curr_p = int(float(ws_data.get('curr', 0) or 0))
-    buy_p = float(stock.get('buy_price', 0) or 0)
+    curr_p = _safe_int(ws_data.get('curr'), 0)
+    buy_p = _safe_float(stock.get('buy_price'), 0.0)
     if curr_p <= 0 or buy_p <= 0:
         return "현재가 또는 매수가 유효하지 않음"
     if not stock.get('holding_started_at'):
@@ -1391,7 +1404,7 @@ def run_sniper(is_test_mode=False):
             time.sleep(1)
 
     except Exception as e:
-        log_error(f"🔥 스나이퍼 루프 치명적 에러: {e}")
+        log_error(f"🔥 스나이퍼 루프 치명적 에러: {e}\n{traceback.format_exc()}")
         print(f"🔥 스나이퍼 루프 치명적 에러: {e}")
         event_bus.publish('TELEGRAM_BROADCAST', {'message': f"🚨 [시스템 에러] 스나이퍼 엔진 치명적 에러: {e}"})
 
