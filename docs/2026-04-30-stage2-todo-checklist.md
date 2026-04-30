@@ -71,17 +71,37 @@
 
 ## 장중 체크리스트 (09:00~15:20)
 
-- [ ] `[MechanicalMomentumLatencyRelief0430-1000] mechanical_momentum_latency_relief 10시 1차 판정` (`Due: 2026-04-30`, `Slot: INTRADAY`, `TimeWindow: 10:00~10:15`, `Track: ScalpingLogic`)
+- [x] `[MechanicalMomentumLatencyRelief0430-1000] mechanical_momentum_latency_relief 10시 1차 판정` (`Due: 2026-04-30`, `Slot: INTRADAY`, `TimeWindow: 10:00~10:15`, `Track: ScalpingLogic`)
   - Source: [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
   - 판정 기준: `09:00~10:00` 또는 새 restart 이후 창 기준 `budget_pass`, `mechanical_momentum_relief_canary_applied`, `latency_mechanical_momentum_relief_normal_override`, `submitted`, `full_fill`, `partial_fill`, `pre_submit_price_guard_block`, `fallback_regression=0`를 확인한다. `full fill`과 `partial fill`은 분리한다.
   - why: 이 축은 거래수 회복을 위한 운영 override라 오전 1시간 안에 최소 방향성은 나와야 한다. `submitted`가 움직이지 않으면 같은 날 추가 유지 근거가 약하다.
-  - 다음 액션: 제출 회복이 있으면 12시 full 창으로 유지판정하고, `budget_pass >= 150`인데 `submitted <= 2`면 장중 OFF/다음축 재분해를 연다.
+  - 실행 메모 (`2026-04-30 10:15 KST 사후 집계`): `09:00~10:00` 창에서 `budget_pass=951`, `order_bundle_submitted=27`, `mechanical_momentum_relief_canary_applied=22`, `mechanical canary applied + submitted=22`가 확인됐다. 첫 canary submit은 `09:10:03 KST` `삼성전기(009150, id=4480)`였고, 마지막 오전 1차 창 표본은 `09:57:52 KST` `HD현대(267250, id=4542)`였다. `order_bundle_submitted`의 `entry_mode`는 모두 `normal`이었고 `pre_submit_price_guard_block=0`, `full_fill=0`, `partial_fill=0`이었다.
+  - 판정 결과: `완료 / 제출 회복 방향성 확인, same-day 유지 근거 충족`
+  - 근거: 이 항목의 fail line은 `budget_pass >= 150`인데 `submitted <= 2`다. 실제로는 `budget_pass 951 -> submitted 27`로 제출 회복이 있었고, 그중 `22건`이 `latency_mechanical_momentum_relief_normal_override` 직접 표본이었다. 오전 1차 창에서는 체결 완료까지는 아직 없었지만, 운영 override의 목적이던 `BUY drought 해소` 관점에서는 `mechanical cohort가 normal order로 실제 제출된 것`이 먼저 확인됐다.
+  - 테스트/검증:
+    - `PYTHONPATH=. .venv/bin/python` 집계로 `pipeline_events_2026-04-30.jsonl` `09:00~10:00` 창의 `budget_pass/submitted/mechanical canary/full_fill/partial_fill/pre_submit_price_guard_block` 카운트 검증
+    - `mechanical canary applied` 표본 22건과 `order_bundle_submitted` record_id 매칭 확인
+    - `order_bundle_submitted entry_mode != normal` 검색 결과 `0건`
+  - 다음 액션: 12시 full 창에서는 `mechanical cohort 22건`의 후속 `fill quality`, `COMPLETED + valid profit_rate`, `price_below_bid_bps` 분포를 분리한다. `pre_submit_price_guard_block`이 계속 `0`이면 가드 비활성이라기보다 deep bid 재발 부재인지 장후 P0 guard KPI 항목과 같이 닫는다.
 
-- [ ] `[ReversalAddBadEntry0430-1030] REVERSAL_ADD/bad_entry_block 오전 1차 관찰` (`Due: 2026-04-30`, `Slot: INTRADAY`, `TimeWindow: 10:30~10:45`, `Track: ScalpingLogic`)
+- [x] `[ReversalAddBadEntry0430-1030] REVERSAL_ADD/bad_entry_block 오전 1차 관찰` (`Due: 2026-04-30`, `Slot: INTRADAY`, `TimeWindow: 10:30~10:45`, `Track: ScalpingLogic`)
   - Source: [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
   - 판정 기준: `09:00~10:30` 창에서 `reversal_add_candidate`, `reversal_add_blocked_reason`, `scale_in_executed add_type=AVG_DOWN`, `reversal_add_used`, `bad_entry_block_observed`, `soft_stop_micro_grace`, `scalp_soft_stop_pct`, `COMPLETED + valid profit_rate`를 분리한다.
   - why: `2026-04-30` 오전을 단순 진단으로 허비하지 않기 위해, 유효 진입의 초반 눌림은 소형 추가매수로 실험하고 never-green/AI fade는 observe-only로 분류한다.
-  - 다음 액션: `REVERSAL_ADD` 체결이 1건 이상이면 해당 record를 장중 anchor case로 고정하고 이후 soft stop 여부를 추적한다. 후보만 있고 체결이 없으면 `zero_qty`, `position_at_cap`, `supply_conditions_not_met`, `ai_not_recovering` 중 어느 blocker인지 닫는다. `bad_entry_block_observed`가 3건 이상이면 장후 classifier 승격 표본으로 보낸다.
+  - 실행 메모 (`2026-04-30 10:45 KST 사후 집계`): `09:00~10:30` 창에서 `reversal_add_candidate=0`, `reversal_add_blocked_reason=258`, `scale_in_executed=2`, `bad_entry_block_observed=47`가 확인됐다. `scale_in_executed` 2건은 `한화(id=4427)`, `쏠리드(id=4488)`였고 둘 다 `add_type=PYRAMID`였다. 즉 오전 창의 추가체결은 `REVERSAL_ADD(AVG_DOWN)`가 아니라 기존 winner-side `PYRAMID`였다.
+  - 판정 결과: `완료 / REVERSAL_ADD 체결 없음, bad_entry observe-only 표본은 충분`
+  - 근거: 오전 창에서 `AVG_DOWN` 체결은 `0건`이어서 canary efficacy는 아직 미판정이다. 대신 blocker는 명확하다. `reversal_add_blocked_reason 258건` 중 분류 기준으로 `pnl_out_of_range=205`, `hold_sec_out_of_range=46`, `ai_score_too_low=7`, `ai_not_recovering=1`이었다. `bad_entry_block_observed 47건 / unique 10 record`는 전부 `never_green_ai_fade` classifier였고, observe-only 표본 확보 목표는 넘겼다.
+  - 테스트/검증:
+    - `PYTHONPATH=. .venv/bin/python` 집계로 `pipeline_events_2026-04-30.jsonl` `09:00~10:30` 창의 `reversal_add_blocked_reason/scale_in_executed/bad_entry_block_observed` 카운트 검증
+    - `scale_in_executed` 2건의 `add_type` 확인 결과 모두 `PYRAMID`, `AVG_DOWN=0`
+    - `bad_entry_block_observed` classifier 분포 확인 결과 `never_green_ai_fade 47건`
+  - 다음 액션: `REVERSAL_ADD`는 오전 창에서 후보 진입까지 못 갔으므로 장후에는 `candidate zero`가 아니라 `blocked funnel`로 닫고, 특히 `pnl_out_of_range`와 `hold_sec_out_of_range`가 과도한지 임계 재검토 후보로 넘긴다. `bad_entry_block_observed >= 3` 조건은 이미 충족했으므로 장후 classifier 승격 검토 표본으로 연결한다.
+
+- [ ] `[ReversalAddBadEntry0430-1130] REVERSAL_ADD/bad_entry_block 재기동 후 장중 1차 효과 판정` (`Due: 2026-04-30`, `Slot: INTRADAY`, `TimeWindow: 11:30~12:00`, `Track: ScalpingLogic`)
+  - Source: [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - 판정 기준: `2026-04-30 10:14 KST` 재기동 이후 cohort만 분리해 `reversal_add_used`, `scale_in_executed add_type=AVG_DOWN`, `reversal_add_post_eval_fail`, `bad_entry_block_observed`, `scalp_soft_stop_pct`, `soft_stop_micro_grace`, `COMPLETED + valid profit_rate`를 확인한다.
+  - why: threshold widen 직후에는 표본이 조금 더 쌓인 `11:30~12:00 KST`가 same-day rollback 여부를 가장 빨리 가를 수 있는 첫 창이다. 재기동 전 표본을 섞으면 원인귀속이 흐려진다.
+  - 다음 액션: `AVG_DOWN` 체결이 생기고 soft stop tail이 비악화면 same-day 유지 근거로 잠근다. 반대로 `reversal_add_used` 후 `scalp_soft_stop_pct` 급증, 또는 `COMPLETED + valid profit_rate` 평균이 rollback guard에 닿으면 즉시 원복 후보로 넘긴다.
 
 ## 장후 체크리스트 (16:00~20:00)
 
@@ -158,11 +178,24 @@
   - why: Rebase 기준 보유/청산 1순위는 여전히 `soft_stop_rebound_split`이며, 2026-04-29 표본은 `정당 컷`, `혼합형 rebound`, `same-day 회수형 recovery recapture`가 함께 나왔다. 지금 단계에서 바로 live 파라미터를 더 열면 원인귀속이 흐려지고, 반대로 이 표본을 독립 분해하지 않으면 EV 훼손 패턴을 놓칠 수 있다.
   - 다음 액션: `MISSED_UPSIDE/recovery recapture`가 누적되면 다음 운영일인 `2026-05-04` checklist에 `observe-only label/log patch` 또는 `extend acceptance` 항목을 올린다. `GOOD_EXIT` 우세면 live 파라미터는 그대로 두고 `soft_stop_micro_grace`만 유지한다.
 
-- [ ] `[ReversalAddBadEntry0430-Postclose] REVERSAL_ADD 소형 canary와 bad_entry_block classifier 장후 판정` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 19:25~19:45`, `Track: ScalpingLogic`)
+- [x] `[ReversalAddBadEntry0430-Postclose] REVERSAL_ADD 소형 canary와 bad_entry_block classifier 장후 판정` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 19:25~19:45`, `Track: ScalpingLogic`)
   - Source: [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
   - 판정 기준: `reversal_add_used` cohort와 비사용 후보를 분리해 `full/partial`, `initial/pyramid`, `soft_stop`, `trailing`, `COMPLETED + valid profit_rate`, `post_sell outcome`을 비교한다. `bad_entry_block_observed`는 후속 `soft_stop/hard_stop/GOOD_EXIT/MISSED_UPSIDE` 분포만 보고 실전 차단 승격 여부를 판단한다.
   - why: 이 항목의 목적은 soft stop을 몇 초 늦추는 것이 아니라, `유효 진입 회수`와 `불량 진입 회피` 중 어느 전략이 EV 개선 가능성이 큰지 고르는 것이다.
-  - 다음 액션: `REVERSAL_ADD`가 손익/soft stop tail을 악화시키면 OFF하고 classifier 관찰만 유지한다. `bad_entry_block` 후보가 반복적으로 손실로 끝나면 다음 운영일 `2026-05-04`에 live entry block 후보를 별도 단일축으로 올린다.
+  - 실행 메모 (`2026-04-30 10:20 KST intraday pull-in`): 사용자가 `장후 밀림 불가`를 명시해 장후 판정을 장중으로 당겼다. 오전 `09:00~10:15` blocker를 재집계한 결과 `pnl_out_of_range=217` 중 `-0.70%~-0.10%`로 새로 흡수 가능한 표본이 `45건`, `hold_sec_out_of_range=52` 중 `20~180초`로 새로 흡수 가능한 표본이 `4건`이었다. 반면 `ai_score_too_low`는 `7건`뿐이라 주 blocker가 아니었다.
+  - 판정 결과: `완료 / REVERSAL_ADD live canary 유지 + intraday threshold widen 승인`
+  - 근거: `REVERSAL_ADD`는 이미 `SCALPING` 공통 live canary 경로에 걸려 있고, 오전 0체결의 원인은 축 미적용이 아니라 임계 과협착이었다. same-day 원인귀속을 지키면서도 손실 확대 회수 표본을 늘리려면 `REVERSAL_ADD_PNL_MIN -0.45 -> -0.70`, `REVERSAL_ADD_MAX_HOLD_SEC 120 -> 180`만 완화하는 것이 가장 좁은 조작점이다. `AI>=60`, `AI 회복`, `수급 3/4` 조건은 그대로 둬서 bad entry 추종 리스크를 키우지 않는다.
+  - 테스트/검증:
+    - [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py) 기본값을 `REVERSAL_ADD_PNL_MIN=-0.70`, `REVERSAL_ADD_MAX_HOLD_SEC=180`으로 조정
+    - [test_sniper_scale_in.py](/home/ubuntu/KORStockScan/src/tests/test_sniper_scale_in.py)에서 reversal_add helper 기본값과 extended intraday window 회귀 테스트 추가
+    - 런타임 반영은 `restart.flag` 재기동 후 새 PID provenance로 확인
+  - 다음 액션: 재기동 후 같은 장중 cohort에서 `reversal_add_used`, `scale_in_executed add_type=AVG_DOWN`, `reversal_add_post_eval_fail`, `scalp_soft_stop_pct`를 분리한다. 손익/soft stop tail이 악화되면 same-day 즉시 원복한다.
+
+- [ ] `[BadEntryOutcome0430-Postclose] bad_entry observe-only classifier 후행 outcome 장후 확정` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 19:25~19:45`, `Track: ScalpingLogic`)
+  - Source: [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - 판정 기준: `bad_entry_block_observed` cohort의 후속 `soft_stop`, `hard_stop`, `trailing`, `GOOD_EXIT`, `MISSED_UPSIDE`, `same_symbol reentry`, `COMPLETED + valid profit_rate`를 비후보군과 분리 비교한다. `2026-04-30 10:14 KST` 재기동 이후 표본은 별도 cohort로 고정한다.
+  - why: `bad_entry_block`은 진입 시점 판정이 아니라 never-green/AI fade 후행 분류이므로, 장후에 종결 outcome까지 붙여야 classifier 승격 여부를 제대로 닫을 수 있다.
+  - 다음 액션: 후보군의 `soft_stop/hard_stop` 전환율이 비후보군보다 높고 `GOOD_EXIT/MISSED_UPSIDE` 놓침 위험이 낮으면 다음 운영일 live block 후보로만 승격 검토한다. 반대로 outcome 차이가 약하거나 missed winner가 크면 observe-only 유지로 닫는다.
 
 - [ ] `[InitialQtyCap3Share0430-Postclose] 스캘핑 신규 BUY 3주 cap 전환 승인조건 판정` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 19:45~20:00`, `Track: ScalpingLogic`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [2026-04-29-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-29-stage2-todo-checklist.md)

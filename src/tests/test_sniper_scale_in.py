@@ -3380,10 +3380,10 @@ def _reversal_add_rules(**kwargs):
     return replace(
         CONFIG,
         REVERSAL_ADD_ENABLED=True,
-        REVERSAL_ADD_PNL_MIN=-0.45,
+        REVERSAL_ADD_PNL_MIN=-0.70,
         REVERSAL_ADD_PNL_MAX=-0.10,
         REVERSAL_ADD_MIN_HOLD_SEC=20,
-        REVERSAL_ADD_MAX_HOLD_SEC=120,
+        REVERSAL_ADD_MAX_HOLD_SEC=180,
         REVERSAL_ADD_MIN_AI_SCORE=60,
         REVERSAL_ADD_MIN_AI_RECOVERY_DELTA=15,
         REVERSAL_ADD_MIN_BUY_PRESSURE=55.0,
@@ -3414,7 +3414,7 @@ def test_reversal_add_tc2_pnl_out_of_range():
     from src.utils.constants import TRADING_RULES as CONFIG
     scale_in.TRADING_RULES = _reversal_add_rules()
     try:
-        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.55, current_ai_score=65, held_sec=50)
+        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.75, current_ai_score=65, held_sec=50)
         assert result["should_add"] is False
         assert "pnl_out_of_range" in result["reason"]
     finally:
@@ -3534,6 +3534,22 @@ def test_reversal_add_tc9_hold_sec_out_of_range():
         result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.25, current_ai_score=65, held_sec=5)
         assert result["should_add"] is False
         assert "hold_sec_out_of_range" in result["reason"]
+    finally:
+        scale_in.TRADING_RULES = CONFIG
+
+
+def test_reversal_add_tc11_extended_intraday_window_allows_deeper_loss_and_longer_hold():
+    stock = _reversal_add_stock({
+        "reversal_add_ai_bottom": 42,
+        "reversal_add_ai_history": [42, 44, 50, 58],
+        "reversal_add_profit_floor": -0.58,
+    })
+    from src.utils.constants import TRADING_RULES as CONFIG
+    scale_in.TRADING_RULES = _reversal_add_rules()
+    try:
+        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.60, current_ai_score=65, held_sec=150)
+        assert result["should_add"] is True
+        assert result["reason"] == "reversal_add_ok"
     finally:
         scale_in.TRADING_RULES = CONFIG
 

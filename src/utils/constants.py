@@ -237,10 +237,10 @@ class TradingConfig:
 
     # ── reversal_add ────────────────────────────────────────
     REVERSAL_ADD_ENABLED: bool = True              # 2026-04-30 canary: 역전 확인 추가매수 소형 실험
-    REVERSAL_ADD_PNL_MIN: float = -0.45            # 허용 손실 하한 (%)
+    REVERSAL_ADD_PNL_MIN: float = -0.70            # 2026-04-30 intraday override: 손실 확대 회수용 허용 손실 하한 (%)
     REVERSAL_ADD_PNL_MAX: float = -0.10            # 허용 손실 상한 (%)
     REVERSAL_ADD_MIN_HOLD_SEC: int = 20            # 최소 보유시간(초)
-    REVERSAL_ADD_MAX_HOLD_SEC: int = 120           # 최대 보유시간(초)
+    REVERSAL_ADD_MAX_HOLD_SEC: int = 180           # 2026-04-30 intraday override: 회복 확인 최대 보유시간(초)
     REVERSAL_ADD_MIN_AI_SCORE: int = 60            # 실행 직전 최소 AI 점수
     REVERSAL_ADD_MIN_AI_RECOVERY_DELTA: int = 15   # AI bottom 대비 최소 회복폭
     REVERSAL_ADD_MIN_BUY_PRESSURE: float = 55.0    # 최소 매수 압도율(%)
