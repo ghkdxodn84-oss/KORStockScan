@@ -986,7 +986,9 @@ def _handle_add_buy_execution(
     target_stock['last_add_time'] = time.time()
     if not target_stock.get('holding_started_at'):
         target_stock['holding_started_at'] = now
-    highest_prices[code] = max(highest_prices.get(code, 0), exec_price)
+    if isinstance(highest_prices, dict):
+        # 추가매수 후 포지션 평단/수량이 바뀌면 기존 고점 기준 trailing은 새 포지션에 과민하다.
+        highest_prices[code] = max(float(exec_price or 0), float(new_avg or 0))
 
     count_increment = False
     if not target_stock.get('pending_add_counted'):

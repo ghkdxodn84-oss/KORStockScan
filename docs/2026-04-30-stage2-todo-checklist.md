@@ -123,17 +123,40 @@
     - `PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500` -> parser count `54`, `SoftStopExpertDefense0430-1230/1330` 미완료 항목 인식
   - 다음 액션: 코드/테스트/restart provenance를 확인한 뒤 `[SoftStopExpertDefense0430-1230]`에서 첫 health check를 수행한다.
 
-- [ ] `[SoftStopExpertDefense0430-1230] 12:30 health check` (`Due: 2026-04-30`, `Slot: INTRADAY`, `TimeWindow: 12:30~12:40`, `Track: ScalpingLogic`)
+- [x] `[SoftStopExpertDefense0430-1230] 12:30 health check` (`Due: 2026-04-30`, `Slot: INTRADAY`, `TimeWindow: 12:30~12:40`, `Track: ScalpingLogic`)
   - Source: [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
   - 판정 기준: `soft_stop_absorption_probe`, `soft_stop_absorption_extend`, `soft_stop_absorption_exit`, `soft_stop_expert_shadow`, `adverse_fill_observed` 발생 여부와 `reversal_add_used` 제외가 지켜졌는지 확인한다.
   - why: 12:00 live 적용 직후에는 수익률 결론보다 routing/로그/제외규칙 무결성이 먼저다.
-  - 다음 액션: 로그가 없으면 표본 없음으로 유지하되 코드 로드 증적을 확인한다. cross-contamination 또는 sell failure가 있으면 즉시 OFF한다.
+  - 실행 메모 (`2026-04-30 12:40 KST`): `12:00~12:40 KST` cohort에서 `soft_stop_expert_shadow=6 / unique 3`, `adverse_fill_observed=6 / unique 3`, `soft_stop_absorption_probe=1 / unique 1`, `soft_stop_absorption_exit=1 / unique 1`, `soft_stop_absorption_extend=0`, `soft_stop_absorption_recovered=0`, `reversal_add_used=0`, `sell_order_failed=0`, `protect_hard_stop=0`였다. anchor 표본은 `아진엑스텍(059120, id=4464)`, `흥구석유(024060, id=4591)`, `KG케미칼(001390, id=4635)`다.
+  - 판정 결과: `완료 / routing·shadow·observe 무결성 확인, same-day keep 유지`
+  - 근거: `흥구석유`는 `12:06:11 KST`에 `soft_stop_absorption_probe -> soft_stop_absorption_exit`가 발생했고 `thesis_invalidated=True`, `thesis_reason=large_sell_print`, `exclusion_reason=large_sell_print`, `should_extend=False`로 live veto가 정상 동작했다. `아진엑스텍`과 `KG케미칼`은 `soft_stop_micro_grace`에서 `expert_exclusion_reason=base_micro_grace`, `expert_defense_active=False` 상태로 base 20초 유예가 먼저 적용됐고, shadow/observe만 기록된 뒤 `scalp_soft_stop_pct` exit로 종료됐다. `reversal_add_used` 혼입, `sell_order_failed`, `protect_hard_stop`는 모두 `0건`이라 cross-contamination 증거는 없다.
+  - 테스트/검증:
+    - `PYTHONPATH=. .venv/bin/python` 집계로 `pipeline_events_2026-04-30.jsonl` `12:00~12:40 KST` 창의 `soft_stop_absorption_*`, `soft_stop_expert_shadow`, `adverse_fill_observed`, `reversal_add_used`, `sell_order_failed`, `protect_hard_stop` 카운트 검증
+    - `TradingConfig()` import check로 `SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED=True`, `SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT=2026-04-30 12:00:00`, `SCALP_SOFT_STOP_ABSORPTION_EXTENSION_SEC=20`, `SCALP_SOFT_STOP_ABSORPTION_MAX_EXTENSIONS=1` 확인
+    - `ps -eo pid,lstart,cmd | rg "python bot_main.py|bot_main.py"` -> main PID `72901`, 시작 `Thu Apr 30 11:44:57 2026`
+    - `PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500` -> parser count `54`, `SoftStopExpertDefense0430-1330` 미완료 항목 유지 확인
+  - 다음 액션: `13:30` 창에서는 `guarded cohort`를 `full/partial`, `sell_completed`, `COMPLETED + valid profit_rate`, `hard/protect stop 전이`, `sell_order_failed`로 분리해 keep/OFF를 판정한다. `extend=0` 자체는 fail이 아니라 첫 창 표본 특성으로 보고, `thesis veto 정상동작`과 `cross-contamination 부재`를 우선 유지 근거로 쓴다.
 
 - [ ] `[SoftStopExpertDefense0430-1330] 13:30 rollback/keep 판정` (`Due: 2026-04-30`, `Slot: INTRADAY`, `TimeWindow: 13:30~13:45`, `Track: ScalpingLogic`)
   - Source: [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
   - 판정 기준: `12:00` 이후 candidate live cohort를 `full/partial`, `initial/pyramid`, `REVERSAL_ADD 제외`, `COMPLETED + valid profit_rate`, `soft_stop_absorption_extend 후 hard/protect 전이`, `sell_order_failed`로 분리한다.
   - why: same-day 방어망은 장후까지 방치하지 않고 첫 충분 표본 또는 위험 신호에서 바로 keep/OFF를 닫아야 한다.
   - 다음 액션: rollback guard가 없고 guarded 표본이 비악화면 장중 유지, guard에 닿으면 `KORSTOCKSCAN_SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED=false`로 재기동해 OFF한다.
+
+- [x] `[PyramidPostAddTrailingGuard0430-Now] 불타기 체결 직후 trailing 조기청산 로직 오류 확인/패치` (`Due: 2026-04-30`, `Slot: INTRADAY`, `TimeWindow: 12:45~13:05`, `Track: ScalpingLogic`)
+  - Source: [sniper_execution_receipts.py](/home/ubuntu/KORStockScan/src/engine/sniper_execution_receipts.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [bot_history.log](/home/ubuntu/KORStockScan/logs/bot_history.log)
+  - 판정 기준: `PYRAMID scale_in_executed` 직후 `protect_trailing_stop` 또는 `scalp_trailing_take_profit`이 기존 고점/보호선 기준으로 즉시 매도되는지 확인한다.
+  - 실행 메모 (`2026-04-30 13:05 KST`): `쏠리드(050890, id=4639)`에서 `12:44:05` `PYRAMID BUY 1주 @ 17,460` 후 `12:45:57` `TRAILING SELL 3주 @ 17,390`가 발생했다. 코드상 추가매수 체결 후 `buy_price/buy_qty`는 갱신되지만 `highest_prices`는 기존 고점을 유지하고, trailing 평가는 `last_add_at/last_add_type` grace 없이 즉시 실행됐다.
+  - 판정 결과: `로직 오류 확인 / 패치 완료`
+  - 근거: 추가매수 후 포지션 평균가와 수량이 바뀌면 기존 고점 기준의 drawdown은 새 포지션의 MFE가 아니다. 따라서 불타기 직후 trailing은 새 체결가/평단 기준으로 고점을 리베이스하고, 짧은 post-add grace 동안 `protect_trailing_stop`, `scalp_trailing_take_profit`을 억제해야 한다. hard stop/soft stop은 억제하지 않는다.
+  - 패치: 추가매수 체결 시 `highest_prices[code]=max(exec_price,new_avg)`로 리베이스하고, `SCALP_PYRAMID_POST_ADD_TRAILING_GRACE_SEC=180` 동안 `pyramid_post_add_trailing_grace` 로그만 남긴다.
+  - 런타임 반영 (`2026-04-30 13:08 KST`): `restart.flag` 소모 후 main PID가 `72901 -> 85560`으로 교체됐다. 새 PID 시작시각은 `2026-04-30 13:07:41 KST`이며, `TradingConfig().SCALP_PYRAMID_POST_ADD_TRAILING_GRACE_SEC=180` import check와 `logs/bot_history.log` 기준 WS 재접속/조건식 등록 재개를 확인했다.
+  - 테스트/검증:
+    - `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_scale_in.py -k 'pyramid_add_suppresses or add_execution_rebases_highest_price_after_pyramid or add_count_increment_once'` -> `4 passed`
+    - `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_scale_in.py -k 'scale_in or pyramid or trailing or reversal_add'` -> `103 passed`
+    - `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/sniper_state_handlers.py src/engine/sniper_execution_receipts.py src/utils/constants.py` -> 통과
+    - `git diff --check -- src/engine/sniper_state_handlers.py src/engine/sniper_execution_receipts.py src/utils/constants.py src/tests/test_sniper_scale_in.py` -> 통과
+  - 다음 액션: 장중 반영이 필요하면 커밋 후 봇 재기동으로 코드 로드한다. 재기동 전까지 현재 실행 중인 봇에는 미반영이다.
 
 ## 장후 체크리스트 (16:00~20:00)
 

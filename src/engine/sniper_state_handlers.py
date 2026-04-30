@@ -210,6 +210,45 @@ def _coerce_optional_timestamp(value):
     return 0.0
 
 
+def _pyramid_post_add_trailing_grace(stock, now_ts):
+    if str(stock.get('last_add_type') or '').upper() != 'PYRAMID':
+        return False, 0, 0
+    grace_sec = _rule_int('SCALP_PYRAMID_POST_ADD_TRAILING_GRACE_SEC', 0)
+    if grace_sec <= 0:
+        return False, 0, 0
+
+    last_add = float(stock.get('last_add_time', 0) or 0)
+    if last_add <= 0 and stock.get('last_add_at'):
+        last_add = _coerce_optional_timestamp(stock.get('last_add_at'))
+    if last_add <= 0:
+        return False, 0, grace_sec
+
+    elapsed_sec = max(0, int(float(now_ts or time.time()) - last_add))
+    return elapsed_sec < grace_sec, elapsed_sec, grace_sec
+
+
+def _log_pyramid_post_add_trailing_grace(stock, code, *, now_ts, exit_rule_candidate, profit_rate, peak_profit, drawdown):
+    last_log = float(stock.get('last_pyramid_post_add_trailing_grace_log_ts', 0) or 0)
+    if now_ts - last_log < 15:
+        return
+    active, elapsed_sec, grace_sec = _pyramid_post_add_trailing_grace(stock, now_ts)
+    if not active:
+        return
+    _mutate_stock_state(stock, set_fields={'last_pyramid_post_add_trailing_grace_log_ts': now_ts})
+    _log_holding_pipeline(
+        stock,
+        code,
+        "pyramid_post_add_trailing_grace",
+        exit_rule_candidate=exit_rule_candidate,
+        profit_rate=f"{profit_rate:+.2f}",
+        peak_profit=f"{peak_profit:+.2f}",
+        drawdown=f"{drawdown:.2f}",
+        elapsed_sec=elapsed_sec,
+        grace_sec=grace_sec,
+        last_add_type=stock.get('last_add_type', '-'),
+    )
+
+
 def bind_state_dependencies(
     *,
     kiwoom_token=None,
@@ -4339,10 +4378,22 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         exit_rule = "protect_hard_stop"
 
     elif trailing_stop_price > 0 and curr_p <= trailing_stop_price:
-        is_sell_signal = True
-        sell_reason_type = "TRAILING"
-        reason = f"🔥 보호 트레일링 이탈 ({trailing_stop_price:,.0f}원)"
-        exit_rule = "protect_trailing_stop"
+        in_pyramid_trailing_grace, _, _ = _pyramid_post_add_trailing_grace(stock, now_ts)
+        if in_pyramid_trailing_grace:
+            _log_pyramid_post_add_trailing_grace(
+                stock,
+                code,
+                now_ts=now_ts,
+                exit_rule_candidate="protect_trailing_stop",
+                profit_rate=profit_rate,
+                peak_profit=peak_profit,
+                drawdown=0.0,
+            )
+        else:
+            is_sell_signal = True
+            sell_reason_type = "TRAILING"
+            reason = f"🔥 보호 트레일링 이탈 ({trailing_stop_price:,.0f}원)"
+            exit_rule = "protect_trailing_stop"
 
     elif strategy == 'SCALPING':
         base_stop_pct = _rule_float('SCALP_STOP', -1.5)
@@ -4713,10 +4764,22 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 exit_rule = "scalp_ai_momentum_decay"
 
             elif drawdown >= dynamic_trailing_limit:
-                is_sell_signal = True
-                sell_reason_type = "TRAILING"
-                reason = f"🔥 고점 대비 밀림 (-{drawdown:.2f}%). 트레일링 익절 (+{profit_rate:.2f}%)"
-                exit_rule = "scalp_trailing_take_profit"
+                in_pyramid_trailing_grace, _, _ = _pyramid_post_add_trailing_grace(stock, now_ts)
+                if in_pyramid_trailing_grace:
+                    _log_pyramid_post_add_trailing_grace(
+                        stock,
+                        code,
+                        now_ts=now_ts,
+                        exit_rule_candidate="scalp_trailing_take_profit",
+                        profit_rate=profit_rate,
+                        peak_profit=peak_profit,
+                        drawdown=drawdown,
+                    )
+                else:
+                    is_sell_signal = True
+                    sell_reason_type = "TRAILING"
+                    reason = f"🔥 고점 대비 밀림 (-{drawdown:.2f}%). 트레일링 익절 (+{profit_rate:.2f}%)"
+                    exit_rule = "scalp_trailing_take_profit"
 
     elif strategy == 'KOSDAQ_ML':
         try:

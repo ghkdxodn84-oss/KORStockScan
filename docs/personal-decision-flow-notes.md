@@ -166,6 +166,7 @@
 | 기대효과 | `blocked_ai_score_share`가 내려가면 `WAIT/DROP 과밀`이 완화되고, `ai_confirmed -> submitted`로 이어질 수 있는 후보 풀이 늘어난다. 결국 목표는 BUY 남발이 아니라 “막히지 말아야 할 후보의 복구”다. |
 | 주의점 | 이 지표만 보고 threshold를 바로 풀면 원인귀속이 흐려질 수 있다. 제출 병목, latency, budget blocker와 분리해서 봐야 한다. |
 | 결정 결과 | 독립 개선축으로는 채택하지 않았다. `blocked_ai_score_share` 자체는 핵심 관찰지표로 유지하되, 이 지표만을 직접 완화 목표로 삼는 별도 액션은 폐기했다. |
+| 현재 상태 | `2026-04-30` 기준 폐기 상태 유지다. 이 값은 계속 보조 관찰지표로만 쓰고, 현재 live/active owner는 `DF-ENTRY-007`과 `DF-HOLDING-004` 쪽에 있다. |
 | 폐기 사유 | 장중 판정 시점에 필요한 것은 지표 자체의 개선 선언이 아니라 `WAIT65~79 -> BUY 회복`을 실제로 만드는 구체 액션이었다. 독립 `blocked_ai_score_share` 개선축은 실행 단위가 모호하고, `score`, `prompt`, `latency`, `budget` 중 무엇을 건드리는지 흐릴 수 있다. |
 | 후속 액션 | `DF-ENTRY-002 buy_recovery_canary prompt 재교정`으로 연결한다. 즉, 관찰지표는 유지하되 실행은 recovery prompt 1축으로 옮긴다. |
 
@@ -191,6 +192,7 @@
 | 장중 후속 판정 업데이트 | `2026-04-23 11:03 KST` snapshot 기준 `candidates=124`, `ai_confirmed=66`, `entry_armed=36`, `submitted=1`, `budget_pass_events=1893`, `order_bundle_submitted_events=2`, `latency_block_events=1891`, `quote_fresh_latency_blocks=1693`, `gatekeeper_eval_ms_p95=16869ms`다. `wait6579`도 `recovery_check=20`, `promoted=13`, `budget_pass=15`, `latency_block=15`, `submitted=0`이라 오전 방향성은 `BUY 부족`이 아니라 `BUY는 충분하나 entry_armed 이후 병목`으로 바뀌었다. |
 | 현재 해석 5 | 따라서 `DF-ENTRY-002`는 이제 “BUY 후보를 못 만든다” 문제를 보는 축이 아니라, upstream 표본 생성은 유효했고 다음 live 주연은 downstream 제출축으로 넘어갔다는 기준점 역할을 한다. `buy_recovery_canary`는 종료가 아니라 유지/고정이다. |
 | 현재 해석 6 | `blocked_ai_score_share`와 `score/promote` 해석은 보조가설로 남지만, 당장 다음 canary 우선순위는 아니다. 다시 말해 `DF-ENTRY-002`의 성공 기준은 `BUY 부족 해소 여부`까지이고, `submitted/full/partial` 회복은 후속 제출축에서 본다. |
+| 현재 상태 | upstream 고정 상태다. `BUY 후보 자체 부족`보다는 downstream 제출/체결 품질이 주병목이라는 결론이 유지된다. |
 | 가드 해석 | `latency_p95=16637ms`는 임계치(`15900ms`)를 넘지만 `gatekeeper_decisions=37`이라 가드 발동 조건인 `sample >= 50`을 아직 못 채웠다. 따라서 hard OFF 근거는 아니고 방향성 경고로만 본다. |
 | 오늘 결론 | `현 축 유지 + upstream 고정`이 맞다. 지금 OFF하면 BUY drought 완화 입력이 사라지고, 지금 다른 upstream 축으로 넘어가면 `prompt 개선`, `AI threshold`, `제출 병목`의 원인귀속이 다시 흐려진다. |
 | 실패 시 해석 | 이후 관측에서 `ai_confirmed/entry_armed`가 다시 줄거나 `blocked_ai_score_share`가 재악화되면 upstream 문제 재개로 본다. 반대로 `promoted/entry_armed`가 유지되는데 `submitted`만 낮으면 핵심 병목은 계속 제출 경로(latency/quote)다. |
@@ -219,6 +221,7 @@
 | 지금 바로 할 수 있는 일 | blocker 분해뿐 아니라 `spread-only + quote fresh` 케이스 전용 `fallback 비결합 canary`를 코드에 넣고, 테스트까지 통과시킨 뒤 남은 장에서 live 검증할 수 있다. |
 | 지금 바로 못 하는 일 | 다축 동시 ON 상태에서 downstream 효과를 검증할 수는 없다. same-day live는 `기존 축 OFF -> restart.flag -> 새 축 ON` 교체 규칙을 지켜야 하고, fallback 관련 플래그는 재사용하면 안 된다. |
 | 결정 결과 | 다음 공식 판정축으로 등록했고, 장중에 `fallback 비결합 spread relief canary` 구현까지 완료했다. 남은 단계도 `장중 정량 checkpoint -> same-day 유지/확대/롤백` 판정이어야 하며, `POSTCLOSE에서 첫 제출/체결 품질만 보고 닫는 방식`은 허용하지 않는다. |
+| 현재 상태 | 제출축 분해 작업은 완료됐고, active owner는 더 이상 이 섹션이 아니다. 결과적으로 `DF-ENTRY-007 mechanical_momentum_latency_relief`와 그 이후 HOLDING 품질 판정으로 넘어갔다. |
 | 장중 1차 분해 결과 | `2026-04-23 11:21:13 KST` snapshot 기준 `budget_pass_events=2091`, `order_bundle_submitted_events=2`, `latency_block_events=2089`, `quote_fresh_latency_blocks=1882`, `quote_fresh_latency_pass_rate=0.1%`다. raw log 228건 집계에서는 `quote_stale=False 203건`, `quote_stale=True 25건`으로 fresh quote 차단이 우세했고, danger reason overlap은 `spread_too_wide 177`, `ws_age_too_high 42`, `ws_jitter_too_high 36`, `quote_stale 25`, `other_danger 22`였다. |
 | gatekeeper 해석 보정 | gatekeeper reject 실표본은 오늘 `2건`뿐이며 `gatekeeper_lock_wait_ms=0`, `gatekeeper_model_call_ms≈total_internal_ms`, `gatekeeper_cache=miss`였다. 즉 느린 것은 맞지만, 현재 `entry_armed -> submitted` 대량 단절의 1차 설명력은 `fresh quote spread 지배`보다 약하다. |
 | 단일 조작점 후보 1 | 첫 `fallback 비결합 downstream 1축` 후보는 `quote_stale=False + spread_too_wide 지배 구간 분리`다. 핵심은 전역 latency 완화가 아니라 fresh quote spread 구간을 별도 cohort로 떼어 `budget_pass_to_submitted_rate` 개선 가능성을 보는 것이다. |
@@ -240,6 +243,7 @@
 | 10:00 KST 판정 | `09:00~10:00` 누적 `ai_confirmed=77`, `entry_armed=31`, `submitted=4`, `budget_pass_events=863`, `latency_block_events=859`, `quote_fresh_latency_blocks=777`, `quote_fresh_latency_pass_rate=0.5%`, `full_fill=0`, `partial_fill=0`, `gatekeeper_eval_ms_p95=12543.0ms`였다. 따라서 원인 축은 `upstream BUY 부족`이 아니라 `budget_pass -> latency_block/submitted` downstream 단절로 고정했다. |
 | 10:30 KST 재판정 | `09:00~10:30` 누적 `ai_confirmed=91`, `entry_armed=39`, `submitted=8`, `budget_pass_events=1220`, `latency_block_events=1212`, `quote_fresh_latency_blocks=1092`, `quote_fresh_latency_pass_rate=0.7%`, `full_fill=0`, `partial_fill=0`, `gatekeeper_eval_ms_p95=12485.0ms`였다. `10:20~10:30` 증분에서도 `spread_only_required=82`가 차단사유 대부분이었다. |
 | 오늘 판정 | `spread relief canary`는 원인 위치를 downstream으로 잠그는 데는 성공했지만, 실효성 승인에는 실패했다. 즉 `제출축 병목 위치 확인`은 됐고, `실제 제출 회복 효과`는 오전 표본에서 입증하지 못했다. |
+| 현재 상태 | 종료 상태다. 병목 위치 확인용 historical 판정으로 남기고, 현재 live entry 판단에는 쓰지 않는다. |
 | why 1 | `submitted_orders=8`로 Plan Rebase §6 `N_min` 최소치 `20`에 `+12`가 부족하다. 따라서 hard pass/fail을 줄 표본은 없다. |
 | why 2 | 표본 미달과 별개로 `budget_pass_events=1220` 대비 `submitted=8`, `latency_block_events=1212`, `quote_fresh_latency_blocks=1092`라서 downstream 차단이 지배적이라는 방향성은 충분히 강하다. |
 | why 3 | `gatekeeper_eval_ms_p95`는 `12.5s` 수준으로 높지만 rollback guard(`>15,900ms`, sample>=50)까지는 아니다. 따라서 immediate rollback 사유도 아니다. |
@@ -257,6 +261,7 @@
 | 폐기된 보조가설 | `2026-04-24`에는 `window`보다 `signature_changed`가 더 많다는 이유로 `signature-only` deadband를 시도했다. 하지만 `2026-04-27 10:00~11:00`에도 `gatekeeper_fast_reuse_ratio=0.0%`, `budget_pass_to_submitted_rate=0.2%`가 유지돼 live 제출 회복축으로는 닫았다. |
 | 11:31 same-day 종료 판정 | raw 재집계 기준 `latency_block=3196`, `latency_state_danger=3000`이었고 내부 분해는 `other_danger=1218`, `ws_jitter-only=869`, `spread-only=257` 순이었다. `other_danger` 단일 케이스 1427건 중 `latency_canary_reason=low_signal`가 `1079건`이라, 남은 기대값 개선 여지는 `latency_state_danger -> other_danger relief` 쪽이 가장 직접적이었다. |
 | 현재 해석 | `entry_armed -> budget_pass`는 계속 병목이 아니고, `budget_pass -> latency_block -> submitted`가 주병목이다. 이 구간의 우선 KPI는 `submitted/full/partial`, `latency_state_danger`, `latency_danger_reasons`, `latency_canary_reason`, `other_danger relief applied`다. |
+| 현재 상태 | pivot 설명 역할은 완료됐다. `other_danger/ws_jitter/spread` 단일축은 모두 종료됐고, 현재 live owner는 `mechanical_momentum_latency_relief`로 잠겼다. |
 | 코드 반영 상태 | `SCALP_LATENCY_OTHER_DANGER_RELIEF_MIN_SIGNAL_SCORE`를 `90.0 -> 85.0`으로 낮춰 `other_danger relief`의 `low_signal` 병목을 바로 완화했다. `85.0 통과 / 84.9 차단` 회귀 테스트도 추가했다. |
 | 13:00 장중 판정 | offline bundle `latency_1300` 기준 `budget_pass=5628`, `submitted=9`, `budget_pass_to_submitted_rate=0.2%`, `latency_block=5619`, `latency_state_danger=5290`, `full_fill=4`, `partial_fill=0`이었다. `11:00` 대비 absolute `submitted/full_fill`는 늘었지만 비율 개선이 없고 `latency_state_danger` 비중도 유지 또는 악화돼, `other_danger-only normal override` 효과를 유의미한 제출 회복으로 보지는 않는다. |
 | 15:00 장중 판정 | offline bundle `ws_jitter_1500` 기준 `budget_pass=7568`, `submitted=11`, `budget_pass_to_submitted_rate=0.1%`, `latency_block=7557`, `latency_state_danger=7178`, `full_fill=7`, `partial_fill=0`이었다. `13:00` 대비 absolute `submitted/full_fill`는 늘었지만 효율 비율은 악화됐고 danger 분해도 `other_danger=3256`, `ws_age_too_high=2224`, `ws_jitter_too_high=2203` 순으로 유지돼 `ws_jitter-only relief`도 제출 회복축으로는 닫았다. |
@@ -298,15 +303,9 @@
 | 현재 상태 | `2026-04-29 12:50 KST` ON, `12:57 KST` restart 반영 완료. main PID는 `30566 -> 35539`로 교체됐다. 현재 entry live 1축은 이 축이다. |
 | 핵심 KPI | `mechanical_momentum_relief_canary_applied`, `latency_mechanical_momentum_relief_normal_override`, `submitted`, `full fill`, `partial fill`, `COMPLETED + valid profit_rate`, `fallback_regression=0` |
 | 14시 관찰 결과 | `12:57 restart -> 14:00` 고유 기준 `budget_pass=38`, `mechanical_unique=22`, `submitted=20`, `guard_block=2`, `order_failed=2`, `filled=7`이었다. `13:15 hotfix -> 14:00` 기준으로도 `budget_pass=32`, `submitted=17`, `filled=7`이라 제출 drought는 완화됐지만, fill quality와 청산 품질까지 baseline-lock 할 단계는 아니다. |
+| 2026-04-30 최신 상태 | entry live owner 유지다. 오전 `09:00~10:00` 창에서 `budget_pass=951`, `submitted=27`, `mechanical_momentum_relief_canary_applied=22`, `full_fill=0`, `partial_fill=0`로 제출 회복 방향성은 확인됐고, 그 뒤 HOLDING/청산 축은 `soft_stop_expert_defense` health check 단계로 넘어갔다. |
 | rollback guard | post-restart cohort에서 `budget_pass >= 150`인데 `submitted <= 2`, `pre_submit_price_guard_block_rate > 2.0%`, `normal_slippage_exceeded` 반복, 또는 canary cohort 일간 손익이 NAV 대비 `<= -0.35%`이면 OFF 후보로 본다. |
 | 다음 액션 | 먼저 same-day post-restart cohort에서 제출 회복 여부를 본다. 회복이 확인되면 `DF-HOLDING-001`의 HOLDING/청산 품질 판정으로 넘어가고, 실패하면 다음 replacement 축 또는 entry price/P0 guard 축과 연결해 다시 닫는다. |
-
-### 플로우차트 진행 위치
-
-- 현재 플로우는 여전히 `entry_armed -> budget_pass -> latency_block -> submitted` 구간(플로우차트 단계 7~8)에 고정돼 있다.
-- upstream 단계인 `감시종목/AI 판정`(`DF-ENTRY-001`, `DF-ENTRY-002`)은 `보류`가 아니라 `선결 조건 충족` 상태다. 지금 흔들면 안 되는 것은 upstream이 아니라 downstream 세부축 선택이다.
-- `spread_relief`, `ws_jitter-only relief`, `other_danger residual`까지 `quote_fresh family`는 한 차례 장중 잠금됐다. 그 뒤 `gatekeeper_fast_reuse`로 넘어간 것이 매몰 지점이었고, DF-ENTRY-005는 이를 철회해 `latency_state_danger -> other_danger relief` 직접 병목으로 되돌리는 항목이다.
-- 따라서 현재 위치는 `gatekeeper_fast_reuse` 재관찰 대기가 아니라, `latency_quote_fresh_composite` historical/reference 종료와 `latency_signal_quality_quote_composite` same-day 종료를 거친 뒤 `DF-ENTRY-007 mechanical_momentum_latency_relief` live 관찰 흐름이다. 지금은 `mechanical fallback` 표본을 포함한 post-restart cohort에서 `submitted/full/partial`과 `COMPLETED + valid profit_rate`를 본다.
 
 ## 제출축 판정 후 다음 단계
 
@@ -327,18 +326,8 @@
 | 성공 판정 | 제출 증가와 함께 체결 품질/청산 품질 악화가 없고 `COMPLETED + valid profit_rate`가 유지 또는 개선 |
 | 실패 판정 | 제출 증가 대비 `soft_stop` 급증, `full_fill` 악화, `COMPLETED + valid profit_rate` 악화 동반 |
 | 다음 액션 | `HoldingExitPlan0427`에서는 `soft_stop qualifying cohort`의 단일 조작점을 `micro grace`로 승인한다. 근거 묶음은 `rebound_above_sell_10m=93.4%`, `rebound_above_buy_10m=26.2%`, `same_symbol_reentry_loss_count=5`, `hard_stop_auxiliary`다. `whipsaw confirmation`은 AI/호가 확인을 추가해 지연과 미체결을 다시 만들 수 있어 1차 live 조작점에서 제외한다. |
+| 현재 상태 | 선결조건 충족 후 active 단계다. 현재 holding/exit live owner는 `soft_stop_micro_grace v1 + soft_stop_expert_defense v2` 조합이며, 같은 `2026-04-30 12:00~12:40` cohort에서 health check를 수행 중이다. |
 | Source | [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
-
-### VM 성능변경에 따른 기준선 해석 메모
-
-| 항목 | 내용 |
-| --- | --- |
-| 변경 사실 | `2026-04-28` 사용자 확인 기준 EC2 인스턴스는 `m7g.xlarge`로 상향 완료됐다. |
-| 해석 원칙 | VM 변경 직후 표본은 전략 canary 효과와 infra 효과를 분리해서 본다. 즉 `QuoteFresh/latency` 계열 지표는 같은 날 바로 `기존 main-only baseline`의 승패 근거로 쓰지 않고, `reference/provisional baseline`으로만 둔다. |
-| 먼저 볼 것 | `instance type`, `uname -m`, `nproc`, `MemAvailable`, `SwapUsed`, bot PID `/proc/<pid>/environ` 같은 provenance와 함께 `gatekeeper_eval_ms_p95`, `latency_state_danger / budget_pass`, `ws_age`, `ws_jitter`, `submitted/full/partial`를 같은 창에서 묶어 본다. |
-| 흔들림 해석 | `gatekeeper_eval_ms_p95`만 내려가거나 `latency_state_danger`만 줄어드는 경우는 전략 회복이 아니라 `infra-only improvement` 가능성이 높다. 반대로 quote freshness 지표가 출렁여도 `submitted/full/partial`이 그대로면 관찰축 민감도 변화일 수 있다. |
-| 기준선 reset 조건 | `ShadowDiff0428`이 닫히고 same-day에 `submitted/full/partial`까지 같이 움직인 뒤에만 `VM 이후 baseline reset` 후보로 승격한다. 그 전에는 `04-27 15:00 offline bundle`과 기존 `canary_applied=False` 기준선은 계속 참고선으로만 쓴다. |
-| 오판 금지 | VM 변경일의 `QuoteFresh` 개선을 새 진입축 성공으로 바로 읽지 않는다. 반대로 악화도 즉시 새 축 실패로 단정하지 않는다. 먼저 `관찰축 흔들림`, `infra-only shift`, `strategy effect` 중 어디에 가까운지 분리해야 한다. |
 
 ### DF-HOLDING-002 `soft_stop 1차 live canary` 판정 흐름
 
@@ -362,6 +351,7 @@
 | 11시 1차 판정 | `2026-04-27 11:00~11:15 KST`에는 `유지/축소/OFF/판정유예` 중 하나로 잠근다. `COMPLETED + valid profit_rate >= 10` 전에는 hard pass/fail이 아니라 방향성 판정으로만 두며, `rebound_above_sell_10m`, `rebound_above_buy_10m`, `mfe_ge_0_5`, `mfe_ge_1_0`로 휩쏘 여부를 같이 본다. |
 | 15시 최종 선택 | `soft_stop qualifying cohort`는 `micro grace`로 승인한다. 기본값은 `enabled=True`, `grace_sec=20`, `emergency_pct=-2.0`이며, hard stop `-2.5%`는 그대로 둔다. soft stop 최초 터치 후 20초 안에 emergency를 넘지 않으면 `soft_stop_micro_grace`로 지연하고, 회복 시 grace state를 제거한다. |
 | 2026-04-29 표본 보정 | `올릭스(226950)`은 `GOOD_EXIT`, `덕산하이메탈(077360)`은 `NEUTRAL`, `지앤비에스 에코(382800)`는 `MISSED_UPSIDE`이며 soft stop 후 고가 재진입 체결과 익절이 확인됐다. `코오롱(002020)`은 `GOOD_EXIT`지만 soft stop 후 고가 재진입 제출이 있었다. 따라서 지금 결론은 `micro grace 유지 + recovery recapture 라벨/로그 필요성 관찰`이지, 즉시 `soft_stop_micro_grace_extend` ON이 아니다. |
+| 현재 상태 | `soft_stop_micro_grace` 자체는 유지다. 다만 `2026-04-30 12:00 KST` 이후부터는 이 축 단독이 아니라 `DF-HOLDING-004 soft_stop_expert_defense`의 base layer로 동작한다. |
 | trailing과의 관계 | `trailing_continuation_micro_canary`는 2순위다. `MISSED_UPSIDE rate >= 60%`, `GOOD_EXIT rate <= 30%`를 충족하고 soft stop 축이 오염되지 않을 때만 다음 후보로 다시 연다. |
 | Source | [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
 
@@ -375,6 +365,7 @@
 | observe-only classifier | `bad_entry_block`: 보유 60초 이상, 손익 `<= -0.70%`, peak `<= +0.20%`, AI score `<=45`인 never-green 후보를 `bad_entry_block_observed`로만 남긴다. 내일은 live block 금지다. |
 | rollback guard | `REVERSAL_ADD` 체결 후 soft stop/hard stop으로 이어지거나, 체결 cohort 평균 손익이 `<= -0.30%`이면 OFF 후보로 본다. |
 | 승격 조건 | `bad_entry_block_observed`가 최소 10건 이상 누적되고 후속 손실 전환이 높으며 `GOOD_EXIT/MISSED_UPSIDE` 놓침 위험이 낮을 때만 별도 live block canary로 연다. |
+| 현재 상태 | `REVERSAL_ADD`는 threshold widen 후에도 `reversal_add_used=0` 상태다. `bad_entry_block`은 오전 표본 충분을 넘겼고, 현재는 `soft_stop_expert_defense`와 병렬 observe-only 근거 축으로 유지 중이다. |
 | 다음 액션 | 장전 로드와 오전 1차 관찰은 완료했다. 다음 확인창은 `2026-04-30 11:30~12:00 KST` 재기동 후 1차 효과 판정, 그리고 `19:25~19:45 KST` `bad_entry_block` 후행 outcome 확정이다. |
 | Source | [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
 
@@ -391,6 +382,7 @@
 | 제외 조건 | `reversal_add_used=True`, `POST_ADD_EVAL`, hard/emergency stop, `profit_rate <= -2.0%`, active sell order pending, invalid feature, REVERSAL_ADD 체결 포지션은 v2 적용에서 제외한다. |
 | 원인귀속 보존 | live 변경은 여러 전략 이름을 갖지만 `soft_stop_micro_grace v2` 하나의 canary owner로 묶는다. 개별 전략은 로그 필드와 cohort tag로 분리하고, 성과 판정은 v1 baseline과 v2 guarded cohort를 비교한다. |
 | rollback guard | guarded cohort 평균손익 `<= -0.30%`, guarded 후 hard/protect stop 전이, `sell_order_failed`, 또는 REVERSAL_ADD 체결 포지션 적용 1건 이상이면 v2를 OFF한다. |
+| 현재 상태 | `12:30 health check` 기준 유지다. `12:00~12:40` 창에서 `soft_stop_expert_shadow=6 / unique 3`, `adverse_fill_observed=6 / unique 3`, `soft_stop_absorption_probe=1 / unique 1`, `soft_stop_absorption_exit=1 / unique 1`, `extend=0`, `reversal_add_used=0`, `sell_order_failed=0`으로 집계됐다. |
 | 후속 액션 | `DF-HOLDING-005`부터 개별 전략을 별도 ID로 추적한다. `12:30` health check와 `13:30` keep/rollback 판정은 날짜별 checklist가 소유한다. |
 | Source | [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
 
@@ -404,6 +396,7 @@
 | 적용 상태 | `2026-04-30 12:00 KST` live canary 포함. 단독 alpha가 아니라 v2 방어망의 traffic controller로 본다. |
 | 우선순위 | emergency/hard stop과 active sell pending은 항상 우선한다. 그 다음 thesis invalidation veto를 보고, veto가 없고 absorption score가 충분할 때만 soft stop 20초 1회 유예를 허용한다. |
 | 기대효과 | 서로 다른 방어전략이 동시에 발동해 `유예`, `추가매수`, `트레일링`, `감산`이 섞이는 것을 막아 원인귀속을 보존한다. |
+| 현재 상태 | 정상 동작 중이다. `12:00~12:40` 창에서 `reversal_add_used` 혼입은 `0건`이었고, active sell pending 관련 오염이나 `sell_order_failed`도 관측되지 않았다. |
 | 실패 신호 | excluded cohort에 v2가 적용되거나, active sell pending 상태에서 추가 유예가 찍히면 즉시 구현/운영 오류로 본다. |
 | 다음 액션 | `soft_stop_absorption_probe/extend/exit` 로그에서 `expert_exclusion_reason`과 `reversal_add_used` 제외가 지켜지는지 확인한다. |
 
@@ -417,6 +410,7 @@
 | 적용 상태 | `2026-04-30 12:00 KST` live veto 포함. |
 | 오늘 veto 조건 | large sell print가 있거나, tick acceleration이 약하고 curr vs micro VWAP 이탈이 강하면 유예를 금지한다. 현재 구현 기준은 `large_sell_print_detected=True` 또는 `tick_acceleration_ratio < 0.60 and curr_vs_micro_vwap_bp < -20`이다. |
 | 기대효과 | `흡수되는 눌림`이 아니라 `진입 thesis 붕괴`인 표본을 오래 들고 가지 않게 해, soft stop 유예가 손실 확대로 바뀌는 것을 막는다. |
+| 현재 상태 | 첫 live veto가 확인됐다. `흥구석유(024060, id=4591)`에서 `12:06:11 KST` `large_sell_print`로 `thesis_invalidated=True`, `soft_stop_absorption_probe -> soft_stop_absorption_exit`가 발생했고 `extend`는 열리지 않았다. |
 | 실패 신호 | thesis veto 조건이 참인데 `soft_stop_absorption_extend`가 발생하면 즉시 v2 OFF 후보로 본다. |
 | 다음 액션 | `soft_stop_absorption_probe`에서 `veto_reason`과 실제 exit 전환을 확인한다. |
 
@@ -429,6 +423,7 @@
 | 역할 | 진입 직후 체결 품질이 나쁜지 라벨링한다. partial fill, 불리한 microprice, 체결 직후 매도 우위, spread 악화 같은 조건을 soft stop 후행 결과와 연결한다. |
 | 적용 상태 | observe-only. 오늘은 주문, 청산, 수량을 바꾸지 않고 `adverse_fill_observed` 로그만 남긴다. |
 | 기대효과 | soft stop의 원인이 청산 로직 과민인지, 애초에 체결 품질이 나쁜 진입이었는지 분리한다. 이는 다음 `bad_entry_block` 또는 entry quality 축의 근거가 된다. |
+| 현재 상태 | observe-only 정상이다. `아진엑스텍`, `흥구석유`, `KG케미칼` 3 record에서 총 `6건` 기록됐고, 주문/청산 분기 자체를 바꾼 흔적은 없다. |
 | 승격 조건 | adverse fill 후보의 후속 soft/hard stop 전환율이 비후보보다 높고, missed winner 위험이 낮을 때만 다음 운영일 live block 후보로 검토한다. |
 | 실패 신호 | observe-only인데 주문 제출, 수량, exit timing을 바꾸면 즉시 중단한다. |
 | 다음 액션 | `adverse_fill_observed`와 `COMPLETED + valid profit_rate`를 후행 연결하되, 오늘 v2 성과에는 주문 행동 변경분으로 합산하지 않는다. |
@@ -444,6 +439,7 @@
 | 유예 조건 | microstructure 흡수 신호가 3개 이상일 때만 `20초`, `1회` 유예한다. 후보 신호는 buy pressure, net aggressive delta, same-price buy absorption, micro VWAP 근접, microprice edge, tick acceleration, top3 depth ratio다. |
 | 금지 조건 | thesis veto, emergency `<= -2.0%`, REVERSAL_ADD 체결/POST_ADD_EVAL, active sell pending, invalid feature에서는 유예하지 않는다. |
 | 기대효과 | `진짜 하락`은 자르되, 호가 흡수 중인 순간 눌림은 20초 더 보아 불필요한 저점 매도를 줄인다. |
+| 현재 상태 | 아직 `extend`는 `0건`이다. `아진엑스텍(059120, id=4464)`은 `absorption_score=4`였지만 base micro grace 구간에서 emergency 쪽으로 먼저 빠졌고, `흥구석유`는 `absorption_score=2`와 `large_sell_print` veto로 즉시 exit 처리됐다. |
 | 실패 신호 | 유예 후 hard/protect stop 전이, sell failure, 평균손익 `<= -0.30%`, 또는 유예 빈도 대비 recovery 부재가 확인되면 v2를 OFF한다. |
 | 다음 액션 | `soft_stop_absorption_extend`, `soft_stop_absorption_recovered`, `soft_stop_absorption_exit`를 12:30/13:30에 분리해 본다. |
 
@@ -456,6 +452,7 @@
 | 역할 | soft stop 직후 회복 가능성을 점수화해, 향후 유예/청산/감산의 arbitration 입력으로 쓰기 위한 모델 후보다. |
 | 적용 상태 | shadow-only. 오늘 live 판단에는 쓰지 않고 `recovery_prob_shadow`만 기록한다. |
 | 기대효과 | 단순 rule 유예가 아니라, 과거 MAE/MFE와 현재 microstructure를 결합해 회복 가능성이 높은 표본만 선별하는 다음 단계 근거를 만든다. |
+| 현재 상태 | shadow-only 정상이다. `12:00~12:40` 창 `soft_stop_expert_shadow` 3개 record에 `recovery_prob_shadow`가 남았고, 예시는 `아진엑스텍 0.570 -> 0.210`, `흥구석유 0.210`, `KG케미칼 0.210`이다. |
 | 승격 조건 | shadow score 상위군의 `rebound_above_sell/buy`, `mfe_10m`, `COMPLETED + valid profit_rate`가 하위군보다 명확히 우수할 때만 canary 후보로 올린다. |
 | 실패 신호 | score와 실제 회복이 무관하거나, high score군에서 hard/protect stop 전이가 많으면 모델 입력으로 쓰지 않는다. |
 | 다음 액션 | 오늘은 `soft_stop_expert_shadow` 필드 품질과 후행 recovery label 연결성만 확인한다. |
@@ -469,6 +466,7 @@
 | 역할 | 전략/상황별 정상 손실폭과 정상 회복폭을 quantile로 보고, 고정 `scalp_soft_stop_pct`가 종목/상황별 변동성을 무시하는지 확인한다. |
 | 적용 상태 | shadow-only. 오늘 live stop threshold를 바꾸지 않는다. |
 | 기대효과 | 모든 종목과 장면에 같은 soft stop 폭을 적용하는 구조의 한계를 검증한다. 정상 MAE가 큰데 MFE 회복도 큰 유형은 유예 후보, MAE가 작아도 MFE가 빈약한 유형은 빠른 컷 후보로 분리할 수 있다. |
+| 현재 상태 | shadow-only 정상이다. `soft_stop_expert_shadow`에 `mae_proxy_pct`, `mfe_proxy_pct`가 남고 있으며 `12:30 health check`에서는 로깅 품질만 확인됐다. |
 | 승격 조건 | 충분한 표본에서 quantile band가 soft stop 결과를 유의미하게 설명하고, full/partial 및 initial/pyramid 분리 후에도 방향이 유지될 때만 다음 후보로 올린다. |
 | 실패 신호 | quantile 기준이 표본 부족이거나 특정 종목 몇 건에 과적합되면 live threshold에는 쓰지 않는다. |
 | 다음 액션 | `MAE/MFE quantile`은 장후 리포트 입력으로만 쓰고, 오늘 12:00 live 판정에는 합산하지 않는다. |
@@ -483,6 +481,7 @@
 | 적용 상태 | shadow-only. 오늘은 `would_trim_qty`, `would_trim_price`, `post_trim_mfe/mae`만 남기고 실주문 수량은 바꾸지 않는다. |
 | live 제외 사유 | 부분 감산은 주문수량, 체결귀속, 평균가, 후속 손익 계산을 모두 바꾼다. 같은 날 `soft_stop_micro_grace v2`와 동시에 live로 열면 원인귀속이 크게 흐려진다. |
 | 기대효과 | 전량 손절의 tail loss를 줄이면서, 반등 시 잔여 수량으로 upside capture를 남길 수 있는지 검증한다. |
+| 현재 상태 | shadow-only 정상이다. `12:00~12:40` 창 3개 record에 `would_trim_qty=1`, `would_trim_price`가 남았고 실주문 수량 변경은 없었다. |
 | 승격 조건 | counterfactual 기준으로 tail loss 감소가 뚜렷하고, post-trim MFE가 유의미하며, 주문 실패/부분체결 복잡도가 감당 가능할 때만 별도 단일축 canary로 연다. |
 | 실패 신호 | would-trim이 대부분 full exit보다 나쁘거나, 평균가/실현손익 attribution을 흐리면 보류한다. |
 | 다음 액션 | 오늘은 shadow 산출값의 존재와 후행 `post_trim_mfe/mae` 연결 가능성만 본다. |

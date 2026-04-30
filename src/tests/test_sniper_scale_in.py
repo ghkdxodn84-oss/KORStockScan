@@ -216,6 +216,40 @@ def test_add_count_increment_once_on_partial_fills(monkeypatch):
     assert target_stock["avg_down_count"] == 1
 
 
+def test_add_execution_rebases_highest_price_after_pyramid(monkeypatch):
+    receipts.ACTIVE_TARGETS = []
+    receipts.highest_prices = {"123456": 18000}
+    receipts._get_fast_state = lambda code: None
+
+    monkeypatch.setattr(receipts, "_update_db_for_add", lambda *args, **kwargs: None)
+    monkeypatch.setattr(receipts, "record_add_history_event", lambda *args, **kwargs: True)
+    monkeypatch.setattr(receipts, "_refresh_scalp_preset_exit_order", lambda *args, **kwargs: True)
+
+    target_stock = {
+        "id": 1,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 17150,
+        "buy_qty": 2,
+        "pending_add_order": True,
+        "pending_add_type": "PYRAMID",
+        "pending_add_qty": 1,
+        "pending_add_ord_no": "A1",
+        "add_count": 0,
+        "pyramid_count": 0,
+    }
+    receipts.ACTIVE_TARGETS.append(target_stock)
+
+    receipts.handle_real_execution(
+        {"code": "123456", "type": "BUY", "order_no": "A1", "price": 17460, "qty": 1}
+    )
+
+    assert round(target_stock["buy_price"], 4) == 17253.3333
+    assert receipts.highest_prices["123456"] == 17460
+
+
 def test_update_db_for_add_does_not_touch_detached_record_after_commit(monkeypatch):
     class DetachedRecord:
         def __init__(self):
@@ -534,6 +568,146 @@ def test_sell_priority_blocks_add(monkeypatch):
     assert called["gate"] is True
     assert called["eval"] is True
     assert called["add"] is False
+
+
+def test_recent_pyramid_add_suppresses_scalp_trailing(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    class _RulesProxy:
+        def __getattr__(self, name):
+            overrides = {
+                "SCALE_IN_REQUIRE_HISTORY_TABLE": False,
+                "SCALP_PYRAMID_POST_ADD_TRAILING_GRACE_SEC": 180,
+                "SCALP_SAFE_PROFIT": 0.5,
+                "SCALP_TRAILING_LIMIT_WEAK": 0.4,
+                "SCALP_TRAILING_LIMIT_STRONG": 0.8,
+            }
+            if name in overrides:
+                return overrides[name]
+            return getattr(CONFIG, name)
+
+    now_ts = 1_000_000.0
+    state_handlers.TRADING_RULES = _RulesProxy()
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 17460}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = None
+
+    calls = {"sell": 0, "stages": []}
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_no_add"},
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: calls.__setitem__("sell", calls["sell"] + 1) or {"return_code": "0", "ord_no": "S1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: calls["stages"].append((stage, fields)),
+    )
+
+    stock = {
+        "id": 1,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 17253.3333,
+        "buy_qty": 3,
+        "last_add_type": "PYRAMID",
+        "last_add_time": now_ts - 90,
+        "rt_ai_prob": 0.68,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 17380},
+        admin_id=1,
+        market_regime="BULL",
+        now_ts=now_ts,
+        now_dt=datetime(2026, 4, 30, 12, 45, 57),
+        radar=None,
+        ai_engine=None,
+    )
+
+    assert calls["sell"] == 0
+    assert any(stage == "pyramid_post_add_trailing_grace" for stage, _ in calls["stages"])
+
+
+def test_recent_pyramid_add_suppresses_protect_trailing(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    class _RulesProxy:
+        def __getattr__(self, name):
+            overrides = {
+                "SCALE_IN_REQUIRE_HISTORY_TABLE": False,
+                "SCALP_PYRAMID_POST_ADD_TRAILING_GRACE_SEC": 180,
+            }
+            if name in overrides:
+                return overrides[name]
+            return getattr(CONFIG, name)
+
+    now_ts = 1_000_000.0
+    state_handlers.TRADING_RULES = _RulesProxy()
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 17460}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = None
+
+    calls = {"sell": 0, "stages": []}
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_no_add"},
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: calls.__setitem__("sell", calls["sell"] + 1) or {"return_code": "0", "ord_no": "S1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: calls["stages"].append((stage, fields)),
+    )
+
+    stock = {
+        "id": 1,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 17253.3333,
+        "buy_qty": 3,
+        "trailing_stop_price": 17305,
+        "last_add_type": "PYRAMID",
+        "last_add_time": now_ts - 90,
+        "rt_ai_prob": 0.68,
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 17300},
+        admin_id=1,
+        market_regime="BULL",
+        now_ts=now_ts,
+        now_dt=datetime(2026, 4, 30, 12, 45, 57),
+        radar=None,
+        ai_engine=None,
+    )
+
+    assert calls["sell"] == 0
+    assert any(stage == "pyramid_post_add_trailing_grace" for stage, _ in calls["stages"])
 
 
 def test_timeout_pending_add_attempts_cancel_before_clear(monkeypatch):

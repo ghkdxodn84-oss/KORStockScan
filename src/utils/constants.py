@@ -49,6 +49,7 @@ class TradingConfig:
     MAX_POSITION_PCT: float = 0.20  # 남은 리스크 예산 우선
     SCALE_IN_COOLDOWN_SEC: int = 180  # 추가매수 재시도 쿨다운
     ADD_JUDGMENT_LOCK_SEC: int = 20  # 추가매수 판단 락(스팸 판단 방지)
+    SCALP_PYRAMID_POST_ADD_TRAILING_GRACE_SEC: int = 180  # 불타기 체결 직후 trailing 조기청산 억제
 
     # ==========================================
     # 3.2 추가매수(스캘핑) 설정
