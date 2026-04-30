@@ -13,7 +13,7 @@
 3. 현재 폐기 확정 축은 `fallback_scout/main`, `fallback_single`, `latency fallback split-entry`다.
 4. 현재 live 운용 원칙은 `동일 단계 내 1축 canary`다. 진입병목축과 보유/청산축은 서로 다른 단계이므로 양쪽 canary 동시 존재가 가능하지만, 같은 단계 안에서 canary 중복은 금지한다.
 5. 현재 entry live 축은 `mechanical_momentum_latency_relief`다. `latency_quote_fresh_composite`는 `2026-04-29 08:29 KST` 기준 OFF + restart 반영까지 완료됐고, `latency_signal_quality_quote_composite`는 `2026-04-29 12:50 KST` 운영 override로 효과 미약 판정 후 OFF 했다. 같은 시각 제출 drought를 방치하지 않기 위해 `mechanical_momentum_latency_relief`를 same-day 1축 replacement로 ON 했다. 이 판정은 hard baseline 승격이 아니라 EV/거래수 회복 우선의 운영 override이며, 이후 성과판정은 새 restart 이후 cohort로 분리한다.
-6. 현재 보유/청산 live 축은 `soft_stop_micro_grace`다. `gatekeeper_fast_reuse signature/window`는 same-day `종료된 보조 진단축`이며 active 후보가 아니다.
+6. 현재 보유/청산 live 축은 `soft_stop_micro_grace`이며, `2026-04-30 12:00 KST`부터 같은 축의 v2 확장인 `soft_stop_expert_defense`를 activation gate로 적재한다. `gatekeeper_fast_reuse signature/window`는 same-day `종료된 보조 진단축`이며 active 후보가 아니다.
 7. `2026-04-30`부터 soft stop 감소 접근은 단순 유예가 아니라 `valid_entry_reversal_add`와 `bad_entry_block` 가설로 분리한다. `REVERSAL_ADD`는 손실 초기 구간에서 저점 미갱신, AI 회복, 수급 재개가 같이 확인될 때 1주 floor까지 허용하는 소형 포지션 증감 canary이고, `bad_entry_block`은 never-green/AI fade 유형을 관찰만 하는 classifier다.
 
 ## 2. 용어 범례
@@ -37,6 +37,7 @@
 | `mechanical_momentum_latency_relief` | AI score 50/70 같은 mechanical fallback 상태라도 `budget_pass` 이후 수급/강도와 quote freshness 조건이 충분하면 latency DANGER를 normal 주문으로 넘기는 entry replacement 축 | `2026-04-29 12:50 KST` 운영 override로 live ON. 조건은 `signal_score<=75`, `latest_strength>=110`, `buy_pressure_10t>=50`, `ws_age<=1200ms`, `ws_jitter<=500ms`, `spread<=0.0085`, `quote_stale=False`이며, 성과는 post-restart cohort에서 `mechanical_momentum_relief_canary_applied`, `submitted/full/partial`, `COMPLETED + valid profit_rate`, `fallback_regression=0`로 분리한다 |
 | `holding_exit_observation` | 보유/청산 후보를 saved snapshot, post-sell, pipeline event로 분해하는 리포트 축 | live canary가 아니라 관찰/후보 고정용. `partial/full`, `initial/pyramid` 합산 결론 금지 |
 | `soft_stop_micro_grace_extend` | soft stop 최초 유예 20초가 너무 짧을 때 threshold 근처에서 1회 추가 유예하는 보조 파라미터 | standby/off. `soft_stop_micro_grace` 20초 축의 hard stop/동일종목 손실/미체결 비악화가 확인되고도 반등 포착이 부족할 때만 검토한다 |
+| `soft_stop_expert_defense` | `soft_stop_micro_grace v2`로 `stop arbitration layer`, `thesis invalidation veto`, `orderbook absorption stop`을 live에 묶고, `MAE/MFE quantile`, `recovery probability`, `partial de-risk`, `adverse fill`은 shadow/observe로 분리하는 보유/청산 방어망 | `2026-04-30 12:00 KST` activation gate로 same-day live canary. `REVERSAL_ADD` 체결/POST_ADD_EVAL, emergency, invalid feature, active sell pending은 제외한다 |
 | `valid_entry_reversal_add` | 진입 판단은 유효했지만 초반 눌림이 발생한 표본에서 저점 미갱신, AI 회복, 수급 재개가 확인될 때 평단을 낮추는 소형 추가매수 canary | `2026-04-30` 소형 canary. 기본 조건은 `REVERSAL_ADD_ENABLED=True`, `profit_rate -0.70%~-0.10%`, `held_sec 20~180`, `AI>=60`, bottom 대비 `+15pt` 또는 연속회복, 수급 3/4 충족, 1회만 허용. `2026-04-30 10:15 KST` intraday override로 오전 blocker의 대부분을 차지한 `pnl_out_of_range`, `hold_sec_out_of_range`만 완화하고 AI/supply 조건은 유지한다 |
 | `pyramid_dynamic_qty_observe` | 수익 중인 포지션의 `PYRAMID` 불타기 수량을 고정 50% 템플릿이 아니라 추세/수급/트레일링 여유 기반으로 재산정하는 후보 | standby/observe-only. 현재 `PYRAMID`는 유지하되 `initial-only`와 `pyramid-activated` 표본을 분리한다. 동적 수량화는 `REVERSAL_ADD`와 같은 날 live 변경하지 않고 `would_qty` counterfactual부터 설계한다 |
 | `bad_entry_block` | soft stop으로 이어질 가능성이 큰 never-green/AI fade 유형을 진입 차단 후보로 분류하는 observe-only classifier | `2026-04-30` observe-only. `held_sec>=60`, `profit_rate<=-0.70%`, `peak_profit<=+0.20%`, `AI<=45`를 기본 anchor로 로깅하며 실전 차단은 하지 않는다 |
@@ -143,6 +144,7 @@
 | `recovery_false_positive_rate` | canary로 회복된 BUY 중 soft_stop 비율이 `normal_only` baseline 대비 `+5.0%p` 이상 증가 | `buy_recovery_canary` | canary OFF, score/prompt 재교정 |
 | `initial_entry_qty_cap` | prompt 재교정 이후 신규 BUY 변동성이 커질 때 스캘핑 초기 진입은 임시로 `2주` cap 적용 | entry/holding/exit 관찰 기간 | 초기 진입 risk tail은 제한하되 `buy_qty=1 -> pyramid zero_qty`로 추가매수가 사실상 막히는 왜곡은 줄이고, `PYRAMID`는 여전히 별도 축으로 분리 관찰 |
 | `reversal_add_loss_cap` | `REVERSAL_ADD` 체결 cohort의 당일 `COMPLETED + valid profit_rate` 평균이 `<= -0.30%`, 또는 `reversal_add_used` 후 soft stop 전환율이 baseline 대비 `+5.0%p` 이상 | `valid_entry_reversal_add` | canary OFF, `bad_entry_block` 관찰만 유지 |
+| `soft_stop_expert_defense_loss_cap` | guarded cohort의 `COMPLETED + valid profit_rate` 평균이 `<= -0.30%`, guarded 후 hard/protect stop 전이, `sell_order_failed`, 또는 `REVERSAL_ADD` 체결 포지션 적용 cross-contamination 1건 이상 | `soft_stop_expert_defense` | canary OFF, `soft_stop_micro_grace v1`만 유지하고 shadow/observe 로그는 계속 남김 |
 | `bad_entry_block_promote_gate` | observe-only 표본 `>=10`에서 classifier 후보의 soft stop/하드스탑 전환율이 비후보 대비 `+10.0%p` 이상이고 missed winner 비율이 낮음 | `bad_entry_block` | 다음 운영일에 live entry block 후보로만 승격 검토 |
 
 ## 7. 매매단계별 Pain Point
@@ -166,7 +168,7 @@
 | --- | --- | --- | --- |
 | entry live canary | `mechanical_momentum_latency_relief` ON (`latency_quote_fresh_composite`, `latency_signal_quality_quote_composite` OFF 후 same-day replacement) | [2026-04-29 checklist](./2026-04-29-stage2-todo-checklist.md) `MechanicalMomentumLatencyRelief0429-Now` | 사용자 운영 override로 제출 drought 지속 방치 불허. hard baseline 승격은 보류하고 post-restart cohort를 별도 판정한다 |
 | entry data-quality gate | `ShadowDiff0428` open | [2026-04-28 checklist](./2026-04-28-stage2-todo-checklist.md) `ShadowDiff0428` | submitted/full/partial mismatch가 닫혀야 hard pass/fail 가능 |
-| holding/exit live canary | `soft_stop_micro_grace` active | 날짜별 checklist + holding audit/report | stage-disjoint 예외로 entry 축과 병렬 존재 가능 |
+| holding/exit live canary | `soft_stop_micro_grace` active, `soft_stop_expert_defense` v2 activation gate `2026-04-30 12:00 KST` | 날짜별 checklist + holding audit/report | 동일 축 v2 확장으로 관리. `REVERSAL_ADD` 체결 포지션은 excluded cohort로 분리 |
 | holding/exit observation | `holding_exit_observation` 유지 | checklist + observation report | `soft_stop/trailing/same_symbol/EOD-NXT` 분해 입력 소유 |
 | runtime stabilization follow-up | `nan_cast_guard_followup` open | [2026-05-06 checklist](./2026-05-06-stage2-todo-checklist.md) `NaNCastGuard0506HolidayCarry` | canary 아님. `2026-05-05` 어린이날 휴장 이월 후 메인 기준 최소 safe cast 범위와 upstream source 추적 계획만 잠금 |
 | engine parity / transport observation | `openai_transport_parity_flag_off` observe-only | [2026-04-30-openai-enable-acceptance-spec.md](./2026-04-30-openai-enable-acceptance-spec.md), [2026-05-04-stage2-todo-checklist.md](./2026-05-04-stage2-todo-checklist.md) | Gemini/DeepSeek acceptance와 같은 문서 구조로 유지. live 라우팅 승격이 아니라 schema/transport provenance 잠금이 목적 |

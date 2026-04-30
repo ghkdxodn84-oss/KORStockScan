@@ -2959,6 +2959,186 @@ def test_scalp_soft_stop_micro_grace_extension_delays_near_threshold_exit(monkey
     assert not exit_calls
 
 
+def _install_soft_stop_expert_test_doubles(monkeypatch):
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 10000}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    pipeline_logs = []
+    exit_calls = []
+
+    def fake_log_holding_pipeline(stock, code, stage, **fields):
+        pipeline_logs.append((stage, fields))
+
+    monkeypatch.setattr(state_handlers, "_log_holding_pipeline", fake_log_holding_pipeline)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: exit_calls.append(args) or {"return_code": "0", "ord_no": "S1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+    return pipeline_logs, exit_calls
+
+
+def _soft_stop_expert_config(**overrides):
+    return replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_SOFT_STOP_MICRO_GRACE_ENABLED=True,
+        SCALP_SOFT_STOP_MICRO_GRACE_SEC=20,
+        SCALP_SOFT_STOP_MICRO_GRACE_EMERGENCY_PCT=-2.0,
+        SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED=True,
+        SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT="",
+        SCALP_SOFT_STOP_ABSORPTION_EXTENSION_SEC=20,
+        SCALP_SOFT_STOP_ABSORPTION_MIN_SCORE=3,
+        SCALP_SOFT_STOP_ABSORPTION_MAX_EXTENSIONS=1,
+        **overrides,
+    )
+
+
+def _soft_stop_expert_stock(**overrides):
+    stock = {
+        "id": 172,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+        "rt_ai_prob": 0.60,
+        "soft_stop_micro_grace_started_at": state_handlers.time.time() - 21,
+        "last_reversal_features": {
+            "buy_pressure_10t": 62.0,
+            "tick_acceleration_ratio": 1.05,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": -2.0,
+            "net_aggressive_delta_10t": 300,
+            "same_price_buy_absorption": 3,
+            "microprice_edge_bp": 1.5,
+            "top3_depth_ratio": 1.05,
+        },
+    }
+    stock.update(overrides)
+    return stock
+
+
+def test_soft_stop_expert_absorption_extends_after_micro_grace(monkeypatch):
+    state_handlers.TRADING_RULES = _soft_stop_expert_config()
+    pipeline_logs, exit_calls = _install_soft_stop_expert_test_doubles(monkeypatch)
+
+    stock = _soft_stop_expert_stock()
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 9840, "orderbook": {"bids": [{"price": 9840, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    extend_logs = [fields for stage, fields in pipeline_logs if stage == "soft_stop_absorption_extend"]
+    shadow_logs = [fields for stage, fields in pipeline_logs if stage == "soft_stop_expert_shadow"]
+    adverse_logs = [fields for stage, fields in pipeline_logs if stage == "adverse_fill_observed"]
+    exit_logs = [fields for stage, fields in pipeline_logs if stage == "exit_signal"]
+    assert stock["status"] == "HOLDING"
+    assert stock["soft_stop_absorption_extension_used"] is True
+    assert extend_logs and extend_logs[-1]["absorption_score"] >= 3
+    assert shadow_logs and shadow_logs[-1]["shadow_only"] is True
+    assert adverse_logs and adverse_logs[-1]["observe_only"] is True
+    assert not exit_logs
+    assert not exit_calls
+
+
+def test_soft_stop_expert_thesis_veto_blocks_absorption_extension(monkeypatch):
+    state_handlers.TRADING_RULES = _soft_stop_expert_config()
+    pipeline_logs, exit_calls = _install_soft_stop_expert_test_doubles(monkeypatch)
+
+    stock = _soft_stop_expert_stock(
+        last_reversal_features={
+            "buy_pressure_10t": 70.0,
+            "tick_acceleration_ratio": 1.10,
+            "large_sell_print_detected": True,
+            "curr_vs_micro_vwap_bp": -1.0,
+            "net_aggressive_delta_10t": 400,
+            "same_price_buy_absorption": 4,
+            "microprice_edge_bp": 2.0,
+            "top3_depth_ratio": 1.00,
+        }
+    )
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 9840, "orderbook": {"bids": [{"price": 9840, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    probe_logs = [fields for stage, fields in pipeline_logs if stage == "soft_stop_absorption_probe"]
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["last_exit_rule"] == "scalp_soft_stop_pct"
+    assert probe_logs and probe_logs[-1]["thesis_invalidated"] is True
+    assert probe_logs[-1]["exclusion_reason"] == "large_sell_print"
+    assert exit_calls
+
+
+def test_soft_stop_expert_excludes_reversal_add_used_position(monkeypatch):
+    state_handlers.TRADING_RULES = _soft_stop_expert_config()
+    pipeline_logs, exit_calls = _install_soft_stop_expert_test_doubles(monkeypatch)
+
+    stock = _soft_stop_expert_stock(reversal_add_used=True)
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 9840, "orderbook": {"bids": [{"price": 9840, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    probe_logs = [fields for stage, fields in pipeline_logs if stage == "soft_stop_absorption_probe"]
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["last_exit_rule"] == "scalp_soft_stop_pct"
+    assert probe_logs and probe_logs[-1]["exclusion_reason"] == "reversal_add_used"
+    assert exit_calls
+
+
+def test_soft_stop_expert_emergency_keeps_immediate_exit(monkeypatch):
+    state_handlers.TRADING_RULES = _soft_stop_expert_config()
+    pipeline_logs, exit_calls = _install_soft_stop_expert_test_doubles(monkeypatch)
+
+    stock = _soft_stop_expert_stock()
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 9790, "orderbook": {"bids": [{"price": 9790, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    probe_logs = [fields for stage, fields in pipeline_logs if stage == "soft_stop_absorption_probe"]
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["last_exit_rule"] == "scalp_soft_stop_pct"
+    assert probe_logs and probe_logs[-1]["exclusion_reason"] == "emergency_pct"
+    assert exit_calls
+
+
 def test_open_reclaim_never_green_exit_rule(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 

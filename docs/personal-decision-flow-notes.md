@@ -10,7 +10,7 @@
 | entry live owner | `mechanical_momentum_latency_relief`. `latency_quote_fresh_composite`는 `2026-04-29 08:29 KST` OFF + restart 완료, `latency_signal_quality_quote_composite`는 `2026-04-29 12:50 KST` 효과 미약으로 OFF |
 | submitted 상태 | `mechanical_momentum_latency_relief` post-restart cohort에서 제출 회복은 확인됐다. `2026-04-30 09:00~10:00` 기준 `budget_pass=951`, `submitted=27`, 이 중 `mechanical_momentum_relief_canary_applied=22`건이 실제 `normal` submit으로 이어졌다. 다만 `full_fill=0`, `partial_fill=0`이라 fill/청산 품질은 계속 관찰 대상이다. |
 | entry 수량축 | 스캘핑 신규 BUY는 임시 `2주 cap` 유지. `3주 cap`은 기술적으로 가능하지만 `mechanical_momentum_latency_relief`와 같은 entry 단계 live 변경이므로, `2026-04-30` 장후 승인조건 판정 전에는 적용하지 않는다. |
-| 보유/청산 live owner | `soft_stop_micro_grace` active에 더해 `2026-04-30`은 `REVERSAL_ADD` 1주 소형 canary와 `bad_entry_block` observe-only classifier를 병행 운용한다. 단계가 entry가 아니라 holding/exit라 `mechanical_momentum_latency_relief`와 cohort를 분리한다. |
+| 보유/청산 live owner | `soft_stop_micro_grace` active에 더해 `2026-04-30 12:00 KST`부터 같은 축의 v2 확장인 `soft_stop_expert_defense`를 live canary로 운용한다. live 적용은 `stop arbitration layer`, `thesis invalidation veto`, `orderbook absorption stop`만 포함하고, `REVERSAL_ADD` 체결/POST_ADD_EVAL, emergency, invalid feature, active sell pending은 제외한다. |
 | soft stop 해석 | 4월 soft stop post-sell 61건 중 10분 내 매도가 재상회 57건, +0.5% 이상 반등 43건, +1.0% 이상 반등 23건, 매수가 회복 16건이다. 즉 휩쏘 가능성은 높지만 무조건 더 오래 버티는 결론은 아니다. |
 | 2026-04-29 soft stop 표본 | `올릭스`는 `GOOD_EXIT`, `덕산하이메탈`은 `NEUTRAL`, `지앤비에스 에코`는 `MISSED_UPSIDE + 고가 재진입 체결 + 익절 완료`, `코오롱`은 `GOOD_EXIT`지만 고가 재진입 제출 흔적이 있다. |
 | 2026-04-30 보유/청산 실험 | 오전 `09:00~10:30`에는 `REVERSAL_ADD` 체결이 없었고 blocker는 `pnl_out_of_range`, `hold_sec_out_of_range`가 지배적이었다. 이에 `2026-04-30 10:14 KST` 재기동 기준 `REVERSAL_ADD_PNL_MIN -0.45 -> -0.70`, `REVERSAL_ADD_MAX_HOLD_SEC 120 -> 180`만 intraday widen 했고, `bad_entry_block`은 continue observe-only다. |
@@ -136,7 +136,8 @@
 | EV 관점 추가전략 2 | `recovery recapture`: soft stop 후 동일종목 고가 재진입 또는 매수가 회복을 별도 라벨로 분리한다. 목적은 손절 유예가 아니라 `청산 후 회수 경로`가 독립 alpha인지 확인하는 것이다. |
 | EV 관점 추가전략 3 | `same-symbol soft stop cooldown`: soft stop 직후 같은 종목을 더 높은 가격에 재진입해 손실과 재진입 슬리피지를 동시에 만드는 패턴을 차단 후보로 둔다. 다만 현재는 shadow/observe 성격으로만 해석하고 live 차단은 별도 단일축이 필요하다. |
 | EV 관점 추가전략 4 | `trailing_continuation_micro_canary`: trailing 익절 후 `MISSED_UPSIDE + same_symbol_reentry`가 반복되면 이익을 너무 빨리 끊는 문제다. 현재는 soft stop 다음 2순위 후보로 유지한다. |
-| 롤백 기준 | `REVERSAL_ADD` 체결 cohort의 `COMPLETED + valid profit_rate` 평균이 `<= -0.30%`이거나 `reversal_add_used` 후 soft stop 전환율이 baseline 대비 `+5.0%p` 이상이면 OFF하고, `bad_entry_block` 관찰만 유지한다. |
+| soft_stop_expert_defense | `soft_stop_micro_grace`를 단순 시간유예로 더 늘리지 않고, 전문가 전략 후보를 계층화해 v2 방어망으로 묶는다. live는 `stop arbitration layer + thesis invalidation veto + orderbook absorption stop`만 열고, `MAE/MFE quantile`, `recovery probability`, `partial de-risk`, `adverse fill`은 주문 변경 없이 shadow/observe로만 남긴다. |
+| 롤백 기준 | `REVERSAL_ADD` 체결 cohort의 `COMPLETED + valid profit_rate` 평균이 `<= -0.30%`이거나 `reversal_add_used` 후 soft stop 전환율이 baseline 대비 `+5.0%p` 이상이면 OFF하고, `bad_entry_block` 관찰만 유지한다. `soft_stop_expert_defense`는 guarded cohort 평균손익 `<= -0.30%`, guarded 후 hard/protect stop 전이, `sell_order_failed`, `REVERSAL_ADD` 체결 포지션 적용 1건 이상이면 v2를 OFF하고 v1 micro grace만 유지한다. |
 
 ## ID 명명 규칙
 
@@ -377,6 +378,115 @@
 | 다음 액션 | 장전 로드와 오전 1차 관찰은 완료했다. 다음 확인창은 `2026-04-30 11:30~12:00 KST` 재기동 후 1차 효과 판정, 그리고 `19:25~19:45 KST` `bad_entry_block` 후행 outcome 확정이다. |
 | Source | [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
 
+### DF-HOLDING-004 `soft_stop_expert_defense` 계층화 적용 결정
+
+| 항목 | 내용 |
+| --- | --- |
+| ID | `DF-HOLDING-004` |
+| 판정항목 | `2026-04-30 12:00 KST` `soft_stop_micro_grace v2`를 전문가 방어망으로 계층화할지 여부 |
+| 문제 인식 | `soft_stop_micro_grace`와 `REVERSAL_ADD`만으로는 `scalp_soft_stop_pct` leakage를 충분히 방어하기 어렵다. 특히 단순 시간유예는 정당 손절과 흡수형 눌림을 분리하지 못하고, 반대로 `REVERSAL_ADD`는 후보가 늘어도 체결이 0이면 soft stop tail을 즉시 줄이지 못한다. |
+| 결정 결과 | 채택. `soft_stop_expert_defense`를 `soft_stop_micro_grace v2` 하나의 holding/exit live canary로 묶고, `2026-04-30 12:00 KST` activation gate로 적용한다. |
+| live 적용 범위 | `stop arbitration layer`, `thesis invalidation veto`, `orderbook absorption stop`만 live에 포함한다. 즉 우선순위 조정, thesis 붕괴 veto, 흡수 확인 시 20초 1회 유예만 실주문 행동을 바꾼다. |
+| shadow/observe 범위 | `MAE/MFE quantile stop`, `recovery probability model`, `partial de-risk stop`은 shadow-only, `adverse fill detector`는 observe-only다. 이 네 축은 오늘 주문 수량, 청산 시점, 평균가를 바꾸지 않는다. |
+| 제외 조건 | `reversal_add_used=True`, `POST_ADD_EVAL`, hard/emergency stop, `profit_rate <= -2.0%`, active sell order pending, invalid feature, REVERSAL_ADD 체결 포지션은 v2 적용에서 제외한다. |
+| 원인귀속 보존 | live 변경은 여러 전략 이름을 갖지만 `soft_stop_micro_grace v2` 하나의 canary owner로 묶는다. 개별 전략은 로그 필드와 cohort tag로 분리하고, 성과 판정은 v1 baseline과 v2 guarded cohort를 비교한다. |
+| rollback guard | guarded cohort 평균손익 `<= -0.30%`, guarded 후 hard/protect stop 전이, `sell_order_failed`, 또는 REVERSAL_ADD 체결 포지션 적용 1건 이상이면 v2를 OFF한다. |
+| 후속 액션 | `DF-HOLDING-005`부터 개별 전략을 별도 ID로 추적한다. `12:30` health check와 `13:30` keep/rollback 판정은 날짜별 checklist가 소유한다. |
+| Source | [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
+
+### DF-HOLDING-005 `stop arbitration layer`
+
+| 항목 | 내용 |
+| --- | --- |
+| ID | `DF-HOLDING-005` |
+| 전략 | `stop arbitration layer` |
+| 역할 | hard stop, emergency stop, soft stop, REVERSAL_ADD, trailing, partial de-risk 후보가 같은 포지션에서 충돌하지 않게 우선순위를 정하는 최상위 조정 계층이다. |
+| 적용 상태 | `2026-04-30 12:00 KST` live canary 포함. 단독 alpha가 아니라 v2 방어망의 traffic controller로 본다. |
+| 우선순위 | emergency/hard stop과 active sell pending은 항상 우선한다. 그 다음 thesis invalidation veto를 보고, veto가 없고 absorption score가 충분할 때만 soft stop 20초 1회 유예를 허용한다. |
+| 기대효과 | 서로 다른 방어전략이 동시에 발동해 `유예`, `추가매수`, `트레일링`, `감산`이 섞이는 것을 막아 원인귀속을 보존한다. |
+| 실패 신호 | excluded cohort에 v2가 적용되거나, active sell pending 상태에서 추가 유예가 찍히면 즉시 구현/운영 오류로 본다. |
+| 다음 액션 | `soft_stop_absorption_probe/extend/exit` 로그에서 `expert_exclusion_reason`과 `reversal_add_used` 제외가 지켜지는지 확인한다. |
+
+### DF-HOLDING-006 `thesis invalidation stop`
+
+| 항목 | 내용 |
+| --- | --- |
+| ID | `DF-HOLDING-006` |
+| 전략 | `thesis invalidation stop` |
+| 역할 | 처음 진입한 이유가 깨졌는지를 판단하는 veto 계층이다. thesis가 깨졌으면 micro grace, absorption, recovery 기대를 모두 금지하고 기존 exit로 보낸다. |
+| 적용 상태 | `2026-04-30 12:00 KST` live veto 포함. |
+| 오늘 veto 조건 | large sell print가 있거나, tick acceleration이 약하고 curr vs micro VWAP 이탈이 강하면 유예를 금지한다. 현재 구현 기준은 `large_sell_print_detected=True` 또는 `tick_acceleration_ratio < 0.60 and curr_vs_micro_vwap_bp < -20`이다. |
+| 기대효과 | `흡수되는 눌림`이 아니라 `진입 thesis 붕괴`인 표본을 오래 들고 가지 않게 해, soft stop 유예가 손실 확대로 바뀌는 것을 막는다. |
+| 실패 신호 | thesis veto 조건이 참인데 `soft_stop_absorption_extend`가 발생하면 즉시 v2 OFF 후보로 본다. |
+| 다음 액션 | `soft_stop_absorption_probe`에서 `veto_reason`과 실제 exit 전환을 확인한다. |
+
+### DF-HOLDING-007 `adverse fill detector`
+
+| 항목 | 내용 |
+| --- | --- |
+| ID | `DF-HOLDING-007` |
+| 전략 | `adverse fill detector` |
+| 역할 | 진입 직후 체결 품질이 나쁜지 라벨링한다. partial fill, 불리한 microprice, 체결 직후 매도 우위, spread 악화 같은 조건을 soft stop 후행 결과와 연결한다. |
+| 적용 상태 | observe-only. 오늘은 주문, 청산, 수량을 바꾸지 않고 `adverse_fill_observed` 로그만 남긴다. |
+| 기대효과 | soft stop의 원인이 청산 로직 과민인지, 애초에 체결 품질이 나쁜 진입이었는지 분리한다. 이는 다음 `bad_entry_block` 또는 entry quality 축의 근거가 된다. |
+| 승격 조건 | adverse fill 후보의 후속 soft/hard stop 전환율이 비후보보다 높고, missed winner 위험이 낮을 때만 다음 운영일 live block 후보로 검토한다. |
+| 실패 신호 | observe-only인데 주문 제출, 수량, exit timing을 바꾸면 즉시 중단한다. |
+| 다음 액션 | `adverse_fill_observed`와 `COMPLETED + valid profit_rate`를 후행 연결하되, 오늘 v2 성과에는 주문 행동 변경분으로 합산하지 않는다. |
+
+### DF-HOLDING-008 `orderbook absorption stop`
+
+| 항목 | 내용 |
+| --- | --- |
+| ID | `DF-HOLDING-008` |
+| 전략 | `orderbook absorption stop` |
+| 역할 | soft stop이 고점 대비 밀림 또는 순간 호가 흔들림에 너무 민감하게 반응하는지 방어하는 핵심 실행축이다. 매도 압력이 실제로 흡수되고 있으면 soft stop을 짧게 1회 유예한다. |
+| 적용 상태 | `2026-04-30 12:00 KST` live canary 핵심축. |
+| 유예 조건 | microstructure 흡수 신호가 3개 이상일 때만 `20초`, `1회` 유예한다. 후보 신호는 buy pressure, net aggressive delta, same-price buy absorption, micro VWAP 근접, microprice edge, tick acceleration, top3 depth ratio다. |
+| 금지 조건 | thesis veto, emergency `<= -2.0%`, REVERSAL_ADD 체결/POST_ADD_EVAL, active sell pending, invalid feature에서는 유예하지 않는다. |
+| 기대효과 | `진짜 하락`은 자르되, 호가 흡수 중인 순간 눌림은 20초 더 보아 불필요한 저점 매도를 줄인다. |
+| 실패 신호 | 유예 후 hard/protect stop 전이, sell failure, 평균손익 `<= -0.30%`, 또는 유예 빈도 대비 recovery 부재가 확인되면 v2를 OFF한다. |
+| 다음 액션 | `soft_stop_absorption_extend`, `soft_stop_absorption_recovered`, `soft_stop_absorption_exit`를 12:30/13:30에 분리해 본다. |
+
+### DF-HOLDING-009 `recovery probability model`
+
+| 항목 | 내용 |
+| --- | --- |
+| ID | `DF-HOLDING-009` |
+| 전략 | `recovery probability model` |
+| 역할 | soft stop 직후 회복 가능성을 점수화해, 향후 유예/청산/감산의 arbitration 입력으로 쓰기 위한 모델 후보다. |
+| 적용 상태 | shadow-only. 오늘 live 판단에는 쓰지 않고 `recovery_prob_shadow`만 기록한다. |
+| 기대효과 | 단순 rule 유예가 아니라, 과거 MAE/MFE와 현재 microstructure를 결합해 회복 가능성이 높은 표본만 선별하는 다음 단계 근거를 만든다. |
+| 승격 조건 | shadow score 상위군의 `rebound_above_sell/buy`, `mfe_10m`, `COMPLETED + valid profit_rate`가 하위군보다 명확히 우수할 때만 canary 후보로 올린다. |
+| 실패 신호 | score와 실제 회복이 무관하거나, high score군에서 hard/protect stop 전이가 많으면 모델 입력으로 쓰지 않는다. |
+| 다음 액션 | 오늘은 `soft_stop_expert_shadow` 필드 품질과 후행 recovery label 연결성만 확인한다. |
+
+### DF-HOLDING-010 `MAE/MFE quantile stop`
+
+| 항목 | 내용 |
+| --- | --- |
+| ID | `DF-HOLDING-010` |
+| 전략 | `MAE/MFE quantile stop` |
+| 역할 | 전략/상황별 정상 손실폭과 정상 회복폭을 quantile로 보고, 고정 `scalp_soft_stop_pct`가 종목/상황별 변동성을 무시하는지 확인한다. |
+| 적용 상태 | shadow-only. 오늘 live stop threshold를 바꾸지 않는다. |
+| 기대효과 | 모든 종목과 장면에 같은 soft stop 폭을 적용하는 구조의 한계를 검증한다. 정상 MAE가 큰데 MFE 회복도 큰 유형은 유예 후보, MAE가 작아도 MFE가 빈약한 유형은 빠른 컷 후보로 분리할 수 있다. |
+| 승격 조건 | 충분한 표본에서 quantile band가 soft stop 결과를 유의미하게 설명하고, full/partial 및 initial/pyramid 분리 후에도 방향이 유지될 때만 다음 후보로 올린다. |
+| 실패 신호 | quantile 기준이 표본 부족이거나 특정 종목 몇 건에 과적합되면 live threshold에는 쓰지 않는다. |
+| 다음 액션 | `MAE/MFE quantile`은 장후 리포트 입력으로만 쓰고, 오늘 12:00 live 판정에는 합산하지 않는다. |
+
+### DF-HOLDING-011 `partial de-risk stop`
+
+| 항목 | 내용 |
+| --- | --- |
+| ID | `DF-HOLDING-011` |
+| 전략 | `partial de-risk stop` |
+| 역할 | 전량 손절 대신 일부 감산으로 tail risk를 줄이고 회복 여지를 남기는 전략 후보다. |
+| 적용 상태 | shadow-only. 오늘은 `would_trim_qty`, `would_trim_price`, `post_trim_mfe/mae`만 남기고 실주문 수량은 바꾸지 않는다. |
+| live 제외 사유 | 부분 감산은 주문수량, 체결귀속, 평균가, 후속 손익 계산을 모두 바꾼다. 같은 날 `soft_stop_micro_grace v2`와 동시에 live로 열면 원인귀속이 크게 흐려진다. |
+| 기대효과 | 전량 손절의 tail loss를 줄이면서, 반등 시 잔여 수량으로 upside capture를 남길 수 있는지 검증한다. |
+| 승격 조건 | counterfactual 기준으로 tail loss 감소가 뚜렷하고, post-trim MFE가 유의미하며, 주문 실패/부분체결 복잡도가 감당 가능할 때만 별도 단일축 canary로 연다. |
+| 실패 신호 | would-trim이 대부분 full exit보다 나쁘거나, 평균가/실현손익 attribution을 흐리면 보류한다. |
+| 다음 액션 | 오늘은 shadow 산출값의 존재와 후행 `post_trim_mfe/mae` 연결 가능성만 본다. |
+
 ## 항목 간 연결 관계
 
 | 선행 ID | 결정 결과 | 후속 ID | 연결 의미 |
@@ -389,3 +499,12 @@
 | `DF-ENTRY-006` | `latency_quote_fresh_composite`를 묶음 ON/OFF 기준의 entry 복합축으로 관리했지만 현재는 OFF historical/reference 상태 | `DF-ENTRY-007` | same-day replacement(`latency_signal_quality_quote_composite`) 실패 후 `mechanical_momentum_latency_relief`로 현재 live owner가 이동했다는 의미 |
 | `DF-ENTRY-007` | `mechanical_momentum_latency_relief`를 현재 entry live replacement 축으로 관리 | `DF-HOLDING-001` | 제출 회복이 확인되면 HOLDING/청산 품질 판정으로 넘어가고, 회복 실패면 다음 entry replacement 축 또는 entry price/P0 guard 계열로 닫는다는 의미 |
 | `DF-HOLDING-001` | 제출 회복 이후 HOLDING/청산 품질 판정 축 유지 | `DF-HOLDING-002` | 4월 손익 훼손 기준으로 soft stop을 1순위 live 후보로 분리하고, 10시 중간점검/11시 1차 판정으로 조기 오염을 잡는다는 의미 |
+| `DF-HOLDING-002` | `soft_stop_micro_grace` 20초 유예를 1차 live 조작점으로 승인 | `DF-HOLDING-003` | 단순 유예만으로 부족해 `유효 진입 회수`와 `불량 진입 분류`를 분리했다는 의미 |
+| `DF-HOLDING-003` | `REVERSAL_ADD` 후보는 생겼지만 체결 0, soft stop tail은 계속 발생 | `DF-HOLDING-004` | 장후로 미루지 않고 `soft_stop_micro_grace v2` 전문가 방어망을 12:00 same-day canary로 적용한다는 의미 |
+| `DF-HOLDING-004` | soft stop expert defense를 하나의 v2 canary로 채택 | `DF-HOLDING-005` | 개별 전략은 한 canary 안의 계층으로 분리 추적한다는 의미 |
+| `DF-HOLDING-005` | stop 우선순위 조정 계층 live 포함 | `DF-HOLDING-006` | 우선순위가 정리된 뒤 thesis 붕괴 veto를 먼저 적용한다는 의미 |
+| `DF-HOLDING-006` | thesis invalidation veto live 포함 | `DF-HOLDING-008` | thesis가 깨지지 않은 표본만 orderbook absorption 유예 후보로 보낸다는 의미 |
+| `DF-HOLDING-007` | adverse fill은 observe-only | `DF-HOLDING-003` | 불량 체결 라벨은 다음 bad_entry/live block 판단 근거로만 되돌린다는 의미 |
+| `DF-HOLDING-008` | orderbook absorption stop live 포함 | `DF-HOLDING-009` | live 유예 결과를 recovery probability shadow 검증의 후행 label로 쓴다는 의미 |
+| `DF-HOLDING-009` | recovery probability는 shadow-only | `DF-HOLDING-010` | 회복 점수와 MAE/MFE quantile을 함께 장후 리포트 입력으로 축적한다는 의미 |
+| `DF-HOLDING-010` | MAE/MFE quantile은 shadow-only | `DF-HOLDING-011` | 고정 손절폭 보정 가능성을 확인한 뒤, 별도 수량 변경축인 partial de-risk 후보로 연결한다는 의미 |

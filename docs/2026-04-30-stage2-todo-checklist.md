@@ -97,11 +97,43 @@
     - `bad_entry_block_observed` classifier 분포 확인 결과 `never_green_ai_fade 47건`
   - 다음 액션: `REVERSAL_ADD`는 오전 창에서 후보 진입까지 못 갔으므로 장후에는 `candidate zero`가 아니라 `blocked funnel`로 닫고, 특히 `pnl_out_of_range`와 `hold_sec_out_of_range`가 과도한지 임계 재검토 후보로 넘긴다. `bad_entry_block_observed >= 3` 조건은 이미 충족했으므로 장후 classifier 승격 검토 표본으로 연결한다.
 
-- [ ] `[ReversalAddBadEntry0430-1130] REVERSAL_ADD/bad_entry_block 재기동 후 장중 1차 효과 판정` (`Due: 2026-04-30`, `Slot: INTRADAY`, `TimeWindow: 11:30~12:00`, `Track: ScalpingLogic`)
+- [x] `[ReversalAddBadEntry0430-1130] REVERSAL_ADD/bad_entry_block 재기동 후 장중 1차 효과 판정` (`Due: 2026-04-30`, `Slot: INTRADAY`, `TimeWindow: 11:30~12:00`, `Track: ScalpingLogic`)
   - Source: [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
   - 판정 기준: `2026-04-30 10:14 KST` 재기동 이후 cohort만 분리해 `reversal_add_used`, `scale_in_executed add_type=AVG_DOWN`, `reversal_add_post_eval_fail`, `bad_entry_block_observed`, `scalp_soft_stop_pct`, `soft_stop_micro_grace`, `COMPLETED + valid profit_rate`를 확인한다.
   - why: threshold widen 직후에는 표본이 조금 더 쌓인 `11:30~12:00 KST`가 same-day rollback 여부를 가장 빨리 가를 수 있는 첫 창이다. 재기동 전 표본을 섞으면 원인귀속이 흐려진다.
+  - 실행 메모 (`2026-04-30 11:41 KST`): 최신 재기동 `2026-04-30 10:33:12 KST` 이후 `11:41 KST`까지 `reversal_add_candidate=6 / unique 2`, `scale_in_executed add_type=AVG_DOWN=0`, `reversal_add_used=0`, `reversal_add_post_eval_fail=0`, `bad_entry_block_observed=48 / unique 6`, `soft_stop_micro_grace=63 / unique 6`, `scalp_soft_stop_pct exit_signal=6 / unique 6`로 집계됐다.
+  - 판정 결과: `완료 / REVERSAL_ADD rollback guard 미발동, 12:00 soft_stop_expert_defense 착수 허용`
+  - 근거: `REVERSAL_ADD` 후보는 생겼지만 실제 `AVG_DOWN` 체결과 `reversal_add_used`가 없어서 `reversal_add_used 후 soft stop 급증` 또는 체결 cohort 평균손익 rollback 조건이 성립하지 않는다. 반면 같은 창에서도 `soft_stop_micro_grace`와 `scalp_soft_stop_pct`는 계속 발생해 soft stop 방어망을 장후로 미룰 근거가 약하다.
+  - 테스트/검증:
+    - `PYTHONPATH=. .venv/bin/python` 집계로 `pipeline_events_2026-04-30.jsonl`의 `2026-04-30 10:33:12~11:41 KST` 창 stage 카운트 확인
   - 다음 액션: `AVG_DOWN` 체결이 생기고 soft stop tail이 비악화면 same-day 유지 근거로 잠근다. 반대로 `reversal_add_used` 후 `scalp_soft_stop_pct` 급증, 또는 `COMPLETED + valid profit_rate` 평균이 rollback guard에 닿으면 즉시 원복 후보로 넘긴다.
+
+- [x] `[SoftStopExpertDefense0430-1200] 전문가 soft stop 방어망 live canary 적용` (`Due: 2026-04-30`, `Slot: INTRADAY`, `TimeWindow: 12:00~12:10`, `Track: ScalpingLogic`)
+  - Source: [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - 판정 기준: `soft_stop_micro_grace v2`로 `stop arbitration layer + thesis invalidation veto + orderbook absorption stop`만 live 적용하고, `MAE/MFE quantile stop`, `recovery probability model`, `partial de-risk stop`은 shadow-only, `adverse fill detector`는 observe-only 로그로만 연다. activation gate는 `2026-04-30 12:00:00 KST`로 고정한다.
+  - why: 오늘 soft stop 손실 유형 집계에서 `scalp_soft_stop_pct`가 주요 leakage로 확인됐고, `5/4`로 미루지 말라는 운영 지시에 따라 기존 11:20/11:30 작업 이후 same-day 12:00 cohort로 즉시 착수한다. 단, live 변경은 기존 `soft_stop_micro_grace`의 v2 확장 1축으로 묶어 원인귀속을 보존한다.
+  - cohort lock: baseline cohort=`2026-04-30 10:33:12~12:00 soft_stop_micro_grace v1`, candidate live cohort=`2026-04-30 12:00 이후 soft_stop_expert_defense 적용 포지션`, observe-only cohort=`adverse_fill_observed`, shadow-only cohort=`soft_stop_expert_shadow`, excluded cohort=`reversal_add_used/POST_ADD_EVAL/emergency/invalid_feature/active_sell_pending`, rollback owner=`soft_stop_expert_defense`.
+  - rollback guard: guarded cohort의 `COMPLETED + valid profit_rate` 평균이 `<= -0.30%`, guarded 후 `hard/protect stop` 전이, `sell_order_failed`, 또는 `REVERSAL_ADD` 체결 포지션에 적용되는 cross-contamination이 1건이라도 확인되면 즉시 OFF한다.
+  - 실행 메모 (`2026-04-30 11:45 KST`): 코드 구현, targeted test, parser 검증, restart를 완료했다. 새 PID는 `72901`, 시작시각은 `2026-04-30 11:44:57 KST`이며 `SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED=True`, `SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT=2026-04-30 12:00:00`, `SCALP_SOFT_STOP_ABSORPTION_EXTENSION_SEC=20`로 로드된다.
+  - 판정 결과: `완료 / 12:00 activation gate 적재, candidate live cohort는 12:00 이후만 인정`
+  - 근거: 1차 재기동 직후 `11:43:06 KST`에 `soft_stop_expert_shadow/adverse_fill_observed`가 1개 record에서 선행 발생했으나, 즉시 보정해 shadow/observe도 activation gate 뒤로 묶고 `11:44:57 KST` 재기동했다. 해당 pre-activation 로그는 candidate/shadow/observe cohort에서 제외한다.
+  - 테스트/검증:
+    - `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/sniper_state_handlers.py src/utils/constants.py`
+    - `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_scale_in.py -k 'soft_stop_micro_grace or soft_stop_expert or reversal_add or bad_entry_block'` -> `21 passed`
+    - `PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500` -> parser count `54`, `SoftStopExpertDefense0430-1230/1330` 미완료 항목 인식
+  - 다음 액션: 코드/테스트/restart provenance를 확인한 뒤 `[SoftStopExpertDefense0430-1230]`에서 첫 health check를 수행한다.
+
+- [ ] `[SoftStopExpertDefense0430-1230] 12:30 health check` (`Due: 2026-04-30`, `Slot: INTRADAY`, `TimeWindow: 12:30~12:40`, `Track: ScalpingLogic`)
+  - Source: [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - 판정 기준: `soft_stop_absorption_probe`, `soft_stop_absorption_extend`, `soft_stop_absorption_exit`, `soft_stop_expert_shadow`, `adverse_fill_observed` 발생 여부와 `reversal_add_used` 제외가 지켜졌는지 확인한다.
+  - why: 12:00 live 적용 직후에는 수익률 결론보다 routing/로그/제외규칙 무결성이 먼저다.
+  - 다음 액션: 로그가 없으면 표본 없음으로 유지하되 코드 로드 증적을 확인한다. cross-contamination 또는 sell failure가 있으면 즉시 OFF한다.
+
+- [ ] `[SoftStopExpertDefense0430-1330] 13:30 rollback/keep 판정` (`Due: 2026-04-30`, `Slot: INTRADAY`, `TimeWindow: 13:30~13:45`, `Track: ScalpingLogic`)
+  - Source: [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - 판정 기준: `12:00` 이후 candidate live cohort를 `full/partial`, `initial/pyramid`, `REVERSAL_ADD 제외`, `COMPLETED + valid profit_rate`, `soft_stop_absorption_extend 후 hard/protect 전이`, `sell_order_failed`로 분리한다.
+  - why: same-day 방어망은 장후까지 방치하지 않고 첫 충분 표본 또는 위험 신호에서 바로 keep/OFF를 닫아야 한다.
+  - 다음 액션: rollback guard가 없고 guarded 표본이 비악화면 장중 유지, guard에 닿으면 `KORSTOCKSCAN_SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED=false`로 재기동해 OFF한다.
 
 ## 장후 체크리스트 (16:00~20:00)
 

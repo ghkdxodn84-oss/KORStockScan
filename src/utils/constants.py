@@ -137,6 +137,17 @@ class TradingConfig:
     SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_ENABLED: bool = False  # 예비 파라미터: threshold 근처 1회 추가 확인유예
     SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_SEC: int = 10  # 추가 확인유예 최대 초
     SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_BUFFER_PCT: float = 0.20  # soft stop 기준선 아래 추가 유예 허용폭
+    SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED: bool = True  # 2026-04-30 12:00 soft_stop_micro_grace v2 canary
+    SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT: str = "2026-04-30 12:00:00"  # KST local process time
+    SCALP_SOFT_STOP_ABSORPTION_EXTENSION_SEC: int = 20  # orderbook absorption 확인유예(초)
+    SCALP_SOFT_STOP_ABSORPTION_MIN_SCORE: int = 3  # absorption 조건 최소 충족 개수
+    SCALP_SOFT_STOP_ABSORPTION_MAX_EXTENSIONS: int = 1  # 포지션당 absorption 유예 1회
+    SCALP_SOFT_STOP_ABSORPTION_MIN_BUY_PRESSURE: float = 55.0
+    SCALP_SOFT_STOP_ABSORPTION_MIN_TICK_ACCEL: float = 0.95
+    SCALP_SOFT_STOP_ABSORPTION_MIN_MICRO_VWAP_BP: float = -5.0
+    SCALP_SOFT_STOP_ABSORPTION_MAX_TOP3_DEPTH_RATIO: float = 1.35
+    SCALP_SOFT_STOP_THESIS_TICK_ACCEL_MIN: float = 0.60
+    SCALP_SOFT_STOP_THESIS_MICRO_VWAP_BP_MIN: float = -20.0
     SCALP_AI_MOMENTUM_DECAY_SCORE_LIMIT: int = 45  # 이 값 미만일 때만 AI 모멘텀 둔화 익절 검토
     SCALP_AI_MOMENTUM_DECAY_MIN_HOLD_SEC: int = 90  # AI 모멘텀 둔화 익절 최소 보유시간(초)
     SCALP_PRESET_HARD_STOP_PCT: float = -0.7  # SCALP_PRESET_TP 기본 손절선
@@ -466,6 +477,14 @@ def _env_bool(name: str) -> bool | None:
     return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _env_str(name: str) -> str | None:
+    raw = os.getenv(name)
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    return value or None
+
+
 def _env_csv_tuple(name: str) -> tuple | None:
     raw = os.getenv(name)
     if raw is None or str(raw).strip() == "":
@@ -681,6 +700,8 @@ def _build_trading_rules() -> TradingConfig:
     env_reversal_add_size_ratio = _env_float("KORSTOCKSCAN_REVERSAL_ADD_SIZE_RATIO")
     env_reversal_add_min_qty_floor_enabled = _env_bool("KORSTOCKSCAN_REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED")
     env_bad_entry_observe_enabled = _env_bool("KORSTOCKSCAN_SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED")
+    env_soft_stop_expert_enabled = _env_bool("KORSTOCKSCAN_SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED")
+    env_soft_stop_expert_activate_at = _env_str("KORSTOCKSCAN_SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT")
     if (
         env_dynamic_strength_enabled is not None
         or env_dynamic_strength_tags is not None
@@ -698,6 +719,8 @@ def _build_trading_rules() -> TradingConfig:
         or env_reversal_add_size_ratio is not None
         or env_reversal_add_min_qty_floor_enabled is not None
         or env_bad_entry_observe_enabled is not None
+        or env_soft_stop_expert_enabled is not None
+        or env_soft_stop_expert_activate_at is not None
     ):
         config = replace(
             config,
@@ -749,6 +772,12 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED=env_bad_entry_observe_enabled
             if env_bad_entry_observe_enabled is not None
             else config.SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED,
+            SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED=env_soft_stop_expert_enabled
+            if env_soft_stop_expert_enabled is not None
+            else config.SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED,
+            SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT=env_soft_stop_expert_activate_at
+            if env_soft_stop_expert_activate_at is not None
+            else config.SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT,
         )
 
     env_scalping_enable_avg_down = _env_bool("KORSTOCKSCAN_SCALPING_ENABLE_AVG_DOWN")
