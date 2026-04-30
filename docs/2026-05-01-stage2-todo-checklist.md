@@ -9,12 +9,18 @@
 ## 오늘 강제 규칙
 
 - 휴장일에는 실전 `PREOPEN/INTRADAY/POSTCLOSE` 작업을 새로 열지 않는다.
+- 단, threshold collector 초기 적재처럼 실전 주문/판정에 영향을 주지 않는 maintenance bootstrap은 `RuntimeStability` 작업으로만 허용한다.
 - 미래 작업은 상대 표현이 아니라 다음 KRX 운영일 `2026-05-04 KST` 기준 `Due`, `Slot`, `TimeWindow`로 재작성한다.
 - 손익/퍼널/체결 품질 판정은 `2026-04-30`까지 확보된 `COMPLETED + valid profit_rate`와 다음 운영일 신규 표본을 분리해 해석한다.
 
 ## 장전 체크리스트
 
-- 없음
+- [ ] `[ThresholdBootstrap0501-AM] threshold collector 휴일 bootstrap 1차 실행 및 IO guard 확인` (`Due: 2026-05-01`, `Slot: PREOPEN`, `TimeWindow: 09:00~10:30`, `Track: RuntimeStability`)
+  - Source: [2026-04-30-data-driven-threshold-inventory.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-30-data-driven-threshold-inventory.md), [backfill_threshold_cycle_events.py](/home/ubuntu/KORStockScan/src/engine/backfill_threshold_cycle_events.py)
+  - 판정 기준: `data/threshold_cycle/date=YYYY-MM-DD/family=*/part-*.jsonl` partition이 생성되고, `data/threshold_cycle/checkpoints/YYYY-MM-DD.json`에 `byte_offset`, `raw_line_count`, `written_count`, `partitions`, `last_sample_metrics`, `completed/paused_reason`이 기록되는지 확인한다.
+  - 실행 원칙: 첫 실행은 raw full scan 반복이 아니라 checkpoint/resume 가능한 bootstrap으로만 수행한다. 기본 line cap은 `--max-input-lines-per-chunk 20000`, `--max-output-lines-per-partition 25000`이며, IO 우려가 있으면 더 작은 cap으로 시작한다.
+  - rollback/중단 기준: `paused_by_availability_guard`, `iowait_pct>=20`, `disk_read_mb_delta>=128`, `mem_available_mb<512`, `stopped_source_changed` 중 하나가 나오면 즉시 추가 scan을 멈추고 checkpoint와 system metric sample만 보고한다.
+  - 다음 액션: bootstrap이 `completed=true`가 아니면 같은 명령을 `--resume`으로 재실행한다. 완료 후에는 `daily_threshold_cycle_report`가 `partitioned_compact`를 우선 읽고 raw fallback을 쓰지 않는지 검증한다.
 
 ## 장중 체크리스트
 

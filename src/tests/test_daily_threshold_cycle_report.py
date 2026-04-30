@@ -99,3 +99,61 @@ def test_default_pipeline_loader_prefers_compact_threshold_file(tmp_path, monkey
     rows = report_mod._default_pipeline_loader("2026-04-30")
     assert len(rows) == 1
     assert rows[0]["stage"] == "bad_entry_block_observed"
+
+
+def test_default_pipeline_loader_prefers_partitioned_compact_over_legacy(tmp_path, monkeypatch):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(report_mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
+    partition_dir = report_mod.THRESHOLD_CYCLE_DIR / "date=2026-04-30" / "family=bad_entry_block"
+    partition_dir.mkdir(parents=True, exist_ok=True)
+    (partition_dir / "part-000001.jsonl").write_text(
+        json.dumps(
+            {
+                "event_type": "threshold_cycle_event",
+                "stage": "bad_entry_block_observed",
+                "fields": {"held_sec": "70"},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    report_mod.THRESHOLD_CYCLE_DIR.mkdir(parents=True, exist_ok=True)
+    (report_mod.THRESHOLD_CYCLE_DIR / "threshold_events_2026-04-30.jsonl").write_text(
+        json.dumps({"event_type": "threshold_cycle_event", "stage": "budget_pass", "fields": {}}, ensure_ascii=False)
+        + "\n",
+        encoding="utf-8",
+    )
+    checkpoint_dir = report_mod.THRESHOLD_CYCLE_DIR / "checkpoints"
+    checkpoint_dir.mkdir(parents=True, exist_ok=True)
+    (checkpoint_dir / "2026-04-30.json").write_text(
+        json.dumps({"completed": True, "paused_reason": None}, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+    load_result = report_mod._default_pipeline_load_result("2026-04-30")
+    assert [row["stage"] for row in load_result.rows] == ["bad_entry_block_observed"]
+    assert load_result.meta["data_source"] == "partitioned_compact"
+    assert load_result.meta["partition_count"] == 1
+    assert load_result.meta["checkpoint_completed"] is True
+
+
+def test_daily_threshold_cycle_report_includes_pipeline_load_meta(tmp_path, monkeypatch):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(report_mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
+    partition_dir = report_mod.THRESHOLD_CYCLE_DIR / "date=2026-04-30" / "family=bad_entry_block"
+    partition_dir.mkdir(parents=True, exist_ok=True)
+    (partition_dir / "part-000001.jsonl").write_text(
+        json.dumps({"event_type": "threshold_cycle_event", "stage": "bad_entry_block_observed", "fields": {}}, ensure_ascii=False)
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-04-30",
+        completed_rows_loader=lambda start_date, end_date: [],
+        skip_completed_rows=True,
+    )
+
+    assert report["meta"]["pipeline_load"]["2026-04-30"]["data_source"] == "partitioned_compact"
+    assert report["summary"]["event_count_same_day"] == 1

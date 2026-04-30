@@ -165,3 +165,9 @@
   - 판정 기준: `PerformanceTuningSnapshot` 및 `daily_threshold_cycle_report` 생성 시 스토리지 IO 과부하가 `초기 데이터 적재 1회성`인지, `매 사이클 raw jsonl full scan`으로 반복되는지 구분한다. `pipeline_events_YYYY-MM-DD.jsonl` 크기, cycle 실행 횟수, read bytes, wall time, lock contention, system availability 저하 로그를 함께 본다.
   - why: threshold 데이터 수집이 기대값 개선을 위한 핵심 기반이더라도, 장중/장후마다 400MB~GB급 raw 파일을 반복 스캔하면 실전 가용성과 체결 truth 품질을 훼손한다.
   - 다음 액션: 반복성 과부하면 cursor 기반 증분 collector, stage 필터 사전집계, 일자/분 단위 partition, single-pass shared snapshot 중 하나를 다음 구현 항목으로 고정한다. 1회성 초기 적재면 운영문서에 cold-start 예외와 금지 시간대를 명시한다.
+
+- [ ] `[ThresholdOpsTransition0506] threshold 운영전환 자동화 acceptance 확정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 22:10~22:30`, `Track: RuntimeStability`)
+  - Source: [2026-04-30-data-driven-threshold-inventory.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-30-data-driven-threshold-inventory.md), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [backfill_threshold_cycle_events.py](/home/ubuntu/KORStockScan/src/engine/backfill_threshold_cycle_events.py)
+  - 판정 기준: 최종 안정화 후 운영전환 acceptance가 `매일 자동 실행`, `다음 장전 승인 threshold 자동 적용 + 봇 기동`, `장후 threshold version별 실적분석 제출`, `실적 결과 기반 다음 threshold weight 미세조정` 4개를 모두 포함하는지 확인한다.
+  - why: threshold cycle이 수동 리포트에 머물면 데이터 기반 완화값이 실전 기대값 개선으로 연결되지 않는다. 반대로 장중 실시간 자동변경으로 가면 원인귀속과 rollback guard가 깨지므로, 자동화는 일일 배치/다음 장전 적용 단위로만 닫아야 한다.
+  - 다음 액션: acceptance가 잠기면 workflow/cron 설계 항목을 분리한다. 장중 compact collector, 장후 report+weight 산정, 장전 apply+bot start, 장후 performance attribution report를 각각 재실행 가능한 wrapper로 정의한다.

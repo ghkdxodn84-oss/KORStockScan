@@ -45,6 +45,18 @@
 - 운영 판정: threshold 수집 기능은 기대값 개선의 기반이지만, 장중/장후마다 raw full scan을 반복하면 시스템 가용성과 체결 truth 품질을 훼손한다. `2026-05-06` `[ThresholdCollectorIO0506]`에서 과부하가 초기 적재 1회성인지, 매 cycle 반복성인지 분리 판정한다.
 - 후속 설계 후보: cursor 기반 증분 collector, stage 필터 사전집계, 일자/분 단위 partition, single-pass shared snapshot. 반복성 과부하로 확인되면 이 중 하나를 구현 항목으로 승격한다.
 
+## Threshold Collector IO 구조개선 (2026-04-30 Night)
+
+- 반복 raw full scan은 폐기한다. 운영 경로는 `1회 bootstrap -> daily incremental -> partitioned compact dataset -> 장후 threshold 산정 -> 다음 장전 적용`으로 고정한다.
+- compact dataset은 `data/threshold_cycle/date=YYYY-MM-DD/family=<family>/part-000001.jsonl` 구조를 우선 사용하고, 기존 `threshold_events_YYYY-MM-DD.jsonl`은 호환 fallback으로만 남긴다.
+- 파티션은 `date/family`뿐 아니라 라인수 상한을 둔다. 기본값은 input chunk `20,000` raw lines, output partition `25,000` compact lines이며, 라인 cap 도달 시 checkpoint를 남기고 다음 실행에서 이어간다.
+- checkpoint는 `data/threshold_cycle/checkpoints/YYYY-MM-DD.json`에 source path/size/mtime, byte offset, raw line count, written count, partition state, completed, paused reason, system metric sample을 저장한다.
+- source truncate 또는 mtime/size 불일치가 감지되면 자동 재개하지 않고 `stopped_source_changed`로 중단한다. 이 경우 overwrite 여부를 사람이 명시해야 한다.
+- 시스템 가용성 측정은 기존 `src/engine/system_metric_sampler.py`를 사용한다. 각 chunk 전후 `cpu.iowait_pct`, `io.disk_read_mb_delta`, `memory.mem_available_mb`를 기록하고, 기본 guard는 `iowait_pct>=20`, `chunk read>=128MB`, `mem_available<512MB`다.
+- checkpoint에는 다음 실행 권고값 `recommended_next_input_lines_per_chunk`도 남긴다. guard에 걸리면 현재 cap의 50%로 낮추고, iowait/read/memory가 안정적이면 기본 상한 안에서만 완만하게 늘린다.
+- threshold report loader 우선순위는 `partitioned compact > legacy compact > small raw fallback`이다. raw fallback은 기존 `64MB` 이하에서만 허용하고, 초과 시 scan하지 않고 warning/meta만 남긴다.
+- `2026-05-01` 오전 휴일 bootstrap은 실전 trading 작업이 아니라 maintenance 작업으로 분리한다. 첫 실행은 보수 line cap으로 시작해 system metric sample을 보고 다음 cap을 조정한다.
+
 ## Threshold 후보 분류
 
 | 영역 | 파라미터/묶음 | 데이터량 | 현재 산정 가능성 | 해석 |
@@ -116,6 +128,31 @@
 6. `장중 고정`
    - 장중에는 추천값이 다시 계산돼도 적용하지 않는다.
    - 재계산 결과는 `shadow recommendation`으로만 남기고 다음 장후 판정 입력으로 넘긴다.
+
+## 운영전환 필수 구현 조건
+
+최종 안정화가 완료되어 threshold cycle을 운영 전환할 때는 아래 4개 조건을 모두 구현해야 한다. 하나라도 빠지면 수동 리포트/수동 적용 단계로 유지한다.
+
+1. `매일 자동 실행`
+   - 장중에는 compact threshold event 적재가 자동으로 계속되어야 한다.
+   - 장후에는 partitioned compact dataset 기준 threshold 산정 배치가 자동 실행되어야 한다.
+   - raw full scan은 bootstrap/복구성 작업으로만 허용하고, daily path에는 넣지 않는다.
+
+2. `다음 장전 자동 적용 + 봇 기동`
+   - 장후 산정 결과 중 승인된 `apply_candidate_list`만 다음 장전 `PREOPEN`에 적용한다.
+   - 적용 전에는 `threshold_snapshot`, `change governor`, `rollback_guard_pack`, `single owner` 조건을 검사한다.
+   - 적용 후 봇이 기동될 때 runtime config/env provenance에 `threshold_version`, `source_report`, `applied_family`, `current -> applied` diff가 남아야 한다.
+
+3. `장후 매매실적 결과 분석 제출`
+   - 매일 장후에는 당일 적용 threshold version별 매매실적 결과를 제출해야 한다.
+   - 최소 분석 단위는 `COMPLETED + valid profit_rate`, 거래수, blocker 분포, submitted/full/partial, sell_completed, soft/hard/trailing exit, GOOD_EXIT/MISSED_UPSIDE, owner contamination 여부다.
+   - threshold 변경이 없던 날도 baseline 유지 결과로 제출한다.
+
+4. `실적 기반 다음 가중치 미세조정`
+   - 장후 실적 결과는 다음 threshold 산정의 weight 입력으로 들어가야 한다.
+   - weight는 실시간으로 바꾸지 않고 장후 배치에서만 갱신한다.
+   - 같은 family 안에서도 손익만 보지 않고 opportunity cost, blocker 감소, 체결 품질, post-exit MFE/MAE를 같이 반영한다.
+   - 단일축 canary 원칙을 깨지 않도록 최종 live 적용은 다음 장전 1축 owner로 제한한다.
 
 ## 일일 산정 산출물
 

@@ -1,4 +1,5 @@
 import json
+import os
 
 from src.engine import backfill_threshold_cycle_events as mod
 
@@ -6,6 +7,15 @@ from src.engine import backfill_threshold_cycle_events as mod
 def test_backfill_threshold_cycle_events_streams_only_target_stages(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
+    monkeypatch.setattr(
+        mod,
+        "_sample_metrics",
+        lambda: {
+            "cpu": {"iowait_pct": 0.0},
+            "io": {"disk_read_mb_delta": 0.0},
+            "memory": {"mem_available_mb": 2048.0},
+        },
+    )
 
     raw_dir = tmp_path / "pipeline_events"
     raw_dir.mkdir(parents=True, exist_ok=True)
@@ -24,6 +34,146 @@ def test_backfill_threshold_cycle_events_streams_only_target_stages(tmp_path, mo
     summary = mod.backfill_threshold_cycle_events("2026-04-30", overwrite=True)
     assert summary["written"] == 2
 
-    compact_path = tmp_path / "threshold_cycle" / "threshold_events_2026-04-30.jsonl"
-    rows = [json.loads(line) for line in compact_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    compact_path = (
+        tmp_path
+        / "threshold_cycle"
+        / "date=2026-04-30"
+        / "family=entry_mechanical_momentum"
+        / "part-000001.jsonl"
+    )
+    bad_entry_path = (
+        tmp_path / "threshold_cycle" / "date=2026-04-30" / "family=bad_entry_block" / "part-000001.jsonl"
+    )
+    rows = [json.loads(line) for path in (compact_path, bad_entry_path) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert [row["stage"] for row in rows] == ["budget_pass", "bad_entry_block_observed"]
+
+
+def test_backfill_threshold_cycle_events_resumes_after_partition_line_cap(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
+    monkeypatch.setattr(
+        mod,
+        "_sample_metrics",
+        lambda: {
+            "cpu": {"iowait_pct": 0.0},
+            "io": {"disk_read_mb_delta": 0.0},
+            "memory": {"mem_available_mb": 2048.0},
+        },
+    )
+    raw_dir = tmp_path / "pipeline_events"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    raw_path = raw_dir / "pipeline_events_2026-04-30.jsonl"
+    raw_path.write_text(
+        "\n".join(
+            json.dumps({"event_type": "pipeline_event", "stage": "budget_pass", "fields": {"idx": idx}})
+            for idx in range(3)
+        ),
+        encoding="utf-8",
+    )
+
+    first = mod.backfill_threshold_cycle_events(
+        "2026-04-30",
+        overwrite=True,
+        max_output_lines_per_partition=2,
+        max_input_lines_per_chunk=10,
+    )
+    assert first["status"] == "paused_by_availability_guard"
+    assert first["paused_reason"] == "output_partition_line_cap"
+    assert first["written"] == 2
+
+    second = mod.backfill_threshold_cycle_events(
+        "2026-04-30",
+        max_output_lines_per_partition=2,
+        max_input_lines_per_chunk=10,
+    )
+    assert second["completed"] is True
+    assert second["written"] == 1
+
+    parts = sorted((tmp_path / "threshold_cycle" / "date=2026-04-30" / "family=entry_mechanical_momentum").glob("*.jsonl"))
+    assert [path.name for path in parts] == ["part-000001.jsonl", "part-000002.jsonl"]
+    assert sum(1 for path in parts for line in path.read_text(encoding="utf-8").splitlines() if line.strip()) == 3
+
+
+def test_backfill_threshold_cycle_events_stops_on_source_truncate(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
+    monkeypatch.setattr(
+        mod,
+        "_sample_metrics",
+        lambda: {
+            "cpu": {"iowait_pct": 0.0},
+            "io": {"disk_read_mb_delta": 0.0},
+            "memory": {"mem_available_mb": 2048.0},
+        },
+    )
+    raw_dir = tmp_path / "pipeline_events"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    raw_path = raw_dir / "pipeline_events_2026-04-30.jsonl"
+    raw_path.write_text(
+        "\n".join(
+            json.dumps({"event_type": "pipeline_event", "stage": "budget_pass", "fields": {"idx": idx}})
+            for idx in range(4)
+        ),
+        encoding="utf-8",
+    )
+    mod.backfill_threshold_cycle_events("2026-04-30", overwrite=True, max_input_lines_per_chunk=2)
+
+    raw_path.write_text(
+        json.dumps({"event_type": "pipeline_event", "stage": "budget_pass", "fields": {"idx": 0}}),
+        encoding="utf-8",
+    )
+
+    summary = mod.backfill_threshold_cycle_events("2026-04-30")
+    assert summary["status"] == "stopped_source_changed"
+
+
+def test_backfill_threshold_cycle_events_stops_on_source_mtime_mismatch(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
+    monkeypatch.setattr(
+        mod,
+        "_sample_metrics",
+        lambda: {
+            "cpu": {"iowait_pct": 0.0},
+            "io": {"disk_read_mb_delta": 0.0},
+            "memory": {"mem_available_mb": 2048.0},
+        },
+    )
+    raw_dir = tmp_path / "pipeline_events"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    raw_path = raw_dir / "pipeline_events_2026-04-30.jsonl"
+    raw_path.write_text(
+        "\n".join(
+            json.dumps({"event_type": "pipeline_event", "stage": "budget_pass", "fields": {"idx": idx}})
+            for idx in range(4)
+        ),
+        encoding="utf-8",
+    )
+    mod.backfill_threshold_cycle_events("2026-04-30", overwrite=True, max_input_lines_per_chunk=2)
+    stat = raw_path.stat()
+    os.utime(raw_path, (stat.st_atime + 10, stat.st_mtime + 10))
+
+    summary = mod.backfill_threshold_cycle_events("2026-04-30")
+    assert summary["status"] == "stopped_source_changed"
+
+
+def test_backfill_threshold_cycle_events_pauses_on_system_metric_guard(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
+    samples = iter(
+        [
+            {"cpu": {"iowait_pct": 0.0}, "io": {"disk_read_mb_delta": 0.0}, "memory": {"mem_available_mb": 2048.0}},
+            {"cpu": {"iowait_pct": 21.0}, "io": {"disk_read_mb_delta": 0.0}, "memory": {"mem_available_mb": 2048.0}},
+        ]
+    )
+    monkeypatch.setattr(mod, "_sample_metrics", lambda: next(samples))
+    raw_dir = tmp_path / "pipeline_events"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    (raw_dir / "pipeline_events_2026-04-30.jsonl").write_text(
+        json.dumps({"event_type": "pipeline_event", "stage": "budget_pass", "fields": {}}),
+        encoding="utf-8",
+    )
+
+    summary = mod.backfill_threshold_cycle_events("2026-04-30", overwrite=True)
+    assert summary["status"] == "paused_by_availability_guard"
+    assert summary["paused_reason"] == "iowait_pct>=20"

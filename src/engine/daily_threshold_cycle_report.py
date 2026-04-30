@@ -36,6 +36,12 @@ class ThresholdCycleContext:
     warnings: list[str]
 
 
+@dataclass
+class PipelineLoadResult:
+    rows: list[dict]
+    meta: dict[str, Any]
+
+
 def _safe_float(value: Any, default: float | None = None) -> float | None:
     if value in (None, "", "-", "None"):
         return default
@@ -123,25 +129,92 @@ def _default_completed_rows_loader(start_date: str, end_date: str) -> list[dict]
         return [dict(row) for row in conn.execute(query, {"start_date": start_date, "end_date": end_date}).mappings().all()]
 
 
-def _default_pipeline_loader(target_date: str) -> list[dict]:
+def _read_threshold_jsonl(path: Path) -> list[dict]:
+    rows: list[dict] = []
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            if str(payload.get("stage") or "") not in TARGET_STAGES:
+                continue
+            rows.append(payload)
+    return rows
+
+
+def _checkpoint_for_date(target_date: str) -> dict:
+    path = THRESHOLD_CYCLE_DIR / "checkpoints" / f"{target_date}.json"
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _partition_paths_for_date(target_date: str) -> list[Path]:
+    root = THRESHOLD_CYCLE_DIR / f"date={target_date}"
+    if not root.exists():
+        return []
+    return sorted(root.glob("family=*/part-*.jsonl"))
+
+
+def _load_partitioned_pipeline_events(target_date: str) -> PipelineLoadResult | None:
+    paths = _partition_paths_for_date(target_date)
+    if not paths:
+        return None
+    rows: list[dict] = []
+    read_bytes = 0
+    for path in paths:
+        try:
+            read_bytes += path.stat().st_size
+            rows.extend(_read_threshold_jsonl(path))
+        except OSError:
+            continue
+    checkpoint = _checkpoint_for_date(target_date)
+    return PipelineLoadResult(
+        rows=rows,
+        meta={
+            "target_date": target_date,
+            "data_source": "partitioned_compact",
+            "partition_count": len(paths),
+            "line_count": len(rows),
+            "checkpoint_completed": bool(checkpoint.get("completed")) if checkpoint else None,
+            "paused_reason": checkpoint.get("paused_reason") if checkpoint else None,
+            "read_bytes_estimate": read_bytes,
+            "warnings": [],
+        },
+    )
+
+
+def _default_pipeline_load_result(target_date: str) -> PipelineLoadResult:
+    partitioned = _load_partitioned_pipeline_events(target_date)
+    if partitioned is not None:
+        return partitioned
+
     compact_path = THRESHOLD_CYCLE_DIR / f"threshold_events_{target_date}.jsonl"
     if compact_path.exists():
-        rows: list[dict] = []
-        with open(compact_path, "r", encoding="utf-8", errors="replace") as handle:
-            for raw_line in handle:
-                line = raw_line.strip()
-                if not line:
-                    continue
-                try:
-                    payload = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(payload, dict):
-                    continue
-                if str(payload.get("stage") or "") not in TARGET_STAGES:
-                    continue
-                rows.append(payload)
-        return rows
+        rows = _read_threshold_jsonl(compact_path)
+        return PipelineLoadResult(
+            rows=rows,
+            meta={
+                "target_date": target_date,
+                "data_source": "legacy_compact",
+                "partition_count": 0,
+                "line_count": len(rows),
+                "checkpoint_completed": None,
+                "paused_reason": None,
+                "read_bytes_estimate": compact_path.stat().st_size,
+                "warnings": [],
+            },
+        )
 
     jsonl_path = DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
     if jsonl_path.exists() and jsonl_path.stat().st_size <= RAW_PIPELINE_FALLBACK_MAX_BYTES:
@@ -163,8 +236,39 @@ def _default_pipeline_loader(target_date: str) -> list[dict]:
                     continue
                 if isinstance(payload, dict):
                     rows.append(payload)
-        return rows
-    return []
+        return PipelineLoadResult(
+            rows=rows,
+            meta={
+                "target_date": target_date,
+                "data_source": "small_raw_fallback",
+                "partition_count": 0,
+                "line_count": len(rows),
+                "checkpoint_completed": None,
+                "paused_reason": None,
+                "read_bytes_estimate": jsonl_path.stat().st_size,
+                "warnings": ["raw fallback used; compact partition missing"],
+            },
+        )
+    warnings = []
+    if jsonl_path.exists():
+        warnings.append(f"raw fallback skipped: file exceeds {RAW_PIPELINE_FALLBACK_MAX_BYTES} bytes")
+    return PipelineLoadResult(
+        rows=[],
+        meta={
+            "target_date": target_date,
+            "data_source": "none",
+            "partition_count": 0,
+            "line_count": 0,
+            "checkpoint_completed": None,
+            "paused_reason": None,
+            "read_bytes_estimate": 0,
+            "warnings": warnings,
+        },
+    )
+
+
+def _default_pipeline_loader(target_date: str) -> list[dict]:
+    return _default_pipeline_load_result(target_date).rows
 
 
 def _extract_field_values(events: list[dict], stage: str, field_name: str) -> list[float]:
@@ -423,7 +527,7 @@ def build_daily_threshold_cycle_report(
 ) -> dict:
     target_date = str(target_date).strip()
     ctx = ThresholdCycleContext(warnings=[])
-    pipeline_loader = pipeline_loader or _default_pipeline_loader
+    custom_pipeline_loader = pipeline_loader
     completed_rows_loader = completed_rows_loader or _default_completed_rows_loader
 
     same_day = _date_range(target_date, 1)
@@ -431,11 +535,19 @@ def build_daily_threshold_cycle_report(
     rolling_7d = _date_range(target_date, 7)
 
     event_windows: dict[str, list[dict]] = {}
+    pipeline_meta_by_date: dict[str, dict] = {}
     for label, dates in {"same_day": same_day, "rolling_3d": rolling_3d, "rolling_7d": rolling_7d}.items():
         rows: list[dict] = []
         for event_date in dates:
             try:
-                rows.extend(pipeline_loader(event_date))
+                if custom_pipeline_loader is None:
+                    load_result = _default_pipeline_load_result(event_date)
+                    rows.extend(load_result.rows)
+                    pipeline_meta_by_date[event_date] = load_result.meta
+                    for warning in load_result.meta.get("warnings", []):
+                        ctx.warnings.append(f"pipeline event 로드 경고({event_date}): {warning}")
+                else:
+                    rows.extend(custom_pipeline_loader(event_date))
             except Exception as exc:
                 ctx.warnings.append(f"pipeline event 로드 실패({event_date}): {exc}")
         event_windows[label] = rows
@@ -478,6 +590,7 @@ def build_daily_threshold_cycle_report(
             "schema_version": THRESHOLD_CYCLE_SCHEMA_VERSION,
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "report_path": str(report_path_for_date(target_date)),
+            "pipeline_load": pipeline_meta_by_date,
         },
         "windows": {
             "same_day": same_day,

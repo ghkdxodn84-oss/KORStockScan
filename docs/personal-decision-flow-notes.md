@@ -16,7 +16,7 @@
 | 2026-04-30 보유/청산 실험 | 오전 `09:00~10:30`에는 `REVERSAL_ADD` 체결이 없었고 blocker는 `pnl_out_of_range`, `hold_sec_out_of_range`가 지배적이었다. 이에 `2026-04-30 10:14 KST` 재기동 기준 `REVERSAL_ADD_PNL_MIN -0.45 -> -0.70`, `REVERSAL_ADD_MAX_HOLD_SEC 120 -> 180`만 intraday widen 했다. `bad_entry_block`은 표본 부족이 아니라 단순 차단 시 `GOOD_EXIT` 제거 위험 때문에 refined canary가 필요했고, `2026-04-30` 장후에 코드/테스트 준비를 완료했다. |
 | trailing 위치 | trailing 과민 여부는 active live 축이 아니라 `2순위 candidate`다. 판단축은 `GOOD_EXIT/MISSED_UPSIDE`, `same_symbol reentry`, `mfe_10m`, `peak-to-exit giveback`이며, soft stop 축보다 뒤에 둔다. |
 | runtime truth 이슈 | `SK이노베이션(096770)`은 BUY/SELL 모두 WS 실제체결이 들어왔으나 `EXEC_IGNORED`가 발생했고, 정기 계좌동기화가 HOLDING/COMPLETED를 복구했다. 수동 HTS 매도 기준 실손익은 비용 반영 약 `+4.2%`다. 핵심 후속은 order-binding 품질이다. |
-| threshold 진행현황 | 실시간 자동변경은 폐기했다. 현재는 `장중 적재 -> 장후 산정 -> 다음 장전 적용` 사이클로 고정했고, compact threshold stream을 별도 적재한다. sample ready는 `entry_mechanical_momentum`, `bad_entry_block`, `REVERSAL_ADD blocked funnel`, `soft_stop_micro_grace`이며, 다음 holding/exit threshold owner는 `bad_entry_refined_canary`, `REVERSAL_ADD`는 `pnl/hold/gate` blocker 축소 단계다. |
+| threshold 진행현황 | 실시간 자동변경은 폐기했다. 현재는 `장중 적재 -> 장후 산정 -> 다음 장전 적용` 사이클로 고정했고, compact threshold stream을 별도 적재한다. 운영전환 시에는 매일 자동 실행, 다음 장전 승인 threshold 자동 적용 + 봇 기동, 장후 threshold version별 실적분석 제출, 그 결과의 다음 산정 weight 반영까지 닫혀야 한다. sample ready는 `entry_mechanical_momentum`, `bad_entry_block`, `REVERSAL_ADD blocked funnel`, `soft_stop_micro_grace`이며, 다음 holding/exit threshold owner는 `bad_entry_refined_canary`, `REVERSAL_ADD`는 `pnl/hold/gate` blocker 축소 단계다. |
 | 휴장 보정 | `2026-05-01`은 근로자의 날 KRX 휴장, 다음 운영일은 `2026-05-04`. `2026-05-05`는 어린이날 휴장, 이월 작업은 `2026-05-06` checklist가 소유한다. |
 
 ## 현재 기준 최종 의사결정 흐름
@@ -44,12 +44,17 @@
 
 1. threshold 운영은 `실시간 drift`가 아니라 `장중 적재 -> 장후 산정 -> 다음 장전 적용`이다.
 2. compact stream이 기본 적재 경로이고 raw `pipeline_events` full scan은 복구성 작업으로만 제한한다.
-3. 현재 sample ready 축:
+3. 최종 안정화 후 운영전환 조건은 아래 4개다.
+   - 매일 자동 실행
+   - 매일 장전 승인 threshold 자동 적용 후 봇 기동
+   - 매일 장후 threshold version별 매매실적 결과 제출
+   - 해당 실적 결과를 다음 threshold weight 산정에 반영
+4. 현재 sample ready 축:
    - `entry_mechanical_momentum`
    - `bad_entry_block`
    - `REVERSAL_ADD blocked funnel`
    - `soft_stop_micro_grace`
-4. 현재 부족 축:
+5. 현재 부족 축:
    - `partial fill`
    - `preset hard stop`
    - `post-sell feedback pipeline`
@@ -338,12 +343,12 @@
 | live 정의 | `signal_score<=75`, `latest_strength>=110`, `buy_pressure_10t>=50`, `ws_age<=1200ms`, `ws_jitter<=500ms`, `spread<=0.0085`, `quote_stale=False`, fallback/split-entry 금지, normal override만 허용 |
 | 왜 이 축인가 | 같은 post-restart 창 counterfactual 기준으로는 약 `91`건 후보가 보여, 기존 복합축이 버리던 `mechanical fallback` 표본을 제한적으로 열 수 있다. 즉 지금 필요한 것은 `high score only`가 아니라 `기계 fallback이라도 microstructure가 충분한 후보`를 살리는 것이다. |
 | 판정 원칙 | hard baseline 승격이 아니라 same-day 운영 override다. 따라서 새 restart 이후 cohort만 분리해 보고, 기존 `h1200`이나 `QuoteFresh` historical cohort와 직접 합산하지 않는다. |
-| 현재 상태 | `2026-04-29 12:50 KST` ON, `12:57 KST` restart 반영 완료. main PID는 `30566 -> 35539`로 교체됐다. 현재 entry live 1축은 이 축이다. |
+| 현재 상태 | 현재 entry live 1축이다. `2026-04-29 12:50 KST` ON 후 재기동 반영됐고, `2026-04-30 09:00~10:00` 기준 제출 회복 방향성은 확인됐지만 `submitted` 이후 체결/청산 품질은 별도 관찰 구간이다. |
 | 핵심 KPI | `mechanical_momentum_relief_canary_applied`, `latency_mechanical_momentum_relief_normal_override`, `submitted`, `full fill`, `partial fill`, `COMPLETED + valid profit_rate`, `fallback_regression=0` |
 | 14시 관찰 결과 | `12:57 restart -> 14:00` 고유 기준 `budget_pass=38`, `mechanical_unique=22`, `submitted=20`, `guard_block=2`, `order_failed=2`, `filled=7`이었다. `13:15 hotfix -> 14:00` 기준으로도 `budget_pass=32`, `submitted=17`, `filled=7`이라 제출 drought는 완화됐지만, fill quality와 청산 품질까지 baseline-lock 할 단계는 아니다. |
 | 2026-04-30 최신 상태 | entry live owner 유지다. 오전 `09:00~10:00` 창에서 `budget_pass=951`, `submitted=27`, `mechanical_momentum_relief_canary_applied=22`, `full_fill=0`, `partial_fill=0`로 제출 회복 방향성은 확인됐다. 제출 이후 품질은 보유/청산 outcome과 분리해 본다. |
 | rollback guard | post-restart cohort에서 `budget_pass >= 150`인데 `submitted <= 2`, `pre_submit_price_guard_block_rate > 2.0%`, `normal_slippage_exceeded` 반복, 또는 canary cohort 일간 손익이 NAV 대비 `<= -0.35%`이면 OFF 후보로 본다. |
-| 다음 액션 | 먼저 same-day post-restart cohort에서 제출 회복 여부를 본다. 회복이 확인되면 `DF-HOLDING-001`의 HOLDING/청산 품질 판정으로 넘어가고, 실패하면 다음 replacement 축 또는 entry price/P0 guard 축과 연결해 다시 닫는다. |
+| 다음 액션 | 5/4에는 제출 회복 자체보다 `full/partial`, `HOLDING -> exit_rule -> COMPLETED + valid profit_rate`로 BUY 신호 적정성을 본다. 신규 BUY 수량은 `1주 cap` 기준으로 고정하고, 수량 확대는 별도 승인 전에는 열지 않는다. |
 
 ## 제출축 판정 후 다음 단계
 
@@ -359,11 +364,9 @@
 | 분리 원칙 | `initial-only`와 `pyramid-activated` 표본을 섞지 않는다. `full fill`과 `partial fill`도 합치지 않는다. |
 | 수량정책 메모 | `2026-04-28~29`에는 `1주 cap -> PYRAMID zero_qty` 왜곡을 줄이기 위해 임시 `2주 cap`을 시험했다. 그러나 `2026-04-30` 장후 기준 신규 BUY exposure와 holding/exit 원인귀속 오염을 더 우선해 `SCALPING_INITIAL_ENTRY_MAX_QTY=1`로 되돌린다. |
 | 1주 cap 최신 메모 | `2026-04-30` 장후 사용자 지시로 최대매수가능 주수를 `1주`로 고정한다. 2주 cap의 과거 관찰값(`initial_entry_qty_cap_applied=38`, `zero_qty=0`, `pyramid_activated=3`)은 historical reference로만 남기고, 다음 운영일에는 `cap_qty=1`, `initial-only`, `REVERSAL_ADD floor`, `PYRAMID zero_qty`를 새 baseline으로 다시 분리한다. |
-| VM 기준선 메모 | `m7g.xlarge` 상향 직후 첫 거래일은 `runtime basis shift day`로 본다. 이 날의 `gatekeeper_eval_ms_p95`, `latency_state_danger share`, `ws_age/ws_jitter`, `budget_pass_to_submitted_rate` 변화는 전략 개선과 infra 처리속도 개선이 섞일 수 있으므로, 기존 baseline과 바로 hard 비교하지 않고 `VM 이후 provisional baseline` 후보로만 둔다. |
-| 관찰축 흔들림 메모 | VM 상향 직후에는 `QuoteFresh`, `latency_state_danger`, `gatekeeper_eval_ms_p95`가 동시에 흔들릴 수 있다. 이때 `latency_state_danger` 감소나 `p95` 하락만으로 entry 축 회복으로 판정하지 않는다. 최소 `submitted/full/partial` 회복이 같이 붙어야 하고, 그렇지 않으면 `infra-only improvement` 또는 `observation wobble`로 분리한다. |
 | 성공 판정 | 제출 증가와 함께 체결 품질/청산 품질 악화가 없고 `COMPLETED + valid profit_rate`가 유지 또는 개선 |
 | 실패 판정 | 제출 증가 대비 `soft_stop` 급증, `full_fill` 악화, `COMPLETED + valid profit_rate` 악화 동반 |
-| 다음 액션 | `HoldingExitPlan0427`에서는 `soft_stop qualifying cohort`의 단일 조작점을 `micro grace`로 승인한다. 근거 묶음은 `rebound_above_sell_10m=93.4%`, `rebound_above_buy_10m=26.2%`, `same_symbol_reentry_loss_count=5`, `hard_stop_auxiliary`다. `whipsaw confirmation`은 AI/호가 확인을 추가해 지연과 미체결을 다시 만들 수 있어 1차 live 조작점에서 제외한다. |
+| 다음 액션 | `soft_stop_micro_grace`는 현 baseline live로 유지한다. 다음 신규 보유/청산 조작점은 v2 재가동이 아니라 `bad_entry_refined_canary`이며, 5/4 장전에는 로드/override/cohort 확인만 남긴다. |
 | 현재 상태 | 선결조건 충족 후 active 단계다. 현재 holding/exit live owner는 `soft_stop_micro_grace`이며, `soft_stop_expert_defense v2`는 2026-04-30 수집 종료 후 기본 OFF다. 다음 신규 후보는 refined `bad_entry` canary다. |
 | Source | [2026-04-24-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-24-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
 
@@ -537,12 +540,12 @@
 | `DF-ENTRY-007` | `mechanical_momentum_latency_relief`를 현재 entry live replacement 축으로 관리 | `DF-HOLDING-001` | 제출 회복이 확인되면 HOLDING/청산 품질 판정으로 넘어가고, 회복 실패면 다음 entry replacement 축 또는 entry price/P0 guard 계열로 닫는다는 의미 |
 | `DF-HOLDING-001` | 제출 회복 이후 HOLDING/청산 품질 판정 축 유지 | `DF-HOLDING-002` | 4월 손익 훼손 기준으로 soft stop을 1순위 live 후보로 분리하고, 10시 중간점검/11시 1차 판정으로 조기 오염을 잡는다는 의미 |
 | `DF-HOLDING-002` | `soft_stop_micro_grace` 20초 유예를 1차 live 조작점으로 승인 | `DF-HOLDING-003` | 단순 유예만으로 부족해 `유효 진입 회수`와 `불량 진입 분류`를 분리했다는 의미 |
-| `DF-HOLDING-003` | `REVERSAL_ADD` 후보는 생겼지만 체결 0, soft stop tail은 계속 발생 | `DF-HOLDING-004` | 장후로 미루지 않고 `soft_stop_micro_grace v2` 전문가 방어망을 12:00 same-day canary로 적용한다는 의미 |
-| `DF-HOLDING-004` | soft stop expert defense를 하나의 v2 canary로 채택 | `DF-HOLDING-005` | 개별 전략은 한 canary 안의 계층으로 분리 추적한다는 의미 |
-| `DF-HOLDING-005` | stop 우선순위 조정 계층 live 포함 | `DF-HOLDING-006` | 우선순위가 정리된 뒤 thesis 붕괴 veto를 먼저 적용한다는 의미 |
-| `DF-HOLDING-006` | thesis invalidation veto live 포함 | `DF-HOLDING-008` | thesis가 깨지지 않은 표본만 orderbook absorption 유예 후보로 보낸다는 의미 |
-| `DF-HOLDING-007` | adverse fill은 observe-only | `DF-HOLDING-003` | 불량 체결 라벨은 다음 bad_entry/live block 판단 근거로만 되돌린다는 의미 |
-| `DF-HOLDING-008` | orderbook absorption stop live 포함 | `DF-HOLDING-009` | live 유예 결과를 recovery probability shadow 검증의 후행 label로 쓴다는 의미 |
-| `DF-HOLDING-009` | recovery probability는 shadow-only | `DF-HOLDING-010` | 회복 점수와 MAE/MFE quantile을 함께 장후 리포트 입력으로 축적한다는 의미 |
+| `DF-HOLDING-003` | `REVERSAL_ADD` 후보는 생겼지만 체결 0, soft stop tail은 계속 발생 | `DF-HOLDING-004` | 장후로 미루지 않고 `soft_stop_micro_grace v2` 전문가 방어망을 12:00 same-day canary로 적용했다는 historical 흐름 |
+| `DF-HOLDING-004` | soft stop expert defense를 v2 canary로 채택했으나 장후 기본 OFF | `DF-HOLDING-003` | v2 지속이 아니라 bad-entry/never-green refined canary로 다음 live owner를 되돌린다는 현재 흐름 |
+| `DF-HOLDING-005` | stop 우선순위 조정 계층은 v2 안에서 정상 동작 확인 | `DF-HOLDING-003` | arbitration 오염이 없었으므로 다음 단일축 refined bad-entry의 제외조건으로 흡수한다는 의미 |
+| `DF-HOLDING-006` | thesis invalidation veto는 v2 안에서 정상 동작 확인 | `DF-HOLDING-003` | thesis/adverse 확인을 refined bad-entry의 confirmation 조건으로 재사용한다는 의미 |
+| `DF-HOLDING-007` | adverse fill은 observe-only | `DF-HOLDING-003` | 불량 체결 라벨은 refined bad-entry 판단 근거로 되돌린다는 의미 |
+| `DF-HOLDING-008` | orderbook absorption stop은 성공 표본 부족으로 live 지속 근거 없음 | `DF-HOLDING-009` | absorption은 다음 live 축이 아니라 recovery probability/MAE-MFE shadow 해석 입력으로만 남긴다는 의미 |
+| `DF-HOLDING-009` | recovery probability는 shadow-only | `DF-HOLDING-003` | 회복확률 점수는 refined bad-entry의 confirmation/제외조건에 보조 입력으로만 쓴다는 의미 |
 | `DF-HOLDING-010` | MAE/MFE quantile은 shadow-only | `DF-HOLDING-011` | 고정 손절폭 보정 가능성을 확인한 뒤, 별도 수량 변경축인 partial de-risk 후보로 연결한다는 의미 |
-| `DF-HOLDING-003` | `bad_entry_block` outcome으로 refined rule을 확정 | `DF-HOLDING-001` | v2 OFF 이후 다음 보유/청산 live owner를 `bad_entry_refined_canary`로 되돌려 5/4 장전 로드 확인만 남긴다는 의미 |
+| `DF-HOLDING-003` | `bad_entry_block` outcome으로 refined rule을 확정 | `DF-HOLDING-001` | v2 OFF 이후 다음 보유/청산 live owner를 `bad_entry_refined_canary`로 되돌려 5/4 장전 로드 확인만 남긴다는 현재 흐름 |
