@@ -15,12 +15,21 @@
 
 ## 장전 체크리스트
 
-- [ ] `[ThresholdBootstrap0501-AM] threshold collector 휴일 bootstrap 1차 실행 및 IO guard 확인` (`Due: 2026-05-01`, `Slot: PREOPEN`, `TimeWindow: 09:00~10:30`, `Track: RuntimeStability`)
+- [x] `[ThresholdBootstrap0501-AM] threshold collector 휴일 bootstrap 1차 실행 및 IO guard 확인` (`Due: 2026-05-01`, `Slot: PREOPEN`, `TimeWindow: 09:00~10:30`, `Track: RuntimeStability`)
   - Source: [2026-04-30-data-driven-threshold-inventory.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-30-data-driven-threshold-inventory.md), [backfill_threshold_cycle_events.py](/home/ubuntu/KORStockScan/src/engine/backfill_threshold_cycle_events.py)
   - 판정 기준: `data/threshold_cycle/date=YYYY-MM-DD/family=*/part-*.jsonl` partition이 생성되고, `data/threshold_cycle/checkpoints/YYYY-MM-DD.json`에 `byte_offset`, `raw_line_count`, `written_count`, `partitions`, `last_sample_metrics`, `completed/paused_reason`이 기록되는지 확인한다.
   - 실행 원칙: 첫 실행은 raw full scan 반복이 아니라 checkpoint/resume 가능한 bootstrap으로만 수행한다. 기본 line cap은 `--max-input-lines-per-chunk 20000`, `--max-output-lines-per-partition 25000`이며, IO 우려가 있으면 더 작은 cap으로 시작한다.
   - rollback/중단 기준: `paused_by_availability_guard`, `iowait_pct>=20`, `disk_read_mb_delta>=128`, `mem_available_mb<512`, `stopped_source_changed` 중 하나가 나오면 즉시 추가 scan을 멈추고 checkpoint와 system metric sample만 보고한다.
-  - 다음 액션: bootstrap이 `completed=true`가 아니면 같은 명령을 `--resume`으로 재실행한다. 완료 후에는 `daily_threshold_cycle_report`가 `partitioned_compact`를 우선 읽고 raw fallback을 쓰지 않는지 검증한다.
+  - 실행 메모 (`2026-05-01 KST`): `2026-04-30` raw pipeline `508,715,934 bytes`를 checkpoint/resume 방식으로 bootstrap 완료했다. 최종 checkpoint는 `completed=true`, `paused_reason=null`, `byte_offset=508715934`, `raw_line_count=469809`, `written_count=10894`, `recommended_next_input_lines_per_chunk=20000`이다.
+  - 추가 실행 메모 (`2026-05-01 KST`): 휴일 bootstrap 범위를 `2026-04-25`, `2026-04-27`, `2026-04-28`, `2026-04-29`, `2026-04-30` 가용 raw 전체로 확장했다. 5개 일자 모두 `completed=true`, `paused_reason=null`로 완료했고, 5/4부터 `07:35 PREOPEN manifest`, `16:10 POSTCLOSE collector/report` cron 자동화를 설치했다.
+  - 판정 결과: `완료 / 4월 가용 raw partitioned_compact 적재 완료, 5/4 daily cycle manifest-only 자동화 설치`
+  - 근거: partition 총량은 `2026-04-25=6`, `2026-04-27=7653`, `2026-04-28=8583`, `2026-04-29=15093`, `2026-04-30=10894`다. 4/30 최종 system metric sample은 `iowait_pct=0.76`, `disk_read_mb_delta=15.805`, `mem_available_mb=12404.0`으로 중단 기준(`iowait_pct>=20`, `read>=128MB`, `mem<512MB`)에 걸리지 않았다.
+  - 테스트/검증:
+    - `PYTHONPATH=. .venv/bin/python -m src.engine.daily_threshold_cycle_report --date 2026-04-30 --skip-db --print` -> `data_source=partitioned_compact`, `partition_count=5`, `line_count=10894`, `checkpoint_completed=true`
+    - `PYTHONPATH=. .venv/bin/python -m src.engine.threshold_cycle_preopen_apply --date 2026-05-04 --source-date 2026-04-30` -> `manifest_ready`, `runtime_change=false`
+    - `deploy/install_threshold_cycle_cron.sh` -> `35 7` PREOPEN, `10 16` POSTCLOSE cron 등록 확인
+    - `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_backfill_threshold_cycle_events.py src/tests/test_daily_threshold_cycle_report.py src/tests/test_threshold_cycle_preopen_apply.py` -> 통과
+  - 다음 액션: 5/4부터 daily incremental 운영은 자동 실행한다. 단 live threshold runtime mutation은 5/6 `[ThresholdOpsTransition0506]` acceptance 전까지 `manifest_only`로 막고, 장전 manifest와 장후 report/attribution 결과만 자동 생성한다.
 
 ## 장중 체크리스트
 

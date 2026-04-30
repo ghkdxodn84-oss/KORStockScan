@@ -10,8 +10,9 @@ from pathlib import Path
 from typing import Any
 
 from src.engine import system_metric_sampler
-from src.engine.daily_threshold_cycle_report import TARGET_STAGES, THRESHOLD_CYCLE_DIR
+from src.engine.daily_threshold_cycle_report import THRESHOLD_CYCLE_DIR
 from src.utils.constants import DATA_DIR
+from src.utils.threshold_cycle_registry import threshold_family_for_stage
 
 
 DEFAULT_MAX_INPUT_LINES_PER_CHUNK = 20_000
@@ -19,18 +20,6 @@ DEFAULT_MAX_OUTPUT_LINES_PER_PARTITION = 25_000
 DEFAULT_MAX_CHUNK_READ_MB = 128.0
 DEFAULT_MAX_IOWAIT_PCT = 20.0
 DEFAULT_MIN_MEM_AVAILABLE_MB = 512.0
-
-STAGE_FAMILY_MAP = {
-    "budget_pass": "entry_mechanical_momentum",
-    "order_bundle_submitted": "pre_submit_price_guard",
-    "latency_pass": "pre_submit_price_guard",
-    "pre_submit_price_guard_block": "pre_submit_price_guard",
-    "bad_entry_block_observed": "bad_entry_block",
-    "reversal_add_candidate": "reversal_add",
-    "reversal_add_blocked_reason": "reversal_add",
-    "soft_stop_micro_grace": "soft_stop_micro_grace",
-}
-
 
 def raw_pipeline_path(target_date: str) -> Path:
     return DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
@@ -175,7 +164,9 @@ def _write_compact_payload(
     max_output_lines_per_partition: int,
 ) -> tuple[bool, str | None]:
     stage = str(payload.get("stage") or "")
-    family = STAGE_FAMILY_MAP.get(stage, "unknown")
+    family = threshold_family_for_stage(stage, payload.get("fields") if isinstance(payload.get("fields"), dict) else None)
+    if not family:
+        return False, "not_threshold_cycle_stage"
     state = partition_state.setdefault(family, {"part": 1, "line_count": 0})
     if state["line_count"] >= max_output_lines_per_partition:
         state["part"] += 1
@@ -279,7 +270,10 @@ def backfill_threshold_cycle_events(
                 continue
             if payload.get("event_type") not in (None, "", "pipeline_event"):
                 continue
-            if str(payload.get("stage") or "") not in TARGET_STAGES:
+            if not threshold_family_for_stage(
+                str(payload.get("stage") or ""),
+                payload.get("fields") if isinstance(payload.get("fields"), dict) else None,
+            ):
                 continue
             wrote, reason = _write_compact_payload(
                 target_date=target_date,

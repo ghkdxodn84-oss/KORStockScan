@@ -169,5 +169,6 @@
 - [ ] `[ThresholdOpsTransition0506] threshold 운영전환 자동화 acceptance 확정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 22:10~22:30`, `Track: RuntimeStability`)
   - Source: [2026-04-30-data-driven-threshold-inventory.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-30-data-driven-threshold-inventory.md), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [backfill_threshold_cycle_events.py](/home/ubuntu/KORStockScan/src/engine/backfill_threshold_cycle_events.py)
   - 판정 기준: 최종 안정화 후 운영전환 acceptance가 `매일 자동 실행`, `다음 장전 승인 threshold 자동 적용 + 봇 기동`, `장후 threshold version별 실적분석 제출`, `실적 결과 기반 다음 threshold weight 미세조정` 4개를 모두 포함하는지 확인한다.
+  - 현재 자동화 상태: `2026-05-01`에 4월 가용 raw partition bootstrap을 완료했고, `07:35 PREOPEN apply manifest`, `16:10 POSTCLOSE collector/report` cron을 설치했다. 단 live threshold runtime mutation은 acceptance 전까지 `manifest_only`다.
   - why: threshold cycle이 수동 리포트에 머물면 데이터 기반 완화값이 실전 기대값 개선으로 연결되지 않는다. 반대로 장중 실시간 자동변경으로 가면 원인귀속과 rollback guard가 깨지므로, 자동화는 일일 배치/다음 장전 적용 단위로만 닫아야 한다.
   - 다음 액션: acceptance가 잠기면 workflow/cron 설계 항목을 분리한다. 장중 compact collector, 장후 report+weight 산정, 장전 apply+bot start, 장후 performance attribution report를 각각 재실행 가능한 wrapper로 정의한다.

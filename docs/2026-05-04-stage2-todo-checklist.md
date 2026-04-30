@@ -8,6 +8,7 @@
 - BUY-side timeout/parse failure/late response는 `DROP/SKIP` 보수 폴백으로만 처리하고, `previous_response_id`는 종목 간 상태 오염 방지 차원에서 금지한다.
 - `soft_stop_expert_defense v2`는 `2026-04-30` same-day 수집 후 기본 OFF다. 다음 보유/청산 신규 owner는 v2 재가동이 아니라 `GOOD_EXIT` 제거를 피하는 refined `bad_entry` canary다.
 - 스캘핑 신규 BUY 최대매수가능 주수는 `1주 cap`이다. 5/4 장전에는 `SCALPING_INITIAL_ENTRY_MAX_QTY=1` 로드와 env override 오염 여부를 확인한다.
+- threshold cycle은 `07:35 PREOPEN apply manifest`, `16:10 POSTCLOSE collector/report`가 자동 실행된다. 5/6 운영전환 acceptance 전까지 live runtime mutation은 `manifest_only`다.
 
 ## 오늘 강제 규칙
 
@@ -24,6 +25,7 @@
 - 다축 동시 변경 금지, 승인 전 `main` 실주문 변경 금지 규칙을 유지한다.
 - `openai_responses_ws_shadow_flag_off`는 `observe-only`다. `request_id mismatch`, `late discard`, `http fallback`, `timeout reject`는 shadow 판정 근거로만 쓰고 실주문 go/no-go에는 직접 사용하지 않는다.
 - `bad_entry` 신규 canary는 naive block 금지다. `2026-04-30` 장후에 코드/테스트는 준비했고, 5/4 장전에는 런타임 로드와 cohort tag만 확인한다.
+- threshold 자동화는 장전 manifest와 장후 report 생성까지만 허용한다. `ThresholdOpsTransition0506` 전에는 자동 threshold live 적용이나 봇 재기동 정책 변경을 열지 않는다.
 
 ## 장전 체크리스트 (08:40~08:55)
 

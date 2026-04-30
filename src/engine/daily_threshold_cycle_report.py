@@ -12,22 +12,13 @@ from pathlib import Path
 from typing import Any, Callable
 
 from src.utils.constants import DATA_DIR, POSTGRES_URL, TRADING_RULES
+from src.utils.threshold_cycle_registry import TARGET_STAGES, is_threshold_cycle_stage
 
 
 REPORT_DIR = DATA_DIR / "report"
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
 THRESHOLD_CYCLE_SCHEMA_VERSION = 1
 THRESHOLD_CYCLE_DIR = DATA_DIR / "threshold_cycle"
-TARGET_STAGES = {
-    "budget_pass",
-    "order_bundle_submitted",
-    "latency_pass",
-    "bad_entry_block_observed",
-    "reversal_add_candidate",
-    "reversal_add_blocked_reason",
-    "soft_stop_micro_grace",
-    "pre_submit_price_guard_block",
-}
 RAW_PIPELINE_FALLBACK_MAX_BYTES = 64 * 1024 * 1024
 
 
@@ -142,7 +133,10 @@ def _read_threshold_jsonl(path: Path) -> list[dict]:
                 continue
             if not isinstance(payload, dict):
                 continue
-            if str(payload.get("stage") or "") not in TARGET_STAGES:
+            if not is_threshold_cycle_stage(
+                str(payload.get("stage") or ""),
+                payload.get("fields") if isinstance(payload.get("fields"), dict) else None,
+            ):
                 continue
             rows.append(payload)
     return rows
@@ -230,7 +224,10 @@ def _default_pipeline_load_result(target_date: str) -> PipelineLoadResult:
                     continue
                 if not isinstance(payload, dict):
                     continue
-                if str(payload.get("stage") or "") not in TARGET_STAGES:
+                if not is_threshold_cycle_stage(
+                    str(payload.get("stage") or ""),
+                    payload.get("fields") if isinstance(payload.get("fields"), dict) else None,
+                ):
                     continue
                 if payload.get("event_type") not in (None, "", "pipeline_event"):
                     continue

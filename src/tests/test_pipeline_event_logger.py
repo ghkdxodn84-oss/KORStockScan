@@ -71,3 +71,29 @@ def test_emit_pipeline_event_writes_reversal_add_gate_blocked_to_compact_stream(
     compact_path = tmp_path / "threshold_cycle" / f"threshold_events_{payload['emitted_date']}.jsonl"
     compact_rows = [json.loads(line) for line in compact_path.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert compact_rows and compact_rows[0]["stage"] == "reversal_add_gate_blocked"
+
+
+def test_emit_pipeline_event_accepts_dynamic_threshold_family(monkeypatch, tmp_path):
+    monkeypatch.setattr(logger_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        logger_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            PIPELINE_EVENT_JSONL_ENABLED=True,
+            PIPELINE_EVENT_SCHEMA_VERSION=3,
+        ),
+    )
+    monkeypatch.setattr(logger_mod, "log_info", lambda msg, send_telegram=False: None)
+
+    payload = logger_mod.emit_pipeline_event(
+        "ENTRY_PIPELINE",
+        "테스트종목",
+        "123456",
+        "new_threshold_probe",
+        fields={"threshold_family": "entry_new_probe", "value": "1"},
+    )
+
+    compact_path = tmp_path / "threshold_cycle" / f"threshold_events_{payload['emitted_date']}.jsonl"
+    compact_rows = [json.loads(line) for line in compact_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert compact_rows and compact_rows[0]["stage"] == "new_threshold_probe"
+    assert compact_rows[0]["family"] == "entry_new_probe"

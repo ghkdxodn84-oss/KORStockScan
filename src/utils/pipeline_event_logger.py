@@ -9,23 +9,11 @@ from pathlib import Path
 
 from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.logger import log_error, log_info
+from src.utils.threshold_cycle_registry import threshold_family_for_stage
 from src.engine.dashboard_data_repository import upsert_pipeline_event_rows
 
 
 _WRITE_LOCK = threading.RLock()
-_THRESHOLD_CYCLE_TARGET_STAGES = {
-    "budget_pass",
-    "order_bundle_submitted",
-    "latency_pass",
-    "bad_entry_block_observed",
-    "bad_entry_refined_candidate",
-    "bad_entry_refined_exit",
-    "reversal_add_candidate",
-    "reversal_add_blocked_reason",
-    "reversal_add_gate_blocked",
-    "soft_stop_micro_grace",
-    "pre_submit_price_guard_block",
-}
 
 
 def _event_dir() -> Path:
@@ -99,10 +87,12 @@ def emit_pipeline_event(
             path = _event_path(event_payload["emitted_date"])
             with open(path, "a", encoding="utf-8") as handle:
                 handle.write(json.dumps(event_payload, ensure_ascii=False) + "\n")
-            if safe_stage in _THRESHOLD_CYCLE_TARGET_STAGES:
+            threshold_family = threshold_family_for_stage(safe_stage, event_payload["fields"])
+            if threshold_family:
                 compact_payload = {
                     "schema_version": 1,
                     "event_type": "threshold_cycle_event",
+                    "family": threshold_family,
                     "pipeline": safe_pipeline,
                     "stage": safe_stage,
                     "stock_name": safe_name,

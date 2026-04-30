@@ -56,6 +56,9 @@
 - checkpoint에는 다음 실행 권고값 `recommended_next_input_lines_per_chunk`도 남긴다. guard에 걸리면 현재 cap의 50%로 낮추고, iowait/read/memory가 안정적이면 기본 상한 안에서만 완만하게 늘린다.
 - threshold report loader 우선순위는 `partitioned compact > legacy compact > small raw fallback`이다. raw fallback은 기존 `64MB` 이하에서만 허용하고, 초과 시 scan하지 않고 warning/meta만 남긴다.
 - `2026-05-01` 오전 휴일 bootstrap은 실전 trading 작업이 아니라 maintenance 작업으로 분리한다. 첫 실행은 보수 line cap으로 시작해 system metric sample을 보고 다음 cap을 조정한다.
+- `2026-05-01` 휴일 실행 결과, 가용한 4월 raw 전체(`2026-04-25`, `2026-04-27`, `2026-04-28`, `2026-04-29`, `2026-04-30`)를 partitioned compact로 적재했다. 각 일자 checkpoint는 모두 `completed=true`, `paused_reason=null`이며 compact event count는 각각 `6`, `7653`, `8583`, `15093`, `10894`다.
+- `2026-05-04`부터 daily automation은 `07:35 PREOPEN apply manifest`, `16:10 POSTCLOSE collector/report`로 등록했다. live threshold runtime mutation은 `ThresholdOpsTransition0506` acceptance 전까지 `manifest_only`로 유지한다.
+- 향후 threshold가 늘어날 때 수집 누락을 막기 위해 stage inclusion rule은 `src/utils/threshold_cycle_registry.py`로 중앙화한다. 새 threshold는 이 registry에 stage/family를 추가하거나, pipeline event `fields`에 `threshold_family`를 남기면 live compact stream, raw backfill, report loader가 같은 규칙으로 자동 포함한다.
 
 ## Threshold 후보 분류
 
