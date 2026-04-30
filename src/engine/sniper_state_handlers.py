@@ -160,6 +160,56 @@ def _rule_float(name, default=0.0):
         return float(default)
 
 
+def _coerce_optional_timestamp(value):
+    """런타임/DB 경계 시각값을 epoch 초로 보수 변환한다.
+
+    `None`, 빈 문자열, `NaT` 같은 결측 표기는 0으로 취급한다.
+    """
+    if value in (None, "", 0, "0"):
+        return 0.0
+
+    if isinstance(value, (int, float)):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped or stripped.lower() in {"nat", "nan", "none"}:
+            return 0.0
+        try:
+            return datetime.fromisoformat(stripped).timestamp()
+        except ValueError:
+            return 0.0
+
+    if isinstance(value, datetime):
+        try:
+            return float(value.timestamp())
+        except (TypeError, ValueError, OSError, OverflowError):
+            return 0.0
+
+    to_pydatetime = getattr(value, "to_pydatetime", None)
+    if callable(to_pydatetime):
+        try:
+            converted = to_pydatetime()
+        except Exception:
+            return 0.0
+        return _coerce_optional_timestamp(converted)
+
+    timestamp_fn = getattr(value, "timestamp", None)
+    if callable(timestamp_fn):
+        text = str(value).strip().lower()
+        if text in {"nat", "nan", "none"}:
+            return 0.0
+        try:
+            return float(timestamp_fn())
+        except (TypeError, ValueError, OSError, OverflowError):
+            return 0.0
+
+    return 0.0
+
+
 def bind_state_dependencies(
     *,
     kiwoom_token=None,
@@ -4822,10 +4872,7 @@ def can_consider_scale_in(
     cooldown_sec = _rule_int('SCALE_IN_COOLDOWN_SEC', 180)
     last_add = float(stock.get('last_add_time', 0) or 0)
     if not last_add and stock.get('last_add_at'):
-        try:
-            last_add = stock['last_add_at'].timestamp()
-        except Exception as exc:
-            log_error(f"[SCALE_IN_GUARD] last_add_at timestamp 변환 실패 ({stock.get('code', '-')}: {stock.get('last_add_at')}) {exc}")
+        last_add = _coerce_optional_timestamp(stock.get('last_add_at'))
     if last_add > 0 and (time.time() - last_add) < cooldown_sec:
         return {"allowed": False, "reason": "scale_in_cooldown"}
 

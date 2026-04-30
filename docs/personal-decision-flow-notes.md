@@ -6,14 +6,15 @@
 
 | 항목 | 현재 기준 |
 | --- | --- |
-| 기준일 | `2026-04-29 KST` 장후 반영 기준 |
+| 기준일 | `2026-04-30 KST` 장중 반영 기준 |
 | entry live owner | `mechanical_momentum_latency_relief`. `latency_quote_fresh_composite`는 `2026-04-29 08:29 KST` OFF + restart 완료, `latency_signal_quality_quote_composite`는 `2026-04-29 12:50 KST` 효과 미약으로 OFF |
-| submitted 상태 | 운영상 급한 drought는 완화됐다. `12:57 restart -> 14:00` 고유 기준 `budget_pass=38`, `submitted=20`, `filled=7`; `13:15 hotfix -> 14:00` 기준 `budget_pass=32`, `submitted=17`, `filled=7`이다. 단, baseline-lock 전까지는 관찰 대상이다. |
+| submitted 상태 | `mechanical_momentum_latency_relief` post-restart cohort에서 제출 회복은 확인됐다. `2026-04-30 09:00~10:00` 기준 `budget_pass=951`, `submitted=27`, 이 중 `mechanical_momentum_relief_canary_applied=22`건이 실제 `normal` submit으로 이어졌다. 다만 `full_fill=0`, `partial_fill=0`이라 fill/청산 품질은 계속 관찰 대상이다. |
 | entry 수량축 | 스캘핑 신규 BUY는 임시 `2주 cap` 유지. `3주 cap`은 기술적으로 가능하지만 `mechanical_momentum_latency_relief`와 같은 entry 단계 live 변경이므로, `2026-04-30` 장후 승인조건 판정 전에는 적용하지 않는다. |
-| 보유/청산 live owner | `soft_stop_micro_grace` active에 더해 `2026-04-30`은 `REVERSAL_ADD` 1주 소형 canary와 `bad_entry_block` observe-only classifier를 병행 준비했다. 단계가 entry가 아니라 holding/exit라 `mechanical_momentum_latency_relief`와 cohort를 분리한다. |
+| 보유/청산 live owner | `soft_stop_micro_grace` active에 더해 `2026-04-30`은 `REVERSAL_ADD` 1주 소형 canary와 `bad_entry_block` observe-only classifier를 병행 운용한다. 단계가 entry가 아니라 holding/exit라 `mechanical_momentum_latency_relief`와 cohort를 분리한다. |
 | soft stop 해석 | 4월 soft stop post-sell 61건 중 10분 내 매도가 재상회 57건, +0.5% 이상 반등 43건, +1.0% 이상 반등 23건, 매수가 회복 16건이다. 즉 휩쏘 가능성은 높지만 무조건 더 오래 버티는 결론은 아니다. |
 | 2026-04-29 soft stop 표본 | `올릭스`는 `GOOD_EXIT`, `덕산하이메탈`은 `NEUTRAL`, `지앤비에스 에코`는 `MISSED_UPSIDE + 고가 재진입 체결 + 익절 완료`, `코오롱`은 `GOOD_EXIT`지만 고가 재진입 제출 흔적이 있다. |
-| 2026-04-30 보유/청산 실험 | `REVERSAL_ADD`는 유효 진입 초반 눌림을 1주 추가매수로 회수하는 active canary다. `bad_entry_block`은 never-green/AI fade 후보를 관찰만 하며 주문 차단은 하지 않는다. |
+| 2026-04-30 보유/청산 실험 | 오전 `09:00~10:30`에는 `REVERSAL_ADD` 체결이 없었고 blocker는 `pnl_out_of_range`, `hold_sec_out_of_range`가 지배적이었다. 이에 `2026-04-30 10:14 KST` 재기동 기준 `REVERSAL_ADD_PNL_MIN -0.45 -> -0.70`, `REVERSAL_ADD_MAX_HOLD_SEC 120 -> 180`만 intraday widen 했고, `bad_entry_block`은 continue observe-only다. |
+| trailing 위치 | trailing 과민 여부는 active live 축이 아니라 `2순위 candidate`다. 판단축은 `GOOD_EXIT/MISSED_UPSIDE`, `same_symbol reentry`, `mfe_10m`, `peak-to-exit giveback`이며, soft stop 축보다 뒤에 둔다. |
 | runtime truth 이슈 | `SK이노베이션(096770)`은 BUY/SELL 모두 WS 실제체결이 들어왔으나 `EXEC_IGNORED`가 발생했고, 정기 계좌동기화가 HOLDING/COMPLETED를 복구했다. 수동 HTS 매도 기준 실손익은 비용 반영 약 `+4.2%`다. 핵심 후속은 order-binding 품질이다. |
 | 휴장 보정 | `2026-05-01`은 근로자의 날 KRX 휴장, 다음 운영일은 `2026-05-04`. `2026-05-05`는 어린이날 휴장, 이월 작업은 `2026-05-06` checklist가 소유한다. |
 
@@ -124,7 +125,7 @@
 | --- | --- |
 | 왜 물타기를 선택했나 | 목적은 손실 방어가 아니라 `기대값/순이익 극대화`다. 4월 soft stop 표본은 직접 손실 기여가 컸지만, post-sell 기준 10분 내 매도가 재상회와 +0.5% 이상 반등이 많아 `진입 자체는 유효했지만 초반 눌림 뒤 회복한 표본`이 섞여 있다고 본다. 그래서 전역 손절 완화가 아니라 `valid_entry_reversal_add`로 유효 진입 회수 가능성을 좁게 검증한다. |
 | 단순 유예 연장을 우선하지 않는 이유 | `soft_stop_micro_grace_extend`를 바로 켜면 정당 컷이어야 할 never-green/AI fade 표본까지 더 오래 들고 갈 수 있다. EV 관점에서는 손실을 늦추는 것보다 `회복 전조가 확인된 표본만 평단을 낮춰 회수`하는 쪽이 원인귀속과 롤백이 선명하다. |
-| REVERSAL_ADD 해석 | 일반 물타기가 아니라 `profit_rate -0.45%~-0.10%`, `held_sec 20~120`, `AI>=60`, 저점 미갱신, AI bottom 대비 `+15pt` 또는 연속회복, 수급 3/4 충족일 때만 1회 허용하는 소형 canary다. 수량은 `REVERSAL_ADD_SIZE_RATIO=0.33`, 2주 cap 환경에서는 `REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED=True`로 1주 floor를 허용한다. |
+| REVERSAL_ADD 해석 | 일반 물타기가 아니라 `profit_rate -0.70%~-0.10%`, `held_sec 20~180`, `AI>=60`, 저점 미갱신, AI bottom 대비 `+15pt` 또는 연속회복, 수급 3/4 충족일 때만 1회 허용하는 소형 canary다. 수량은 `REVERSAL_ADD_SIZE_RATIO=0.33`, 2주 cap 환경에서는 `REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED=True`로 1주 floor를 허용한다. `2026-04-30 10:15 KST` intraday override는 `pnl_out_of_range`, `hold_sec_out_of_range` blocker만 완화했고 AI/supply 조건은 유지했다. |
 | 수량 산식의 현재 한계 | 현재 수량은 `buy_qty * REVERSAL_ADD_SIZE_RATIO`를 기본 템플릿으로 두고 `MAX_POSITION_PCT` 기반 남은 예산 cap과 1주 floor만 반영한다. 즉 현재가/예수금/보유수량/포지션 cap은 반영하지만, AI 회복 강도, 손실폭 위치, soft/hard stop까지의 거리, 수급 회복 강도, realized volatility를 직접 반영하는 완전 동적 산식은 아니다. |
 | 수량 동적화 방향 | EV 관점에서는 `회복 확률`과 `추가 노출 리스크`를 같이 반영하는 동적 수량이 더 자연스럽다. 후보 공식은 `base_floor 1주 + confidence_multiplier(AI 회복, 수급 3/4~4/4, 저점 미갱신) - risk_discount(soft/hard stop 거리, peak_profit never-green, 포지션 cap 근접)` 형태로 두되, live 적용 전에는 counterfactual/observe-only로 `would_qty`, `actual_qty`, `post_add_mfe`, `post_add_stop_rate`를 먼저 남긴다. |
 | 불타기 수량 현재값 | `PYRAMID`도 `describe_scale_in_qty()` 공통 경로를 탄다. 스캘핑 `PYRAMID`는 `buy_qty * 0.50` 템플릿, `MAX_POSITION_PCT` 기반 cap, `SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED` floor 옵션을 쓴다. 현재 기본값은 floor off라 `buy_qty=1`이면 `int(1*0.5)=0`으로 막히고, `buy_qty=2`부터 1주 불타기가 가능하다. |
@@ -369,11 +370,11 @@
 | --- | --- |
 | ID | `DF-HOLDING-003` |
 | 문제 인식 | soft stop 감소를 `20초 안에 회복하길 기다린다`로만 접근하면 전략 가설이 약하다. 같은 soft stop 후보라도 `진입은 유효했지만 초반 눌림이 과도한 케이스`와 `처음부터 never-green/AI fade였던 불량 진입`은 다른 처리가 필요하다. |
-| active canary | `REVERSAL_ADD`: `-0.45%~-0.10%`, 보유 20~120초, AI 회복, 저점 미갱신, 매수압/틱가속/micro VWAP 조건을 통과한 경우 1주 소형 추가매수로 평단 회수를 실험한다. |
+| active canary | `REVERSAL_ADD`: `-0.70%~-0.10%`, 보유 20~180초, AI 회복, 저점 미갱신, 매수압/틱가속/micro VWAP 조건을 통과한 경우 1주 소형 추가매수로 평단 회수를 실험한다. `2026-04-30` 오전에는 0체결이었고 원인은 축 미적용이 아니라 임계 과협착으로 판정했다. |
 | observe-only classifier | `bad_entry_block`: 보유 60초 이상, 손익 `<= -0.70%`, peak `<= +0.20%`, AI score `<=45`인 never-green 후보를 `bad_entry_block_observed`로만 남긴다. 내일은 live block 금지다. |
 | rollback guard | `REVERSAL_ADD` 체결 후 soft stop/hard stop으로 이어지거나, 체결 cohort 평균 손익이 `<= -0.30%`이면 OFF 후보로 본다. |
 | 승격 조건 | `bad_entry_block_observed`가 최소 10건 이상 누적되고 후속 손실 전환이 높으며 `GOOD_EXIT/MISSED_UPSIDE` 놓침 위험이 낮을 때만 별도 live block canary로 연다. |
-| 다음 액션 | `2026-04-30 08:55~09:00` 장전 로드 확인, `10:30~10:45` 오전 1차 관찰, 장후 cohort 판정으로 닫는다. |
+| 다음 액션 | 장전 로드와 오전 1차 관찰은 완료했다. 다음 확인창은 `2026-04-30 11:30~12:00 KST` 재기동 후 1차 효과 판정, 그리고 `19:25~19:45 KST` `bad_entry_block` 후행 outcome 확정이다. |
 | Source | [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md) |
 
 ## 항목 간 연결 관계

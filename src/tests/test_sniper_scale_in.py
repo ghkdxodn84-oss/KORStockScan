@@ -636,6 +636,54 @@ def test_scale_in_blocked_when_buy_side_paused(monkeypatch):
     assert result["reason"] == "buy_side_paused"
 
 
+def test_scale_in_guard_ignores_nat_like_last_add_at(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    class _FakeNaT:
+        def __bool__(self):
+            return True
+
+        def __str__(self):
+            return "NaT"
+
+        def timestamp(self):
+            raise TypeError("NaTType does not support timestamp")
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        ENABLE_SCALE_IN=True,
+        SCALPING_ENABLE_AVG_DOWN=True,
+        SCALPING_MAX_PYRAMID_COUNT=1,
+        ADD_JUDGMENT_LOCK_SEC=0,
+        SCALE_IN_COOLDOWN_SEC=180,
+        MAX_POSITION_PCT=0.30,
+    )
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 1_000.0)
+
+    stock = {
+        "name": "TEST",
+        "code": "489790",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+        "last_add_at": _FakeNaT(),
+    }
+
+    result = state_handlers.can_consider_scale_in(
+        stock=stock,
+        code="489790",
+        ws_data={"curr": 10000},
+        strategy="SCALPING",
+        market_regime="BULL",
+    )
+
+    assert result["allowed"] is True
+    assert result["reason"] == "ok"
+
+
 def test_watching_state_returns_early_when_buy_side_paused(monkeypatch):
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
