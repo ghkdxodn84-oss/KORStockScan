@@ -316,12 +316,82 @@ def _check_reversal_add_supply(stock):
     return None
 
 
+def _build_reversal_add_probe(stock, profit_rate, current_ai_score, held_sec):
+    pnl_min = float(getattr(TRADING_RULES, 'REVERSAL_ADD_PNL_MIN', -0.45))
+    pnl_max = float(getattr(TRADING_RULES, 'REVERSAL_ADD_PNL_MAX', -0.10))
+    min_hold = int(getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_HOLD_SEC', 20))
+    max_hold = int(getattr(TRADING_RULES, 'REVERSAL_ADD_MAX_HOLD_SEC', 120))
+    floor = float(stock.get('reversal_add_profit_floor', 0.0))
+    margin = float(getattr(TRADING_RULES, 'REVERSAL_ADD_STAGNATION_LOW_FLOOR_MARGIN', 0.05))
+    min_ai = int(getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_AI_SCORE', 60))
+    ai_bottom = int(stock.get('reversal_add_ai_bottom', 100))
+    recovery_delta = int(getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_AI_RECOVERY_DELTA', 15))
+    ai_hist = list(stock.get('reversal_add_ai_history', []))
+    recovering_delta = current_ai_score >= ai_bottom + recovery_delta
+    recovering_consec = len(ai_hist) >= 2 and ai_hist[-1] > ai_hist[-2] and current_ai_score > ai_hist[-1]
+    feat = stock.get('last_reversal_features', {}) or {}
+    min_buy_pressure = float(getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_BUY_PRESSURE', 55) or 55)
+    min_tick_accel = float(getattr(TRADING_RULES, 'REVERSAL_ADD_MIN_TICK_ACCEL', 0.95) or 0.95)
+    min_micro_vwap_bp = float(getattr(TRADING_RULES, 'REVERSAL_ADD_VWAP_BP_MIN', -5.0) or -5.0)
+
+    buy_pressure = _safe_float(feat.get('buy_pressure_10t'), 50.0)
+    tick_accel = _safe_float(feat.get('tick_acceleration_ratio'), 0.0)
+    micro_vwap_bp = _safe_float(feat.get('curr_vs_micro_vwap_bp'), -999.0)
+    large_sell_print = bool(feat.get('large_sell_print_detected', False))
+    supply_checks = {
+        "buy_pressure_ok": buy_pressure >= min_buy_pressure,
+        "tick_accel_ok": tick_accel >= min_tick_accel,
+        "large_sell_absent_ok": not large_sell_print,
+        "micro_vwap_ok": micro_vwap_bp >= min_micro_vwap_bp,
+    }
+    supply_pass_count = sum(1 for ok in supply_checks.values() if ok)
+    supply_ok = supply_pass_count >= 3 if feat else buy_pressure >= min_buy_pressure
+
+    probe = {
+        "reversal_add_used": bool(stock.get('reversal_add_used')),
+        "profit_rate": round(float(profit_rate), 4),
+        "pnl_min": round(pnl_min, 4),
+        "pnl_max": round(pnl_max, 4),
+        "pnl_ok": pnl_min <= profit_rate <= pnl_max,
+        "held_sec": int(held_sec),
+        "min_hold_sec": min_hold,
+        "max_hold_sec": max_hold,
+        "hold_ok": min_hold <= held_sec <= max_hold,
+        "profit_floor": round(floor, 4),
+        "floor_margin": round(margin, 4),
+        "low_floor_ok": profit_rate >= floor - margin,
+        "current_ai_score": int(current_ai_score),
+        "min_ai_score": min_ai,
+        "ai_score_ok": current_ai_score >= min_ai,
+        "ai_bottom": ai_bottom,
+        "min_ai_recovery_delta": recovery_delta,
+        "ai_recovering_delta_ok": recovering_delta,
+        "ai_recovering_consec_ok": recovering_consec,
+        "ai_recover_ok": recovering_delta or recovering_consec,
+        "ai_hist_len": len(ai_hist),
+        "buy_pressure_10t": round(float(buy_pressure), 4),
+        "min_buy_pressure": round(min_buy_pressure, 4),
+        "tick_acceleration_ratio": round(float(tick_accel), 4),
+        "min_tick_accel": round(min_tick_accel, 4),
+        "curr_vs_micro_vwap_bp": round(float(micro_vwap_bp), 4),
+        "min_micro_vwap_bp": round(min_micro_vwap_bp, 4),
+        "large_sell_print_detected": large_sell_print,
+        "supply_pass_count": supply_pass_count if feat else (1 if supply_ok else 0),
+        "supply_ok": supply_ok,
+        "has_reversal_features": bool(feat),
+    }
+    probe.update(supply_checks)
+    return probe
+
+
 def evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_sec):
     """
     역전 확인 추가매수(reversal_add) 평가.
     저점 미갱신 + AI 회복 + 수급 재개가 동시 확인될 때 1회 실행.
     """
     result = _base_result()
+    probe = _build_reversal_add_probe(stock, profit_rate, current_ai_score, held_sec)
+    result["probe"] = probe
 
     if not getattr(TRADING_RULES, 'REVERSAL_ADD_ENABLED', False):
         result["reason"] = "reversal_add_disabled"

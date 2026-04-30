@@ -13,6 +13,19 @@ from src.engine.dashboard_data_repository import upsert_pipeline_event_rows
 
 
 _WRITE_LOCK = threading.RLock()
+_THRESHOLD_CYCLE_TARGET_STAGES = {
+    "budget_pass",
+    "order_bundle_submitted",
+    "latency_pass",
+    "bad_entry_block_observed",
+    "bad_entry_refined_candidate",
+    "bad_entry_refined_exit",
+    "reversal_add_candidate",
+    "reversal_add_blocked_reason",
+    "reversal_add_gate_blocked",
+    "soft_stop_micro_grace",
+    "pre_submit_price_guard_block",
+}
 
 
 def _event_dir() -> Path:
@@ -23,6 +36,16 @@ def _event_dir() -> Path:
 
 def _event_path(target_date: str) -> Path:
     return _event_dir() / f"pipeline_events_{target_date}.jsonl"
+
+
+def _threshold_cycle_dir() -> Path:
+    path = DATA_DIR / "threshold_cycle"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def _threshold_cycle_event_path(target_date: str) -> Path:
+    return _threshold_cycle_dir() / f"threshold_events_{target_date}.jsonl"
 
 
 def sanitize_pipeline_field(value) -> str:
@@ -76,6 +99,22 @@ def emit_pipeline_event(
             path = _event_path(event_payload["emitted_date"])
             with open(path, "a", encoding="utf-8") as handle:
                 handle.write(json.dumps(event_payload, ensure_ascii=False) + "\n")
+            if safe_stage in _THRESHOLD_CYCLE_TARGET_STAGES:
+                compact_payload = {
+                    "schema_version": 1,
+                    "event_type": "threshold_cycle_event",
+                    "pipeline": safe_pipeline,
+                    "stage": safe_stage,
+                    "stock_name": safe_name,
+                    "stock_code": safe_code,
+                    "record_id": int(record_id) if record_id not in (None, "", 0) else None,
+                    "fields": {str(key): str(value) for key, value in (fields or {}).items()},
+                    "emitted_at": event_payload["emitted_at"],
+                    "emitted_date": event_payload["emitted_date"],
+                }
+                compact_path = _threshold_cycle_event_path(event_payload["emitted_date"])
+                with open(compact_path, "a", encoding="utf-8") as compact_handle:
+                    compact_handle.write(json.dumps(compact_payload, ensure_ascii=False) + "\n")
     except Exception as exc:
         log_error(f"[PIPELINE_EVENT] structured append failed: {exc}")
 

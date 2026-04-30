@@ -509,6 +509,56 @@ def _log_holding_pipeline(stock, code, stage, **fields):
     )
 
 
+def _append_reversal_add_probe_fields(fields: dict, probe: dict | None) -> dict:
+    merged = dict(fields or {})
+    if not isinstance(probe, dict) or not probe:
+        return merged
+    for key in (
+        "pnl_ok",
+        "hold_ok",
+        "low_floor_ok",
+        "ai_score_ok",
+        "ai_recover_ok",
+        "ai_recovering_delta_ok",
+        "ai_recovering_consec_ok",
+        "supply_ok",
+        "buy_pressure_ok",
+        "tick_accel_ok",
+        "large_sell_absent_ok",
+        "micro_vwap_ok",
+        "has_reversal_features",
+        "reversal_add_used",
+        "large_sell_print_detected",
+    ):
+        if key in probe:
+            merged[key] = bool(probe.get(key))
+    for key in (
+        "profit_rate",
+        "pnl_min",
+        "pnl_max",
+        "held_sec",
+        "min_hold_sec",
+        "max_hold_sec",
+        "profit_floor",
+        "floor_margin",
+        "current_ai_score",
+        "min_ai_score",
+        "ai_bottom",
+        "min_ai_recovery_delta",
+        "ai_hist_len",
+        "buy_pressure_10t",
+        "min_buy_pressure",
+        "tick_acceleration_ratio",
+        "min_tick_accel",
+        "curr_vs_micro_vwap_bp",
+        "min_micro_vwap_bp",
+        "supply_pass_count",
+    ):
+        if key in probe:
+            merged[key] = probe.get(key)
+    return merged
+
+
 def _log_orderbook_stability_observation(stock, code, snapshot):
     if not isinstance(snapshot, dict) or not snapshot:
         return
@@ -784,6 +834,169 @@ def _has_active_sell_order_pending(stock: dict) -> bool:
         or bool(str(stock.get("sell_ord_no", "") or "").strip())
         or bool(str(stock.get("pending_sell_msg", "") or "").strip())
     )
+
+
+def _build_bad_entry_refined_decision(
+    stock: dict,
+    *,
+    strategy: str,
+    profit_rate: float,
+    peak_profit: float,
+    current_ai_score: float,
+    held_sec: int,
+    dynamic_stop_pct: float,
+    hard_stop_pct: float,
+) -> dict:
+    features, feature_valid = _normalize_soft_stop_expert_features(stock)
+    enabled = _rule_bool("SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED", False)
+    min_hold_sec = _rule_int("SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC", 180)
+    min_loss_pct = _rule_float("SCALP_BAD_ENTRY_REFINED_MIN_LOSS_PCT", -1.16)
+    max_peak_pct = _rule_float("SCALP_BAD_ENTRY_REFINED_MAX_PEAK_PROFIT_PCT", 0.05)
+    ai_limit = _rule_float("SCALP_BAD_ENTRY_REFINED_AI_SCORE_LIMIT", 45)
+    recovery_prob_max = _rule_float("SCALP_BAD_ENTRY_REFINED_RECOVERY_PROB_MAX", 0.30)
+
+    buy_pressure = features.get("buy_pressure_10t", 50.0)
+    tick_accel = features.get("tick_acceleration_ratio", 0.0)
+    large_sell = bool(features.get("large_sell_print_detected", False))
+    micro_vwap_bp = features.get("curr_vs_micro_vwap_bp", 0.0)
+    net_delta = features.get("net_aggressive_delta_10t", 0)
+    absorption_count = features.get("same_price_buy_absorption", 0)
+    microprice_edge_bp = features.get("microprice_edge_bp", 0.0)
+    top3_depth_ratio = features.get("top3_depth_ratio", 999.0)
+
+    thesis_tick_min = _rule_float("SCALP_SOFT_STOP_THESIS_TICK_ACCEL_MIN", 0.60)
+    thesis_vwap_min = _rule_float("SCALP_SOFT_STOP_THESIS_MICRO_VWAP_BP_MIN", -20.0)
+    thesis_invalidated = bool(
+        large_sell or (tick_accel < thesis_tick_min and micro_vwap_bp < thesis_vwap_min)
+    )
+    adverse_fill = bool(
+        large_sell
+        or buy_pressure < 35.0
+        or tick_accel < 0.85
+        or micro_vwap_bp < -10.0
+        or net_delta < 0
+    )
+    absorption_score = sum(
+        1
+        for ok in (
+            buy_pressure >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_BUY_PRESSURE", 55.0),
+            net_delta > 0,
+            absorption_count >= 2,
+            micro_vwap_bp >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_MICRO_VWAP_BP", -5.0),
+            microprice_edge_bp >= 0.0,
+            tick_accel >= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MIN_TICK_ACCEL", 0.95),
+            top3_depth_ratio <= _rule_float("SCALP_SOFT_STOP_ABSORPTION_MAX_TOP3_DEPTH_RATIO", 1.35),
+        )
+        if ok
+    )
+    recovery_prob_shadow = max(
+        0.0,
+        min(
+            1.0,
+            0.20
+            + (0.08 * absorption_score)
+            + (0.05 if current_ai_score >= 55 else 0.0)
+            + (0.05 if peak_profit >= 0 else 0.0)
+            - (0.20 if thesis_invalidated else 0.0),
+        ),
+    )
+    confirmation = bool(
+        thesis_invalidated
+        or adverse_fill
+        or recovery_prob_shadow <= recovery_prob_max
+    )
+
+    exclusion_reason = "-"
+    if not enabled:
+        exclusion_reason = "disabled"
+    elif (strategy or "").upper() != "SCALPING":
+        exclusion_reason = "not_scalping"
+    elif _has_active_sell_order_pending(stock):
+        exclusion_reason = "active_sell_pending"
+    elif bool(stock.get("reversal_add_used")):
+        exclusion_reason = "reversal_add_used"
+    elif str(stock.get("reversal_add_state", "") or "").strip() == "POST_ADD_EVAL":
+        exclusion_reason = "reversal_add_post_eval"
+    elif profit_rate <= hard_stop_pct:
+        exclusion_reason = "hard_stop_zone"
+    elif profit_rate <= dynamic_stop_pct:
+        exclusion_reason = "soft_stop_zone"
+    elif not feature_valid:
+        exclusion_reason = "invalid_feature"
+    elif held_sec < min_hold_sec:
+        exclusion_reason = "hold_too_short"
+    elif profit_rate > min_loss_pct:
+        exclusion_reason = "loss_too_shallow"
+    elif peak_profit > max_peak_pct:
+        exclusion_reason = "peak_recovered"
+    elif float(current_ai_score or 0.0) > ai_limit:
+        exclusion_reason = "ai_recovered"
+    elif not confirmation:
+        exclusion_reason = "no_confirmation"
+
+    return {
+        "enabled": enabled,
+        "feature_valid": feature_valid,
+        "features": features,
+        "should_exit": exclusion_reason == "-",
+        "exclusion_reason": exclusion_reason,
+        "thesis_invalidated": thesis_invalidated,
+        "adverse_fill": adverse_fill,
+        "absorption_score": int(absorption_score),
+        "recovery_prob_shadow": round(recovery_prob_shadow, 3),
+        "recovery_prob_max": recovery_prob_max,
+        "min_hold_sec": min_hold_sec,
+        "min_loss_pct": min_loss_pct,
+        "max_peak_profit_pct": max_peak_pct,
+        "ai_score_limit": ai_limit,
+    }
+
+
+def _emit_bad_entry_refined_candidate(
+    stock: dict,
+    code: str,
+    *,
+    decision: dict,
+    profit_rate: float,
+    peak_profit: float,
+    current_ai_score: float,
+    held_sec: int,
+) -> None:
+    if not decision.get("enabled"):
+        return
+    bucket = max(0, int(held_sec or 0) // 30)
+    logged_key = f"{bucket}:{decision.get('exclusion_reason', '-')}"
+    if stock.get("_bad_entry_refined_candidate_logged_key") == logged_key:
+        return
+
+    features = decision.get("features") or {}
+    _log_holding_pipeline(
+        stock,
+        code,
+        "bad_entry_refined_candidate",
+        canary_enabled=True,
+        should_exit=bool(decision.get("should_exit")),
+        exclusion_reason=decision.get("exclusion_reason", "-"),
+        classifier="never_green_ai_fade_refined",
+        profit_rate=f"{profit_rate:+.2f}",
+        peak_profit=f"{peak_profit:+.2f}",
+        current_ai_score=f"{current_ai_score:.0f}",
+        held_sec=int(held_sec or 0),
+        min_hold_sec=decision.get("min_hold_sec", "-"),
+        min_loss_pct=f"{decision.get('min_loss_pct', 0.0):+.2f}",
+        max_peak_profit_pct=f"{decision.get('max_peak_profit_pct', 0.0):+.2f}",
+        ai_score_limit=f"{decision.get('ai_score_limit', 0.0):.0f}",
+        thesis_invalidated=bool(decision.get("thesis_invalidated")),
+        adverse_fill=bool(decision.get("adverse_fill")),
+        absorption_score=decision.get("absorption_score", 0),
+        recovery_prob_shadow=f"{decision.get('recovery_prob_shadow', 0.0):.3f}",
+        recovery_prob_max=f"{decision.get('recovery_prob_max', 0.0):.3f}",
+        buy_pressure_10t=features.get("buy_pressure_10t", "-"),
+        tick_acceleration_ratio=features.get("tick_acceleration_ratio", "-"),
+        large_sell_print_detected=features.get("large_sell_print_detected", "-"),
+        curr_vs_micro_vwap_bp=features.get("curr_vs_micro_vwap_bp", "-"),
+    )
+    stock["_bad_entry_refined_candidate_logged_key"] = logged_key
 
 
 def _build_soft_stop_expert_decision(
@@ -4283,6 +4496,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             _ra_floor = float(stock.get('reversal_add_profit_floor', 0.0))
                             _ra_margin = _rule_float('REVERSAL_ADD_STAGNATION_LOW_FLOOR_MARGIN', 0.05)
                             _ra_min_ai = _rule_int('REVERSAL_ADD_MIN_AI_SCORE', 60)
+                            _ra_min_hold = _rule_int('REVERSAL_ADD_MIN_HOLD_SEC', 20)
+                            _ra_max_hold = _rule_int('REVERSAL_ADD_MAX_HOLD_SEC', 120)
                             _ra_bottom = int(stock.get('reversal_add_ai_bottom', 100))
                             _ra_recovery_delta = _rule_int('REVERSAL_ADD_MIN_AI_RECOVERY_DELTA', 15)
                             _ra_hist = list(stock.get('reversal_add_ai_history', []))
@@ -4307,6 +4522,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             _ra_candidate_ok = (
                                 (not stock.get('reversal_add_used'))
                                 and (_ra_pnl_min <= profit_rate <= _ra_pnl_max)
+                                and (_ra_min_hold <= held_sec <= _ra_max_hold)
                                 and (profit_rate >= _ra_floor - _ra_margin)
                                 and current_ai_score >= _ra_min_ai
                                 and (_ra_recovering_delta or _ra_recovering_consec)
@@ -4470,6 +4686,25 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             held_sec=held_sec,
             now_ts=now_ts,
         )
+        bad_entry_refined_decision = _build_bad_entry_refined_decision(
+            stock,
+            strategy=strategy,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            current_ai_score=current_ai_score,
+            held_sec=held_sec,
+            dynamic_stop_pct=dynamic_stop_pct,
+            hard_stop_pct=hard_stop_pct,
+        )
+        _emit_bad_entry_refined_candidate(
+            stock,
+            code,
+            decision=bad_entry_refined_decision,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            current_ai_score=current_ai_score,
+            held_sec=held_sec,
+        )
 
         open_reclaim_near_ai_exit = (
             profit_rate <= near_ai_exit_min_loss_pct
@@ -4509,6 +4744,31 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             sell_reason_type = "LOSS"
             reason = f"🛑 하드스탑 도달 ({hard_stop_pct}%) [AI: {current_ai_score:.0f}]"
             exit_rule = "scalp_hard_stop_pct"
+
+        elif bad_entry_refined_decision.get("should_exit"):
+            is_sell_signal = True
+            sell_reason_type = "LOSS"
+            reason = (
+                f"🧯 refined bad_entry 조기정리 "
+                f"(hold={held_sec}s, peak={peak_profit:.2f}%, ai={current_ai_score:.0f}, "
+                f"recovery={bad_entry_refined_decision.get('recovery_prob_shadow', 0.0):.3f})"
+            )
+            exit_rule = "scalp_bad_entry_refined_canary"
+            _log_holding_pipeline(
+                stock,
+                code,
+                "bad_entry_refined_exit",
+                exit_rule=exit_rule,
+                classifier="never_green_ai_fade_refined",
+                profit_rate=f"{profit_rate:+.2f}",
+                peak_profit=f"{peak_profit:+.2f}",
+                current_ai_score=f"{current_ai_score:.0f}",
+                held_sec=held_sec,
+                thesis_invalidated=bool(bad_entry_refined_decision.get("thesis_invalidated")),
+                adverse_fill=bool(bad_entry_refined_decision.get("adverse_fill")),
+                absorption_score=bad_entry_refined_decision.get("absorption_score", 0),
+                recovery_prob_shadow=f"{bad_entry_refined_decision.get('recovery_prob_shadow', 0.0):.3f}",
+            )
 
         elif profit_rate <= dynamic_stop_pct:
             soft_stop_grace_enabled = _rule_bool(
@@ -5193,10 +5453,15 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     stock,
                     code,
                     "reversal_add_blocked_reason",
-                    state="REVERSAL_CANDIDATE",
-                    blocked_reason="add_order_failed",
-                    profit_rate=f"{profit_rate:+.2f}",
-                    ai_score=f"{current_ai_score:.0f}",
+                    **_append_reversal_add_probe_fields(
+                        {
+                            "state": "REVERSAL_CANDIDATE",
+                            "blocked_reason": "add_order_failed",
+                            "profit_rate": f"{profit_rate:+.2f}",
+                            "ai_score": f"{current_ai_score:.0f}",
+                        },
+                        scale_in_action.get("probe"),
+                    ),
                 )
             return
         if strategy == 'SCALPING' and _rule_bool('REVERSAL_ADD_ENABLED', False):
@@ -5209,16 +5474,29 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         stock,
                         code,
                         "reversal_add_blocked_reason",
-                        state=stock.get('reversal_add_state', '') or "-",
-                        blocked_reason=_ra_probe_reason,
-                        profit_rate=f"{profit_rate:+.2f}",
-                        ai_score=f"{current_ai_score:.0f}",
+                        **_append_reversal_add_probe_fields(
+                            {
+                                "state": stock.get('reversal_add_state', '') or "-",
+                                "blocked_reason": _ra_probe_reason,
+                                "profit_rate": f"{profit_rate:+.2f}",
+                                "ai_score": f"{current_ai_score:.0f}",
+                            },
+                            _ra_probe.get("probe"),
+                        ),
                     )
                 _mutate_stock_state(stock, set_fields={'last_reversal_add_probe_log_ts': now_ts})
             return
     else:
         last_block = float(stock.get('last_add_block_log_ts', 0) or 0)
         if now_ts - last_block >= 30:
+            reversal_probe = None
+            if strategy == 'SCALPING' and _rule_bool('REVERSAL_ADD_ENABLED', False):
+                reversal_probe = evaluate_scalping_reversal_add(
+                    stock,
+                    profit_rate,
+                    current_ai_score,
+                    held_sec,
+                )
             if gate.get('reason') == 'buy_side_paused':
                 log_info(
                     f"[TRADING_PAUSED_BLOCK] HOLDING add skipped "
@@ -5230,6 +5508,24 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     "[ADD_BLOCKED] "
                     f"{stock.get('name')}({code}) "
                     f"strategy={strategy} reason={gate.get('reason')}"
+                )
+            if (
+                reversal_probe
+                and stock.get('reversal_add_state') in ('STAGNATION', 'REVERSAL_CANDIDATE')
+            ):
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "reversal_add_gate_blocked",
+                    **_append_reversal_add_probe_fields(
+                        {
+                            "state": stock.get('reversal_add_state', '') or "-",
+                            "gate_reason": gate.get('reason') or "-",
+                            "profit_rate": f"{profit_rate:+.2f}",
+                            "ai_score": f"{current_ai_score:.0f}",
+                        },
+                        reversal_probe.get("probe"),
+                    ),
                 )
             _mutate_stock_state(stock, set_fields={'last_add_block_log_ts': now_ts})
 

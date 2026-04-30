@@ -135,9 +135,9 @@ def test_describe_buy_capacity_respects_absolute_budget_cap():
     assert used_ratio == 0.95
 
 
-def test_scalping_initial_entry_qty_cap_config_defaults_to_two_shares():
+def test_scalping_initial_entry_qty_cap_config_defaults_to_one_share():
     assert CONFIG.SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED is True
-    assert CONFIG.SCALPING_INITIAL_ENTRY_MAX_QTY == 2
+    assert CONFIG.SCALPING_INITIAL_ENTRY_MAX_QTY == 1
 
 
 def test_orderbook_stability_observation_logs_entry_pipeline(monkeypatch):
@@ -3004,6 +3004,162 @@ def test_bad_entry_block_observe_logs_never_green_ai_fade(monkeypatch):
     assert stock["status"] == "HOLDING"
 
 
+def test_bad_entry_refined_canary_exits_before_soft_stop(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_STOP=-1.50,
+        SCALP_HARD_STOP=-2.50,
+        SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED=True,
+        SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=True,
+        SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC=180,
+        SCALP_BAD_ENTRY_REFINED_MIN_LOSS_PCT=-1.16,
+        SCALP_BAD_ENTRY_REFINED_MAX_PEAK_PROFIT_PCT=0.05,
+        SCALP_BAD_ENTRY_REFINED_AI_SCORE_LIMIT=45,
+        SCALP_BAD_ENTRY_REFINED_RECOVERY_PROB_MAX=0.30,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 10000}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    pipeline_logs = []
+
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: {"return_code": "0", "ord_no": "S1"},
+    )
+
+    stock = {
+        "id": 1602,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 2,
+        "rt_ai_prob": 0.40,
+        "order_time": state_handlers.time.time() - 240,
+        "last_reversal_features": {
+            "buy_pressure_10t": 24.0,
+            "tick_acceleration_ratio": 0.50,
+            "large_sell_print_detected": True,
+            "curr_vs_micro_vwap_bp": -24.0,
+            "net_aggressive_delta_10t": -500,
+            "same_price_buy_absorption": 0,
+            "microprice_edge_bp": -3.0,
+            "top3_depth_ratio": 1.8,
+        },
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 9875, "orderbook": {"bids": [{"price": 9875, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    candidate = [fields for stage, fields in pipeline_logs if stage == "bad_entry_refined_candidate"]
+    refined_exit = [fields for stage, fields in pipeline_logs if stage == "bad_entry_refined_exit"]
+    exit_logs = [fields for stage, fields in pipeline_logs if stage == "exit_signal"]
+    assert candidate and candidate[-1]["should_exit"] is True
+    assert refined_exit
+    assert stock["status"] == "SELL_ORDERED"
+    assert stock["last_exit_rule"] == "scalp_bad_entry_refined_canary"
+    assert exit_logs and exit_logs[-1]["exit_rule"] == "scalp_bad_entry_refined_canary"
+
+
+def test_bad_entry_refined_canary_skips_recovered_peak(monkeypatch):
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_STOP=-1.50,
+        SCALP_HARD_STOP=-2.50,
+        SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=True,
+        SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC=180,
+        SCALP_BAD_ENTRY_REFINED_MIN_LOSS_PCT=-1.16,
+        SCALP_BAD_ENTRY_REFINED_MAX_PEAK_PROFIT_PCT=0.05,
+        SCALP_BAD_ENTRY_REFINED_AI_SCORE_LIMIT=45,
+    )
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 10080}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = _DummyDB()
+
+    pipeline_logs = []
+    sell_calls = []
+
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: pipeline_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_block"},
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: sell_calls.append(kwargs) or {"return_code": "0", "ord_no": "S1"},
+    )
+
+    stock = {
+        "id": 1603,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 2,
+        "rt_ai_prob": 0.40,
+        "order_time": state_handlers.time.time() - 240,
+        "last_reversal_features": {
+            "buy_pressure_10t": 24.0,
+            "tick_acceleration_ratio": 0.50,
+            "large_sell_print_detected": True,
+            "curr_vs_micro_vwap_bp": -24.0,
+            "net_aggressive_delta_10t": -500,
+        },
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 9875, "orderbook": {"bids": [{"price": 9875, "volume": 1000}]}},
+        admin_id=1,
+        market_regime="BULL",
+        radar=None,
+        ai_engine=None,
+    )
+
+    candidate = [fields for stage, fields in pipeline_logs if stage == "bad_entry_refined_candidate"]
+    refined_exit = [fields for stage, fields in pipeline_logs if stage == "bad_entry_refined_exit"]
+    assert candidate and candidate[-1]["exclusion_reason"] == "peak_recovered"
+    assert not refined_exit
+    assert not sell_calls
+    assert stock["status"] == "HOLDING"
+
+
 def test_scalp_soft_stop_micro_grace_expires_to_soft_stop(monkeypatch):
     state_handlers.TRADING_RULES = replace(
         CONFIG,
@@ -3971,6 +4127,38 @@ def test_reversal_add_tc10_no_features_engine_buy_pressure_only():
         # feat={} 이면 else 분기: buy_pressure_10t=50.0 < 55 → buy_pressure_not_met
         assert result["should_add"] is False
         assert result["reason"] == "buy_pressure_not_met(no_features)"
+    finally:
+        scale_in.TRADING_RULES = CONFIG
+
+
+def test_reversal_add_probe_contains_all_predicates_when_blocked():
+    stock = _reversal_add_stock({
+        "last_reversal_features": {
+            "buy_pressure_10t": 52.0,
+            "tick_acceleration_ratio": 0.91,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": -7.0,
+        },
+        "reversal_add_ai_bottom": 40,
+        "reversal_add_ai_history": [40, 44, 48],
+        "reversal_add_profit_floor": -0.30,
+    })
+    from src.utils.constants import TRADING_RULES as CONFIG
+    scale_in.TRADING_RULES = _reversal_add_rules()
+    try:
+        result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.25, current_ai_score=60, held_sec=50)
+        probe = result["probe"]
+        assert result["should_add"] is False
+        assert result["reason"].startswith("supply_conditions_not_met")
+        assert probe["pnl_ok"] is True
+        assert probe["hold_ok"] is True
+        assert probe["low_floor_ok"] is True
+        assert probe["ai_score_ok"] is True
+        assert probe["ai_recover_ok"] is True
+        assert probe["buy_pressure_ok"] is False
+        assert probe["tick_accel_ok"] is False
+        assert probe["micro_vwap_ok"] is False
+        assert probe["supply_ok"] is False
     finally:
         scale_in.TRADING_RULES = CONFIG
 

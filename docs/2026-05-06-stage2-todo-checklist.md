@@ -32,7 +32,7 @@
 
 - 없음
 
-## 장후 체크리스트 (16:00~21:55)
+## 장후 체크리스트 (16:00~22:10)
 
 - [ ] `[ScalpingScannerTxnBoundary0506] DB/WS 경계 재설계와 rollback guard 확정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 16:00~16:20`, `Track: ScalpingLogic`)
   - Source: [2026-04-28-scalping-scanner-enhancement-proposal.md](/home/ubuntu/KORStockScan/docs/2026-04-28-scalping-scanner-enhancement-proposal.md), [scalping_scanner.py](/home/ubuntu/KORStockScan/src/scanners/scalping_scanner.py:281)
@@ -159,3 +159,9 @@
   - 판정 기준: 현재 스캘핑 `PYRAMID` 수량이 `buy_qty * 0.50` + `MAX_POSITION_PCT` cap + 선택적 zero-qty floor 구조에 머무르는지 확인하고, `is_new_high`, `peak_profit - profit_rate <= 0.3`, 수익률 레벨, AI/수급 지속성, trailing giveback 여유, 당일 same-symbol reentry 여부를 반영한 `pyramid_would_qty` counterfactual 산식을 설계한다. live 수량 변경은 이 항목에서 켜지 않는다.
   - why: 불타기는 손실 회수형 `REVERSAL_ADD`보다 winner size-up 효과가 직접적이라 EV 개선 여지가 크다. 그러나 `initial-only`, `pyramid-activated`, `REVERSAL_ADD`, `soft_stop` 표본을 섞으면 원인귀속이 깨지므로 불타기 수량 동적화는 독립 observe-only 축으로만 연다.
   - 다음 액션: 산식 후보가 잠기면 `actual_qty`, `pyramid_would_qty`, `qty_reason`, `post_add_mfe`, `trailing_exit`, `COMPLETED + valid profit_rate`, `soft_stop` 전환율을 분리 로깅하고, 최소 표본 확보 후 별도 단일축 canary 후보로만 승격 검토한다.
+
+- [ ] `[ThresholdCollectorIO0506] threshold 데이터 수집 IO 과부하 재발성 판정 및 증분 collector 설계` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 21:55~22:10`, `Track: RuntimeStability`)
+  - Source: [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [2026-04-30-data-driven-threshold-inventory.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-30-data-driven-threshold-inventory.md)
+  - 판정 기준: `PerformanceTuningSnapshot` 및 `daily_threshold_cycle_report` 생성 시 스토리지 IO 과부하가 `초기 데이터 적재 1회성`인지, `매 사이클 raw jsonl full scan`으로 반복되는지 구분한다. `pipeline_events_YYYY-MM-DD.jsonl` 크기, cycle 실행 횟수, read bytes, wall time, lock contention, system availability 저하 로그를 함께 본다.
+  - why: threshold 데이터 수집이 기대값 개선을 위한 핵심 기반이더라도, 장중/장후마다 400MB~GB급 raw 파일을 반복 스캔하면 실전 가용성과 체결 truth 품질을 훼손한다.
+  - 다음 액션: 반복성 과부하면 cursor 기반 증분 collector, stage 필터 사전집계, 일자/분 단위 partition, single-pass shared snapshot 중 하나를 다음 구현 항목으로 고정한다. 1회성 초기 적재면 운영문서에 cold-start 예외와 금지 시간대를 명시한다.

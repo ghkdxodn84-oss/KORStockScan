@@ -79,7 +79,7 @@ class TradingConfig:
     INVEST_RATIO_SCALPING_MAX: float = 0.22  # 2026-04-20 risk cut: 스캘핑 최대 투자 비율 (30% -> 22%)
     SCALPING_MAX_BUY_BUDGET_KRW: int = 1_200_000  # 2026-04-20 risk cut: 스캘핑 신규 진입 1회 절대 투자금 상한 (1,600,000 -> 1,200,000)
     SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED: bool = True  # 임시 운영가드: 신규 BUY 접수 수량 상한 적용
-    SCALPING_INITIAL_ENTRY_MAX_QTY: int = 2  # 임시 운영가드 기본값: 신규 BUY는 2주까지 허용
+    SCALPING_INITIAL_ENTRY_MAX_QTY: int = 1  # 임시 운영가드 기본값: 신규 BUY는 1주로 제한
 
     # 💡 [신규 추가] 스윙 AI 동적 비중 조절용 (Min~Max)
     INVEST_RATIO_KOSDAQ_MIN: float = 0.05  # 코스닥 AI 점수 60점일 때 (5%)
@@ -138,8 +138,8 @@ class TradingConfig:
     SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_ENABLED: bool = False  # 예비 파라미터: threshold 근처 1회 추가 확인유예
     SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_SEC: int = 10  # 추가 확인유예 최대 초
     SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_BUFFER_PCT: float = 0.20  # soft stop 기준선 아래 추가 유예 허용폭
-    SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED: bool = True  # 2026-04-30 12:00 soft_stop_micro_grace v2 canary
-    SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT: str = "2026-04-30 12:00:00"  # KST local process time
+    SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED: bool = False  # 2026-04-30 same-day v2 수집 종료: 다음 승인 전 기본 OFF
+    SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT: str = ""  # env override로만 재개
     SCALP_SOFT_STOP_ABSORPTION_EXTENSION_SEC: int = 20  # orderbook absorption 확인유예(초)
     SCALP_SOFT_STOP_ABSORPTION_MIN_SCORE: int = 3  # absorption 조건 최소 충족 개수
     SCALP_SOFT_STOP_ABSORPTION_MAX_EXTENSIONS: int = 1  # 포지션당 absorption 유예 1회
@@ -259,7 +259,7 @@ class TradingConfig:
     REVERSAL_ADD_MIN_TICK_ACCEL: float = 0.95      # 최소 틱 가속도 비율
     REVERSAL_ADD_VWAP_BP_MIN: float = -5.0         # 최소 Micro-VWAP 대비 (bp)
     REVERSAL_ADD_SIZE_RATIO: float = 0.33          # 추가매수 수량 비율 (기존 보유 대비)
-    REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED: bool = True  # 2주 cap에서도 reversal_add 1주 소형 canary 허용
+    REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED: bool = True  # 1주 cap에서도 reversal_add 1주 소형 canary 허용
     REVERSAL_ADD_POST_EVAL_SEC: int = 25           # POST_ADD_EVAL 감시 시간(초)
     REVERSAL_ADD_SESSION_CUTOFF: str = "14:30"     # 허용 시간대 상한
     REVERSAL_ADD_BOX_RANGE_MAX_PCT: float = 0.20   # 박스 폭 허용 최대치 (%p)
@@ -274,6 +274,12 @@ class TradingConfig:
     SCALP_BAD_ENTRY_BLOCK_MAX_PEAK_PROFIT_PCT: float = 0.20
     SCALP_BAD_ENTRY_BLOCK_AI_SCORE_LIMIT: int = 45
     SCALP_BAD_ENTRY_BLOCK_LOG_INTERVAL_SEC: int = 30
+    SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED: bool = True  # 2026-04-30 postclose: v2 OFF 이후 refined bad_entry 1축 canary
+    SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC: int = 180
+    SCALP_BAD_ENTRY_REFINED_MIN_LOSS_PCT: float = -1.16
+    SCALP_BAD_ENTRY_REFINED_MAX_PEAK_PROFIT_PCT: float = 0.05
+    SCALP_BAD_ENTRY_REFINED_AI_SCORE_LIMIT: int = 45
+    SCALP_BAD_ENTRY_REFINED_RECOVERY_PROB_MAX: float = 0.30
 
     # 💡 [신규] 코스닥 스캐너 설정
     KOSDAQ_TARGET: float = 4.0  # 코스닥은 조금 더 높게 목표 (예: 4.0%)
@@ -701,6 +707,12 @@ def _build_trading_rules() -> TradingConfig:
     env_reversal_add_size_ratio = _env_float("KORSTOCKSCAN_REVERSAL_ADD_SIZE_RATIO")
     env_reversal_add_min_qty_floor_enabled = _env_bool("KORSTOCKSCAN_REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED")
     env_bad_entry_observe_enabled = _env_bool("KORSTOCKSCAN_SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED")
+    env_bad_entry_refined_enabled = _env_bool("KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED")
+    env_bad_entry_refined_min_hold = _env_int("KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC")
+    env_bad_entry_refined_min_loss = _env_float("KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_MIN_LOSS_PCT")
+    env_bad_entry_refined_max_peak = _env_float("KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_MAX_PEAK_PROFIT_PCT")
+    env_bad_entry_refined_ai_limit = _env_int("KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_AI_SCORE_LIMIT")
+    env_bad_entry_refined_recovery_max = _env_float("KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_RECOVERY_PROB_MAX")
     env_soft_stop_expert_enabled = _env_bool("KORSTOCKSCAN_SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED")
     env_soft_stop_expert_activate_at = _env_str("KORSTOCKSCAN_SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT")
     if (
@@ -720,6 +732,12 @@ def _build_trading_rules() -> TradingConfig:
         or env_reversal_add_size_ratio is not None
         or env_reversal_add_min_qty_floor_enabled is not None
         or env_bad_entry_observe_enabled is not None
+        or env_bad_entry_refined_enabled is not None
+        or env_bad_entry_refined_min_hold is not None
+        or env_bad_entry_refined_min_loss is not None
+        or env_bad_entry_refined_max_peak is not None
+        or env_bad_entry_refined_ai_limit is not None
+        or env_bad_entry_refined_recovery_max is not None
         or env_soft_stop_expert_enabled is not None
         or env_soft_stop_expert_activate_at is not None
     ):
@@ -773,6 +791,24 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED=env_bad_entry_observe_enabled
             if env_bad_entry_observe_enabled is not None
             else config.SCALP_BAD_ENTRY_BLOCK_OBSERVE_ENABLED,
+            SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=env_bad_entry_refined_enabled
+            if env_bad_entry_refined_enabled is not None
+            else config.SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED,
+            SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC=env_bad_entry_refined_min_hold
+            if env_bad_entry_refined_min_hold is not None
+            else config.SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC,
+            SCALP_BAD_ENTRY_REFINED_MIN_LOSS_PCT=env_bad_entry_refined_min_loss
+            if env_bad_entry_refined_min_loss is not None
+            else config.SCALP_BAD_ENTRY_REFINED_MIN_LOSS_PCT,
+            SCALP_BAD_ENTRY_REFINED_MAX_PEAK_PROFIT_PCT=env_bad_entry_refined_max_peak
+            if env_bad_entry_refined_max_peak is not None
+            else config.SCALP_BAD_ENTRY_REFINED_MAX_PEAK_PROFIT_PCT,
+            SCALP_BAD_ENTRY_REFINED_AI_SCORE_LIMIT=env_bad_entry_refined_ai_limit
+            if env_bad_entry_refined_ai_limit is not None
+            else config.SCALP_BAD_ENTRY_REFINED_AI_SCORE_LIMIT,
+            SCALP_BAD_ENTRY_REFINED_RECOVERY_PROB_MAX=env_bad_entry_refined_recovery_max
+            if env_bad_entry_refined_recovery_max is not None
+            else config.SCALP_BAD_ENTRY_REFINED_RECOVERY_PROB_MAX,
             SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED=env_soft_stop_expert_enabled
             if env_soft_stop_expert_enabled is not None
             else config.SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED,
