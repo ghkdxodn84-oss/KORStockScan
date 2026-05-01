@@ -2201,6 +2201,7 @@ def _build_ai_ops_log_fields(
         "ai_prompt_type": str(payload.get("ai_prompt_type", "-") or "-"),
         "ai_prompt_version": str(payload.get("ai_prompt_version", "-") or "-"),
         "ai_result_source": str(payload.get("ai_result_source", "-") or "-"),
+        "ai_model": str(payload.get("ai_model", "-") or "-"),
     }
     if payload.get("scalp_feature_packet_version"):
         out["scalp_feature_packet_version"] = str(payload.get("scalp_feature_packet_version"))
@@ -5023,11 +5024,15 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         safe_profit_pct = _rule_float('SCALP_SAFE_PROFIT', 0.5)
         is_critical_zone = (profit_rate >= safe_profit_pct) or (profit_rate < 0)
 
-        dynamic_min_cd = 3 if is_critical_zone else _rule_int('AI_HOLDING_MIN_COOLDOWN', 15)
+        dynamic_min_cd = (
+            _rule_int('AI_HOLDING_CRITICAL_MIN_COOLDOWN', 8)
+            if is_critical_zone
+            else _rule_int('AI_HOLDING_MIN_COOLDOWN', 20)
+        )
         dynamic_max_cd = (
             _rule_int('AI_HOLDING_CRITICAL_COOLDOWN', 20)
             if is_critical_zone
-            else _rule_int('AI_HOLDING_MAX_COOLDOWN', 60)
+            else _rule_int('AI_HOLDING_MAX_COOLDOWN', 90)
         )
         dynamic_price_trigger = 0.20 if is_critical_zone else 0.40
 

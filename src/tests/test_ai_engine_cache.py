@@ -371,11 +371,13 @@ def test_analyze_target_routes_scalping_and_swing_to_expected_tiers(monkeypatch)
 def test_analyze_target_routes_scalping_prompt_profiles(monkeypatch):
     engine = _build_engine()
     used_prompts = []
+    used_models = []
 
     monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "scalp-packet")
 
     def _fake_call(prompt, *args, **kwargs):
         used_prompts.append(prompt)
+        used_models.append(kwargs.get("model_override"))
         return {"action": "WAIT", "score": 61, "reason": "ok"}
 
     monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
@@ -425,10 +427,13 @@ def test_analyze_target_routes_scalping_prompt_profiles(monkeypatch):
         SCALPING_EXIT_SYSTEM_PROMPT,
         SCALPING_SYSTEM_PROMPT,
     ]
+    assert used_models == ["tier1-model", "tier1-model", "tier2-model", "tier1-model"]
     assert watching["ai_prompt_type"] == "scalping_entry"
     assert holding["ai_prompt_type"] == "scalping_holding"
     assert exiting["ai_prompt_type"] == "scalping_exit"
     assert shared["ai_prompt_type"] == "scalping_shared"
+    assert watching["ai_model"] == "tier1-model"
+    assert exiting["ai_model"] == "tier2-model"
     assert watching["ai_prompt_version"] == "split_v2"
 
 

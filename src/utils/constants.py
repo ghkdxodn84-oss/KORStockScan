@@ -375,7 +375,7 @@ class TradingConfig:
     AI_MAX_CONSECUTIVE_FAILURES: int = 5   # 연속 API 실패 시 AI 엔진 일시 중단 임계값
     AI_SCORE_THRESHOLD_KOSDAQ: int = 60    # KOSDAQ_ML AI 점수 매수 보류 임계값 (60점 미만 보류)
     AI_SCORE_THRESHOLD_KOSPI: int = 60     # KOSPI_ML AI 점수 매수 보류 임계값 (60점 미만 보류)
-    AI_WATCHING_COOLDOWN: int = 180  # 신규 진입 감시(WATCHING) 쿨타임 (초)
+    AI_WATCHING_COOLDOWN: int = 45  # 신규 진입 감시(WATCHING) 재평가 간격 (초)
     AI_MAIN_BUY_RECOVERY_CANARY_ENABLED: bool = False  # same-day 교체: BUY recovery canary 기본 OFF
     AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE: int = 65  # 재평가 시작 점수
     AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE: int = 79  # 재평가 종료 점수
@@ -393,17 +393,18 @@ class TradingConfig:
     ML_GATEKEEPER_NEUTRAL_COOLDOWN: int = 60 * 30  # 게이트키퍼 중립/애매 응답 재평가 쿨다운
     ML_GATEKEEPER_ERROR_COOLDOWN: int = 60 * 10  # 게이트키퍼 오류 재시도 쿨다운
     # [AI 보유 종목 감시 쿨타임 설정 - 비용 절감형]
-    AI_HOLDING_MIN_COOLDOWN = 15          # 💡 (기존 5초 -> 15초) 주가가 미친듯이 널뛰어도 최소 15초는 무조건 대기
-    AI_HOLDING_MAX_COOLDOWN = 75          # 💡 일반구간 완화: 평상시 횡보장에서는 75초에 딱 한 번만 AI 호출
-    AI_HOLDING_CRITICAL_COOLDOWN = 10     # 💡 [신규 추가] 익절/손절 임박 구간에서는 20초마다 호출
+    AI_HOLDING_MIN_COOLDOWN = 20          # 일반 보유 감시 최소 재평가 간격
+    AI_HOLDING_MAX_COOLDOWN = 90          # 일반 횡보 구간 최대 재평가 간격
+    AI_HOLDING_CRITICAL_MIN_COOLDOWN = 8  # 익절/손절 임박 구간 최소 재평가 간격
+    AI_HOLDING_CRITICAL_COOLDOWN = 20     # 익절/손절 임박 구간 최대 재평가 간격
     AI_WAIT_DROP_COOLDOWN = 300           # 💡 ai score 75점 이하 대기시간 300초
 
     # ==========================================
     # 🎯 AI 엔진 제어값 (OpenAI)
     # ==========================================
     GPT_FAST_MODEL = "gpt-5.4-nano"
-    GPT_DEEP_MODEL = "gpt-5.4-nano"
-    GPT_REPORT_MODEL = "gpt-5.4-nano"
+    GPT_DEEP_MODEL = "gpt-5.4"
+    GPT_REPORT_MODEL = "gpt-5.4-mini"
     GPT_ENABLE_SCALPING_DEEP_RECHECK: bool = False
     GPT_ENGINE_MIN_INTERVAL: float = 0.5 # OpenAI 서버에 쏘는 최소 간격 (초 단위, 0.5초 = 500ms)
     OPENAI_JSON_DETERMINISTIC_CONFIG_ENABLED: bool = False  # JSON path에만 deterministic temperature 적용

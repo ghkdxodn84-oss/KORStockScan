@@ -483,6 +483,14 @@ class GPTSniperEngine:
     def _get_tier3_model(self):
         return getattr(self, "model_tier3_deep", self._get_tier2_model())
 
+    def _resolve_scalping_model_for_prompt(self, prompt_type):
+        prompt_type = str(prompt_type or "").strip()
+        if prompt_type in {"scalping_entry", "scalping_watching", "scalping_holding", "scalping_shared"}:
+            return self._get_tier1_model()
+        if prompt_type == "scalping_exit":
+            return self._get_tier2_model()
+        return self._get_tier1_model()
+
     def _record_ws_metric(self, metric_name, value=1):
         if not hasattr(self, "_ws_metrics_lock"):
             self._ws_metrics_lock = threading.Lock()
@@ -1832,6 +1840,7 @@ class GPTSniperEngine:
             )
             result = self._merge_last_transport_meta(result)
             normalized = normalize_scalping_entry_price_result(result, fallback_price=fallback_price)
+            normalized["ai_model"] = self._get_tier2_model()
             for key, value in result.items():
                 if str(key).startswith("openai_"):
                     normalized[key] = value
@@ -1979,7 +1988,7 @@ class GPTSniperEngine:
                 feature_audit_fields = {}
             else:
                 formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
-                target_model = self._get_tier1_model()
+                target_model = self._resolve_scalping_model_for_prompt(prompt_type)
                 feature_audit_fields = build_scalping_feature_audit_fields(
                     extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
                 )
@@ -2007,6 +2016,7 @@ class GPTSniperEngine:
                 )
                 result = self._normalize_scalping_action_schema(result, prompt_type=prompt_type)
                 result.update(feature_audit_fields)
+                result["ai_model"] = target_model
 
             self.consecutive_failures = 0
             self.last_call_time = time.time()
@@ -2162,6 +2172,7 @@ class GPTSniperEngine:
                 cache_key=cache_key,
             )
             result = self._merge_last_transport_meta(result)
+            result["ai_model"] = self._get_tier1_model()
 
             self._cache_set(
                 "_analysis_cache",
@@ -2556,6 +2567,7 @@ class GPTSniperEngine:
                 symbol=stock_code,
             )
             normalized = self._normalize_holding_flow_result(result)
+            normalized["ai_model"] = self._get_tier2_model()
             self.consecutive_failures = 0
             self.last_call_time = time.time()
             return self._annotate_analysis_result(
@@ -2623,6 +2635,7 @@ class GPTSniperEngine:
                     'confidence': int(result.get('confidence', 0) or 0),
                     'reason': str(result.get('reason', '') or ''),
                     'risk_note': str(result.get('risk_note', '') or ''),
+                    'ai_model': self._get_tier2_model(),
                     'raw': result,
                 }
             except Exception as e:

@@ -3,6 +3,24 @@
 버전: Gemini 기준 / 작성일: 2026-04-23  
 목표: `SCALPING`(초단타)와 `SWING/KOSPI_ML/KOSDAQ_ML` 경로에서 어떤 프롬프트가 언제 호출되는지, 입력 피처와 액션 타입을 한 번에 확인한다.
 
+## 2026-05-02 Live Model/Interval Update
+
+| 프롬프트/경로 | live model tier | 상태 |
+| --- | --- | --- |
+| `SCALPING_WATCHING_SYSTEM_PROMPT` | Tier1 fast | 실전 WATCHING hot path |
+| `SCALPING_HOLDING_SYSTEM_PROMPT` | Tier1 fast | 일반 보유 감시 hot path |
+| `SCALPING_SYSTEM_PROMPT` | Tier1 fast | legacy/shared fallback. 신규 주 경로 아님 |
+| `SCALPING_EXIT_SYSTEM_PROMPT` | Tier2 balanced | router 지원은 유지하지만 실전 주 caller는 `holding` |
+| `SCALPING_ENTRY_PRICE_PROMPT` | Tier2 balanced | submitted 직전 가격결정 canary |
+| `SCALPING_HOLDING_FLOW_SYSTEM_PROMPT` | Tier2 balanced | holding/overnight flow override |
+| `SCALPING_OVERNIGHT_DECISION_PROMPT` | Tier2 balanced | 15:20 오버나이트 1차 판단 |
+| `EOD_TOMORROW_LEADER_JSON_PROMPT` | Tier3 deep | 장후 심층 후보 선정 |
+
+- OpenAI tier 기본값은 `FAST=gpt-5.4-nano`, `REPORT=gpt-5.4-mini`, `DEEP=gpt-5.4`다.
+- 호출 interval 기본값은 WATCHING `45초`, HOLDING 일반 `20~90초`, HOLDING critical `8~20초`다.
+- `prompt_profile` 개선작업은 코드에는 남아 있지만, 4/22 이후 `shared`/`exit`/canary prompt 정리 항목이 5월 체크리스트에 재등록되지 않아 추적이 끊겼다. 정리 후보는 `2026-05-06` `AIEngineFlagOffBacklog0506`에서 cleanup/backlog/live 유지로 재분류한다.
+- Tier1 fast 경로의 prompt 문자열은 `상위 1%`, `프랍 트레이더`, `극강 공격적`, 장황한 해석 역할극을 제거하고, enum action contract와 핵심 피처 기준만 남기는 방향으로 정리한다.
+
 ## Mermaid Flow (Gemini 중심)
 
 ```mermaid

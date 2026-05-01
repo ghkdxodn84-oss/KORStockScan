@@ -664,6 +664,14 @@ class GeminiSniperEngine:
     def _get_tier3_model(self):
         return getattr(self, "model_tier3_deep", self._get_tier2_model())
 
+    def _resolve_scalping_model_for_prompt(self, prompt_type):
+        prompt_type = str(prompt_type or "").strip()
+        if prompt_type in {"scalping_entry", "scalping_watching", "scalping_holding", "scalping_shared"}:
+            return self._get_tier1_model()
+        if prompt_type == "scalping_exit":
+            return self._get_tier2_model()
+        return self._get_tier1_model()
+
     def _normalize_for_cache(self, value):
         if isinstance(value, dict):
             transient_keys = {
@@ -1114,6 +1122,7 @@ class GeminiSniperEngine:
                 model_override=self._get_tier1_model(),
                 schema_name="entry_v1",
             )
+            result["ai_model"] = self._get_tier1_model()
             self._cache_set(
                 "_analysis_cache",
                 cache_key,
@@ -1674,6 +1683,7 @@ class GeminiSniperEngine:
                 schema_name="entry_price_v1",
             )
             normalized = normalize_scalping_entry_price_result(result, fallback_price=fallback_price)
+            normalized["ai_model"] = self._get_tier2_model()
             self.consecutive_failures = 0
             self.last_call_time = time.time()
             return self._annotate_analysis_result(
@@ -1821,7 +1831,7 @@ class GeminiSniperEngine:
                 feature_audit_fields = {}
             else:
                 formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
-                target_model = self._get_tier1_model()
+                target_model = self._resolve_scalping_model_for_prompt(prompt_type)
                 feature_audit_fields = build_scalping_feature_audit_fields(
                     extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
                 )
@@ -1845,6 +1855,7 @@ class GeminiSniperEngine:
                 )
                 result = self._normalize_scalping_action_schema(result, prompt_type=prompt_type)
                 result.update(feature_audit_fields)
+                result["ai_model"] = target_model
 
             # 호출 성공 시 실패 횟수 리셋
             self.consecutive_failures = 0
@@ -2416,6 +2427,7 @@ class GeminiSniperEngine:
                 schema_name="holding_exit_flow_v1",
             )
             normalized = self._normalize_holding_flow_result(result)
+            normalized["ai_model"] = self._get_tier2_model()
             self.consecutive_failures = 0
             self.last_call_time = time.time()
             return self._annotate_analysis_result(
@@ -2503,6 +2515,7 @@ class GeminiSniperEngine:
                     'confidence': int(result.get('confidence', 0) or 0),
                     'reason': str(result.get('reason', '') or ''),
                     'risk_note': str(result.get('risk_note', '') or ''),
+                    'ai_model': self._get_tier2_model(),
                     'raw': result,
                 }
             except Exception as e:

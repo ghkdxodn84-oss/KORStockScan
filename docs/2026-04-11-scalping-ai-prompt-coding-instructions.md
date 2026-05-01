@@ -49,6 +49,29 @@
 - 단, `작업 3 HOLDING hybrid override 조건 명세`는 `문서 명세 작업`과 `후속 구현 작업`을 분리해서 관리한다.
 - `작업 3` 자체는 오늘 문서 명세를 닫고, 실제 구현 착수는 `작업 10 HOLDING hybrid 적용`과 이후 체크리스트에서 추적한다.
 
+### `2026-05-02 KST` Plan Rebase live 보정
+
+- 판정: 원격/shadow 선행 원칙은 현재 사용자 지시로 중단하고, 기존 provider routing 안에서 prompt별 model tier와 호출 interval 기본값을 live로 즉시 보정한다. 손익 판정은 이후 `COMPLETED + valid profit_rate`, `full/partial` 분리, BUY 후 미진입 blocker 분해로 닫는다.
+- 적용: Gemini `ai_engine.py`와 OpenAI `ai_engine_openai.py` 모두 `prompt_type` 기준 model tier routing을 사용한다.
+- model tier 기본값:
+  - `SCALPING_WATCHING_SYSTEM_PROMPT`, `SCALPING_HOLDING_SYSTEM_PROMPT`, legacy `SCALPING_SYSTEM_PROMPT`: Tier1 fast.
+  - `SCALPING_ENTRY_PRICE_PROMPT`, `SCALPING_HOLDING_FLOW_SYSTEM_PROMPT`, `SCALPING_OVERNIGHT_DECISION_PROMPT`, `SCALPING_EXIT_SYSTEM_PROMPT`, realtime gatekeeper/report: Tier2 balanced/report.
+  - EOD/장후 심층 후보 선정: Tier3 deep.
+  - OpenAI 기본값은 `GPT_FAST_MODEL=gpt-5.4-nano`, `GPT_REPORT_MODEL=gpt-5.4-mini`, `GPT_DEEP_MODEL=gpt-5.4`로 분리한다.
+- 호출 interval 기본값:
+  - WATCHING 재평가: `AI_WATCHING_COOLDOWN=45초`.
+  - HOLDING 일반: `AI_HOLDING_MIN_COOLDOWN=20초`, `AI_HOLDING_MAX_COOLDOWN=90초`.
+  - HOLDING critical: `AI_HOLDING_CRITICAL_MIN_COOLDOWN=8초`, `AI_HOLDING_CRITICAL_COOLDOWN=20초`.
+- prompt_profile 추적 상태:
+  - 코드 경로는 `watching`, `holding`, `exit`, `shared`를 모두 라우팅한다.
+  - 실전 호출부는 `watching`과 `holding` 중심이다.
+  - `2026-04-22`에 `shared`는 주문/보유/청산 의사결정 연결이 없어 코드정리 후보로 닫혔지만, 5월 체크리스트에 정리 항목이 다시 올라오지 않아 추적이 끊겼다.
+  - 정리 후보(`shared`, `75 canary`, `buy_recovery_canary`, 미사용 `exit`, 비JSON EOD`)는 [2026-05-06-stage2-todo-checklist.md](./2026-05-06-stage2-todo-checklist.md)의 `AIEngineFlagOffBacklog0506`에서 code cleanup/backlog로 재분류한다.
+- Tier1 prompt 문자열 경량화:
+  - `flash-lite`/`nano` hot path에는 `상위 1%`, `프랍 트레이더`, `극강 공격적`, `전설적인` 같은 역할극 문구를 남기지 않는다.
+  - Tier1 프롬프트는 짧은 enum contract, 핵심 피처 해석 기준, `reason` 1줄만 남기고 장황한 discretionary 해석은 Tier2/3 또는 장후 리포트로 격리한다.
+  - 이 누락은 [2026-05-06-stage2-todo-checklist.md](./2026-05-06-stage2-todo-checklist.md)의 `AIEngineFlagOffBacklog0506`에서 prompt cleanup 판정 기준으로 닫는다.
+
 ## 예정 일정 (2026-04-14 공격 재고정)
 
 1. `2026-04-14 POSTCLOSE`

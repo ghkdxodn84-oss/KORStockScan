@@ -78,12 +78,13 @@ def _sample_candles():
 
 def test_openai_scalping_analyze_target_returns_feature_audit_fields(monkeypatch):
     engine = _build_engine()
+    used_models = []
 
-    monkeypatch.setattr(
-        engine,
-        "_call_openai_safe",
-        lambda *args, **kwargs: {"action": "BUY", "score": 84, "reason": "momentum"},
-    )
+    def _fake_call(*args, **kwargs):
+        used_models.append(kwargs.get("model_override"))
+        return {"action": "BUY", "score": 84, "reason": "momentum"}
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
     monkeypatch.setattr(
         engine,
         "_apply_remote_entry_guard",
@@ -101,6 +102,8 @@ def test_openai_scalping_analyze_target_returns_feature_audit_fields(monkeypatch
     assert result["action"] == "BUY"
     assert result["ai_prompt_type"] == "scalping_entry"
     assert result["ai_prompt_version"] == "split_v2"
+    assert result["ai_model"] == "gpt-fast"
+    assert used_models == ["gpt-fast"]
     assert result["ai_parse_ok"] is True
     assert result["ai_parse_fail"] is False
     assert result["ai_fallback_score_50"] is False
