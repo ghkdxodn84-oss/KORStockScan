@@ -1,6 +1,6 @@
 # KORStockScan Plan Rebase 중심 문서
 
-기준일: `2026-04-22 KST`  
+기준일: `2026-05-01 KST`  
 역할: 현재 튜닝 원칙, 판정축, 정량 목표, active/open 상태만 고정하는 중심축 문서다.  
 주의: 이 문서는 자동 파싱용 체크리스트를 소유하지 않는다. Project/Calendar 동기화 대상 작업항목은 날짜별 `stage2 todo checklist`가 소유한다.
 
@@ -10,12 +10,12 @@
 
 1. 현재 단계는 손실 억제형 미세조정이 아니라 `기대값/순이익 극대화`를 위한 `Plan Rebase`다.
 2. 현재 기준선은 `main-only`, `normal_only`, `post_fallback_deprecation`이다.
-3. 현재 폐기 확정 축은 `fallback_scout/main`, `fallback_single`, `latency fallback split-entry`다.
+3. 현재 폐기/종료 확정 축은 [closed observation archive](./archive/closed-observation-axes-2026-05-01.md)로 내린다. rebase 본문은 active/open 축과 재개 금지 원칙만 유지한다.
 4. 현재 live 운용 원칙은 `동일 단계 내 1축 canary`다. 진입병목축과 보유/청산축은 서로 다른 단계이므로 양쪽 canary 동시 존재가 가능하지만, 같은 단계 안에서 canary 중복은 금지한다.
-5. 현재 entry live 축은 `mechanical_momentum_latency_relief`다. `latency_quote_fresh_composite`는 `2026-04-29 08:29 KST` 기준 OFF + restart 반영까지 완료됐고, `latency_signal_quality_quote_composite`는 `2026-04-29 12:50 KST` 운영 override로 효과 미약 판정 후 OFF 했다. 같은 시각 제출 drought를 방치하지 않기 위해 `mechanical_momentum_latency_relief`를 same-day 1축 replacement로 ON 했다. 이 판정은 hard baseline 승격이 아니라 EV/거래수 회복 우선의 운영 override이며, 이후 성과판정은 새 restart 이후 cohort로 분리한다.
-6. 현재 보유/청산 live 축은 `soft_stop_micro_grace`다. `soft_stop_expert_defense`는 `2026-04-30 12:00~15:30 KST` same-day v2 수집 축으로 종료했고, 다음 재승인 전 기본 OFF로 둔다. `gatekeeper_fast_reuse signature/window`는 same-day `종료된 보조 진단축`이며 active 후보가 아니다.
-7. `2026-04-30`부터 soft stop 감소 접근은 단순 유예가 아니라 `valid_entry_reversal_add`와 `bad_entry_block` 가설로 분리한다. `REVERSAL_ADD`는 손실 초기 구간에서 저점 미갱신, AI 회복, 수급 재개가 같이 확인될 때 1주 floor까지 허용하는 소형 포지션 증감 canary이고, `bad_entry_block`은 never-green/AI fade 유형을 관찰하는 classifier다. `2026-04-30` 장후에는 이 표본을 바탕으로 `bad_entry_refined_canary`를 다음 보유/청산 active canary로 준비했다.
-8. `2026-05-04 KST` 장전부터 `holding_flow_override`를 기존 튜닝 관찰축과 별개인 운영 override로 둔다. 적용 대상은 `AI/soft stop/trailing/bad-entry refined` 청산 후보와 오버나이트 `SELL_TODAY` 후보이며, hard stop/protect hard stop/주문·잔고 안전장치는 즉시 실행을 유지한다. 단일 점수구간 컷 대신 최근 tick 30개, 분봉 60개, 최근 flow review history를 넣어 `flow_state/evidence/action` 흐름으로 최종 판단하고, 최초 후보 대비 추가악화 `0.80%p` 또는 최대 보류 `90초` 도달 시 기존 청산을 허용한다.
+5. 현재 entry owner는 `mechanical_momentum_latency_relief` 운영 override와 `dynamic_entry_price_resolver_p1`/`dynamic_entry_ai_price_canary_p2` 가격축이다. 종료된 latency composite 세부 경과는 archive에서만 본다.
+6. 현재 보유/청산 owner는 `soft_stop_micro_grace`, `REVERSAL_ADD`, `bad_entry_refined_canary`다. `soft_stop_expert_defense v2`는 종료했고, naive `bad_entry_block`은 observe-only에서 refined canary의 근거로만 남긴다.
+7. `2026-05-04 KST` 장전부터 `holding_flow_override`를 기존 튜닝 관찰축과 별개인 운영 override로 둔다. 적용 대상은 `AI/soft stop/trailing/bad-entry refined` 청산 후보와 오버나이트 `SELL_TODAY` 후보이며, hard stop/protect hard stop/주문·잔고 안전장치는 즉시 실행을 유지한다. 단일 점수구간 컷 대신 최근 tick 30개, 분봉 60개, 최근 flow review history를 넣어 `flow_state/evidence/action` 흐름으로 최종 판단하고, 최초 후보 대비 추가악화 `0.80%p` 또는 최대 보류 `90초` 도달 시 기존 청산을 허용한다.
+8. AI 엔진 개선은 live routing 승격이 아니라 `Gemini/DeepSeek/OpenAI`별 flag-off acceptance, endpoint schema contract, transport provenance로 분리한다. Gemini live enable과 OpenAI live routing은 별도 checklist 없이 임의로 열지 않는다.
 
 ## 2. 용어 범례
 
@@ -31,8 +31,8 @@
 | `canary` | 작은 범위로 실전에 적용해 성과와 리스크를 검증하는 1축 변경 | 동일 단계 안에서는 1축만 허용 |
 | `stage-disjoint concurrent canary` | 진입병목과 보유/청산처럼 단계, 조작점, 적용시점, cohort tag, rollback guard가 분리되는 병렬 canary | 단계가 다르면 동시 존재 가능. 단, 동일 단계 내 canary 중복은 금지하고, 두 축 중 하나라도 cohort 혼선이 생기면 해당 단계 단일축 원칙으로 복귀 |
 | `shadow` | 실전 주문에는 반영하지 않고 병렬 계산만 하던 검증 방식 | 신규/보완축에서는 금지 |
-| `buy_recovery_canary` | Gemini `WAIT 65~79` 과밀 구간을 2차 재평가해 BUY 회복 여부를 보는 실전 1축 | 현재 유지축 |
-| `entry_filter_quality` | 불량 진입을 줄이고 제출/체결 품질을 높이는 다음 정식 튜닝 후보 | `buy_recovery_canary` 1차 판정 후 재판정 |
+| `buy_recovery_canary` | Gemini `WAIT 65~79` 과밀 구간을 2차 재평가해 BUY 회복 여부를 보던 진입축 | 현재 live owner 아님. `2026-04-23` 이후 downstream 제출병목 축으로 교체됐고, 재개 시 새 checklist 승인 필요 |
+| `entry_filter_quality` | 불량 진입을 줄이고 제출/체결 품질을 높이는 정식 튜닝 후보 | submitted 병목 해소 전까지 parking. 재개는 현재 entry owner와 충돌하지 않는 단일축으로만 가능 |
 | `latency_quote_fresh_composite` | `ws_age`, `ws_jitter`, `spread`, `other_danger`가 단일 사유가 아니라 quote freshness family로 겹쳐 제출을 막는 복합축 | `2026-04-29 08:29 KST` OFF + restart 완료. 현재 standby/off이며, `signal>=88`, `ws_age<=950ms`, `ws_jitter<=450ms`, `spread<=0.0075`, `quote_stale=False` 묶음은 historical/reference 축으로만 남긴다 |
 | `latency_signal_quality_quote_composite` | `latency_quote_fresh_composite` 미회복 시 검토한 예비 복합축. quote freshness 완화폭을 넓히는 대신 `signal>=90`, `latest_strength>=110`, `buy_pressure_10t>=65`를 요구했다 | `2026-04-29 12:50 KST` 운영 override로 OFF. post-restart `budget_pass=972`, `submitted=0`, 후보 통과 0건으로 효과 미약 판정 |
 | `mechanical_momentum_latency_relief` | AI score 50/70 같은 mechanical fallback 상태라도 `budget_pass` 이후 수급/강도와 quote freshness 조건이 충분하면 latency DANGER를 normal 주문으로 넘기는 entry replacement 축 | `2026-04-29 12:50 KST` 운영 override로 live ON. 조건은 `signal_score<=75`, `latest_strength>=110`, `buy_pressure_10t>=50`, `ws_age<=1200ms`, `ws_jitter<=500ms`, `spread<=0.0085`, `quote_stale=False`다. 성과는 post-restart cohort에서 `submitted`까지는 병목 회복으로 보고, `full/partial`, `HOLDING/exit_rule`, `COMPLETED + valid profit_rate`는 체결 품질과 BUY 신호 적정성 관찰축으로 분리한다 |
@@ -164,34 +164,36 @@
 | `soft_stop_expert_defense_loss_cap` | guarded cohort의 `COMPLETED + valid profit_rate` 평균이 `<= -0.30%`, guarded 후 hard/protect stop 전이, `sell_order_failed`, 또는 `REVERSAL_ADD` 체결 포지션 적용 cross-contamination 1건 이상 | `soft_stop_expert_defense` | canary OFF, `soft_stop_micro_grace v1`만 유지하고 shadow/observe 로그는 계속 남김 |
 | `bad_entry_block_promote_gate` | observe-only 표본 `>=10`에서 classifier 후보의 soft stop/하드스탑 전환율이 비후보 대비 `+10.0%p` 이상이고 missed winner 비율이 낮음 | `bad_entry_refined_canary` | 단순 block이 아니라 refined 조기정리 canary로만 승격하고, `GOOD_EXIT/MISSED_UPSIDE` would-have-been 증가 시 OFF |
 
-## 7. 매매단계별 Pain Point
+## 7. 매매단계별 Open Pain Point
 
-| 단계 | Pain point | 현재 증거 | 기대값 영향 | 우선 판정 |
-| --- | --- | --- | --- | --- |
-| 진입 | Gemini 전환 후 BUY drought, WAIT65~79 과밀 | 04-22 12시 기준 `WAIT65~79 total_candidates=121`, `recovery_check=21`, `promoted=0`, `submitted=0`, `blocked_ai_score=97건(80.2%)` | 미진입 기회비용 증가, 표본 고갈 | 현재 확정: `buy_recovery_canary` 유지, `prompt` 재교정 1축 적용 |
-| 진입 | BUY 신호 자체 부재 시 전체 일정 지연 | `04-22` 종합 기준 `recovery_check=40`, `promoted=6`, `submitted=0`, `completed_trades=0`; BUY 후보가 없거나 너무 적으면 `entry_filter_quality`, `threshold`, HOLDING/EOD까지 모두 표본 부족으로 밀린다 | 후속 축 판정과 보유/청산 개선 일정이 기약 없이 밀림 | 대기 판정: `2026-04-23 INTRADAY BUY sufficiency checkpoint`, 부족 지속 시 same-day next-axis live 교체 |
-| 진입 | BUY 후 제출 전 latency/budget 병목 | 04-27 `15:00` offline bundle 기준 `budget_pass=7568`, `submitted=11`, `budget_pass_to_submitted_rate=0.1%`, `latency_state_danger=7178`. 단일 `other_danger`, `ws_jitter`, `gatekeeper_fast_reuse`는 제출 회복 실패. | threshold 단일 완화만으로 거래 회복 불가. `ws_age/ws_jitter/spread/other_danger`가 quote freshness family로 겹치는 복합 병목 가능성이 가장 높다. | 현재 확정: `latency_quote_fresh_composite` active entry canary. primary baseline은 같은 bundle 내 `canary_applied=False` 표본, fallback reference는 `04-27 15:00 offline bundle`, hard pass/fail 전제는 `submitted_orders >= 20` + baseline `N_min` + `ShadowDiff0428` 해소다. 성공 목표는 `budget_pass_to_submitted_rate +1.0%p`, `latency_state_danger share -5.0%p`, fill quality `-2.0%p` 이내 비악화다 |
-| 진입 | prompt 재교정 후 신규 BUY 급증 리스크 | prompt 보정 직후 제출/체결은 늘 수 있으나, soft stop tail이 함께 커질 수 있다 | holding/exit 튜닝 판정 전에 초기 진입 손실 tail이 퍼지면 원인귀속이 흐려진다 | 현재 확정: 스캘핑 신규 BUY는 `1주 cap`, `PYRAMID`는 유지하되 분석/판정은 분리한다. `buy_qty=1`로 `template_qty=0`이 되는 zero_qty 왜곡은 수량확대 근거가 아니라 별도 관찰/동적수량 설계 대상으로 둔다 |
-| 진입 | `shared` 호출 혼입 가능성 | 04-22 오전 실전 로그 `PROMPT_COUNTS={"scalping_shared":39,"scalping_buy_recovery_canary":19,"scalping_entry":357,"-":47}`, `SHARED_STAGE_COUNTS={"ai_cooldown_blocked":39}` | shared를 신규 행동 canary로 볼 근거는 없고, 원인귀속 보존을 위해 코드정리 대상으로만 유지 | 현재 확정: 종료, live canary 아님 |
-| 보유 | 포지션 맥락 부족 | 보유 AI가 수익률/고점/보유시간을 직접 입력으로 받는지 미완. `2026-04-23` 덕산하이메탈(`077360`)은 `ID 3331`이 `10:11:09 KST` `scalp_trailing_take_profit`으로 `+0.67%` 완료된 뒤, `ID 3404`가 `10:39:13 KST` 더 높은 가격대에서 `entry_armed -> budget_pass`, `10:39:15 KST` `+매수` 접수로 다시 열렸다. 이어 `ID 3419`는 `12:00:24 KST` `17,520원` 3차 진입 후 `12:02:42 KST` `LOSS soft stop`으로 `-1.6%` 종료됐고, 사용자 관찰 기준으론 그 직후 가격이 다시 `17,520원` 위로 반등했다. | 트레일링 익절 직후 동일종목 고가 재진입과 soft stop 직후 V-shape 반등을 분리하지 못하면, upside를 너무 일찍 끊고 더 나쁜 가격으로 재진입한 뒤 저점 청산하는 이중 기대값 훼손이 반복될 수 있다. | 현재 확정: `position_context` 스키마 설계 유지 + trailing 익절 후 동일종목 재진입 사례와 `soft stop 직후 rebound` 사례를 HOLDING 재판정 입력에 포함 |
-| 보유/청산 | 4월 trailing/soft_stop 관찰축 공백 | 4월 `COMPLETED + valid profit_rate` 225건, 실현손익 `-429,425원`, `partial_trade` 평균 `-0.347%`, `full_trade` 평균 `-0.013%`. post-fallback normal 표본은 11건, 전부 full fill, 평균 `-0.069%`. post-sell 4월 191건 중 `MISSED_UPSIDE 54`, `GOOD_EXIT 72`; `2026-04-24` 생성 리포트 기준 `scalp_soft_stop_pct completed_valid=53`, 평균 `-1.669%`, 실현손익 `-651,680원`, `scalp_trailing_take_profit completed_valid=54`, 평균 `+1.041%`, 실현손익 `+280,742원`. 4월 soft_stop post-sell 61건은 10분 내 매도가 재상회 57건(`93.4%`), +0.5% 이상 반등 43건(`70.5%`), +1.0% 이상 반등 23건(`37.7%`), 매수가 회복 16건(`26.2%`)이다. hard stop 계열은 `scalp_preset_hard_stop_pct` post-sell 28건(`MISSED_UPSIDE 4`, `GOOD_EXIT 8`, `NEUTRAL 16`)으로 보조 관찰에 둔다. 하방카운트/`scalp_ai_early_exit`는 2026-04-27 기준 폐기 완료된 historical-only 축이다. | soft_stop은 직접 손익 훼손 1순위이고, 휩쏘 가능성이 높다. trailing은 upside capture 개선 후보지만 월간 기준 live 우선순위가 낮다. 하드스탑은 severe-loss guard라 완화 우선순위를 낮춘다. submitted가 회복되면 `soft_stop_rebound/whipsaw_windows`, `hard_stop_auxiliary`, `same_symbol_reentry`, `trailing_continuation`, `EOD/NXT`를 독립 후보로 고정해야 한다. | 현재 확정: `soft_stop_rebound_split` 1순위, 단일 조작점은 `soft_stop micro grace`로 승인. `SCALP_SOFT_STOP_MICRO_GRACE_ENABLED=True`, `SEC=20`, `EMERGENCY_PCT=-2.0`을 적용하고 hard stop `-2.5%`는 유지한다. `trailing_continuation_micro_canary`는 2순위. `hard_stop_whipsaw_aux`는 parking. `gatekeeper_fast_reuse`, `other_danger`, `ws_jitter`는 same-day latency residual 평가축으로 종료했지만, 진입병목 자체는 미해소 상태로 둔다 |
-| 청산 | EOD/NXT 및 exit_rule 혼선 | NXT 가능/불가능 종목의 EOD 판단 분리 필요 | 청산 원인별 기대값 개선 지점 불명확 | 현재 확정: 후순위 설계 |
-| 포지션 증감 | 물타기/불타기/분할진입 축 혼재 | 불타기 수익 확대 관찰, fallback 오염 존재. `pyramid-activated`는 11건 평균 `+1.084%`로 힌트가 있고, soft stop은 10분 내 매도가 재상회가 높지만 매수가 회복은 일부에 그친다. 현재 스캘핑 `PYRAMID` 수량은 `buy_qty * 0.50` + 포지션 cap 구조라 추세 지속성/AI/수급/trailing 여유를 직접 반영하지 않는다. | 추가진입 기대값 판단 오염. 단순 soft stop 유예보다 유효 진입의 초반 눌림을 회수하는 쪽이 EV 개선 가설로 더 명확하지만, winner size-up인 `PYRAMID`도 EV 개선 여지가 커서 별도 observe-only 수량 산식이 필요하다. | 현재 확정: `2026-04-30` `valid_entry_reversal_add` 소형 canary + `bad_entry_block` observe-only classifier를 병행했다. 장후에는 `bad_entry_refined_canary`를 다음 보유/청산 단일 active canary로 준비했고, `REVERSAL_ADD`는 parking 없이 `pnl/hold/gate` 실행 blocker 축소를 계속한다. 물타기/불타기 `MAX_*_COUNT`는 runtime blocker에서 제거하고 attribution counter로만 유지한다. 반복 추가매수 리스크는 enable flag, cooldown, pending order, position cap, protection 재설정 fail-closed, near-close gate가 소유한다. `PYRAMID` 동적 수량화는 같은 단계 live 변경으로 보지 않고 다음 체크리스트에서 `would_qty` counterfactual 설계로만 연다 |
-| 운영/데이터 | 리포트 basis 혼선 | 문서 파생값과 DB 실필드 혼용 위험 | 잘못된 승격/롤백 위험 | 현재 확정: DB 우선, 체크리스트 동기화 |
+| 단계 | 현재 pain point | 기대값 영향 | 현재 owner / 다음 판정 |
+| --- | --- | --- | --- |
+| 진입 | BUY 후 제출 전 병목과 mechanical fallback score 표본 처리 | 제출 drought가 지속되면 보유/청산 개선 표본도 고갈된다 | `mechanical_momentum_latency_relief` 유지. 성과는 submitted/full/partial, `COMPLETED + valid profit_rate`를 post-restart cohort로 분리 |
+| 진입가 | reference target이 실주문가/timeout을 과도하게 왜곡하는 문제 | 미체결 기회비용과 불리한 추격진입이 동시에 생길 수 있다 | `dynamic_entry_price_resolver_p1`, `dynamic_entry_ai_price_canary_p2`는 [2026-05-04 checklist](./2026-05-04-stage2-todo-checklist.md)가 로드/health check를 소유하고, 5/6에 guard 분포/ingress를 재판정 |
+| AI 엔진 | Gemini/DeepSeek/OpenAI 계약 안정화와 live enable 금지선 분산 | parse/contract drift가 생기면 BUY/WAIT/DROP, HOLD/TRIM/EXIT 분포가 바뀌어 원인귀속이 깨진다 | 4/29~4/30 acceptance는 완료. [2026-05-06 checklist](./2026-05-06-stage2-todo-checklist.md) `AIEngineFlagOffBacklog0506`이 잔여 flag-off/backlog 재분류를 소유 |
+| 보유/청산 | soft stop tail, never-green/AI fade, 조급한 전량청산 | 손실 축소보다 missed upside 회복과 bad-entry tail 절단의 순EV가 핵심이다 | `soft_stop_micro_grace`, `REVERSAL_ADD`, `bad_entry_refined_canary`, `holding_flow_override`를 분리. 5/4 checklist가 live health/장후 판정을 소유 |
+| 포지션 증감 | `REVERSAL_ADD`와 `PYRAMID` 수량 산식이 고정비율 중심 | 유효 진입 회수와 winner size-up 기대값이 제한된다 | live 수량 변경 금지. [2026-05-06 checklist](./2026-05-06-stage2-todo-checklist.md) `ReversalAddDynamicQty0506`, `PyramidDynamicQty0506`에서 observe-only `would_qty` 설계 |
+| 의사결정 지원 | 가격대/거래량/시간대별 행동가중치와 AI decision matrix가 runtime 판단과 분리됨 | 청산/물타기/불타기 선택의 기회비용을 놓치면 기대값 개선축 선정이 늦어진다 | `statistical_action_weight`, `stat_action_decision_snapshot`, `holding_exit_decision_matrix`는 5/6~5/8 체크리스트가 report-only/ADM ladder로 소유 |
+| 스캐너/구조 | candidate/enrich/promote 경계, DB/WS 경계, state handler 단일 모듈 비대 | 좋은 후보를 놓치거나 WS 부하/부분 커밋으로 미진입 기회비용이 커질 수 있다 | [2026-05-06 checklist](./2026-05-06-stage2-todo-checklist.md) `ScalpingScanner*`, `StateHandlers*`, `CodeDebt0506`이 설계/분해 순서를 소유 |
+| 운영/데이터 | NaN, receipt binding, threshold collector IO, historical aggregation 품질 | 집계/truth 품질이 흔들리면 잘못된 승격/롤백이 발생한다 | [2026-05-06 checklist](./2026-05-06-stage2-todo-checklist.md) `NaNCastGuard*`, `ExecutionReceiptsThreadSafety*`, `Threshold*`가 소유 |
 
 ## 8. 현재 Open 상태 요약
 
-| 영역 | 현재 상태 | 다음 판정/소유 문서 | 메모 |
+| 영역 | 현재 상태 | 체크리스트/소유 문서 | 누락 여부 |
 | --- | --- | --- | --- |
-| entry operating override | `mechanical_momentum_latency_relief` ON (`latency_quote_fresh_composite`, `latency_signal_quality_quote_composite` OFF 후 same-day replacement) | [2026-04-29 checklist](./2026-04-29-stage2-todo-checklist.md) `MechanicalMomentumLatencyRelief0429-Now` | canary 성과와 합산하지 않는 same-day entry replacement 운영 override다. hard baseline 승격은 보류하고 post-restart cohort를 별도 판정한다 |
-| entry price baseline/live | `dynamic_entry_price_resolver_p1` baseline 경로 + `dynamic_entry_ai_price_canary_p2` active canary | [2026-05-04 checklist](./2026-05-04-stage2-todo-checklist.md) `DynamicEntryResolverP10504-*`, `DynamicEntryAIPriceCanary0504-*` | P1은 reference/defensive 권한 분리와 timeout 분리가 목적이고, P2는 submitted 직전 Tier2 가격조정 canary다. 둘 다 entry stage 소유이며 P2 실패는 P1로 fail-closed한다 |
-| entry data-quality gate | `ShadowDiff0428` open | [2026-04-28 checklist](./2026-04-28-stage2-todo-checklist.md) `ShadowDiff0428` | submitted/full/partial mismatch가 닫혀야 hard pass/fail 가능 |
-| holding/exit live canary | `soft_stop_micro_grace` active, `soft_stop_expert_defense` v2는 `2026-04-30` 수집 종료 후 기본 OFF, 다음 신규 owner는 `bad_entry_refined_canary` | 날짜별 checklist + holding audit/report | v2 로그는 다음 방어망 설계 근거로만 유지. `REVERSAL_ADD` 체결 포지션은 excluded cohort로 분리. refined bad-entry는 `bad_entry_refined_candidate/exit`로 applied/not-applied cohort를 분리 |
-| holding/overnight operating override | `holding_flow_override` ON 준비 (`2026-05-04` 장전 로드 확인) | [2026-05-04 checklist](./2026-05-04-stage2-todo-checklist.md) `HoldingFlowOverride0504-*` | 튜닝 관찰축이 아니라 운영 override다. `soft_stop/trailing/AI momentum/bad_entry refined`와 `15:20 SELL_TODAY`에 공통 flow 재검문을 적용하고, hard/protect/order safety는 우회하지 않는다 |
-| holding/exit observation | `holding_exit_observation` 유지 | checklist + observation report | `soft_stop/trailing/same_symbol/EOD-NXT` 분해 입력 소유 |
-| runtime stabilization follow-up | `nan_cast_guard_followup` open | [2026-05-06 checklist](./2026-05-06-stage2-todo-checklist.md) `NaNCastGuard0506HolidayCarry` | canary 아님. `2026-05-05` 어린이날 휴장 이월 후 메인 기준 최소 safe cast 범위와 upstream source 추적 계획만 잠금 |
-| engine parity / transport observation | `openai_transport_parity_flag_off` observe-only | [2026-04-30-openai-enable-acceptance-spec.md](./2026-04-30-openai-enable-acceptance-spec.md), [2026-05-04-stage2-todo-checklist.md](./2026-05-04-stage2-todo-checklist.md) | Gemini/DeepSeek acceptance와 같은 문서 구조로 유지. live 라우팅 승격이 아니라 schema/transport provenance 잠금이 목적 |
-| retired entry axes | `gatekeeper_fast_reuse`, `other_danger`, `ws_jitter`, `fallback/split-entry` closed | `execution-delta` + audit/report | historical-only. 재개는 새 workorder + rollback guard 필요 |
+| entry operating override | `mechanical_momentum_latency_relief` ON. 종료된 `latency_quote_fresh_composite`, `latency_signal_quality_quote_composite`, 단일 `other_danger/ws_jitter/spread` relief는 archive로 내림 | [2026-04-30 checklist](./2026-04-30-stage2-todo-checklist.md) `MechanicalMomentumLatencyRelief0430-*`, [closed archive](./archive/closed-observation-axes-2026-05-01.md) | 반영 완료. 재개는 새 workorder 필요 |
+| entry price baseline/live | `dynamic_entry_price_resolver_p1` baseline 경로 + `dynamic_entry_ai_price_canary_p2` active canary. P2 실패는 P1로 fail-closed | [2026-05-04 checklist](./2026-05-04-stage2-todo-checklist.md) `DynamicEntryResolverP10504-*`, `DynamicEntryAIPriceCanary0504-*`; [2026-05-06 checklist](./2026-05-06-stage2-todo-checklist.md) `LatencyEntryPriceGuard*`, `PreSubmitGuard*`, `BuyPriceSchemaSplit*`, `DynamicEntryResolverIngress*` | 반영 완료 |
+| entry data-quality gate | `ShadowDiff0428`는 historical fill 집계 품질 gate로 유지. TEST synthetic row 제외는 4/30에 닫힘 | [2026-04-28 checklist](./2026-04-28-stage2-todo-checklist.md) `ShadowDiff0428`, [2026-04-30 checklist](./2026-04-30-stage2-todo-checklist.md) `ShadowDiffSyntheticExclusion0430` | 반영 완료 |
+| AI engine: Gemini | P0 JSON fast-path는 반영됨. P1 `system_instruction`, P1 deterministic JSON config, P2 schema registry는 flag-off 준비/관찰 승인이고 live enable 미승인 | [workorder_gemini_engine_review](./workorder_gemini_engine_review.md), [2026-04-29 Gemini spec](./2026-04-29-gemini-enable-acceptance-spec.md), [2026-04-30 checklist](./2026-04-30-stage2-todo-checklist.md) `GeminiSchemaIngress0430`, `GeminiSchemaContractCarry0430`; [2026-05-06 checklist](./2026-05-06-stage2-todo-checklist.md) `AIEngineFlagOffBacklog0506` | 5/6 재점검 항목으로 보강 완료 |
+| AI engine: DeepSeek | context-aware backoff/retry acceptance는 flag-off 관찰성 보강. gatekeeper structured-output, holding cache bucket, Tool Calling은 backlog 유지 | [2026-04-29 DeepSeek spec](./2026-04-29-deepseek-enable-acceptance-spec.md), [2026-04-30 checklist](./2026-04-30-stage2-todo-checklist.md) `DeepSeekRemoteAcceptance0430`, `DeepSeekAcceptanceCarry0430`, `DeepSeekInterfaceGap0430`; [2026-05-06 checklist](./2026-05-06-stage2-todo-checklist.md) `AIEngineFlagOffBacklog0506` | 5/6 재점검 항목으로 보강 완료 |
+| AI engine: OpenAI | schema/deterministic config/Responses WS는 flag-off parity/transport 관찰. live routing 승격 아님 | [2026-04-30 OpenAI spec](./2026-04-30-openai-enable-acceptance-spec.md), [2026-05-04 checklist](./2026-05-04-stage2-todo-checklist.md) `OpenAIParity0504-Preopen`, `OpenAIResponsesWS0504-*`; [2026-05-06 checklist](./2026-05-06-stage2-todo-checklist.md) `AIEngineFlagOffBacklog0506` | 반영 완료, 5/6 통합 재점검으로 보강 |
+| holding/exit live canary | `soft_stop_micro_grace`, `REVERSAL_ADD`, `bad_entry_refined_canary`가 현재 보유/청산 live owner다. `soft_stop_expert_defense v2`는 archive | [2026-05-04 checklist](./2026-05-04-stage2-todo-checklist.md) `BadEntryRefinedCanary0504-*`, [2026-05-06 checklist](./2026-05-06-stage2-todo-checklist.md) `ReversalAddDynamicQty0506`, `PyramidDynamicQty0506`; [closed archive](./archive/closed-observation-axes-2026-05-01.md) | 반영 완료 |
+| holding/overnight operating override | `holding_flow_override`는 튜닝 관찰축이 아니라 운영 override. hard/protect/order safety는 우회하지 않는다 | [2026-05-04 checklist](./2026-05-04-stage2-todo-checklist.md) `HoldingFlowOverride0504-*`, [2026-05-01 review](./2026-05-01-holding-flow-override-code-review-report.md) | 반영 완료 |
+| threshold cycle / action weight | threshold compact collector, 장후 report, 다음 장전 manifest/apply, `statistical_action_weight`는 runtime mutation 전 단계다. 현재 live threshold 자동변경은 금지하고 `manifest_only`로 둔다 | [2026-05-01 checklist](./2026-05-01-stage2-todo-checklist.md) `ThresholdBootstrap0501-AM`, `StatActionMatrixReport0501-Maintenance`; [2026-05-06 checklist](./2026-05-06-stage2-todo-checklist.md) `ThresholdCollectorIO0506`, `ThresholdOpsTransition0506`, `StatActionWeight0506`, `StatActionMarkdown0506`, `StatActionAdvancedAxes0506`; [2026-05-07 checklist](./2026-05-07-stage2-todo-checklist.md) `StatActionEligibleOutcome0507`; [2026-05-08 checklist](./2026-05-08-stage2-todo-checklist.md) `StatActionAdvancedContext0508` | 반영 완료 |
+| holding/exit decision support | `stat_action_decision_snapshot`, `holding_exit_decision_matrix`는 report-only/observe-only. AI 반영은 `ADM-1 -> ADM-2 -> ADM-3 -> ADM-4 -> ADM-5` ladder | [2026-05-06 checklist](./2026-05-06-stage2-todo-checklist.md) `AIDecisionMatrix0506`; [2026-05-07 checklist](./2026-05-07-stage2-todo-checklist.md) `AIDecisionMatrixShadow0507` | 반영 완료 |
+| scanner/residual architecture | 스캐너 3단 분해, DB/WS 경계, source/gate/composite, state handler context/split은 설계/정리 단계 | [2026-05-06 checklist](./2026-05-06-stage2-todo-checklist.md) `ScalpingScanner*`, `StateHandlers*`, `SwingTrailingPolicy0506`, `CodeDebt0506` | 반영 완료 |
+| runtime stabilization | `nan_cast_guard_followup`, execution receipt binding/thread safety는 EV 판정 전제 품질축. threshold IO/ops는 위 `threshold cycle / action weight` 행에서 별도 관리 | [2026-05-06 checklist](./2026-05-06-stage2-todo-checklist.md) `NaNCastGuard0506HolidayCarry`, `ExecutionReceiptsThreadSafety0506` | 반영 완료 |
+| closed observation axes | fallback/split-entry, latency residual single-relief, `soft_stop_expert_defense v2`, Gemini/DeepSeek 종료 관찰 항목 등 | [closed archive](./archive/closed-observation-axes-2026-05-01.md) | 반영 완료 |
 
 ## 9. 델타/Q&A 라우팅
 
@@ -201,15 +203,19 @@
 | [qna](./plan-korStockScanPerformanceOptimization.qna.md) | baseline 해석, direction-only 규칙, 감리 확인 포인트, 반복 질의 | 규칙은 중요하지만 매번 중심 문서 본문에 장문 설명으로 둘 필요는 없다 |
 | 날짜별 checklist | 특정 시각 작업, Due/Slot/TimeWindow, 완료/미완 상태 | 자동 파싱과 Project/Calendar 소유 문서는 checklist다 |
 | audit/report | 외부 반출본, 세부 수치 근거, 감리 관점 해설 | rebase는 승인 기준만 남기고 수치 근거 전문은 분리한다 |
+| [closed observation archive](./archive/closed-observation-axes-2026-05-01.md) | 종료/폐기/역사참조 관찰축, 재개 금지선 | 중심 문서에는 active/open 판단만 남기기 위함 |
 
 ## 10. 핵심 참조문서
 
 | 문서 | 역할 |
 | --- | --- |
-| [2026-04-28-stage2-todo-checklist.md](./2026-04-28-stage2-todo-checklist.md) | 현재 실행 작업항목, Due/Slot/TimeWindow, 자동 파싱 기준 |
+| [2026-05-04-stage2-todo-checklist.md](./2026-05-04-stage2-todo-checklist.md) | 다음 KRX 운영일 장전/장중/장후 실행 작업항목 |
+| [2026-05-06-stage2-todo-checklist.md](./2026-05-06-stage2-todo-checklist.md) | 휴장 이월 후속, 스캐너/threshold/AI 엔진/보유청산 잔여작업 |
+| [2026-05-07-stage2-todo-checklist.md](./2026-05-07-stage2-todo-checklist.md) | `SAW-3`, `ADM-2` 후속 설계 |
+| [2026-05-08-stage2-todo-checklist.md](./2026-05-08-stage2-todo-checklist.md) | `SAW-4~SAW-6` 체결품질/시장맥락/orderbook readiness |
 | [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md) | 원안 대비 변경, 날짜형 이력, 종료된 축 기록 |
 | [plan-korStockScanPerformanceOptimization.qna.md](./plan-korStockScanPerformanceOptimization.qna.md) | 반복 판단 기준과 감리 Q&A |
 | [plan-korStockScanPerformanceOptimization.performance-report.md](./plan-korStockScanPerformanceOptimization.performance-report.md) | 정기 성과 기준선과 반복 성과값 |
 | [workorder-shadow-canary-runtime-classification.md](./workorder-shadow-canary-runtime-classification.md) | shadow/canary/historical 분류와 코드베이스 정렬 기준 |
-| [audit-reports/2026-04-28-entry-composite-auditor-export-brief.md](./audit-reports/2026-04-28-entry-composite-auditor-export-brief.md) | 외부 반출용 감리 핵심 4개 요약 |
+| [archive/closed-observation-axes-2026-05-01.md](./archive/closed-observation-axes-2026-05-01.md) | 종료된 관찰축 archive |
 | [archive/](./archive/) | 폐기 과제, 과거 workorder, legacy shadow/fallback 경과 |

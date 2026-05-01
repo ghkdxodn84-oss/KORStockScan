@@ -35,7 +35,7 @@
 
 - 없음
 
-## 장후 체크리스트 (16:00~23:50)
+## 장후 체크리스트 (16:00~23:59)
 
 - [ ] `[ScalpingScannerTxnBoundary0506] DB/WS 경계 재설계와 rollback guard 확정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 16:00~16:20`, `Track: ScalpingLogic`)
   - Source: [2026-04-28-scalping-scanner-enhancement-proposal.md](/home/ubuntu/KORStockScan/docs/2026-04-28-scalping-scanner-enhancement-proposal.md), [scalping_scanner.py](/home/ubuntu/KORStockScan/src/scanners/scalping_scanner.py:281)
@@ -203,3 +203,10 @@
   - 선반영 메모: `2026-05-01` 휴장 maintenance에서 ADM-1 산출물 schema와 Markdown/JSON 저장은 구현했다. 5/6에는 운영일 산출물의 `recommended_bias`, `prompt_hint`, `hard_veto`, `matrix_version` provenance를 확인하고 `ADM-2 shadow prompt injection` 진입 여부를 판정한다.
   - why: 사용자가 요구한 것은 threshold 변경뿐 아니라 AI가 보유/청산 판단을 할 때 통계 matrix를 참조하고, 필요 시 가중치를 더하는 실시간성 개입 기능이다. 이 요구는 `statistical_action_weight` 내부 JSON만으로는 충족되지 않는다.
   - 다음 액션: schema가 잠기면 `2026-05-07`에 `ADM-2 shadow prompt injection`을 열고, matrix context가 AI 응답을 어떻게 바꾸는지 action drift를 먼저 본다.
+
+- [ ] `[AIEngineFlagOffBacklog0506] Gemini/DeepSeek/OpenAI flag-off 잔여축 재점검 및 live enable 금지선 확인` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 23:50~23:59`, `Track: AIPrompt`)
+  - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_gemini_engine_review.md), [2026-04-29-gemini-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/2026-04-29-gemini-enable-acceptance-spec.md), [2026-04-29-deepseek-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/2026-04-29-deepseek-enable-acceptance-spec.md), [2026-04-30-openai-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/2026-04-30-openai-enable-acceptance-spec.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - 판정 기준: Gemini `system_instruction`/deterministic config/schema registry, DeepSeek retry/gatekeeper structured-output/holding cache/Tool Calling, OpenAI schema/deterministic/Responses WS/live routing을 `done`, `flag-off observe`, `backlog`, `new checklist required` 중 하나로 재분류한다.
+  - why: AI 엔진 후속은 여러 문서에 분산돼 있어, 실전 enable 미승인 항목이 누락되거나 active entry/holding canary와 같은 날 섞이면 원인귀속이 깨진다.
+  - 금지: 이 항목에서 Gemini/OpenAI/DeepSeek live routing, response schema live enable, deterministic config live enable을 켜지 않는다.
+  - 다음 액션: `new checklist required`가 있으면 다음 KRX 운영일 checklist에 `Due`, `Slot`, `TimeWindow`, rollback owner, cohort를 포함한 단일 항목으로만 올린다. 근거가 없으면 backlog로 유지하고, rebase에는 active/open으로 올리지 않는다.
