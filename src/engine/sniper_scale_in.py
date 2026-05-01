@@ -137,12 +137,6 @@ def evaluate_scalping_avg_down(stock, profit_rate):
         result["reason"] = "avg_down_disabled"
         return result
 
-    max_count = int(getattr(TRADING_RULES, 'SCALPING_MAX_AVG_DOWN_COUNT', 0) or 0)
-    avg_down_count = int(stock.get('avg_down_count', 0) or 0)
-    if avg_down_count >= max_count:
-        result["reason"] = "avg_down_count_limit"
-        return result
-
     max_loss_pct = float(getattr(TRADING_RULES, 'SCALPING_AVG_DOWN_MIN_DROP_PCT', -3.0))
     min_loss_pct = float(getattr(TRADING_RULES, 'SCALPING_AVG_DOWN_MAX_DROP_PCT', -6.0))
     if not (profit_rate <= max_loss_pct and profit_rate >= min_loss_pct):
@@ -173,12 +167,6 @@ def evaluate_scalping_pyramid(stock, profit_rate, peak_profit, is_new_high):
         result["reason"] = "profit_not_enough"
         return result
 
-    max_count = int(getattr(TRADING_RULES, 'SCALPING_MAX_PYRAMID_COUNT', 0) or 0)
-    pyramid_count = int(stock.get('pyramid_count', 0) or 0)
-    if pyramid_count >= max_count:
-        result["reason"] = "pyramid_count_limit"
-        return result
-
     drawdown_from_peak = float(peak_profit - profit_rate)
     if not (is_new_high or drawdown_from_peak <= 0.3):
         result["reason"] = "trend_not_strong"
@@ -199,12 +187,6 @@ def evaluate_swing_avg_down(stock, profit_rate, market_regime):
 
     if market_regime == 'BEAR' and getattr(TRADING_RULES, 'BLOCK_SWING_AVG_DOWN_IN_BEAR', True):
         result["reason"] = "bear_avg_down_blocked"
-        return result
-
-    max_count = int(getattr(TRADING_RULES, 'SWING_MAX_AVG_DOWN_COUNT', 0) or 0)
-    avg_down_count = int(stock.get('avg_down_count', 0) or 0)
-    if avg_down_count >= max_count:
-        result["reason"] = "avg_down_count_limit"
         return result
 
     min_loss_pct = float(getattr(TRADING_RULES, 'SWING_AVG_DOWN_MIN_DROP_PCT', -7.0))
@@ -228,12 +210,6 @@ def evaluate_swing_pyramid(stock, profit_rate, peak_profit):
     min_profit = float(getattr(TRADING_RULES, 'SWING_PYRAMID_MIN_PROFIT_PCT', 5.0))
     if profit_rate < min_profit:
         result["reason"] = "profit_not_enough"
-        return result
-
-    max_count = int(getattr(TRADING_RULES, 'SWING_MAX_PYRAMID_COUNT', 0) or 0)
-    pyramid_count = int(stock.get('pyramid_count', 0) or 0)
-    if pyramid_count >= max_count:
-        result["reason"] = "pyramid_count_limit"
         return result
 
     drawdown_from_peak = float(peak_profit - profit_rate)

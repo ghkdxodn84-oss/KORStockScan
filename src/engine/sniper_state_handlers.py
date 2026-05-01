@@ -509,6 +509,129 @@ def _log_holding_pipeline(stock, code, stage, **fields):
     )
 
 
+def _format_action_list(values):
+    cleaned = [str(value).strip() for value in (values or []) if str(value).strip()]
+    return "|".join(cleaned) if cleaned else "-"
+
+
+def _spread_bps_from_ws(ws_data, curr_price):
+    orderbook = ws_data.get("orderbook") if isinstance(ws_data, dict) else None
+    if not isinstance(orderbook, dict):
+        return None
+    asks = orderbook.get("asks") or []
+    bids = orderbook.get("bids") or []
+    if not asks or not bids:
+        return None
+    best_ask = _safe_float((asks[0] or {}).get("price"), 0.0)
+    best_bid = _safe_float((bids[0] or {}).get("price"), 0.0)
+    ref_price = _safe_float(curr_price, 0.0) or ((best_ask + best_bid) / 2.0)
+    if best_ask <= 0 or best_bid <= 0 or ref_price <= 0:
+        return None
+    return ((best_ask - best_bid) / ref_price) * 10000.0
+
+
+def _top3_depth_ratio_from_ws(ws_data):
+    orderbook = ws_data.get("orderbook") if isinstance(ws_data, dict) else None
+    if not isinstance(orderbook, dict):
+        return None
+    asks = orderbook.get("asks") or []
+    bids = orderbook.get("bids") or []
+    ask_qty = sum(_safe_float((level or {}).get("volume"), 0.0) for level in asks[:3])
+    bid_qty = sum(_safe_float((level or {}).get("volume"), 0.0) for level in bids[:3])
+    if bid_qty <= 0:
+        return None
+    return ask_qty / bid_qty
+
+
+def _emit_stat_action_decision_snapshot(
+    *,
+    stock,
+    code,
+    strategy,
+    ws_data,
+    chosen_action,
+    eligible_actions=None,
+    rejected_actions=None,
+    profit_rate=0.0,
+    peak_profit=0.0,
+    current_ai_score=0.0,
+    held_sec=0,
+    curr_price=0,
+    buy_price=0,
+    exit_rule="-",
+    sell_reason_type="-",
+    scale_in_gate=None,
+    scale_in_action=None,
+    reason="-",
+    force=False,
+):
+    if not _rule_bool("STAT_ACTION_DECISION_SNAPSHOT_ENABLED", True):
+        return False
+    if str(strategy or "").upper() != "SCALPING":
+        return False
+
+    now_ts = time.time()
+    if not force:
+        min_interval = _rule_int("STAT_ACTION_DECISION_SNAPSHOT_MIN_INTERVAL_SEC", 30)
+        last_ts = _safe_float(stock.get("last_stat_action_snapshot_ts"), 0.0)
+        if last_ts > 0 and (now_ts - last_ts) < min_interval:
+            return False
+
+    gate = scale_in_gate if isinstance(scale_in_gate, dict) else {}
+    action = scale_in_action if isinstance(scale_in_action, dict) else {}
+    feat = stock.get("last_reversal_features", {}) if isinstance(stock, dict) else {}
+    if not isinstance(feat, dict):
+        feat = {}
+
+    drawdown_from_peak = _safe_float(peak_profit, 0.0) - _safe_float(profit_rate, 0.0)
+    curr_price_int = _safe_int(curr_price, 0)
+    buy_price_float = _safe_float(buy_price, 0.0)
+    distance_to_buy_bps = (
+        ((curr_price_int - buy_price_float) / buy_price_float) * 10000.0
+        if curr_price_int > 0 and buy_price_float > 0
+        else None
+    )
+    fields = {
+        "threshold_family": "statistical_action_weight",
+        "chosen_action": str(chosen_action or "-"),
+        "eligible_actions": _format_action_list(eligible_actions),
+        "rejected_actions": _format_action_list(rejected_actions),
+        "profit_rate": f"{_safe_float(profit_rate, 0.0):+.2f}",
+        "peak_profit": f"{_safe_float(peak_profit, 0.0):+.2f}",
+        "drawdown_from_peak": f"{drawdown_from_peak:.2f}",
+        "held_sec": _safe_int(held_sec, 0),
+        "current_ai_score": f"{_safe_float(current_ai_score, 0.0):.0f}",
+        "curr_price": curr_price_int,
+        "buy_price": f"{buy_price_float:.2f}",
+        "buy_qty": _safe_int(stock.get("buy_qty"), 0),
+        "avg_down_count": _safe_int(stock.get("avg_down_count"), 0),
+        "pyramid_count": _safe_int(stock.get("pyramid_count"), 0),
+        "last_add_type": stock.get("last_add_type") or "-",
+        "reversal_add_state": stock.get("reversal_add_state") or "-",
+        "reversal_add_used": bool(stock.get("reversal_add_used")),
+        "exit_rule_candidate": exit_rule or "-",
+        "sell_reason_type": sell_reason_type or "-",
+        "scale_in_gate_allowed": bool(gate.get("allowed")),
+        "scale_in_gate_reason": gate.get("reason", "-"),
+        "scale_in_action_type": action.get("add_type", "-"),
+        "scale_in_action_reason": action.get("reason", "-"),
+        "reason": str(reason or "-"),
+        "spread_bps": "-" if _spread_bps_from_ws(ws_data, curr_price_int) is None else f"{_spread_bps_from_ws(ws_data, curr_price_int):.2f}",
+        "top3_depth_ratio": "-" if _top3_depth_ratio_from_ws(ws_data) is None else f"{_top3_depth_ratio_from_ws(ws_data):.4f}",
+        "buy_pressure_10t": feat.get("buy_pressure_10t", "-"),
+        "tick_acceleration_ratio": feat.get("tick_acceleration_ratio", "-"),
+        "large_sell_print_detected": feat.get("large_sell_print_detected", "-"),
+        "curr_vs_micro_vwap_bp": feat.get("curr_vs_micro_vwap_bp", "-"),
+        "snapshot_observe_only": True,
+    }
+    if distance_to_buy_bps is not None:
+        fields["distance_to_buy_bps"] = f"{distance_to_buy_bps:.2f}"
+
+    _log_holding_pipeline(stock, code, "stat_action_decision_snapshot", **fields)
+    _mutate_stock_state(stock, set_fields={"last_stat_action_snapshot_ts": now_ts})
+    return True
+
+
 def _append_reversal_add_probe_fields(fields: dict, probe: dict | None) -> dict:
     merged = dict(fields or {})
     if not isinstance(probe, dict) or not probe:
@@ -5132,6 +5255,9 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             exit_rule = "kospi_regime_stop_loss"
 
     if is_sell_signal:
+        fallback_gate = None
+        fallback_action = None
+        fallback_candidate = False
         if sell_reason_type == "LOSS" and strategy == "SCALPING":
             fallback_gate = can_consider_scale_in(
                 stock=stock,
@@ -5202,6 +5328,30 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         )
                         return
 
+        rejected_actions = []
+        if fallback_gate and not fallback_candidate:
+            rejected_actions.append(f"avg_down_wait:{fallback_gate.get('reason') or fallback_reason or 'not_candidate'}")
+        _emit_stat_action_decision_snapshot(
+            stock=stock,
+            code=code,
+            strategy=strategy,
+            ws_data=ws_data,
+            chosen_action="exit_now",
+            eligible_actions=["exit_now"],
+            rejected_actions=rejected_actions,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            current_ai_score=current_ai_score,
+            held_sec=held_sec,
+            curr_price=curr_p,
+            buy_price=buy_p,
+            exit_rule=exit_rule or "-",
+            sell_reason_type=sell_reason_type or "-",
+            scale_in_gate=fallback_gate,
+            scale_in_action=fallback_action,
+            reason=reason,
+            force=True,
+        )
         _remember_exit_context(
             stock=stock,
             exit_rule=exit_rule,
@@ -5422,6 +5572,29 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             held_sec=held_sec,
         )
         if scale_in_action:
+            chosen_add_type = str(scale_in_action.get("add_type") or "").upper()
+            chosen_action = "avg_down_wait" if chosen_add_type == "AVG_DOWN" else "pyramid_wait"
+            _emit_stat_action_decision_snapshot(
+                stock=stock,
+                code=code,
+                strategy=strategy,
+                ws_data=ws_data,
+                chosen_action=chosen_action,
+                eligible_actions=[chosen_action, "hold_wait"],
+                rejected_actions=["exit_now:no_sell_signal"],
+                profit_rate=profit_rate,
+                peak_profit=peak_profit,
+                current_ai_score=current_ai_score,
+                held_sec=held_sec,
+                curr_price=curr_p,
+                buy_price=buy_p,
+                exit_rule="-",
+                sell_reason_type="-",
+                scale_in_gate=gate,
+                scale_in_action=scale_in_action,
+                reason=scale_in_action.get("reason") or "-",
+                force=True,
+            )
             if scale_in_action.get("reason") == "reversal_add_ok":
                 _mutate_stock_state(stock, set_fields={'reversal_add_state': 'ADD_ARMED'})
             log_info(
@@ -5484,6 +5657,24 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                             _ra_probe.get("probe"),
                         ),
                     )
+                    _emit_stat_action_decision_snapshot(
+                        stock=stock,
+                        code=code,
+                        strategy=strategy,
+                        ws_data=ws_data,
+                        chosen_action="hold_wait",
+                        eligible_actions=["hold_wait"],
+                        rejected_actions=[f"avg_down_wait:{_ra_probe_reason}"],
+                        profit_rate=profit_rate,
+                        peak_profit=peak_profit,
+                        current_ai_score=current_ai_score,
+                        held_sec=held_sec,
+                        curr_price=curr_p,
+                        buy_price=buy_p,
+                        scale_in_gate=gate,
+                        scale_in_action=_ra_probe,
+                        reason="scale_in_probe_blocked",
+                    )
                 _mutate_stock_state(stock, set_fields={'last_reversal_add_probe_log_ts': now_ts})
             return
     else:
@@ -5526,6 +5717,24 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         },
                         reversal_probe.get("probe"),
                     ),
+                )
+                _emit_stat_action_decision_snapshot(
+                    stock=stock,
+                    code=code,
+                    strategy=strategy,
+                    ws_data=ws_data,
+                    chosen_action="hold_wait",
+                    eligible_actions=["hold_wait"],
+                    rejected_actions=[f"avg_down_wait:{gate.get('reason') or '-'}"],
+                    profit_rate=profit_rate,
+                    peak_profit=peak_profit,
+                    current_ai_score=current_ai_score,
+                    held_sec=held_sec,
+                    curr_price=curr_p,
+                    buy_price=buy_p,
+                    scale_in_gate=gate,
+                    scale_in_action=reversal_probe,
+                    reason="scale_in_gate_blocked",
                 )
             _mutate_stock_state(stock, set_fields={'last_add_block_log_ts': now_ts})
 
@@ -5626,12 +5835,12 @@ def can_consider_scale_in(
     raw_strategy = (strategy or "").upper()
     if raw_strategy == 'SCALPING':
         allow_avg = _rule_bool('SCALPING_ENABLE_AVG_DOWN', False)
-        allow_pyr = _rule_int('SCALPING_MAX_PYRAMID_COUNT', 0) > 0
+        allow_pyr = _rule_bool('SCALPING_ENABLE_PYRAMID', True)
         if not (allow_avg or allow_pyr):
             return {"allowed": False, "reason": "scalping_scale_in_disabled"}
     elif raw_strategy in ('KOSPI_ML', 'KOSDAQ_ML'):
         allow_avg = _rule_bool('SWING_ENABLE_AVG_DOWN', False)
-        allow_pyr = _rule_int('SWING_MAX_PYRAMID_COUNT', 0) > 0
+        allow_pyr = _rule_bool('SWING_ENABLE_PYRAMID', True)
         if not (allow_avg or allow_pyr):
             return {"allowed": False, "reason": "swing_scale_in_disabled"}
 

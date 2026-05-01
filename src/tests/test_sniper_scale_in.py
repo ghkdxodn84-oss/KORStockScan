@@ -54,6 +54,41 @@ def test_scalping_pyramid_signal():
     assert result["add_type"] == "PYRAMID"
 
 
+def test_scalping_pyramid_count_is_attribution_only():
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(CONFIG, SCALPING_MAX_PYRAMID_COUNT=1)
+    try:
+        result = scale_in.evaluate_scalping_pyramid(
+            {"pyramid_count": 5},
+            profit_rate=2.0,
+            peak_profit=2.1,
+            is_new_high=True,
+        )
+        assert result["should_add"] is True
+        assert result["reason"] == "scalping_pyramid_ok"
+    finally:
+        scale_in.TRADING_RULES = original
+
+
+def test_swing_avg_down_count_is_attribution_only():
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(CONFIG, SWING_MAX_AVG_DOWN_COUNT=1)
+    try:
+        result = scale_in.evaluate_swing_avg_down(
+            {"avg_down_count": 3},
+            profit_rate=-8.0,
+            market_regime="BULL",
+        )
+        assert result["should_add"] is True
+        assert result["reason"] == "swing_avg_down_ok"
+    finally:
+        scale_in.TRADING_RULES = original
+
+
 def test_swing_avg_down_bear_blocked():
     stock = {"avg_down_count": 0}
     result = scale_in.evaluate_swing_avg_down(stock, profit_rate=-8.0, market_regime="BEAR")
@@ -168,6 +203,81 @@ def test_orderbook_stability_observation_logs_entry_pipeline(monkeypatch):
     assert logs[0][2] == "orderbook_stability_observed"
     assert logs[0][3]["unstable_quote_observed"] is True
     assert logs[0][3]["sample_trade_count"] == 3
+
+
+def test_stat_action_decision_snapshot_logs_observe_only_with_rate_limit(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    logs = []
+    now = {"ts": 1_000.0}
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        STAT_ACTION_DECISION_SNAPSHOT_ENABLED=True,
+        STAT_ACTION_DECISION_SNAPSHOT_MIN_INTERVAL_SEC=30,
+    )
+    monkeypatch.setattr(state_handlers.time, "time", lambda: now["ts"])
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "buy_qty": 2,
+        "avg_down_count": 1,
+        "pyramid_count": 0,
+        "last_reversal_features": {
+            "buy_pressure_10t": 62,
+            "tick_acceleration_ratio": 1.1,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 3.0,
+        },
+    }
+    ws_data = {
+        "orderbook": {
+            "asks": [{"price": 10010, "volume": 100}, {"price": 10020, "volume": 80}],
+            "bids": [{"price": 10000, "volume": 120}, {"price": 9990, "volume": 90}],
+        }
+    }
+
+    emitted = state_handlers._emit_stat_action_decision_snapshot(
+        stock=stock,
+        code="123456",
+        strategy="SCALPING",
+        ws_data=ws_data,
+        chosen_action="hold_wait",
+        eligible_actions=["hold_wait"],
+        rejected_actions=["avg_down_wait:pnl_out_of_range"],
+        profit_rate=-0.4,
+        peak_profit=0.2,
+        current_ai_score=64,
+        held_sec=75,
+        curr_price=10000,
+        buy_price=10050,
+        scale_in_gate={"allowed": True, "reason": "ok"},
+        reason="unit_test",
+    )
+    assert emitted is True
+    assert logs[0][0] == "stat_action_decision_snapshot"
+    assert logs[0][1]["snapshot_observe_only"] is True
+    assert logs[0][1]["chosen_action"] == "hold_wait"
+    assert logs[0][1]["rejected_actions"] == "avg_down_wait:pnl_out_of_range"
+    assert logs[0][1]["scale_in_gate_allowed"] is True
+    assert "spread_bps" in logs[0][1]
+
+    now["ts"] = 1_010.0
+    emitted_again = state_handlers._emit_stat_action_decision_snapshot(
+        stock=stock,
+        code="123456",
+        strategy="SCALPING",
+        ws_data=ws_data,
+        chosen_action="hold_wait",
+    )
+    assert emitted_again is False
+    assert len(logs) == 1
 
 
 def test_add_count_increment_once_on_partial_fills(monkeypatch):
@@ -856,6 +966,91 @@ def test_scale_in_guard_ignores_nat_like_last_add_at(monkeypatch):
 
     assert result["allowed"] is True
     assert result["reason"] == "ok"
+
+
+def test_scale_in_guard_uses_pyramid_enable_flag_not_count_limit(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls):
+            return datetime(2026, 4, 30, 10, 0, 0)
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        ENABLE_SCALE_IN=True,
+        SCALPING_ENABLE_AVG_DOWN=False,
+        SCALPING_ENABLE_PYRAMID=True,
+        SCALPING_MAX_PYRAMID_COUNT=0,
+        ADD_JUDGMENT_LOCK_SEC=0,
+        SCALE_IN_COOLDOWN_SEC=0,
+        MAX_POSITION_PCT=1.0,
+    )
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(state_handlers, "datetime", FixedDateTime)
+
+    stock = {
+        "name": "TEST",
+        "code": "123456",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+    }
+
+    result = state_handlers.can_consider_scale_in(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10000},
+        strategy="SCALPING",
+        market_regime="BULL",
+    )
+
+    assert result["allowed"] is True
+    assert result["reason"] == "ok"
+
+
+def test_scale_in_guard_can_disable_pyramid_explicitly(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls):
+            return datetime(2026, 4, 30, 10, 0, 0)
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        ENABLE_SCALE_IN=True,
+        SCALPING_ENABLE_AVG_DOWN=False,
+        SCALPING_ENABLE_PYRAMID=False,
+        ADD_JUDGMENT_LOCK_SEC=0,
+        SCALE_IN_COOLDOWN_SEC=0,
+        MAX_POSITION_PCT=1.0,
+    )
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(state_handlers, "datetime", FixedDateTime)
+
+    stock = {
+        "name": "TEST",
+        "code": "123456",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+    }
+
+    result = state_handlers.can_consider_scale_in(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10000},
+        strategy="SCALPING",
+        market_regime="BULL",
+    )
+
+    assert result["allowed"] is False
+    assert result["reason"] == "scalping_scale_in_disabled"
 
 
 def test_watching_state_returns_early_when_buy_side_paused(monkeypatch):

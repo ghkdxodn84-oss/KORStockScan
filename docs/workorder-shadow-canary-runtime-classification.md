@@ -16,6 +16,77 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 6. `2026-05-01` 근로자의 날과 `2026-05-05` 어린이날은 KRX 휴장으로, 휴장일 Due 작업은 다음 운영일 체크리스트로 이관한다.
 7. threshold 운영은 `실시간 자동변경`이 아니라 `장중 적재 -> 장후 산정 -> 다음 장전 적용`으로 고정한다. compact threshold stream이 기본 경로이며, `entry_mechanical_momentum`, `bad_entry_block`, `REVERSAL_ADD blocked funnel`, `soft_stop_micro_grace`가 현재 sample-ready family다.
 8. `bad_entry_block`의 naive 차단은 금지하지만, `2026-04-30` 장후 outcome으로 좁힌 `bad_entry_refined_canary`는 다음 보유/청산 active canary다. 5/4 장전에는 신규 설계가 아니라 로드/override/cohort 확인만 남긴다.
+9. `statistical_action_weight`는 가격대/거래량/시간대별 행동 선택 통계용 `decision-support` 축이다. live 판단에는 직접 쓰지 않고 장후 threshold weight 입력과 동적 수량화 설계 근거로만 둔다.
+
+## 0.1 Runtime ON/OFF 스냅샷 (`2026-05-01` 기준)
+
+이 표는 `src/utils/constants.py` 기본값과 현재 운영문서 기준의 runtime 상태를 한곳에 잠그기 위한 스냅샷이다. env override가 있으면 장전 로드 확인에서 반드시 이 표와 비교한다.
+
+### ON: 실주문/실판단 영향 있음
+
+| 축 | 상태 | 현재 기준 | 유지/판정 기준 |
+| --- | --- | --- | --- |
+| `mechanical_momentum_latency_relief` | ON, entry active-canary | `SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=True` | 제출 전은 진입병목 회복, 제출 후는 `full/partial` 체결 품질과 BUY 신호 적정성으로 분리 판정 |
+| `soft_stop_micro_grace` | ON, exit active-canary | `SCALP_SOFT_STOP_MICRO_GRACE_ENABLED=True`, `20초`, emergency `-2.0%` | hard stop 전환, 미체결, same-symbol 손실이 늘면 OFF. 반등 포착 개선이 유지되면 baseline-promote 후보 |
+| `REVERSAL_ADD` | ON, exit active-canary | `REVERSAL_ADD_ENABLED=True` | executed가 계속 0이면 parking 금지. `pnl/hold/supply/qty/position_cap/cooldown/pending/protection` blocker를 좁혀 실행요건을 찾는다 |
+| `bad_entry_refined_canary` | ON, exit active-canary | `SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=True` | naive block 금지. `GOOD_EXIT/MISSED_UPSIDE` 제거가 늘거나 canary cohort 손익이 비적용 후보보다 악화되면 OFF |
+| `initial_entry_qty_cap_1share` | ON, size guard | `SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED=True`, `SCALPING_INITIAL_ENTRY_MAX_QTY=1` | initial/pyramid 원인귀속과 tail 제한이 닫힐 때까지 유지. 확대는 별도 단일축 승인 필요 |
+| `pre_submit_price_guard` | ON, entry guard | `SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED=True` | 비정상 저가 지정가 차단. false block이 확인될 때만 threshold 조정 |
+| `partial_fill_ratio_guard` | ON, fill-quality guard | `SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED=True` | partial/full 분리 판정 유지. partial 악화가 닫히기 전 해제 금지 |
+| `dynamic_vpw` | ON, entry gate | `SCALP_DYNAMIC_VPW_ENABLED=True`, `OBSERVE_ONLY=False` | 체결강도 동적 gate 적용. threshold cycle 산정 후보로 유지 |
+| `dynamic_strength_relief` | ON, baseline-promote 후보 | `SCALP_DYNAMIC_STRENGTH_RELIEF_ENABLED=True` | runtime/log는 relief 기준. 이름상 canary 잔재는 후속 정리 대상 |
+| `SCALPING_ENABLE_PYRAMID` | ON, add enable owner | `SCALPING_ENABLE_PYRAMID=True` | count cap이 아니라 cooldown/pending/position cap/protection으로 리스크 제한 |
+
+### ON: observe/report-only, 실주문 변경 없음
+
+| 축 | 상태 | 현재 기준 | live 전환 기준 |
+| --- | --- | --- | --- |
+| `stat_action_decision_snapshot` | observe-only ON | `STAT_ACTION_DECISION_SNAPSHOT_ENABLED=True`, `30초` rate-limit | 직접 live 전환 금지. 장후 weight/report 입력으로만 사용 |
+| `statistical_action_weight` | report-only ON | 장후 행동가중치 리포트 생성 | live 적용은 별도 단일축 canary와 rollback guard가 있을 때만 가능 |
+| `holding_exit_decision_matrix` | report-only ON | AI 보유/청산 판단 보조 매트릭스 | `ADM-1 report-only -> ADM-2 shadow prompt -> ADM-3 advisory nudge -> ADM-4 weighted live -> ADM-5 policy gate` 순서로만 전환 |
+| `threshold_cycle` | automation ON, mutation OFF | 07:35 manifest, 16:10 collector/report | `ThresholdOpsTransition0506` 전까지 `manifest_only`; runtime threshold mutation/restart 자동화 금지 |
+| `hard_time_stop_shadow` | shadow ON | `SCALP_COMMON_HARD_TIME_STOP_SHADOW_ONLY=True` | 실주문 승격 후보 아님. time-based exit 의제 재개 시 새 단일축으로 정의 |
+| `same_symbol_soft_stop_cooldown_shadow` | shadow ON | soft stop 직후 same-symbol cooldown 관찰 | same-symbol 손실이 독립 리스크로 확인될 때만 canary 후보 |
+| `partial_only_timeout_shadow` | shadow ON | partial-only timeout 관찰 | partial 장기체류 손익 훼손이 반복될 때만 canary 후보 |
+| `SCALP_LOSS_FALLBACK` | observe-only ON, live OFF | `SCALP_LOSS_FALLBACK_ENABLED=False`, `OBSERVE_ONLY=True` | `REVERSAL_ADD`와 충돌하지 않는 별도 owner/rollback 기준 없이는 live 금지 |
+
+#### `holding_exit_decision_matrix` 전환 ladder
+
+`AI decision matrix`는 계속 보고서로만 두는 축이 아니다. 다만 live 반영은 아래 순서 외에는 허용하지 않는다.
+
+| 단계 | 상태 | 의미 | ON 기준 | 금지사항 |
+| --- | --- | --- | --- | --- |
+| `ADM-1 report-only` | 현재 ON | 장후 `holding_exit_decision_matrix_YYYY-MM-DD.json/md` 생성 | schema, `matrix_version`, `prompt_hint`, `hard_veto`, provenance 확인 | AI prompt/응답/주문 변경 금지 |
+| `ADM-2 shadow prompt` | 현재 OFF | 전일 matrix를 다음 장전 로드하고 shadow-only prompt context로 주입 | token budget, cache key 분리, Gemini/OpenAI/DeepSeek parity, action drift 로그 준비 | live AI 응답 채택 금지 |
+| `ADM-3 advisory nudge` | 현재 OFF | matrix가 `참고 권고`로 live prompt에 들어가지만 hard override는 하지 않음 | ADM-2에서 drift가 설명 가능하고 `GOOD_EXIT/MISSED_UPSIDE/soft_stop` 악화가 없을 때 | matrix 단독 청산/추가매수 금지 |
+| `ADM-4 weighted live` | 현재 OFF | AI 응답 후처리 또는 confidence weight에 제한 반영 | bucket sample floor, confidence-adjusted edge, rollback guard, single owner가 닫힐 때 | 다른 보유/청산 canary와 같은 stage에서 중복 live 금지 |
+| `ADM-5 policy gate` | 현재 OFF | 특정 bucket에서 강한 veto/allow gate로 사용 | 며칠 이상 반복 표본과 hard veto 정밀도 검증, owner 승인, 즉시 OFF env 필요 | 초기 운영에서 바로 진입 금지 |
+
+운영 규칙:
+
+1. matrix는 장중 self-updating 금지다. 전일 장후 산정본을 다음 장전 immutable context로만 로드한다.
+2. ADM-2 이상을 켜려면 별도 runtime flag가 필요하다. 현재 코드에는 `HOLDING_EXIT_DECISION_MATRIX_*` 토글이 없으므로 report-only 외 단계는 OFF로 본다.
+3. ADM-3 이상은 `soft_stop_micro_grace`, `REVERSAL_ADD`, `bad_entry_refined_canary`와 같은 보유/청산 stage live owner 충돌 여부를 먼저 확인한다.
+4. live 전환 판정은 손실 억제가 아니라 `COMPLETED + valid profit_rate`, `GOOD_EXIT/MISSED_UPSIDE`, soft stop tail, 추가매수 기회비용을 함께 본다.
+
+### OFF 또는 guarded-off: ON 시점/기준
+
+| 축 | 현재 OFF 근거 | ON 시점 | ON 기준 |
+| --- | --- | --- | --- |
+| `soft_stop_expert_defense v2` | `SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED=False`; 2026-04-30 same-day 수집 종료 | 5/4 장후 이후 refined canary 결과 확인 후, 빠르면 5/6 이후 별도 checklist | v2 그대로 재가동 금지. `absorption/veto/arbitration` 중 하나의 단일 조작점, rollback guard, cohort tag, restart plan이 닫힐 때만 ON |
+| `soft_stop_micro_grace_extend` | `SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_ENABLED=False` 예비 파라미터 | `soft_stop_micro_grace 20초` 표본이 비악화인데 rebound capture가 부족할 때 | hard stop/same-symbol/미체결 악화 없음, 추가 10초 유예의 would-have-improved 근거가 있어야 함 |
+| `latency_quote_fresh_composite` | 2026-04-29 08:29 OFF + restart 완료 | 현 entry owner 교체가 필요할 때만 | `mechanical_momentum_latency_relief`를 OFF하고 단일축 replacement 승인, submitted 회복 목표와 rollback guard 필요 |
+| `latency_signal_quality_quote_composite` | 2026-04-29 12:50 효과 미약 종료 | 재개 기본 없음 | signal>=90 경로에서 실제 pass candidate가 확인되고 현 entry owner와 충돌하지 않을 때만 재정의 |
+| `latency_spread_relief` | replacement 완료 후 parking | spread-only blocker가 다시 주병목일 때 | spread blocker가 제출 전 terminal miss의 주원인이고 broad relief가 아닌 단일축 rollback 기준이 있을 때 |
+| `latency_ws_jitter_relief` | 2026-04-27 미개선 종료 | ws jitter가 독립 주병목으로 재확인될 때 | quote freshness/other danger와 분리된 표본, restart/rollback plan 필요 |
+| `latency_other_danger_relief` | 2026-04-27 미개선 종료 | other_danger residual이 다시 주병목일 때 | broad fallback 금지. danger reason별 단일축으로 재분해해야 함 |
+| `latency_guard_canary` | broad fallback override OFF | 원칙상 재개 금지 | broad override가 아니라 신규 세분화 축으로만 재등록 |
+| `latency_fallback` / `split_entry` | fallback/split-entry 폐기 확정 | 재개 계획 없음 | 재개하려면 기존 축 복구가 아니라 새 workorder, 새 cohort, 새 rollback guard 필요 |
+| `SCALPING_ENABLE_AVG_DOWN` | generic avg-down OFF | `REVERSAL_ADD`와 별도 일반 물타기 owner를 열 때 | `REVERSAL_ADD` 결과와 충돌하지 않는 단일축, 수량/평단/protection 재설정 검증 필요 |
+| `SCALPING_PYRAMID_ZERO_QTY_STAGE1` | zero-qty stage1 OFF | pyramid zero-qty 분석을 runtime stage로 다시 남길 때 | 현재 add count blocker 제거 후에도 zero-qty 귀속 공백이 남을 때만 observe로 재개 |
+| `OpenAI Responses WS` | `OPENAI_RESPONSES_WS_ENABLED=False`, transport `http` | 5/4 shadow 결과와 parity acceptance 통과 후 | request_id mismatch=0, late_discard=0, http fallback<=2%, parse_fail<=0.5%, timeout reject<=1% |
+| `OpenAI dual persona` | `OPENAI_DUAL_PERSONA_ENABLED=False` | AI A/B 의제를 다시 열 때 | entry/holding owner 안정화 후, 추가 API/지연 비용과 EV 비교 cohort가 문서화될 때 |
+| `OpenAI schema registry` / deterministic config | `OPENAI_RESPONSE_SCHEMA_REGISTRY_ENABLED=False`, `OPENAI_JSON_DETERMINISTIC_CONFIG_ENABLED=False` | endpoint contract acceptance 완료 후 | schema gap 0, parse failure 기준 통과, rollback env와 endpoint별 scope 고정 |
 
 ---
 
@@ -203,6 +274,7 @@ cohort 분류 공통 규칙은 아래로 고정한다.
 | `partial_fill` | `observe-only` | partial 전용 손익/재베이스/soft-stop 악화 관찰 | partial 악화 여부가 더 이상 독립 리스크가 아니라고 확인되기 전까지 유지. full/partial 합산 정책 변경 전에는 제거 금지 | `Plan Rebase`, performance/report/checklist |
 | `initial_entry_qty_cap_1share` | `active-canary-decision` | 신규 BUY 초기 수량 tail 제한과 holding/exit 원인귀속 보존 | `initial_entry_qty_cap_applied cap_qty=1`, `zero_qty`, `pyramid_activated`, `soft_stop`, `COMPLETED + valid profit_rate`로 1주 cap 유지/해제를 닫을 때까지 유지 | `2026-04-30 checklist` |
 | `initial_entry_qty_cap_3share_candidate` | `observe-only` | 3주 cap 전환 승인조건 관찰 | `1주 cap` baseline이 안정화되고 2주 historical reference보다 3주 후보의 EV 근거가 별도 승인될 때만 active 후보로 승격 | `2026-04-30 checklist` |
+| `statistical_action_weight` | `observe-only` | 가격대/거래량/시간대별 `exit_only`/`avg_down_wait`/`pyramid_wait` 성과 비교 | sample-ready가 되면 threshold weight 입력으로 연결하되, 직접 live owner로 승격하지 않는다. 단순 평균이 아니라 `confidence_adjusted_score`와 `policy_hint`로만 해석하고, live 적용은 별도 단일축 canary와 rollback guard가 생길 때만 가능 | `threshold_cycle`, `2026-05-06 checklist` |
 | `ai_cache_hit_miss` | `observe-only` | gatekeeper/holding AI cache hit vs miss 영향도 관찰 | structured join 필드가 `submitted/full/partial/COMPLETED`와 안정적으로 연결될 때까지 live go/no-go 입력 금지 | `2026-04-29 checklist` |
 | `execution_receipt_binding_quality` | `observe-only` | WS 실제체결과 active order binding 정합성 관찰 | BUY/SELL `EXEC_IGNORED` 원인이 order number race인지 visibility 문제인지 닫힐 때까지 EV 판정 전제 품질축으로 유지 | `2026-04-29`, `2026-04-30 checklist` |
 | `gemini_schema_registry_flag_off` | `observe-only` | Gemini 6 endpoint response schema registry의 flag-off contract 관찰 | `holding_exit_v1/eod_top5_v1` contract gap이 닫히고 live enable 항목이 별도 승인되기 전까지 flag-off 유지 | `2026-04-29`, `2026-04-30 checklist` |
@@ -249,6 +321,8 @@ inventory 운영 규칙은 아래로 고정한다.
 | `reversal_add` | `active-canary` | `limited-live` | valid-entry early pullback recovery. 1주 cap에서도 1주 floor로 소형 canary. current owner is blocker narrowing (`pnl -> hold -> gate`) |
 | `bad_entry_block` | `observe-only` | `none` | never-green/AI fade 후보 분류. 표본 부족이 아니라 precision/GOOD_EXIT 예외 설계가 병목이었고, refined canary의 비교군으로 유지 |
 | `bad_entry_refined_canary` | `active-canary` | `limited-live` | v2 OFF 이후 다음 보유/청산 신규 owner. `scalp_bad_entry_refined_canary`는 soft stop 전 never-green tail을 줄이는 단일축 canary |
+| `statistical_action_weight` | `observe-only` | `none` | completed trade와 `exit_signal`/`sell_completed`/`scale_in_executed` compact stage를 묶는 장후 행동가중치 리포트. live runtime mutation 없음 |
+| `stat_action_decision_snapshot` | `observe-only` | `none` | HOLDING 판단 순간의 후보/선택/차단 행동 수집 이벤트. `statistical_action_weight`의 selection-bias 보정 입력이며 기본 30초 rate-limit로 IO를 제한 |
 | `ai_cache_hit_miss` | `observe-only` | `none` | structured join gap으로 보조지표 유지 |
 | `execution_receipt_binding_quality` | `observe-only` | `none` | SK이노베이션 BUY/SELL `EXEC_IGNORED` 사례로 runtime truth 품질축 유지 |
 | `gemini_schema_registry_flag_off` | `observe-only` | `guarded-off` | flag-off contract/load observability. live enable 아님 |

@@ -17,6 +17,8 @@ from src.utils.threshold_cycle_registry import TARGET_STAGES, is_threshold_cycle
 
 REPORT_DIR = DATA_DIR / "report"
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
+STAT_ACTION_REPORT_DIR = REPORT_DIR / "statistical_action_weight"
+AI_DECISION_MATRIX_DIR = REPORT_DIR / "holding_exit_decision_matrix"
 THRESHOLD_CYCLE_SCHEMA_VERSION = 1
 THRESHOLD_CYCLE_DIR = DATA_DIR / "threshold_cycle"
 RAW_PIPELINE_FALLBACK_MAX_BYTES = 64 * 1024 * 1024
@@ -50,6 +52,84 @@ def _safe_int(value: Any, default: int | None = None) -> int | None:
         return int(float(value))
     except Exception:
         return default
+
+
+def _parse_datetime(value: Any) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if value in (None, "", "-", "None"):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%H:%M:%S"):
+        try:
+            parsed = datetime.strptime(text[:19] if "%Y" in fmt else text[:8], fmt)
+            return parsed
+        except Exception:
+            continue
+    try:
+        return datetime.fromisoformat(text)
+    except Exception:
+        return None
+
+
+def _avg(values: list[float]) -> float | None:
+    cleaned = [float(v) for v in values if v is not None and math.isfinite(float(v))]
+    if not cleaned:
+        return None
+    return sum(cleaned) / len(cleaned)
+
+
+def _stddev(values: list[float]) -> float | None:
+    cleaned = [float(v) for v in values if v is not None and math.isfinite(float(v))]
+    if len(cleaned) < 2:
+        return None
+    mean = sum(cleaned) / len(cleaned)
+    variance = sum((value - mean) ** 2 for value in cleaned) / (len(cleaned) - 1)
+    return math.sqrt(max(variance, 0.0))
+
+
+def _price_bucket(value: Any) -> str:
+    price = _safe_float(value, None)
+    if price is None or price <= 0:
+        return "price_unknown"
+    if price < 10_000:
+        return "price_lt_10k"
+    if price < 30_000:
+        return "price_10k_30k"
+    if price < 70_000:
+        return "price_30k_70k"
+    return "price_gte_70k"
+
+
+def _volume_bucket(value: Any) -> str:
+    volume = _safe_float(value, None)
+    if volume is None or volume <= 0:
+        return "volume_unknown"
+    if volume < 500_000:
+        return "volume_lt_500k"
+    if volume < 2_000_000:
+        return "volume_500k_2m"
+    if volume < 10_000_000:
+        return "volume_2m_10m"
+    return "volume_gte_10m"
+
+
+def _time_bucket(value: Any) -> str:
+    dt_value = _parse_datetime(value)
+    if dt_value is None:
+        return "time_unknown"
+    minute = dt_value.hour * 60 + dt_value.minute
+    if minute < 9 * 60 or minute >= 15 * 60 + 30:
+        return "time_outside_regular"
+    if minute < 9 * 60 + 30:
+        return "time_0900_0930"
+    if minute < 10 * 60 + 30:
+        return "time_0930_1030"
+    if minute < 14 * 60:
+        return "time_1030_1400"
+    return "time_1400_1530"
 
 
 def _percentile(values: list[float], pct: float, default: float = 0.0) -> float:
@@ -89,6 +169,20 @@ def save_threshold_cycle_report(report: dict) -> Path:
     return path
 
 
+def statistical_action_report_paths(target_date: str) -> tuple[Path, Path]:
+    return (
+        STAT_ACTION_REPORT_DIR / f"statistical_action_weight_{target_date}.json",
+        STAT_ACTION_REPORT_DIR / f"statistical_action_weight_{target_date}.md",
+    )
+
+
+def holding_exit_decision_matrix_paths(target_date: str) -> tuple[Path, Path]:
+    return (
+        AI_DECISION_MATRIX_DIR / f"holding_exit_decision_matrix_{target_date}.json",
+        AI_DECISION_MATRIX_DIR / f"holding_exit_decision_matrix_{target_date}.md",
+    )
+
+
 def _import_sqlalchemy():
     from sqlalchemy import create_engine, text
 
@@ -101,19 +195,37 @@ def _default_completed_rows_loader(start_date: str, end_date: str) -> list[dict]
     query = text(
         """
         SELECT
-            rec_date,
-            stock_code,
-            stock_name,
-            status,
-            strategy,
-            buy_qty,
-            profit_rate
-        FROM recommendation_history
-        WHERE rec_date >= :start_date
-          AND rec_date <= :end_date
-          AND status = 'COMPLETED'
-          AND profit_rate IS NOT NULL
-        ORDER BY rec_date DESC, stock_code
+            rh.rec_date,
+            rh.stock_code,
+            rh.stock_name,
+            rh.status,
+            rh.strategy,
+            rh.buy_price,
+            rh.buy_qty,
+            rh.buy_time,
+            rh.sell_price,
+            rh.sell_time,
+            rh.profit_rate,
+            rh.add_count,
+            rh.avg_down_count,
+            rh.pyramid_count,
+            rh.last_add_type,
+            dsq.volume AS daily_volume,
+            dsq.marcap AS marcap
+        FROM recommendation_history rh
+        LEFT JOIN LATERAL (
+            SELECT volume, marcap
+            FROM daily_stock_quotes dsq
+            WHERE dsq.stock_code = rh.stock_code
+              AND dsq.quote_date <= rh.rec_date
+            ORDER BY dsq.quote_date DESC
+            LIMIT 1
+        ) dsq ON true
+        WHERE rh.rec_date >= :start_date
+          AND rh.rec_date <= :end_date
+          AND rh.status = 'COMPLETED'
+          AND rh.profit_rate IS NOT NULL
+        ORDER BY rh.rec_date DESC, rh.stock_code
         """
     )
     with engine.connect() as conn:
@@ -471,13 +583,214 @@ def _build_soft_stop_family(events: list[dict]) -> dict:
     }
 
 
-def _build_family_reports(events: list[dict]) -> list[dict]:
+def _action_label_for_completed_row(row: dict) -> str:
+    last_add_type = str(row.get("last_add_type") or "").strip().upper()
+    avg_down_count = _safe_int(row.get("avg_down_count"), 0) or 0
+    pyramid_count = _safe_int(row.get("pyramid_count"), 0) or 0
+    if avg_down_count > 0 or last_add_type == "AVG_DOWN":
+        return "avg_down_wait"
+    if pyramid_count > 0 or last_add_type == "PYRAMID":
+        return "pyramid_wait"
+    return "exit_only"
+
+
+def _summarize_action_rows(rows: list[dict]) -> dict:
+    profit_values = [_safe_float(row.get("profit_rate"), None) for row in rows]
+    profit_values = [value for value in profit_values if value is not None]
+    if not profit_values:
+        return {
+            "sample": len(rows),
+            "avg_profit_rate": None,
+            "median_profit_rate": None,
+            "downside_p10_profit_rate": None,
+            "stddev_profit_rate": None,
+            "win_rate": None,
+            "loss_rate": None,
+        }
+    wins = [value for value in profit_values if value > 0]
+    losses = [value for value in profit_values if value < 0]
+    return {
+        "sample": len(profit_values),
+        "avg_profit_rate": round(_avg(profit_values) or 0.0, 4),
+        "median_profit_rate": round(_percentile(profit_values, 50, 0.0), 4),
+        "downside_p10_profit_rate": round(_percentile(profit_values, 10, 0.0), 4),
+        "stddev_profit_rate": round(_stddev(profit_values) or 0.0, 4),
+        "win_rate": round(len(wins) / len(profit_values), 4),
+        "loss_rate": round(len(losses) / len(profit_values), 4),
+    }
+
+
+def _confidence_adjusted_action_score(summary: dict, prior_summary: dict, *, prior_strength: int = 8) -> dict:
+    sample = int(summary.get("sample") or 0)
+    avg_profit = _safe_float(summary.get("avg_profit_rate"), None)
+    prior_avg = _safe_float(prior_summary.get("avg_profit_rate"), 0.0) or 0.0
+    if sample <= 0 or avg_profit is None:
+        return {
+            "empirical_bayes_profit_rate": None,
+            "uncertainty_penalty": None,
+            "confidence_adjusted_score": None,
+            "weight": 0.0,
+        }
+    smoothed = ((avg_profit * sample) + (prior_avg * prior_strength)) / (sample + prior_strength)
+    stddev = _safe_float(summary.get("stddev_profit_rate"), None)
+    if stddev is None or stddev <= 0:
+        stddev = abs(avg_profit - prior_avg) or 0.5
+    uncertainty_penalty = stddev / math.sqrt(sample)
+    score = smoothed - uncertainty_penalty
+    weight = _clamp((score + 1.0) / 2.0, 0.0, 1.0)
+    return {
+        "empirical_bayes_profit_rate": round(smoothed, 4),
+        "uncertainty_penalty": round(uncertainty_penalty, 4),
+        "confidence_adjusted_score": round(score, 4),
+        "weight": round(weight, 4),
+    }
+
+
+def _best_action_by_bucket(rows: list[dict], bucket_field: str, *, min_sample: int = 5) -> list[dict]:
+    grouped: dict[tuple[str, str], list[dict]] = {}
+    for row in rows:
+        grouped.setdefault((str(row.get(bucket_field) or "unknown"), str(row.get("action_label") or "exit_only")), []).append(row)
+
+    global_rows_by_action = {
+        action: [row for row in rows if str(row.get("action_label") or "exit_only") == action]
+        for action in ("exit_only", "avg_down_wait", "pyramid_wait")
+    }
+    global_summary_by_action = {
+        action: _summarize_action_rows(action_rows)
+        for action, action_rows in global_rows_by_action.items()
+    }
+    buckets = sorted({bucket for bucket, _ in grouped})
+    recommendations: list[dict] = []
+    for bucket in buckets:
+        action_summaries = []
+        for action in ("exit_only", "avg_down_wait", "pyramid_wait"):
+            summary = _summarize_action_rows(grouped.get((bucket, action), []))
+            score_pack = _confidence_adjusted_action_score(summary, global_summary_by_action[action])
+            action_summaries.append({"action": action, **summary, **score_pack})
+        eligible = [
+            item for item in action_summaries
+            if item["sample"] >= min_sample and item["confidence_adjusted_score"] is not None
+        ]
+        ranked = sorted(eligible, key=lambda item: item["confidence_adjusted_score"], reverse=True)
+        best = ranked[0] if ranked else None
+        runner_up = ranked[1] if len(ranked) > 1 else None
+        margin = (
+            round(best["confidence_adjusted_score"] - runner_up["confidence_adjusted_score"], 4)
+            if best and runner_up
+            else None
+        )
+        if not best:
+            policy_hint = "insufficient_sample"
+        elif best["loss_rate"] is not None and best["loss_rate"] >= 0.65:
+            policy_hint = "defensive_only_high_loss_rate"
+        elif margin is not None and margin < 0.15:
+            policy_hint = "no_clear_edge"
+        else:
+            policy_hint = "candidate_weight_source"
+        recommendations.append(
+            {
+                "bucket": bucket,
+                "best_action": best["action"] if best else "insufficient_sample",
+                "best_avg_profit_rate": best["avg_profit_rate"] if best else None,
+                "best_confidence_adjusted_score": best["confidence_adjusted_score"] if best else None,
+                "edge_margin": margin,
+                "policy_hint": policy_hint,
+                "actions": action_summaries,
+            }
+        )
+    return recommendations
+
+
+def _build_statistical_action_weight_family(events: list[dict], completed_rows: list[dict]) -> dict:
+    completed_valid: list[dict] = []
+    for row in completed_rows:
+        profit_rate = _safe_float(row.get("profit_rate"), None)
+        if profit_rate is None:
+            continue
+        enriched = dict(row)
+        enriched["action_label"] = _action_label_for_completed_row(row)
+        enriched["price_bucket"] = _price_bucket(row.get("buy_price"))
+        enriched["volume_bucket"] = _volume_bucket(
+            row.get("daily_volume")
+            or row.get("volume")
+            or row.get("acc_volume")
+            or row.get("trade_volume")
+        )
+        enriched["time_bucket"] = _time_bucket(row.get("buy_time") or row.get("sell_time"))
+        completed_valid.append(enriched)
+
+    action_counts = Counter(row["action_label"] for row in completed_valid)
+    action_summary = {
+        action: _summarize_action_rows([row for row in completed_valid if row["action_label"] == action])
+        for action in ("exit_only", "avg_down_wait", "pyramid_wait")
+    }
+    known_price = sum(1 for row in completed_valid if row["price_bucket"] != "price_unknown")
+    known_volume = sum(1 for row in completed_valid if row["volume_bucket"] != "volume_unknown")
+    known_time = sum(1 for row in completed_valid if row["time_bucket"] != "time_unknown")
+    event_counts = Counter(str(event.get("stage") or "") for event in events)
+    sample_ready = (
+        len(completed_valid) >= 50
+        and known_price >= 30
+        and known_time >= 30
+        and (action_counts.get("avg_down_wait", 0) + action_counts.get("pyramid_wait", 0)) >= 10
+    )
+    return {
+        "family": "statistical_action_weight",
+        "stage": "decision_support",
+        "sample": {
+            "completed_valid": len(completed_valid),
+            "exit_only": action_counts.get("exit_only", 0),
+            "avg_down_wait": action_counts.get("avg_down_wait", 0),
+            "pyramid_wait": action_counts.get("pyramid_wait", 0),
+            "compact_exit_signal": event_counts.get("exit_signal", 0),
+            "compact_sell_completed": event_counts.get("sell_completed", 0),
+            "compact_scale_in_executed": event_counts.get("scale_in_executed", 0),
+            "compact_decision_snapshot": event_counts.get("stat_action_decision_snapshot", 0),
+        },
+        "apply_ready": False,
+        "weight_source_ready": sample_ready,
+        "current": {
+            "mode": "report_only",
+            "live_runtime_mutation": False,
+            "bucket_axes": ["price_bucket", "volume_bucket", "time_bucket"],
+            "score_method": "empirical_bayes_lower_confidence_bound",
+        },
+        "recommended": {
+            "action_summary": action_summary,
+            "by_price_bucket": _best_action_by_bucket(completed_valid, "price_bucket"),
+            "by_volume_bucket": _best_action_by_bucket(completed_valid, "volume_bucket"),
+            "by_time_bucket": _best_action_by_bucket(completed_valid, "time_bucket"),
+            "data_completeness": {
+                "price_known": known_price,
+                "volume_known": known_volume,
+                "time_known": known_time,
+            },
+            "weight_governor": {
+                "min_bucket_action_sample": 5,
+                "prior_strength": 8,
+                "clear_edge_margin": 0.15,
+                "high_loss_rate_guard": 0.65,
+            },
+        },
+        "apply_mode": "report_only_weight_source",
+        "notes": [
+            "가격대/거래량/시간대별 exit_only vs avg_down_wait vs pyramid_wait 통계 축이다.",
+            "작은 표본은 action별 전체 prior로 shrinkage하고 불확실성 penalty를 뺀 confidence-adjusted score로만 비교한다.",
+            "live 청산/추가매수 판단에는 직접 적용하지 않고 장후 threshold weight 입력으로만 사용한다.",
+            "거래량 표본이 부족하면 volume_bucket 결론은 금지하고 price/time bucket만 direction-only로 본다.",
+        ],
+    }
+
+
+def _build_family_reports(events: list[dict], completed_rows: list[dict] | None = None) -> list[dict]:
+    completed_rows = completed_rows or []
     return [
         _build_mechanical_entry_family(events),
         _build_pre_submit_guard_family(events),
         _build_bad_entry_family(events),
         _build_reversal_add_family(events),
         _build_soft_stop_family(events),
+        _build_statistical_action_weight_family(events, completed_rows),
     ]
 
 
@@ -513,6 +826,306 @@ def _build_rollback_guard_pack(families: list[dict]) -> list[dict]:
             }
         )
     return guards
+
+
+def _markdown_value(value: Any) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, float):
+        return f"{value:.4f}".rstrip("0").rstrip(".")
+    return str(value)
+
+
+def _best_action_row(bucket: dict) -> dict:
+    best_action = bucket.get("best_action")
+    actions = bucket.get("actions") if isinstance(bucket.get("actions"), list) else []
+    for action in actions:
+        if action.get("action") == best_action:
+            return action
+    return {}
+
+
+def _render_bucket_markdown(title: str, rows: list[dict]) -> list[str]:
+    lines = [f"## {title}", ""]
+    if not rows:
+        lines.extend(["- 표본 없음", ""])
+        return lines
+    lines.append("| bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |")
+    lines.append("| --- | --- | ---: | ---: | ---: | ---: | ---: | --- |")
+    for row in rows:
+        best = _best_action_row(row)
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _markdown_value(row.get("bucket")),
+                    _markdown_value(row.get("best_action")),
+                    _markdown_value(row.get("best_confidence_adjusted_score")),
+                    _markdown_value(row.get("edge_margin")),
+                    _markdown_value(best.get("sample")),
+                    _markdown_value(best.get("avg_profit_rate")),
+                    _markdown_value(best.get("loss_rate")),
+                    _markdown_value(row.get("policy_hint")),
+                ]
+            )
+            + " |"
+        )
+    lines.append("")
+    return lines
+
+
+def build_statistical_action_weight_artifact(report: dict) -> dict:
+    target_date = str(report.get("date") or date.today().isoformat())
+    family = (report.get("threshold_snapshot") or {}).get("statistical_action_weight") or {}
+    recommended = family.get("recommended") if isinstance(family.get("recommended"), dict) else {}
+    sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+    rows = []
+    for axis, key in (
+        ("price_bucket", "by_price_bucket"),
+        ("volume_bucket", "by_volume_bucket"),
+        ("time_bucket", "by_time_bucket"),
+    ):
+        for row in recommended.get(key) or []:
+            if not isinstance(row, dict):
+                continue
+            rows.append({"axis": axis, **row})
+    policy_counts = Counter(str(row.get("policy_hint") or "-") for row in rows)
+    artifact = {
+        "date": target_date,
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "source_report": str(report_path_for_date(target_date)),
+        "family": "statistical_action_weight",
+        "sample": sample,
+        "weight_source_ready": bool(family.get("weight_source_ready")),
+        "current": family.get("current") or {},
+        "recommended": recommended,
+        "policy_counts": dict(policy_counts),
+        "operator_decision": (
+            "candidate_weight_source_review"
+            if policy_counts.get("candidate_weight_source", 0) > 0
+            else "collect_more_samples"
+        ),
+        "runtime_change": False,
+        "runtime_change_reason": "statistical_action_weight is report-only until a separate owner/canary is approved",
+    }
+    return artifact
+
+
+def render_statistical_action_weight_markdown(artifact: dict) -> str:
+    sample = artifact.get("sample") if isinstance(artifact.get("sample"), dict) else {}
+    recommended = artifact.get("recommended") if isinstance(artifact.get("recommended"), dict) else {}
+    data_completeness = recommended.get("data_completeness") if isinstance(recommended.get("data_completeness"), dict) else {}
+    policy_counts = artifact.get("policy_counts") if isinstance(artifact.get("policy_counts"), dict) else {}
+    lines = [
+        f"# Statistical Action Weight Report - {artifact.get('date')}",
+        "",
+        "## 판정",
+        "",
+        f"- 상태: `{artifact.get('operator_decision')}`",
+        f"- weight_source_ready: `{bool(artifact.get('weight_source_ready'))}`",
+        "- runtime_change: `False`",
+        "",
+        "## 표본 충분성",
+        "",
+        "| metric | value |",
+        "| --- | ---: |",
+    ]
+    for key in (
+        "completed_valid",
+        "exit_only",
+        "avg_down_wait",
+        "pyramid_wait",
+        "compact_exit_signal",
+        "compact_sell_completed",
+        "compact_scale_in_executed",
+        "compact_decision_snapshot",
+    ):
+        lines.append(f"| {key} | {_markdown_value(sample.get(key))} |")
+    lines.extend(["", "## 데이터 완성도", "", "| field | known |", "| --- | ---: |"])
+    for key in ("price_known", "volume_known", "time_known"):
+        lines.append(f"| {key} | {_markdown_value(data_completeness.get(key))} |")
+    lines.extend(["", "## Policy Counts", "", "| policy | count |", "| --- | ---: |"])
+    for key, value in sorted(policy_counts.items()):
+        lines.append(f"| {key} | {_markdown_value(value)} |")
+    lines.append("")
+    lines.extend(_render_bucket_markdown("Price Bucket", recommended.get("by_price_bucket") or []))
+    lines.extend(_render_bucket_markdown("Volume Bucket", recommended.get("by_volume_bucket") or []))
+    lines.extend(_render_bucket_markdown("Time Bucket", recommended.get("by_time_bucket") or []))
+    lines.extend(
+        [
+            "## Threshold 반영 원칙",
+            "",
+            "- 이 리포트는 AI/주문 runtime을 직접 변경하지 않는다.",
+            "- `candidate_weight_source`는 다음 threshold weight 또는 decision matrix 후보일 뿐이다.",
+            "- `no_clear_edge`, `insufficient_sample`, `defensive_only_high_loss_rate`는 live 반영 금지다.",
+            "",
+            "## 다음 액션",
+            "",
+            "- Markdown 자동생성 상태와 표본 충분성을 확인한다.",
+            "- sample-ready이면 `holding_exit_decision_matrix`와 shadow prompt 주입 후보로 넘긴다.",
+            "- 부족하면 `stat_action_decision_snapshot`와 completed/action join 품질을 먼저 보강한다.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def save_statistical_action_weight_artifact(report: dict) -> tuple[Path, Path]:
+    artifact = build_statistical_action_weight_artifact(report)
+    json_path, md_path = statistical_action_report_paths(str(artifact.get("date")))
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(artifact, ensure_ascii=False, indent=2), encoding="utf-8")
+    md_path.write_text(render_statistical_action_weight_markdown(artifact), encoding="utf-8")
+    return json_path, md_path
+
+
+def _recommended_bias_for_bucket(row: dict) -> str:
+    if row.get("policy_hint") != "candidate_weight_source":
+        return "no_clear_edge"
+    if row.get("edge_margin") is None:
+        return "no_clear_edge"
+    if "unknown" in str(row.get("bucket") or ""):
+        return "no_clear_edge"
+    best_action = str(row.get("best_action") or "")
+    if best_action == "exit_only":
+        return "prefer_exit"
+    if best_action == "avg_down_wait":
+        return "prefer_avg_down_wait"
+    if best_action == "pyramid_wait":
+        return "prefer_pyramid_wait"
+    return "no_clear_edge"
+
+
+def _prompt_hint_for_matrix_entry(axis: str, row: dict, bias: str) -> str:
+    bucket = row.get("bucket")
+    if bias == "prefer_exit":
+        return f"{axis}={bucket} 과거 표본은 보유/추가매수보다 청산 우위가 있다. 단 hard veto와 현재 thesis를 먼저 확인한다."
+    if bias == "prefer_avg_down_wait":
+        return f"{axis}={bucket} 과거 표본은 회복형 물타기 대기 후보가 상대적으로 우위다. 저점 미갱신과 수급 회복이 없으면 무시한다."
+    if bias == "prefer_pyramid_wait":
+        return f"{axis}={bucket} 과거 표본은 winner size-up 대기 후보가 상대적으로 우위다. trailing giveback과 체결품질을 확인한다."
+    return f"{axis}={bucket} 과거 표본은 행동 우위가 불명확하다. 기존 보유/청산 원칙을 우선한다."
+
+
+def build_holding_exit_decision_matrix(report: dict) -> dict:
+    target_date = str(report.get("date") or date.today().isoformat())
+    family = (report.get("threshold_snapshot") or {}).get("statistical_action_weight") or {}
+    recommended = family.get("recommended") if isinstance(family.get("recommended"), dict) else {}
+    entries: list[dict] = []
+    for axis, key in (
+        ("price_bucket", "by_price_bucket"),
+        ("volume_bucket", "by_volume_bucket"),
+        ("time_bucket", "by_time_bucket"),
+    ):
+        for row in recommended.get(key) or []:
+            if not isinstance(row, dict):
+                continue
+            best = _best_action_row(row)
+            bias = _recommended_bias_for_bucket(row)
+            entries.append(
+                {
+                    "axis": axis,
+                    "bucket": row.get("bucket"),
+                    "recommended_bias": bias,
+                    "confidence_adjusted_score": row.get("best_confidence_adjusted_score"),
+                    "edge_margin": row.get("edge_margin"),
+                    "sample": best.get("sample"),
+                    "loss_rate": best.get("loss_rate"),
+                    "downside_p10_profit_rate": best.get("downside_p10_profit_rate"),
+                    "policy_hint": row.get("policy_hint"),
+                    "prompt_hint": _prompt_hint_for_matrix_entry(axis, row, bias),
+                }
+            )
+    return {
+        "matrix_version": f"holding_exit_decision_matrix_v1_{target_date}",
+        "source_report": str(report_path_for_date(target_date)),
+        "source_date": target_date,
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "valid_for_date": "next_preopen",
+        "runtime_change": False,
+        "application_mode": "shadow_prompt_or_observe_only_until_owner_approval",
+        "hard_veto": [
+            "emergency_or_hard_stop",
+            "active_sell_order_pending",
+            "invalid_feature",
+            "post_add_eval_exclusion",
+        ],
+        "entries": entries,
+        "notes": [
+            "장중 self-updating 금지: 장후 산정 matrix를 다음 장전 로드하고 장중에는 immutable context로만 사용한다.",
+            "AI 점수를 직접 덮어쓰지 않는다. shadow prompt 또는 observe-only nudge부터 검증한다.",
+        ],
+    }
+
+
+def render_holding_exit_decision_matrix_markdown(matrix: dict) -> str:
+    lines = [
+        f"# Holding/Exit Decision Matrix - {matrix.get('source_date')}",
+        "",
+        "## 판정",
+        "",
+        f"- matrix_version: `{matrix.get('matrix_version')}`",
+        f"- application_mode: `{matrix.get('application_mode')}`",
+        "- runtime_change: `False`",
+        "",
+        "## Hard Veto",
+        "",
+    ]
+    for item in matrix.get("hard_veto") or []:
+        lines.append(f"- `{item}`")
+    lines.extend(
+        [
+            "",
+            "## Matrix Entries",
+            "",
+            "| axis | bucket | bias | score | edge | sample | loss_rate | policy |",
+            "| --- | --- | --- | ---: | ---: | ---: | ---: | --- |",
+        ]
+    )
+    for entry in matrix.get("entries") or []:
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _markdown_value(entry.get("axis")),
+                    _markdown_value(entry.get("bucket")),
+                    _markdown_value(entry.get("recommended_bias")),
+                    _markdown_value(entry.get("confidence_adjusted_score")),
+                    _markdown_value(entry.get("edge_margin")),
+                    _markdown_value(entry.get("sample")),
+                    _markdown_value(entry.get("loss_rate")),
+                    _markdown_value(entry.get("policy_hint")),
+                ]
+            )
+            + " |"
+        )
+    lines.extend(["", "## Prompt Hints", ""])
+    for entry in matrix.get("entries") or []:
+        lines.append(
+            f"- `{entry.get('axis')}={entry.get('bucket')}` / `{entry.get('recommended_bias')}`: "
+            f"{entry.get('prompt_hint')}"
+        )
+    lines.extend(
+        [
+            "",
+            "## 다음 액션",
+            "",
+            "- `ADM-2`에서는 이 matrix를 holding/exit shadow prompt context로만 주입한다.",
+            "- action_label/confidence/reason drift를 보고 observe-only nudge 여부를 판정한다.",
+            "- single-owner canary 승인 전에는 live AI 응답을 바꾸지 않는다.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def save_holding_exit_decision_matrix(report: dict) -> tuple[Path, Path]:
+    matrix = build_holding_exit_decision_matrix(report)
+    json_path, md_path = holding_exit_decision_matrix_paths(str(matrix.get("source_date")))
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(matrix, ensure_ascii=False, indent=2), encoding="utf-8")
+    md_path.write_text(render_holding_exit_decision_matrix_markdown(matrix), encoding="utf-8")
+    return json_path, md_path
 
 
 def build_daily_threshold_cycle_report(
@@ -558,13 +1171,15 @@ def build_daily_threshold_cycle_report(
     else:
         ctx.warnings.append("completed trade 로드는 skip-db 옵션으로 생략됨")
 
-    families = _build_family_reports(event_windows["same_day"])
+    families = _build_family_reports(event_windows["same_day"], completed_rows)
     completed = _completed_summary(completed_rows)
     threshold_snapshot = {
         family["family"]: {
             "stage": family["stage"],
             "sample": family["sample"],
             "apply_ready": family["apply_ready"],
+            "weight_source_ready": family.get("weight_source_ready", family["apply_ready"]),
+            "apply_mode": family.get("apply_mode"),
             "current": family["current"],
             "recommended": family["recommended"],
         }
@@ -617,6 +1232,8 @@ def main(argv: list[str] | None = None) -> int:
 
     report = build_daily_threshold_cycle_report(args.target_date, skip_completed_rows=args.skip_db)
     save_threshold_cycle_report(report)
+    save_statistical_action_weight_artifact(report)
+    save_holding_exit_decision_matrix(report)
     if args.print_stdout:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0

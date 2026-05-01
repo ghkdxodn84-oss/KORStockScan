@@ -32,7 +32,7 @@ def test_backfill_threshold_cycle_events_streams_only_target_stages(tmp_path, mo
     )
 
     summary = mod.backfill_threshold_cycle_events("2026-04-30", overwrite=True)
-    assert summary["written"] == 2
+    assert summary["written"] == 3
 
     compact_path = (
         tmp_path
@@ -44,8 +44,16 @@ def test_backfill_threshold_cycle_events_streams_only_target_stages(tmp_path, mo
     bad_entry_path = (
         tmp_path / "threshold_cycle" / "date=2026-04-30" / "family=bad_entry_block" / "part-000001.jsonl"
     )
-    rows = [json.loads(line) for path in (compact_path, bad_entry_path) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
-    assert [row["stage"] for row in rows] == ["budget_pass", "bad_entry_block_observed"]
+    action_weight_path = (
+        tmp_path / "threshold_cycle" / "date=2026-04-30" / "family=statistical_action_weight" / "part-000001.jsonl"
+    )
+    rows = [
+        json.loads(line)
+        for path in (compact_path, action_weight_path, bad_entry_path)
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [row["stage"] for row in rows] == ["budget_pass", "sell_completed", "bad_entry_block_observed"]
 
 
 def test_backfill_threshold_cycle_events_resumes_after_partition_line_cap(tmp_path, monkeypatch):

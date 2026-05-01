@@ -37,4 +37,14 @@
 
 ## 장후 체크리스트
 
-- 없음
+- [x] `[StatActionMatrixReport0501-Maintenance] statistical_action_weight/AI decision matrix 산출물 자동생성 구현` (`Due: 2026-05-01`, `Slot: POSTCLOSE`, `TimeWindow: 09:00~09:20`, `Track: RuntimeStability`)
+  - Source: [2026-04-30-data-driven-threshold-inventory.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-30-data-driven-threshold-inventory.md), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py)
+  - 판정 기준: 장후 `daily_threshold_cycle_report` 실행 시 `data/report/statistical_action_weight/statistical_action_weight_YYYY-MM-DD.md/json`과 `data/report/holding_exit_decision_matrix/holding_exit_decision_matrix_YYYY-MM-DD.md/json`이 같이 생성되는지 확인한다. 실전 runtime 변경은 없어야 한다.
+  - 실행 메모 (`2026-05-01 KST`): `daily_threshold_cycle_report`에 운영자용 statistical action Markdown/JSON 저장과 AI holding/exit decision matrix Markdown/JSON 저장을 추가했다. `run_threshold_cycle_postclose.sh`는 기존처럼 `daily_threshold_cycle_report`를 호출하므로 5/4 이후 장후 자동 실행에 산출물이 포함된다.
+  - 판정 결과: `완료 / 휴장 maintenance 구현, runtime_change=false`
+  - 근거: `2026-04-30` 기준 `statistical_action_weight` 리포트는 `completed_valid=109`, `price_known=109`, `volume_known=103`, `time_known=109`, `weight_source_ready=true`로 생성됐다. AI decision matrix는 `holding_exit_decision_matrix_v1_2026-04-30`, entries `14`, `runtime_change=false`로 생성됐다.
+  - 테스트/검증:
+    - `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py src/tests/test_backfill_threshold_cycle_events.py src/tests/test_threshold_cycle_preopen_apply.py` -> `16 passed`
+    - `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/daily_threshold_cycle_report.py` -> 통과
+    - `PYTHONPATH=. .venv/bin/python -m src.engine.daily_threshold_cycle_report --date 2026-04-30` -> 두 산출물 자동 생성 확인
+  - 다음 액션: 5/6 `[StatActionMarkdown0506]`, `[AIDecisionMatrix0506]`는 구현이 아니라 실제 운영일 산출물 health check와 shadow prompt 주입 전제 확인으로 본다.

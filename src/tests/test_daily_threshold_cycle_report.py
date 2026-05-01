@@ -32,7 +32,11 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
         + [{"stage": "soft_stop_micro_grace", "fields": {"profit_rate": "-1.82", "held_sec": "40"}} for _ in range(30)],
     }
 
-    completed_rows = [{"profit_rate": -0.5}, {"profit_rate": 0.3}, {"profit_rate": -1.1}]
+    completed_rows = [
+        {"profit_rate": -0.5, "buy_price": 8500, "buy_time": "2026-04-30 09:10:00", "daily_volume": 1_200_000},
+        {"profit_rate": 0.3, "buy_price": 22000, "buy_time": "2026-04-30 10:05:00", "daily_volume": 3_000_000, "pyramid_count": 1},
+        {"profit_rate": -1.1, "buy_price": 76000, "buy_time": "2026-04-30 14:20:00", "daily_volume": 8_000_000, "avg_down_count": 1},
+    ]
 
     report = report_mod.build_daily_threshold_cycle_report(
         "2026-04-30",
@@ -56,9 +60,73 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
 
     soft_stop = report["threshold_snapshot"]["soft_stop_micro_grace"]
     assert soft_stop["apply_ready"] is True
+    action_weight = report["threshold_snapshot"]["statistical_action_weight"]
+    assert action_weight["apply_ready"] is False
+    assert action_weight["recommended"]["data_completeness"]["price_known"] == 3
 
     apply_families = {item["family"] for item in report["apply_candidate_list"]}
     assert "pre_submit_price_guard" in apply_families or "entry_mechanical_momentum" in apply_families
+
+
+def test_statistical_action_weight_report_buckets_completed_rows():
+    completed_rows = [
+        {
+            "profit_rate": 0.8,
+            "buy_price": 9000,
+            "buy_time": "2026-04-30 09:10:00",
+            "daily_volume": 1_000_000,
+            "pyramid_count": 1,
+        },
+        {
+            "profit_rate": 0.6,
+            "buy_price": 9500,
+            "buy_time": "2026-04-30 09:12:00",
+            "daily_volume": 1_500_000,
+            "pyramid_count": 1,
+        },
+        {
+            "profit_rate": -0.7,
+            "buy_price": 9500,
+            "buy_time": "2026-04-30 09:16:00",
+            "daily_volume": 1_200_000,
+            "avg_down_count": 1,
+        },
+        {
+            "profit_rate": 0.2,
+            "buy_price": 22_000,
+            "buy_time": "2026-04-30 10:05:00",
+            "daily_volume": 6_000_000,
+        },
+        {
+            "profit_rate": -0.3,
+            "buy_price": 22_000,
+            "buy_time": "2026-04-30 10:08:00",
+            "daily_volume": 6_500_000,
+        },
+    ]
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-04-30",
+        pipeline_loader=lambda target_date: [
+            {"stage": "scale_in_executed", "fields": {"add_type": "PYRAMID"}},
+            {"stage": "stat_action_decision_snapshot", "fields": {"chosen_action": "pyramid_wait"}},
+            {"stage": "sell_completed", "fields": {"profit_rate": "0.8"}},
+        ],
+        completed_rows_loader=lambda start_date, end_date: completed_rows,
+    )
+
+    family = report["threshold_snapshot"]["statistical_action_weight"]
+    assert family["sample"]["completed_valid"] == 5
+    assert family["sample"]["pyramid_wait"] == 2
+    assert family["sample"]["avg_down_wait"] == 1
+    assert family["sample"]["compact_scale_in_executed"] == 1
+    assert family["sample"]["compact_decision_snapshot"] == 1
+    assert family["recommended"]["action_summary"]["pyramid_wait"]["avg_profit_rate"] == 0.7
+    assert family["current"]["score_method"] == "empirical_bayes_lower_confidence_bound"
+    first_price_bucket = family["recommended"]["by_price_bucket"][0]
+    assert "best_confidence_adjusted_score" in first_price_bucket
+    assert "policy_hint" in first_price_bucket
+    assert family["recommended"]["data_completeness"]["volume_known"] == 5
 
 
 def test_build_daily_threshold_cycle_report_keeps_unready_family_observe_only():
@@ -157,3 +225,69 @@ def test_daily_threshold_cycle_report_includes_pipeline_load_meta(tmp_path, monk
 
     assert report["meta"]["pipeline_load"]["2026-04-30"]["data_source"] == "partitioned_compact"
     assert report["summary"]["event_count_same_day"] == 1
+
+
+def test_statistical_action_weight_artifacts_render_markdown(tmp_path, monkeypatch):
+    monkeypatch.setattr(report_mod, "STAT_ACTION_REPORT_DIR", tmp_path / "statistical_action_weight")
+    monkeypatch.setattr(report_mod, "AI_DECISION_MATRIX_DIR", tmp_path / "holding_exit_decision_matrix")
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-04-30",
+        pipeline_loader=lambda target_date: [
+            {"stage": "stat_action_decision_snapshot", "fields": {"chosen_action": "exit_now"}},
+            {"stage": "sell_completed", "fields": {"profit_rate": "0.4"}},
+        ],
+        completed_rows_loader=lambda start_date, end_date: [
+            {
+                "profit_rate": 0.8,
+                "buy_price": 9000,
+                "buy_time": "2026-04-30 09:10:00",
+                "daily_volume": 1_000_000,
+            },
+            {
+                "profit_rate": 0.6,
+                "buy_price": 9000,
+                "buy_time": "2026-04-30 09:12:00",
+                "daily_volume": 1_000_000,
+                "pyramid_count": 1,
+            },
+        ],
+    )
+
+    json_path, md_path = report_mod.save_statistical_action_weight_artifact(report)
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    markdown = md_path.read_text(encoding="utf-8")
+
+    assert payload["family"] == "statistical_action_weight"
+    assert payload["runtime_change"] is False
+    assert "Statistical Action Weight Report" in markdown
+    assert "Price Bucket" in markdown
+    assert "compact_decision_snapshot" in markdown
+
+
+def test_holding_exit_decision_matrix_artifact_contains_prompt_hints(tmp_path, monkeypatch):
+    monkeypatch.setattr(report_mod, "AI_DECISION_MATRIX_DIR", tmp_path / "holding_exit_decision_matrix")
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-04-30",
+        pipeline_loader=lambda target_date: [],
+        completed_rows_loader=lambda start_date, end_date: [
+            {
+                "profit_rate": 0.7,
+                "buy_price": 9000,
+                "buy_time": "2026-04-30 09:10:00",
+                "daily_volume": 1_000_000,
+            }
+            for _ in range(8)
+        ],
+    )
+
+    json_path, md_path = report_mod.save_holding_exit_decision_matrix(report)
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    markdown = md_path.read_text(encoding="utf-8")
+
+    assert payload["matrix_version"] == "holding_exit_decision_matrix_v1_2026-04-30"
+    assert payload["runtime_change"] is False
+    assert payload["hard_veto"]
+    assert payload["entries"]
+    assert "prompt_hint" in payload["entries"][0]
+    assert "Holding/Exit Decision Matrix" in markdown
+    assert "Prompt Hints" in markdown

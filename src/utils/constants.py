@@ -50,13 +50,16 @@ class TradingConfig:
     SCALE_IN_COOLDOWN_SEC: int = 180  # 추가매수 재시도 쿨다운
     ADD_JUDGMENT_LOCK_SEC: int = 20  # 추가매수 판단 락(스팸 판단 방지)
     SCALP_PYRAMID_POST_ADD_TRAILING_GRACE_SEC: int = 180  # 불타기 체결 직후 trailing 조기청산 억제
+    STAT_ACTION_DECISION_SNAPSHOT_ENABLED: bool = True  # 행동가중치용 HOLDING decision snapshot observe-only
+    STAT_ACTION_DECISION_SNAPSHOT_MIN_INTERVAL_SEC: int = 30  # IO guard: 종목별 snapshot 최소 간격
 
     # ==========================================
     # 3.2 추가매수(스캘핑) 설정
     # ==========================================
     SCALPING_ENABLE_AVG_DOWN: bool = False
-    SCALPING_MAX_AVG_DOWN_COUNT: int = 0
-    SCALPING_MAX_PYRAMID_COUNT: int = 2
+    SCALPING_ENABLE_PYRAMID: bool = True
+    SCALPING_MAX_AVG_DOWN_COUNT: int = 0  # DEPRECATED: runtime count gate removed; counter remains for attribution
+    SCALPING_MAX_PYRAMID_COUNT: int = 0  # DEPRECATED: runtime count gate removed; counter remains for attribution
     SCALPING_AVG_DOWN_MIN_DROP_PCT: float = -3.0
     SCALPING_AVG_DOWN_MAX_DROP_PCT: float = -6.0
     SCALPING_PYRAMID_MIN_PROFIT_PCT: float = 1.5
@@ -66,8 +69,9 @@ class TradingConfig:
     # 3.3 추가매수(스윙) 설정
     # ==========================================
     SWING_ENABLE_AVG_DOWN: bool = True
-    SWING_MAX_AVG_DOWN_COUNT: int = 1
-    SWING_MAX_PYRAMID_COUNT: int = 1
+    SWING_ENABLE_PYRAMID: bool = True
+    SWING_MAX_AVG_DOWN_COUNT: int = 0  # DEPRECATED: runtime count gate removed; counter remains for attribution
+    SWING_MAX_PYRAMID_COUNT: int = 0  # DEPRECATED: runtime count gate removed; counter remains for attribution
     SWING_AVG_DOWN_MIN_DROP_PCT: float = -5.0
     SWING_PYRAMID_MIN_PROFIT_PCT: float = 4.0
     BLOCK_SWING_AVG_DOWN_IN_BEAR: bool = True
@@ -818,7 +822,15 @@ def _build_trading_rules() -> TradingConfig:
         )
 
     env_scalping_enable_avg_down = _env_bool("KORSTOCKSCAN_SCALPING_ENABLE_AVG_DOWN")
+    env_scalping_enable_pyramid = _env_bool("KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID")
     env_scalping_max_avg_down_count = _env_int("KORSTOCKSCAN_SCALPING_MAX_AVG_DOWN_COUNT")
+    env_scalping_max_pyramid_count = _env_int("KORSTOCKSCAN_SCALPING_MAX_PYRAMID_COUNT")
+    env_swing_enable_avg_down = _env_bool("KORSTOCKSCAN_SWING_ENABLE_AVG_DOWN")
+    env_swing_enable_pyramid = _env_bool("KORSTOCKSCAN_SWING_ENABLE_PYRAMID")
+    env_swing_max_avg_down_count = _env_int("KORSTOCKSCAN_SWING_MAX_AVG_DOWN_COUNT")
+    env_swing_max_pyramid_count = _env_int("KORSTOCKSCAN_SWING_MAX_PYRAMID_COUNT")
+    env_stat_action_snapshot_enabled = _env_bool("KORSTOCKSCAN_STAT_ACTION_DECISION_SNAPSHOT_ENABLED")
+    env_stat_action_snapshot_min_interval = _env_int("KORSTOCKSCAN_STAT_ACTION_DECISION_SNAPSHOT_MIN_INTERVAL_SEC")
     env_scalping_initial_entry_qty_cap_enabled = _env_bool(
         "KORSTOCKSCAN_SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED"
     )
@@ -830,7 +842,15 @@ def _build_trading_rules() -> TradingConfig:
     )
     if (
         env_scalping_enable_avg_down is not None
+        or env_scalping_enable_pyramid is not None
         or env_scalping_max_avg_down_count is not None
+        or env_scalping_max_pyramid_count is not None
+        or env_swing_enable_avg_down is not None
+        or env_swing_enable_pyramid is not None
+        or env_swing_max_avg_down_count is not None
+        or env_swing_max_pyramid_count is not None
+        or env_stat_action_snapshot_enabled is not None
+        or env_stat_action_snapshot_min_interval is not None
         or env_scalping_initial_entry_qty_cap_enabled is not None
         or env_scalping_initial_entry_max_qty is not None
         or env_scalping_pyramid_zero_qty_stage1_enabled is not None
@@ -840,9 +860,33 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_ENABLE_AVG_DOWN=env_scalping_enable_avg_down
             if env_scalping_enable_avg_down is not None
             else config.SCALPING_ENABLE_AVG_DOWN,
+            SCALPING_ENABLE_PYRAMID=env_scalping_enable_pyramid
+            if env_scalping_enable_pyramid is not None
+            else config.SCALPING_ENABLE_PYRAMID,
             SCALPING_MAX_AVG_DOWN_COUNT=env_scalping_max_avg_down_count
             if env_scalping_max_avg_down_count is not None
             else config.SCALPING_MAX_AVG_DOWN_COUNT,
+            SCALPING_MAX_PYRAMID_COUNT=env_scalping_max_pyramid_count
+            if env_scalping_max_pyramid_count is not None
+            else config.SCALPING_MAX_PYRAMID_COUNT,
+            SWING_ENABLE_AVG_DOWN=env_swing_enable_avg_down
+            if env_swing_enable_avg_down is not None
+            else config.SWING_ENABLE_AVG_DOWN,
+            SWING_ENABLE_PYRAMID=env_swing_enable_pyramid
+            if env_swing_enable_pyramid is not None
+            else config.SWING_ENABLE_PYRAMID,
+            SWING_MAX_AVG_DOWN_COUNT=env_swing_max_avg_down_count
+            if env_swing_max_avg_down_count is not None
+            else config.SWING_MAX_AVG_DOWN_COUNT,
+            SWING_MAX_PYRAMID_COUNT=env_swing_max_pyramid_count
+            if env_swing_max_pyramid_count is not None
+            else config.SWING_MAX_PYRAMID_COUNT,
+            STAT_ACTION_DECISION_SNAPSHOT_ENABLED=env_stat_action_snapshot_enabled
+            if env_stat_action_snapshot_enabled is not None
+            else config.STAT_ACTION_DECISION_SNAPSHOT_ENABLED,
+            STAT_ACTION_DECISION_SNAPSHOT_MIN_INTERVAL_SEC=env_stat_action_snapshot_min_interval
+            if env_stat_action_snapshot_min_interval is not None
+            else config.STAT_ACTION_DECISION_SNAPSHOT_MIN_INTERVAL_SEC,
             SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED=env_scalping_initial_entry_qty_cap_enabled
             if env_scalping_initial_entry_qty_cap_enabled is not None
             else config.SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED,

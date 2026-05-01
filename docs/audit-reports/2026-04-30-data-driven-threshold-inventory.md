@@ -8,6 +8,7 @@
 
 - 데이터 기반 threshold 산정은 지금부터 바로 열 수 있다.
 - 대상은 `REVERSAL_ADD`에 한정되지 않는다. entry gate, latency relief, soft stop, bad entry, pre-submit price guard, partial fill, trailing, position sizing까지 모두 후보군이다.
+- 새 보조축으로 `statistical_action_weight`를 둔다. 가격대, 거래량, 시간대별로 `exit_only`, `avg_down_wait`, `pyramid_wait`의 후행 성과를 비교하되, live 판단이 아니라 장후 threshold weight 입력으로만 사용한다.
 - 다만 모든 파라미터가 같은 수준으로 준비된 것은 아니다. `분포 산정`이 가능한 축과 `outcome 기반 EV 산정`이 가능한 축을 분리해야 한다.
 - 운영 전환은 `실시간 자동변경`이 아니라 `매일 적재 -> 장후 산정 -> 다음 장전 적용` 구조로 고정한다.
 
@@ -59,6 +60,9 @@
 - `2026-05-01` 휴일 실행 결과, 가용한 4월 raw 전체(`2026-04-25`, `2026-04-27`, `2026-04-28`, `2026-04-29`, `2026-04-30`)를 partitioned compact로 적재했다. 각 일자 checkpoint는 모두 `completed=true`, `paused_reason=null`이며 compact event count는 각각 `6`, `7653`, `8583`, `15093`, `10894`다.
 - `2026-05-04`부터 daily automation은 `07:35 PREOPEN apply manifest`, `16:10 POSTCLOSE collector/report`로 등록했다. live threshold runtime mutation은 `ThresholdOpsTransition0506` acceptance 전까지 `manifest_only`로 유지한다.
 - 향후 threshold가 늘어날 때 수집 누락을 막기 위해 stage inclusion rule은 `src/utils/threshold_cycle_registry.py`로 중앙화한다. 새 threshold는 이 registry에 stage/family를 추가하거나, pipeline event `fields`에 `threshold_family`를 남기면 live compact stream, raw backfill, report loader가 같은 규칙으로 자동 포함한다.
+- `exit_signal`, `sell_completed`, `scale_in_executed`는 `statistical_action_weight` family로 compact stream에 포함한다. 목적은 가격대/거래량/시간대별 청산/물타기/불타기 대기 성과를 장후에 비교하기 위한 최소 행동 결과 표본 확보다.
+- `stat_action_decision_snapshot`도 같은 family로 포함한다. 이 이벤트는 실제 선택 행동뿐 아니라 `eligible_actions`, `rejected_actions`, `chosen_action`, `scale_in_gate_reason`, `scale_in_action_reason`, `exit_rule_candidate`를 함께 남겨 selection bias를 줄이기 위한 decision moment 표본이다.
+- 4월 partitioned compact는 이 registry 추가 전에 bootstrap된 파일이므로 historical action stage가 비어 있을 수 있다. 4월 전체 action-weight를 보려면 raw full scan 반복이 아니라 기존 IO guard/checkpoint를 사용하는 maintenance backfill로 action family를 재적재한다.
 
 ## Threshold 후보 분류
 
@@ -74,6 +78,7 @@
 | Bad entry | `MIN_HOLD_SEC=60`, `MIN_LOSS=-0.70`, `MAX_PEAK=0.20`, `AI_LIMIT=45` | observed `329` / unique `31` | 가능 | 손실 flow 1순위와 직접 연결된다. live block 전 counterfactual threshold 산정이 가능하다. |
 | REVERSAL_ADD | `PNL_MIN/MAX`, `MIN/MAX_HOLD`, `MIN_AI`, `AI_RECOVERY_DELTA`, supply 3/4, qty ratio | blocked `1,735` / unique `65`, candidate `22` / unique `8`, AVG_DOWN executed `0` | blocked cohort 기반 가능, realized EV 부족 | 현재 조건은 과도하게 좁다. 다만 first-fail 로그라 완화 후 다음 gate 통과 여부를 완전히 복원하려면 all-predicate logging이 필요하다. |
 | PYRAMID | `PYRAMID_MIN_PROFIT`, `SIZE_RATIO`, `post_add_trailing_grace` | executed `7` | 부족 | 실제 체결은 있으나 표본이 작다. 오늘은 로직 오류 방지와 would_qty counterfactual만 가능하다. |
+| Statistical action weight | 가격대, 거래량, 시간대별 `exit_only`/`avg_down_wait`/`pyramid_wait` 성과 가중치 | completed + compact action stages | 신규 report-only | live 행동 변경 없이 “이 장면에서는 청산/물타기/불타기 후 대기 중 무엇이 유리했는가”를 장후 통계로 본다. 거래량 누락률이 높으면 volume 결론은 금지한다. |
 | Trailing | `SCALP_TRAILING_START_PCT`, drawdown/continuation 후보 | trailing exit unique `23` | 제한 가능 | 표본은 작지만 post-sell/continuation과 결합하면 장후 direction-only 가능하다. |
 | Preset hard stop | `SCALP_PRESET_HARD_STOP_PCT`, grace/emergency | exit unique `3` | 부족 | 오늘 표본으로 threshold 재산정 금지. 안전가드로 유지한다. |
 | Partial fill guard | `SCALP_PARTIAL_FILL_MIN_RATIO_*` | `0` | 불가 | 오늘 실전 표본 없음. historical 또는 다음 체결 발생 전까지 현행 유지. |
@@ -97,6 +102,118 @@
 4. `entry mechanical/VPW/liquidity` threshold
    - 이유: 분포 표본은 가장 많다. 다만 같은 날 holding/exit canary와 섞이지 않게 entry stage 단독으로 산정한다.
    - 산정축: `ws_age`, `spread`, `latest_strength`, `buy_pressure`, VPW buy ratio/exec ratio, liquidity.
+
+5. `statistical_action_weight`
+   - 이유: 전문가 규칙만으로는 가격대/거래량/시간대별 행동 선택의 기대값 차이를 설명하기 어렵다.
+   - 산정축: `price_bucket`, `volume_bucket`, `time_bucket`별 `exit_only`, `avg_down_wait`, `pyramid_wait` 평균손익/승률/표본수, `confidence_adjusted_score`, `policy_hint`.
+   - 주의: 이 축은 다음 live owner가 아니라 threshold weight 및 동적 수량화 후보의 근거다.
+
+## 통계 행동가중치 설계 보강
+
+`statistical_action_weight`는 단순히 bucket별 평균손익이 가장 높은 행동을 고르는 장치가 아니다. 표본이 작고 장면이 빠르게 바뀌는 스캘핑에서는 평균값보다 `얼마나 믿을 수 있는가`와 `틀렸을 때 손실 꼬리가 얼마나 큰가`가 더 중요하다. 따라서 아래 7개 원칙으로 보강한다.
+
+1. `empirical bayes shrinkage`
+   - bucket/action 표본이 작으면 해당 bucket 평균을 그대로 믿지 않는다.
+   - `exit_only`, `avg_down_wait`, `pyramid_wait` 각 action의 전체 prior 평균으로 당겨서 과최적화를 줄인다.
+   - 현재 report는 action별 prior strength `8`을 기본값으로 둔다.
+
+2. `lower confidence bound`
+   - 추천 score는 평균손익이 아니라 `empirical_bayes_profit_rate - uncertainty_penalty`다.
+   - 표본이 적거나 변동성이 큰 bucket은 평균이 좋아도 score가 낮아진다.
+   - 이 값은 `confidence_adjusted_score`로 기록한다.
+
+3. `no-clear-edge policy`
+   - 최고 행동과 차선 행동의 score 차이가 `0.15%p` 미만이면 행동 우위를 선언하지 않는다.
+   - 이런 경우는 `policy_hint=no_clear_edge`로 두고 live threshold 변경 근거로 쓰지 않는다.
+
+4. `tail-risk veto`
+   - 어떤 행동의 평균이 좋아도 손실 비율이 `65%` 이상이면 `defensive_only_high_loss_rate`로 둔다.
+   - 물타기/불타기처럼 노출을 늘리는 행동은 평균보다 downside p10과 loss_rate를 더 엄격히 본다.
+
+5. `hierarchical context`
+   - 1단계는 global action prior다.
+   - 2단계는 `time_bucket`, `price_bucket`, `volume_bucket` 단일축이다.
+   - 3단계는 충분한 표본이 쌓인 뒤에만 `price x time`, `volume x time`, `price x volume` 교차축으로 확장한다.
+   - 3축 동시 교차는 표본이 급격히 희소해지므로 최소 `bucket-action sample>=20` 전에는 금지한다.
+
+6. `action nudge, not action switch`
+   - 이 축은 "지금은 반드시 물타기" 같은 직접 명령을 만들지 않는다.
+   - 결과는 threshold 또는 수량 산식의 작은 가중치로만 쓴다.
+   - 예: `avg_down_wait` score가 `exit_only`보다 충분히 높으면 `REVERSAL_ADD_MAX_HOLD_SEC` 완화 또는 `would_qty` confidence multiplier 후보가 되고, `exit_only`가 높으면 bad-entry/refined exit 쪽 weight가 올라간다.
+
+7. `opportunity cost 포함`
+   - `exit_only`는 손실 축소만 보면 과대평가될 수 있다.
+   - post-sell MFE/MAE, same-symbol reentry, missed upside가 연결되면 `exit_only` 보상에서 missed upside penalty를 차감한다.
+   - 이 연결이 없으면 `exit_only` 우위도 provisional로만 본다.
+
+8. `decision snapshot 우선`
+   - 실제로 선택된 행동만 보면 selection bias가 생긴다.
+   - HOLDING 루프에서 `exit_now`, `hold_wait`, `avg_down_wait`, `pyramid_wait` 중 무엇이 가능했고 무엇이 차단됐는지를 `stat_action_decision_snapshot`으로 남긴다.
+   - 장후 리포트는 최종적으로 `chosen_action` 성과와 `eligible_but_not_chosen` 후보의 후행 MFE/MAE를 분리해야 한다.
+
+## 통계 행동가중치 2차 고급축 로드맵
+
+2차 고급축은 parking하지 않는다. 다만 1차 단일축 표본과 사람이 읽는 Markdown 리포트가 먼저 열려야 하므로 아래 순서로 고정한다.
+
+| 단계 | 대상 | 적용 형태 | 진입 조건 | 산출물 |
+| --- | --- | --- | --- | --- |
+| `SAW-1` | 단일축 `price_bucket`, `volume_bucket`, `time_bucket` | report-only | `stat_action_decision_snapshot` 적재 확인 | `statistical_action_weight_YYYY-MM-DD.md/json` |
+| `SAW-2` | 교차축 `price x time`, `volume x time`, `price x volume` | report-only | 단일축 bucket-action sample floor 충족, `volume_unknown` 과다 아님 | 교차축 표본/score/희소 bucket 제외표 |
+| `SAW-3` | `eligible_but_not_chosen` 후행 성과 | observe-only + report | snapshot timestamp와 후행 quote/position outcome 연결 가능 | 후보별 `post_decision_mfe/mae`, missed upside, avoided loss |
+| `SAW-4` | 체결 품질 `full/partial`, slippage, adverse fill | observe-only + report | execution receipt와 decision snapshot join key 확보 | action별 fill quality/realized slippage 분리표 |
+| `SAW-5` | 시장/종목 맥락 `market_regime`, `volatility`, `marcap`, sector/theme, VI/freshness | report-only | 기본 bucket 표본 유지 + regime/source 누락률 허용 범위 충족 | 맥락별 action weight 후보 |
+| `SAW-6` | orderbook absorption / large sell print / micro VWAP 이탈 | observe-only + report | orderbook snapshot 필드 안정성 확인 | absorption 조건별 soft stop/avg_down/pyramid 성과 |
+
+작업 소유권은 다음과 같이 둔다.
+
+- `2026-05-06 POSTCLOSE`: `SAW-1` Markdown 리포트 자동 생성 구현/검증, `SAW-2` 교차축 설계 및 sample floor 확정.
+- `2026-05-07 POSTCLOSE`: `SAW-3` eligible-but-not-chosen 후행 MFE/MAE 연결 설계.
+- `2026-05-08 POSTCLOSE`: `SAW-4~SAW-6` 체결품질/시장맥락/orderbook 고급축 적재 가능성 판정.
+
+공통 금지조건은 아래와 같다.
+
+- `statistical_action_weight`는 직접 매수/매도/추가매수 결정을 바꾸지 않는다.
+- 교차축은 `bucket-action sample>=20` 전에는 추천값을 만들지 않고 `insufficient_sample`로만 남긴다.
+- 2차 고급축 결과가 좋아 보여도 다음 장전 live 적용은 별도 threshold owner, 단일축 canary, rollback guard가 없으면 금지한다.
+
+## AI 보유/청산 판단 Matrix 적용 로드맵
+
+`statistical_action_weight`는 threshold 산정만을 위한 축으로 끝내지 않는다. 별도 산출물인 `holding_exit_decision_matrix`를 만들어 AI가 보유/청산 판단을 할 때 참조할 수 있는 통계 요약과 가중치 신호를 제공한다.
+
+단, 실시간 tick 중 학습/가중치 갱신은 금지한다. 장후에 산정한 matrix를 다음 장전 로드하고, 장중에는 immutable context로만 사용한다. 이렇게 하면 AI 판단에는 실시간으로 개입하지만, 원인귀속은 `matrix_version` 단위로 고정된다.
+
+| 단계 | 대상 | 적용 형태 | 진입 조건 | 산출물 |
+| --- | --- | --- | --- | --- |
+| `ADM-1` | AI 참조용 matrix schema | report-only | `statistical_action_weight` Markdown 생성 | `holding_exit_decision_matrix_YYYY-MM-DD.json/md` |
+| `ADM-2` | holding/exit prompt context 주입 | shadow prompt only | matrix key coverage, token budget, cache key 영향 확인 | AI 응답 diff, action_label drift, confidence drift |
+| `ADM-3` | AI 판단 후처리 가중치 | observe-only | shadow prompt diff가 안정적이고 false-positive exit 증가 없음 | `ai_matrix_nudge_score`, would_action |
+| `ADM-4` | runtime intervention canary | single owner canary | rollback guard, cohort tag, matrix_version provenance 확정 | holding/exit AI matrix canary |
+| `ADM-5` | daily feedback loop | postclose batch | threshold version별 성과 분석 완료 | 다음 matrix weight 미세조정 |
+
+matrix는 아래 필드를 최소 단위로 가진다.
+
+- `matrix_version`, `source_report`, `generated_at`, `valid_for_date`
+- `context_bucket`: `price_bucket`, `volume_bucket`, `time_bucket`, 이후 `price x time` 등 교차축
+- `recommended_bias`: `prefer_exit`, `prefer_hold`, `prefer_avg_down_wait`, `prefer_pyramid_wait`, `no_clear_edge`
+- `confidence_adjusted_score`, `edge_margin`, `sample`, `loss_rate`, `downside_p10_profit_rate`
+- `hard_veto`: emergency/hard stop, active sell pending, invalid feature, post-add eval exclusion
+- `prompt_hint`: AI에게 제공할 짧은 통계 문맥. 직접 명령이 아니라 "이 조건의 과거 outcome 경향"으로 표현한다.
+
+AI 개입 방식은 3단계로 제한한다.
+
+1. `shadow prompt injection`
+   - 기존 AI 판단에는 영향 없이 같은 입력에 matrix context를 추가한 shadow prompt를 호출해 응답 차이만 본다.
+   - 산출물은 `action_label`, `confidence`, `reason`, `exit/hold/add` drift다.
+
+2. `observe-only nudge`
+   - live AI 응답을 바꾸지 않고 matrix 기준 `would_nudge`와 `nudge_strength`만 로그에 남긴다.
+   - 이 단계에서 `exit_now` 강화, `hold_wait` 강화, `avg_down_wait` 강화 후보를 분리한다.
+
+3. `single-owner canary`
+   - 승인된 날에만 holding/exit 단계의 단일 owner로 적용한다.
+   - AI 점수 자체를 임의로 덮어쓰지 않고, prompt context 또는 후처리 가중치 중 하나만 사용한다.
+
+즉 이 축의 목표는 `threshold 적용`이 아니라 `AI 보유/청산 판단의 통계적 문맥 주입`이다. threshold family와 같은 데이터를 쓰지만 산출물, 적용 위치, rollback owner는 분리한다.
 
 ## 일일 Threshold 운영 사이클
 
@@ -155,6 +272,7 @@
    - 장후 실적 결과는 다음 threshold 산정의 weight 입력으로 들어가야 한다.
    - weight는 실시간으로 바꾸지 않고 장후 배치에서만 갱신한다.
    - 같은 family 안에서도 손익만 보지 않고 opportunity cost, blocker 감소, 체결 품질, post-exit MFE/MAE를 같이 반영한다.
+   - `statistical_action_weight`는 이 단계의 보조 weight source로 사용한다. 가격대/거래량/시간대별 best action이 sample floor를 충족할 때만 다음 threshold 추천의 가중치 입력으로 반영한다.
    - 단일축 canary 원칙을 깨지 않도록 최종 live 적용은 다음 장전 1축 owner로 제한한다.
 
 ## 일일 산정 산출물
@@ -185,6 +303,11 @@
 3. `position sizing`
    - `PYRAMID`, `AVG_DOWN`, `partial de-risk`는 수량/평단/후행 손익 계산을 바꾸므로 threshold family보다 한 단계 보수적으로 다룬다.
    - 표본이 충분해도 먼저 `would_qty`와 shadow PnL로만 본다.
+
+4. `decision support`
+   - `statistical_action_weight`는 threshold family와 live canary 사이에 있는 decision-support 축이다.
+   - 리포트는 만들지만 직접 runtime threshold를 바꾸지 않는다.
+   - 장후 weight 산정에는 쓸 수 있으나, 다음 장전 live 적용은 반드시 별도 owner 항목과 rollback guard를 거친다.
 
 ## 로깅 보강 필요
 

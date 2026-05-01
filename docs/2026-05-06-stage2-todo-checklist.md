@@ -8,6 +8,9 @@
 - 거래대금/VI freshness를 승격 gate에 어떻게 반영할지 정량 기준을 먼저 고정한다.
 - `2026-05-05` 어린이날 휴장으로 실행할 수 없던 latency price guard / NaN cast / resolver 후속 항목을 다음 KRX 운영일 기준으로 이관해 닫는다.
 - `REVERSAL_ADD`와 `PYRAMID` 수량 산식이 현재 고정 비율+cap 구조에 머무르는지 점검하고, 동적 수량화는 observe-only/counterfactual 설계로 먼저 분리한다.
+- 가격대/거래량/시간대별 `exit_only`, `avg_down_wait`, `pyramid_wait` 실적 통계는 live 판단이 아니라 장후 threshold weight 입력으로 먼저 검증한다.
+- `statistical_action_weight` 2차 고급축은 parking하지 않고 `SAW-1~SAW-6` 단계 로드맵으로 추적한다.
+- AI 보유/청산 판단에도 통계 matrix를 참조시키는 `ADM-1~ADM-5` 로드맵을 threshold 적용과 별도 축으로 분리한다.
 
 ## 오늘 강제 규칙
 
@@ -32,7 +35,7 @@
 
 - 없음
 
-## 장후 체크리스트 (16:00~22:10)
+## 장후 체크리스트 (16:00~23:50)
 
 - [ ] `[ScalpingScannerTxnBoundary0506] DB/WS 경계 재설계와 rollback guard 확정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 16:00~16:20`, `Track: ScalpingLogic`)
   - Source: [2026-04-28-scalping-scanner-enhancement-proposal.md](/home/ubuntu/KORStockScan/docs/2026-04-28-scalping-scanner-enhancement-proposal.md), [scalping_scanner.py](/home/ubuntu/KORStockScan/src/scanners/scalping_scanner.py:281)
@@ -172,3 +175,31 @@
   - 현재 자동화 상태: `2026-05-01`에 4월 가용 raw partition bootstrap을 완료했고, `07:35 PREOPEN apply manifest`, `16:10 POSTCLOSE collector/report` cron을 설치했다. 단 live threshold runtime mutation은 acceptance 전까지 `manifest_only`다.
   - why: threshold cycle이 수동 리포트에 머물면 데이터 기반 완화값이 실전 기대값 개선으로 연결되지 않는다. 반대로 장중 실시간 자동변경으로 가면 원인귀속과 rollback guard가 깨지므로, 자동화는 일일 배치/다음 장전 적용 단위로만 닫아야 한다.
   - 다음 액션: acceptance가 잠기면 workflow/cron 설계 항목을 분리한다. 장중 compact collector, 장후 report+weight 산정, 장전 apply+bot start, 장후 performance attribution report를 각각 재실행 가능한 wrapper로 정의한다.
+
+- [ ] `[StatActionWeight0506] 가격대/거래량/시간대별 행동가중치 리포트 1차 판정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 22:30~22:50`, `Track: ScalpingLogic`)
+  - Source: [2026-04-30-data-driven-threshold-inventory.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-30-data-driven-threshold-inventory.md), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [threshold_cycle_registry.py](/home/ubuntu/KORStockScan/src/utils/threshold_cycle_registry.py)
+  - 판정 기준: `statistical_action_weight` family의 `price_bucket`, `volume_bucket`, `time_bucket`별 `exit_only`, `avg_down_wait`, `pyramid_wait` 표본과 평균손익/승률을 확인한다. 추가로 `stat_action_decision_snapshot`의 `chosen_action`, `eligible_actions`, `rejected_actions`, `scale_in_gate_reason`, `exit_rule_candidate`가 충분히 적재됐는지 본다. 단순 평균이 아니라 `confidence_adjusted_score`, `edge_margin`, `policy_hint(no_clear_edge/defensive_only_high_loss_rate/candidate_weight_source)`를 기준으로 본다. `volume_unknown` 비중이 높으면 거래량 결론은 금지하고 가격대/시간대 direction-only만 남긴다.
+  - why: 현재 전략계층은 전문가 규칙 중심이라 “어떤 장면에서는 청산, 어떤 장면에서는 물타기/불타기 후 대기”라는 통계적 행동가중치가 부족했다. 이 축은 live 변경이 아니라 다음 threshold weight와 동적 수량 설계의 근거다. 작은 표본의 우연한 평균값을 믿지 않기 위해 empirical-bayes shrinkage와 불확실성 penalty를 같이 본다.
+  - 다음 액션: sample-ready이면 다음 장후 산정에서 threshold weight 입력으로 연결하고, 부족하면 누락 필드(`daily_volume`, `buy_time`, `scale_in_executed`, `exit_signal`, `sell_completed`, `stat_action_decision_snapshot`) 적재 품질부터 보강한다. 4월 historical compact는 registry 추가 전 bootstrap이라 action stage가 비어 있을 수 있으므로, 필요하면 IO guard가 있는 maintenance backfill로 action family만 재적재한다.
+
+- [ ] `[StatActionMarkdown0506] statistical_action_weight 운영자용 Markdown 리포트 자동생성 구현` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 22:50~23:10`, `Track: ScalpingLogic`)
+  - Source: [2026-04-30-data-driven-threshold-inventory.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-30-data-driven-threshold-inventory.md), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh)
+  - 판정 기준: 장후 threshold cycle 실행 시 `data/report/statistical_action_weight/statistical_action_weight_YYYY-MM-DD.md`와 `.json`이 자동 생성되는지 확인한다. Markdown은 `판정`, `표본 충분성`, `price/volume/time bucket별 best action`, `no_clear_edge/insufficient_sample`, `threshold 반영 금지/가능 항목`, `다음 액션`을 포함해야 한다.
+  - 선반영 메모: `2026-05-01` 휴장 maintenance에서 구현/테스트는 완료했다. 5/6에는 실제 운영일 postclose 자동 실행 산출물 health check와 표본 충분성 판정을 수행한다.
+  - why: 현재 `statistical_action_weight`는 기계용 JSON 내부 섹션으로만 존재해 매일 사람이 읽고 의사결정하기 어렵다. 독립 Markdown이 없으면 2차 고급축 판정도 운영 흐름에서 누락될 수 있다.
+  - 다음 액션: 생성 경로와 postclose wrapper 연결을 테스트로 고정하고, Project/Calendar에는 동일 제목으로 추적되게 유지한다.
+
+- [ ] `[StatActionAdvancedAxes0506] statistical_action_weight 2차 고급축 SAW-2 설계 및 sample floor 확정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 23:10~23:30`, `Track: ScalpingLogic`)
+  - Source: [2026-04-30-data-driven-threshold-inventory.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-30-data-driven-threshold-inventory.md), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py)
+  - 판정 기준: `price x time`, `volume x time`, `price x volume` 교차축을 report-only로 열기 위한 bucket 정의, `bucket-action sample>=20` floor, `volume_unknown` 제외 규칙, `policy_hint` 산식을 확정한다. 3축 교차와 live 반영은 금지한다.
+  - why: 2차 고급축을 명시하지 않으면 “표본이 더 쌓이면”이라는 말이 parking으로 변한다. 다만 교차축은 표본 희소성이 크므로 먼저 floor와 제외 규칙을 잠가야 한다.
+  - 다음 액션: 설계가 잠기면 `2026-05-07` 이후 `SAW-3 eligible-but-not-chosen 후행 MFE/MAE 연결`, `SAW-4~SAW-6 체결품질/시장맥락/orderbook 축`을 별도 항목으로 연다.
+
+- [ ] `[AIDecisionMatrix0506] AI 보유/청산 decision matrix ADM-1 schema 확정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 23:30~23:50`, `Track: AIPrompt`)
+  - Source: [2026-04-30-data-driven-threshold-inventory.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-30-data-driven-threshold-inventory.md), [ai_engine.py](/home/ubuntu/KORStockScan/src/engine/ai_engine.py), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py), [ai_engine_deepseek.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_deepseek.py)
+  - 판정 기준: `holding_exit_decision_matrix_YYYY-MM-DD.json/md` schema를 확정한다. 최소 필드는 `matrix_version`, `valid_for_date`, `context_bucket`, `recommended_bias`, `confidence_adjusted_score`, `edge_margin`, `sample`, `loss_rate`, `hard_veto`, `prompt_hint`다. 이 matrix는 threshold live 적용이 아니라 AI holding/exit prompt 또는 후처리 가중치에 들어갈 decision-support artifact다.
+  - 전환 ladder: 현재 단계는 `ADM-1 report-only ON`이다. 이후는 `ADM-2 shadow prompt OFF`, `ADM-3 advisory nudge OFF`, `ADM-4 weighted live OFF`, `ADM-5 policy gate OFF`로 잠근다. 5/6에는 ADM-2 진입 가능 여부만 판정하고, live AI 응답 변경은 열지 않는다.
+  - ADM-2 진입 기준: 전일 matrix immutable load 경로, token budget, cache key 분리, matrix_version provenance, Gemini/OpenAI/DeepSeek parity 로그, `action_label/confidence/reason` drift 비교 필드가 모두 설계되어야 한다.
+  - 선반영 메모: `2026-05-01` 휴장 maintenance에서 ADM-1 산출물 schema와 Markdown/JSON 저장은 구현했다. 5/6에는 운영일 산출물의 `recommended_bias`, `prompt_hint`, `hard_veto`, `matrix_version` provenance를 확인하고 `ADM-2 shadow prompt injection` 진입 여부를 판정한다.
+  - why: 사용자가 요구한 것은 threshold 변경뿐 아니라 AI가 보유/청산 판단을 할 때 통계 matrix를 참조하고, 필요 시 가중치를 더하는 실시간성 개입 기능이다. 이 요구는 `statistical_action_weight` 내부 JSON만으로는 충족되지 않는다.
+  - 다음 액션: schema가 잠기면 `2026-05-07`에 `ADM-2 shadow prompt injection`을 열고, matrix context가 AI 응답을 어떻게 바꾸는지 action drift를 먼저 본다.

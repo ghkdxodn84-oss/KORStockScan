@@ -8,6 +8,8 @@
 - BUY-side timeout/parse failure/late response는 `DROP/SKIP` 보수 폴백으로만 처리하고, `previous_response_id`는 종목 간 상태 오염 방지 차원에서 금지한다.
 - `soft_stop_expert_defense v2`는 `2026-04-30` same-day 수집 후 기본 OFF다. 다음 보유/청산 신규 owner는 v2 재가동이 아니라 `GOOD_EXIT` 제거를 피하는 refined `bad_entry` canary다.
 - 스캘핑 신규 BUY 최대매수가능 주수는 `1주 cap`이다. 5/4 장전에는 `SCALPING_INITIAL_ENTRY_MAX_QTY=1` 로드와 env override 오염 여부를 확인한다.
+- 물타기/불타기 `MAX_*_COUNT`는 더 이상 runtime blocker가 아니라 attribution counter다. 반복 추가매수 리스크는 enable flag, cooldown, pending order, position cap, protection 재설정, near-close gate로 제한한다.
+- `stat_action_decision_snapshot`은 observe-only다. live 판단 변경 없이 HOLDING 의사결정 순간의 후보/선택/차단 행동을 compact stream에 남긴다.
 - threshold cycle은 `07:35 PREOPEN apply manifest`, `16:10 POSTCLOSE collector/report`가 자동 실행된다. 5/6 운영전환 acceptance 전까지 live runtime mutation은 `manifest_only`다.
 
 ## 오늘 강제 규칙
@@ -27,7 +29,27 @@
 - `bad_entry` 신규 canary는 naive block 금지다. `2026-04-30` 장후에 코드/테스트는 준비했고, 5/4 장전에는 런타임 로드와 cohort tag만 확인한다.
 - threshold 자동화는 장전 manifest와 장후 report 생성까지만 허용한다. `ThresholdOpsTransition0506` 전에는 자동 threshold live 적용이나 봇 재기동 정책 변경을 열지 않는다.
 
-## 장전 체크리스트 (08:40~08:55)
+## 장전 체크리스트 (08:15~08:55)
+
+- [ ] `[RuntimeFlagInventory0504-Preopen] ON/OFF runtime flag inventory 및 OFF축 ON 기준 로드 확인` (`Due: 2026-05-04`, `Slot: PREOPEN`, `TimeWindow: 08:15~08:20`, `Track: RuntimeStability`)
+  - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md), [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - 판정 기준: `2026-05-01` 기준 runtime ON/OFF 스냅샷과 실제 `TradingConfig`/env override를 비교한다. 실주문 영향 ON, observe/report-only ON, guarded-off/OFF를 구분하고, OFF 축은 owner/cohort/rollback/restart 기준 없이 장전 임의 ON 금지로 잠근다.
+  - 현재 실주문 영향 ON: `mechanical_momentum_latency_relief`, `soft_stop_micro_grace`, `REVERSAL_ADD`, `bad_entry_refined_canary`, `initial_entry_qty_cap_1share`, `pre_submit_price_guard`, `partial_fill_ratio_guard`, `dynamic_vpw`, `dynamic_strength_relief`, `SCALPING_ENABLE_PYRAMID`.
+  - 현재 observe/report-only ON: `stat_action_decision_snapshot`, `statistical_action_weight`, `holding_exit_decision_matrix`, `threshold_cycle manifest/report`, `hard_time_stop_shadow`, `same_symbol_soft_stop_cooldown_shadow`, `partial_only_timeout_shadow`, `SCALP_LOSS_FALLBACK observe-only`.
+  - 현재 OFF/guarded-off: `soft_stop_expert_defense v2`, `soft_stop_micro_grace_extend`, `latency_quote_fresh_composite`, `latency_signal_quality_quote_composite`, `latency_spread_relief`, `latency_ws_jitter_relief`, `latency_other_danger_relief`, `latency_guard_canary`, `latency_fallback/split_entry`, generic `SCALPING_ENABLE_AVG_DOWN`, `SCALPING_PYRAMID_ZERO_QTY_STAGE1`, `OpenAI Responses WS`, `OpenAI dual persona`, `OpenAI schema registry/deterministic config`.
+  - 다음 액션: OFF 축을 켜야 한다면 이 항목에서 바로 ON하지 않고, 해당 축별 ON 시점/기준을 [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)의 `0.1 Runtime ON/OFF 스냅샷`과 대조해 단일축 checklist 항목으로 분리한다.
+
+- [ ] `[StatActionDecisionSnapshot0504-Preopen] 행동 후보 decision snapshot observe-only 로드 확인` (`Due: 2026-05-04`, `Slot: PREOPEN`, `TimeWindow: 08:20~08:25`, `Track: ScalpingLogic`)
+  - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [threshold_cycle_registry.py](/home/ubuntu/KORStockScan/src/utils/threshold_cycle_registry.py), [2026-04-30-data-driven-threshold-inventory.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-30-data-driven-threshold-inventory.md)
+  - 판정 기준: `STAT_ACTION_DECISION_SNAPSHOT_ENABLED=True`, `STAT_ACTION_DECISION_SNAPSHOT_MIN_INTERVAL_SEC=30` 기본 로드와 env override 오염 여부를 확인한다. stage `stat_action_decision_snapshot`은 family `statistical_action_weight`로 compact 적재되어야 한다.
+  - why: 통계 행동가중치는 실제 선택 행동만으로는 selection bias가 커진다. HOLDING 판단 순간의 `eligible_actions`, `rejected_actions`, `chosen_action`, 수익률/고점/AI/수급/호가 상태를 같이 남겨야 `exit_now`, `avg_down_wait`, `pyramid_wait`, `hold_wait`의 counterfactual 근거가 생긴다.
+  - 다음 액션: 장중에는 live 행동 변경 없이 snapshot 적재 여부와 IO 증가만 확인한다. 과다 적재가 보이면 env로 interval을 늘리거나 snapshot을 OFF한다.
+
+- [ ] `[ScaleInCountGateRemoval0504-Preopen] 물타기/불타기 count gate 제거 로드 확인` (`Due: 2026-05-04`, `Slot: PREOPEN`, `TimeWindow: 08:25~08:30`, `Track: ScalpingLogic`)
+  - Source: [sniper_scale_in.py](/home/ubuntu/KORStockScan/src/engine/sniper_scale_in.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - 판정 기준: `avg_down_count`/`pyramid_count`가 주문 가능 여부를 막지 않고 집계/귀속값으로만 남는지 확인한다. `SCALPING_ENABLE_AVG_DOWN`, `SCALPING_ENABLE_PYRAMID`, `SWING_ENABLE_AVG_DOWN`, `SWING_ENABLE_PYRAMID`는 enable/disable owner로만 본다.
+  - why: `REVERSAL_ADD`와 `PYRAMID` 실행 표본이 count cap에 막히면 데이터 기반 threshold/weight 산정이 공회전한다. 다만 반복 주문 리스크는 count가 아니라 cooldown, pending order, position cap, protection 재설정 실패 fail-closed로 제한한다.
+  - 다음 액션: 로드 확인 후 후보가 계속 0이면 count가 아니라 `pnl/hold/supply/qty/position_cap/cooldown/pending/protection` blocker로 분해한다.
 
 - [ ] `[BadEntryRefinedCanary0504-Preopen] refined bad_entry canary 설계/로드 승인` (`Due: 2026-05-04`, `Slot: PREOPEN`, `TimeWindow: 08:30~08:40`, `Track: ScalpingLogic`)
   - Source: [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [personal-decision-flow-notes.md](/home/ubuntu/KORStockScan/docs/personal-decision-flow-notes.md), [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)

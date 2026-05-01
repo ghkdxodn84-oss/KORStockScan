@@ -28,6 +28,10 @@ THRESHOLD_STAGE_FAMILY_MAP = {
     "soft_stop_absorption_exit": "soft_stop_expert_defense",
     "soft_stop_absorption_recovered": "soft_stop_expert_defense",
     "adverse_fill_observed": "adverse_fill_detector",
+    "exit_signal": "statistical_action_weight",
+    "sell_completed": "statistical_action_weight",
+    "scale_in_executed": "statistical_action_weight",
+    "stat_action_decision_snapshot": "statistical_action_weight",
 }
 
 TARGET_STAGES = frozenset(THRESHOLD_STAGE_FAMILY_MAP)
