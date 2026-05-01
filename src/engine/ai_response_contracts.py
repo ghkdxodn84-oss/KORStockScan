@@ -13,6 +13,20 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
         },
         "required": ["action", "score", "reason"],
     },
+    "entry_price_v1": {
+        "type": "object",
+        "properties": {
+            "action": {
+                "type": "string",
+                "enum": ["USE_DEFENSIVE", "USE_REFERENCE", "IMPROVE_LIMIT", "SKIP"],
+            },
+            "order_price": {"type": "integer"},
+            "confidence": {"type": "integer"},
+            "reason": {"type": "string"},
+            "max_wait_sec": {"type": "integer"},
+        },
+        "required": ["action", "order_price", "confidence", "reason", "max_wait_sec"],
+    },
     "holding_exit_v1": {
         "type": "object",
         "properties": {
@@ -21,6 +35,19 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
             "reason": {"type": "string"},
         },
         "required": ["action", "score", "reason"],
+    },
+    "holding_exit_flow_v1": {
+        "type": "object",
+        "properties": {
+            "action": {"type": "string", "enum": ["HOLD", "TRIM", "EXIT"]},
+            "score": {"type": "integer"},
+            "flow_state": {"type": "string"},
+            "thesis": {"type": "string"},
+            "evidence": {"type": "array", "items": {"type": "string"}},
+            "reason": {"type": "string"},
+            "next_review_sec": {"type": "integer"},
+        },
+        "required": ["action", "score", "flow_state", "thesis", "evidence", "reason", "next_review_sec"],
     },
     "overnight_v1": {
         "type": "object",

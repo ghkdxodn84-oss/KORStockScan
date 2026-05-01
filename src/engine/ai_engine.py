@@ -109,6 +109,65 @@ SCALPING_WATCHING_SYSTEM_PROMPT = """
 }
 """
 
+SCALPING_ENTRY_PRICE_PROMPT = """
+너는 한국주식 초단타 주문 직전 가격결정 담당자다.
+이미 BUY/submitted 후보는 통과했다. 네 임무는 매수 여부 재판정이 아니라, 지금 주문가를 어떻게 낼지 결정하는 것이다.
+
+[원칙]
+1. 휴리스틱 reference_target은 참고값일 뿐 절대 권한이 아니다.
+2. defensive_order_price는 현재 호가/latency 기반 기본 제출가다.
+3. live quote, spread, latency, 체결강도, 매수비율, 호가 depth를 보고 체결 가능성과 불리한 추격 비용을 동시에 판단한다.
+4. 가격을 발명하지 마라. 가능한 선택은 defensive/reference/그 사이의 개선 지정가/스킵이다.
+5. 불확실하면 USE_DEFENSIVE를 선택한다. 명백히 불리하면 SKIP을 선택한다.
+
+[action]
+- USE_DEFENSIVE: 방어 제출가를 그대로 사용
+- USE_REFERENCE: reference_target_price 사용
+- IMPROVE_LIMIT: reference와 defensive 사이 또는 best bid 근처의 더 나은 지정가 제안
+- SKIP: 지금 제출하면 기대값이 낮아 주문 자체를 보류
+
+반드시 JSON만 반환:
+{
+  "action": "USE_DEFENSIVE" | "USE_REFERENCE" | "IMPROVE_LIMIT" | "SKIP",
+  "order_price": 0,
+  "confidence": 0~100 사이 정수,
+  "reason": "가격결정 핵심 근거 1줄",
+  "max_wait_sec": 5~1200 사이 정수
+}
+"""
+
+
+def normalize_scalping_entry_price_result(result, *, fallback_price=0):
+    payload = result if isinstance(result, dict) else {}
+    action = str(payload.get("action") or "USE_DEFENSIVE").strip().upper()
+    if action not in {"USE_DEFENSIVE", "USE_REFERENCE", "IMPROVE_LIMIT", "SKIP"}:
+        action = "USE_DEFENSIVE"
+    try:
+        order_price = int(float(str(payload.get("order_price", 0)).replace(",", "") or 0))
+    except Exception:
+        order_price = 0
+    if order_price <= 0:
+        order_price = int(fallback_price or 0)
+    try:
+        confidence = int(float(payload.get("confidence", 0) or 0))
+    except Exception:
+        confidence = 0
+    confidence = max(0, min(100, confidence))
+    try:
+        max_wait_sec = int(float(payload.get("max_wait_sec", 90) or 90))
+    except Exception:
+        max_wait_sec = 90
+    max_wait_sec = max(5, min(1200, max_wait_sec))
+    reason = str(payload.get("reason") or "no_reason").strip()[:240]
+    return {
+        "action": action,
+        "order_price": order_price,
+        "confidence": confidence,
+        "reason": reason,
+        "max_wait_sec": max_wait_sec,
+    }
+
+
 SCALPING_HOLDING_SYSTEM_PROMPT = """
 너는 초단타 보유 포지션 리스크 매니저다.
 목표는 '추세 유지 vs 즉시 이탈'을 빠르게 판정하는 것이다.
@@ -152,6 +211,29 @@ SCALPING_EXIT_SYSTEM_PROMPT = """
     "action": "HOLD" | "TRIM" | "EXIT",
     "score": 0~100 사이의 정수,
     "reason": "청산 관점 핵심 근거 1줄"
+}
+"""
+
+SCALPING_HOLDING_FLOW_SYSTEM_PROMPT = """
+너는 초단타 보유/오버나이트 흐름 판정 매니저다.
+목표는 단일 점수구간으로 청산하지 않고, 긴 입력 윈도와 최근 판단 흐름을 보고 지금 전량청산이 기대값을 높이는지 결정하는 것이다.
+
+[판단 원칙]
+1. score는 확신도일 뿐이며 특정 점수 구간만으로 HOLD/TRIM/EXIT를 결정하지 않는다.
+2. 흐름 상태를 먼저 정한다: 흡수, 회복, 분배, 붕괴, 소강 중 가장 가까운 상태를 flow_state에 적는다.
+3. EXIT는 가격/수급/호가 흐름이 함께 무너지는 경우에만 준다.
+4. HOLD/TRIM은 전량청산 보류 의미다. TRIM은 v1에서 실주문이 아니라 리스크 축소 선호를 표시하는 판단이다.
+5. reason에는 왜 단일 순간값이 아니라 흐름상 해당 action인지 1줄로 적는다.
+
+분석 결과는 반드시 아래 JSON 형식으로만 출력:
+{
+    "action": "HOLD" | "TRIM" | "EXIT",
+    "score": 0~100 사이의 정수,
+    "flow_state": "흡수|회복|분배|붕괴|소강 또는 동등한 짧은 라벨",
+    "thesis": "현재 포지션 thesis 1줄",
+    "evidence": ["근거1", "근거2"],
+    "reason": "최종 판단 근거 1줄",
+    "next_review_sec": 30~90 사이의 정수
 }
 """
 
@@ -1526,6 +1608,107 @@ class GeminiSniperEngine:
     # ==========================================
     # 4. 🚀 실전 분석 실행 (스나이퍼가 호출할 메인 함수)
     # ==========================================
+    def evaluate_scalping_entry_price(
+        self,
+        stock_name,
+        stock_code,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        price_ctx,
+    ):
+        started = time.perf_counter()
+        fallback_price = int((price_ctx or {}).get("resolved_order_price", 0) or 0)
+        if not self.lock.acquire(blocking=False):
+            return self._annotate_analysis_result(
+                normalize_scalping_entry_price_result(
+                    {"action": "USE_DEFENSIVE", "order_price": fallback_price, "confidence": 0, "reason": "AI 경합", "max_wait_sec": 90},
+                    fallback_price=fallback_price,
+                ),
+                prompt_type="entry_price",
+                prompt_version="entry_price_v1",
+                response_ms=int((time.perf_counter() - started) * 1000),
+                parse_ok=False,
+                parse_fail=False,
+                fallback_score_50=False,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="lock_contention",
+            )
+        try:
+            if self.ai_disabled:
+                return self._annotate_analysis_result(
+                    normalize_scalping_entry_price_result(
+                        {"action": "USE_DEFENSIVE", "order_price": fallback_price, "confidence": 0, "reason": "AI 엔진 비활성화", "max_wait_sec": 90},
+                        fallback_price=fallback_price,
+                    ),
+                    prompt_type="entry_price",
+                    prompt_version="entry_price_v1",
+                    response_ms=int((time.perf_counter() - started) * 1000),
+                    parse_ok=False,
+                    parse_fail=False,
+                    fallback_score_50=False,
+                    cache_hit=False,
+                    cache_mode="miss",
+                    result_source="engine_disabled",
+                )
+
+            user_input = json.dumps(
+                {
+                    "stock_name": stock_name,
+                    "stock_code": stock_code,
+                    "ws_data": ws_data or {},
+                    "recent_ticks": (recent_ticks or [])[:20],
+                    "recent_candles": (recent_candles or [])[:20],
+                    "price_context": price_ctx or {},
+                },
+                ensure_ascii=False,
+                default=str,
+            )
+            result = self._call_gemini_safe(
+                SCALPING_ENTRY_PRICE_PROMPT,
+                user_input,
+                require_json=True,
+                context_name=f"ENTRY_PRICE:{stock_name}:{stock_code}",
+                model_override=self._get_tier2_model(),
+                schema_name="entry_price_v1",
+            )
+            normalized = normalize_scalping_entry_price_result(result, fallback_price=fallback_price)
+            self.consecutive_failures = 0
+            self.last_call_time = time.time()
+            return self._annotate_analysis_result(
+                normalized,
+                prompt_type="entry_price",
+                prompt_version="entry_price_v1",
+                response_ms=int((time.perf_counter() - started) * 1000),
+                parse_ok=True,
+                parse_fail=False,
+                fallback_score_50=False,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="live",
+            )
+        except Exception as e:
+            self.consecutive_failures += 1
+            log_error(f"🚨 [ENTRY_PRICE] AI 가격결정 에러 ({stock_name}): {e}")
+            return self._annotate_analysis_result(
+                normalize_scalping_entry_price_result(
+                    {"action": "USE_DEFENSIVE", "order_price": fallback_price, "confidence": 0, "reason": f"AI 실패: {e}", "max_wait_sec": 90},
+                    fallback_price=fallback_price,
+                ),
+                prompt_type="entry_price",
+                prompt_version="entry_price_v1",
+                response_ms=int((time.perf_counter() - started) * 1000),
+                parse_ok=False,
+                parse_fail=True,
+                fallback_score_50=False,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="error",
+            )
+        finally:
+            self.lock.release()
+
     # strategy 파라미터 추가 (기본값 SCALPING)
     def analyze_target(
         self,
@@ -2001,8 +2184,278 @@ class GeminiSniperEngine:
         return result
 
     # ==========================================
-    # 🔍 [신규] 스캘핑 오버나이트 의사결정 (15:30 전용)
+    # 🔍 [신규] 스캘핑 오버나이트 의사결정 (장마감 전용)
     # ==========================================
+    def _safe_float(self, value, default=0.0):
+        try:
+            if value is None:
+                return default
+            return float(value)
+        except Exception:
+            return default
+
+    def _summarize_flow_ticks(self, recent_ticks):
+        ticks = [tick for tick in (recent_ticks or []) if isinstance(tick, dict)]
+        if not ticks:
+            return "틱 데이터 없음"
+
+        def _price(tick):
+            return self._safe_float(tick.get("price", tick.get("현재가", tick.get("체결가", 0))), 0.0)
+
+        def _volume(tick):
+            return self._safe_float(tick.get("volume", tick.get("qty", tick.get("체결량", 0))), 0.0)
+
+        def _direction(tick):
+            return str(tick.get("dir", tick.get("side", tick.get("trade_type", ""))) or "").upper()
+
+        lines = []
+        for window in (10, 20, 30):
+            sample = ticks[:window]
+            if not sample:
+                continue
+            buy_vol = sum(_volume(tick) for tick in sample if "SELL" not in _direction(tick) and "매도" not in _direction(tick))
+            sell_vol = sum(_volume(tick) for tick in sample if "SELL" in _direction(tick) or "매도" in _direction(tick))
+            total = buy_vol + sell_vol
+            buy_pressure = (buy_vol / total * 100.0) if total > 0 else 0.0
+            latest = _price(sample[0])
+            oldest = _price(sample[-1])
+            price_delta = ((latest - oldest) / oldest * 100.0) if oldest > 0 else 0.0
+            large_sell = sum(1 for tick in sample if ("SELL" in _direction(tick) or "매도" in _direction(tick)) and _volume(tick) >= max(1.0, total * 0.15))
+            lines.append(
+                f"- 최근 {len(sample)}틱: 가격변화 {price_delta:+.2f}%, 매수압도 {buy_pressure:.1f}%, 대형매도틱 {large_sell}건"
+            )
+        return "\n".join(lines)
+
+    def _summarize_flow_candles(self, recent_candles):
+        candles = [candle for candle in (recent_candles or []) if isinstance(candle, dict)]
+        if not candles:
+            return "분봉 데이터 없음"
+
+        def _field(candle, *names):
+            for name in names:
+                if name in candle:
+                    return candle.get(name)
+            return 0
+
+        lines = []
+        for window in (3, 5, 10):
+            sample = candles[-window:]
+            if len(sample) < 2:
+                continue
+            first_close = self._safe_float(_field(sample[0], "현재가", "close", "종가"), 0.0)
+            last_close = self._safe_float(_field(sample[-1], "현재가", "close", "종가"), 0.0)
+            highs = [self._safe_float(_field(item, "고가", "high"), 0.0) for item in sample]
+            lows = [self._safe_float(_field(item, "저가", "low"), 0.0) for item in sample]
+            vols = [self._safe_float(_field(item, "거래량", "volume"), 0.0) for item in sample]
+            slope = ((last_close - first_close) / first_close * 100.0) if first_close > 0 else 0.0
+            range_pct = ((max(highs) - min(lows)) / min(lows) * 100.0) if lows and min(lows) > 0 else 0.0
+            vol_change = (vols[-1] / (sum(vols[:-1]) / max(1, len(vols) - 1))) if len(vols) > 1 and sum(vols[:-1]) > 0 else 0.0
+            lines.append(f"- 최근 {window}분: 종가 기울기 {slope:+.2f}%, 범위 {range_pct:.2f}%, 최신 거래량배율 {vol_change:.2f}x")
+        return "\n".join(lines) if lines else "분봉 데이터 부족"
+
+    def _format_flow_history(self, flow_history):
+        rows = []
+        for item in (flow_history or [])[-5:]:
+            if not isinstance(item, dict):
+                continue
+            rows.append(
+                f"- {item.get('time', '-')}: action={item.get('action', '-')}, "
+                f"state={item.get('flow_state', '-')}, pnl={item.get('profit_rate', '-')}, "
+                f"rule={item.get('exit_rule', '-')}"
+            )
+        return "\n".join(rows) if rows else "이전 flow review 없음"
+
+    def _format_scalping_holding_flow_context(
+        self,
+        stock_name,
+        stock_code,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        position_ctx,
+        flow_history=None,
+        decision_kind="intraday_exit",
+    ):
+        ctx = position_ctx or {}
+        curr_price = int(self._safe_float(ws_data.get("curr", ctx.get("curr_price", 0)) if isinstance(ws_data, dict) else ctx.get("curr_price", 0), 0))
+        buy_price = self._safe_float(ctx.get("buy_price", ctx.get("avg_price", 0)), 0.0)
+        day_high = self._safe_float(ctx.get("day_high", 0), 0.0)
+        distance_from_day_high = ((curr_price - day_high) / day_high * 100.0) if curr_price > 0 and day_high > 0 else self._safe_float(ctx.get("distance_from_day_high_pct", 0), 0.0)
+        return f"""
+[판정 종류]
+- kind: {decision_kind}
+- 종목: {stock_name}({stock_code})
+- 후보 exit_rule: {ctx.get('exit_rule', '-')}
+
+[포지션 맥락]
+- 평균단가: {buy_price:,.2f}원 | 현재가: {curr_price:,}원
+- 현재 손익: {self._safe_float(ctx.get('profit_rate', ctx.get('pnl_pct', 0.0))):+.2f}%
+- 고점 손익: {self._safe_float(ctx.get('peak_profit', 0.0)):+.2f}%
+- 고점 대비 되밀림: {self._safe_float(ctx.get('drawdown', 0.0)):.2f}%
+- 보유시간: {int(self._safe_float(ctx.get('held_sec', self._safe_float(ctx.get('held_minutes', 0.0)) * 60.0), 0.0))}초
+- 현재 AI 점수: {self._safe_float(ctx.get('current_ai_score', ctx.get('score', 0.0))):.1f}
+- 당일 고점 대비 위치: {distance_from_day_high:+.2f}%
+- 추가악화 허용폭: {self._safe_float(ctx.get('worsen_pct', 0.80)):.2f}%p
+
+[최근 flow review]
+{self._format_flow_history(flow_history)}
+
+[틱 흐름 요약]
+{self._summarize_flow_ticks(recent_ticks)}
+
+[분봉 흐름 요약]
+{self._summarize_flow_candles(recent_candles)}
+
+[실시간 수급/호가]
+- 체결강도: {self._safe_float((ws_data or {}).get('v_pw', 0.0)):.1f}
+- 매수비율: {self._safe_float((ws_data or {}).get('buy_ratio', 0.0)):.1f}
+- 매수체결량/매도체결량: {int(self._safe_float((ws_data or {}).get('buy_exec_volume', 0))):,} / {int(self._safe_float((ws_data or {}).get('sell_exec_volume', 0))):,}
+- 총매도잔량/총매수잔량: {int(self._safe_float((ws_data or {}).get('ask_tot', 0))):,} / {int(self._safe_float((ws_data or {}).get('bid_tot', 0))):,}
+
+[판정 요청]
+단일 score cutoff로 자르지 말고, 위 흐름이 흡수/회복/분배/붕괴/소강 중 어디에 가까운지 먼저 판단한 뒤 HOLD/TRIM/EXIT를 선택하라.
+"""
+
+    def _normalize_holding_flow_result(self, result):
+        payload = dict(result or {}) if isinstance(result, dict) else {}
+        raw_action = str(payload.get("action", "EXIT") or "EXIT").upper().strip()
+        action = raw_action if raw_action in {"HOLD", "TRIM", "EXIT"} else "EXIT"
+        try:
+            score = int(float(payload.get("score", 0)))
+        except Exception:
+            score = 0
+        evidence = payload.get("evidence")
+        if not isinstance(evidence, list):
+            evidence = [str(evidence)] if evidence else []
+        return {
+            "action": action,
+            "score": max(0, min(100, score)),
+            "flow_state": str(payload.get("flow_state", "-") or "-")[:80],
+            "thesis": str(payload.get("thesis", "-") or "-")[:160],
+            "evidence": [str(item).replace("\n", " ")[:160] for item in evidence[:5]],
+            "reason": str(payload.get("reason", "-") or "-").replace("\n", " ")[:180],
+            "next_review_sec": max(30, min(90, int(self._safe_float(payload.get("next_review_sec", 60), 60)))),
+            "raw": payload,
+        }
+
+    def evaluate_scalping_holding_flow(
+        self,
+        stock_name,
+        stock_code,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        position_ctx,
+        flow_history=None,
+        decision_kind="intraday_exit",
+    ):
+        """Long-window holding/exit flow review used as an operational override."""
+        started = time.perf_counter()
+        if not self.lock.acquire(blocking=False):
+            return self._annotate_analysis_result(
+                {
+                    "action": "EXIT",
+                    "score": 0,
+                    "flow_state": "ai_lock_contention",
+                    "thesis": "AI 경합으로 flow 판정 불가",
+                    "evidence": ["lock_contention"],
+                    "reason": "AI 경합으로 기존 청산 후보를 유지",
+                    "next_review_sec": 30,
+                },
+                prompt_type="holding_exit_flow",
+                prompt_version="flow_v1",
+                response_ms=int((time.perf_counter() - started) * 1000),
+                parse_ok=False,
+                parse_fail=False,
+                fallback_score_50=False,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="lock_contention",
+            )
+
+        try:
+            if self.ai_disabled:
+                result = {
+                    "action": "EXIT",
+                    "score": 0,
+                    "flow_state": "engine_disabled",
+                    "thesis": "AI 엔진 비활성화",
+                    "evidence": ["engine_disabled"],
+                    "reason": "AI 엔진 비활성화로 기존 청산 후보 유지",
+                    "next_review_sec": 30,
+                }
+                return self._annotate_analysis_result(
+                    result,
+                    prompt_type="holding_exit_flow",
+                    prompt_version="flow_v1",
+                    response_ms=int((time.perf_counter() - started) * 1000),
+                    parse_ok=False,
+                    parse_fail=False,
+                    fallback_score_50=False,
+                    cache_hit=False,
+                    cache_mode="miss",
+                    result_source="engine_disabled",
+                )
+
+            user_input = self._format_scalping_holding_flow_context(
+                stock_name,
+                stock_code,
+                ws_data or {},
+                recent_ticks or [],
+                recent_candles or [],
+                position_ctx or {},
+                flow_history=flow_history,
+                decision_kind=decision_kind,
+            )
+            result = self._call_gemini_safe(
+                SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
+                user_input,
+                require_json=True,
+                context_name=f"HOLDING_FLOW:{stock_name}:{decision_kind}",
+                model_override=self._get_tier2_model(),
+                schema_name="holding_exit_flow_v1",
+            )
+            normalized = self._normalize_holding_flow_result(result)
+            self.consecutive_failures = 0
+            self.last_call_time = time.time()
+            return self._annotate_analysis_result(
+                normalized,
+                prompt_type="holding_exit_flow",
+                prompt_version="flow_v1",
+                response_ms=int((time.perf_counter() - started) * 1000),
+                parse_ok=True,
+                parse_fail=False,
+                fallback_score_50=False,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="live",
+            )
+        except Exception as e:
+            self.consecutive_failures += 1
+            log_error(f"🚨 [HOLDING_FLOW] AI 판정 에러 ({stock_name}/{decision_kind}): {e}")
+            return self._annotate_analysis_result(
+                {
+                    "action": "EXIT",
+                    "score": 0,
+                    "flow_state": "exception",
+                    "thesis": "AI flow 판정 실패",
+                    "evidence": [str(e)],
+                    "reason": f"AI flow 판정 실패로 기존 청산 후보 유지: {e}",
+                    "next_review_sec": 30,
+                },
+                prompt_type="holding_exit_flow",
+                prompt_version="flow_v1",
+                response_ms=int((time.perf_counter() - started) * 1000),
+                parse_ok=False,
+                parse_fail=True,
+                fallback_score_50=False,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="exception",
+            )
+        finally:
+            self.lock.release()
+
     def _format_scalping_overnight_context(self, realtime_ctx):
         ctx = realtime_ctx or {}
         lines = [
@@ -2029,7 +2482,7 @@ class GeminiSniperEngine:
         """15:30 SCALPING 포지션의 오버나이트/당일청산 의사결정을 JSON으로 반환합니다."""
         with self.lock:
             user_input = (
-                f"🚨 [15:30 SCALPING 오버나이트 판정 요청]\n"
+                f"🚨 [SCALPING 오버나이트 판정 요청]\n"
                 f"종목명: {stock_name}\n종목코드: {stock_code}\n\n"
                 f"📊 [판정 입력 데이터]\n{self._format_scalping_overnight_context(realtime_ctx)}"
             )

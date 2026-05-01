@@ -20,12 +20,21 @@ def _build_gemini_call_engine():
 
 def _build_deepseek_call_engine():
     engine = DeepSeekSniperEngine.__new__(DeepSeekSniperEngine)
+    engine.lock = threading.Lock()
     engine.api_call_lock = threading.Lock()
     engine.current_model_name = "tier1-model"
+    engine.model_tier2_balanced = "tier2-model"
     engine.model_tier3_deep = "tier3-model"
     engine.api_keys = ["deepseek-key-a", "deepseek-key-b"]
     engine.current_key = "deepseek-key-a"
     engine.current_api_key_index = 0
+    engine.ai_disabled = False
+    engine.consecutive_failures = 0
+    engine.last_call_time = 0.0
+    engine._annotate_analysis_result = lambda result, **meta: {**dict(result), **{
+        "ai_parse_ok": bool(meta.get("parse_ok", False)),
+        "ai_parse_fail": bool(meta.get("parse_fail", False)),
+    }}
 
     def _rotate():
         engine.current_key = (
@@ -158,7 +167,9 @@ def test_call_gemini_safe_applies_endpoint_response_schema_when_flag_enabled(mon
 def test_gemini_response_schema_registry_covers_required_endpoints():
     assert set(GEMINI_RESPONSE_SCHEMA_REGISTRY) == {
         "entry_v1",
+        "entry_price_v1",
         "holding_exit_v1",
+        "holding_exit_flow_v1",
         "overnight_v1",
         "condition_entry_v1",
         "condition_exit_v1",
@@ -193,6 +204,44 @@ def test_call_deepseek_safe_parses_plain_json_without_regex_cleanup():
     )
 
     assert result == {"action": "BUY", "score": 93, "reason": "fast-path"}
+
+
+def test_deepseek_holding_flow_normalizes_payload_and_caps_review_window(monkeypatch):
+    engine = _build_deepseek_call_engine()
+
+    def _fake_call(prompt, user_input, **kwargs):
+        assert "단일 score cutoff로 자르지 말고" in user_input
+        return {
+            "action": "HOLD",
+            "score": "23",
+            "flow_state": "흡수",
+            "thesis": "매도 흡수",
+            "evidence": "틱 매수 우위",
+            "reason": "아직 붕괴보다 흡수에 가까움",
+            "next_review_sec": 120,
+        }
+
+    monkeypatch.setattr(engine, "_call_deepseek_safe", _fake_call)
+
+    result = DeepSeekSniperEngine.evaluate_scalping_holding_flow(
+        engine,
+        "테스트",
+        "005930",
+        {"curr": 10000, "v_pw": 130, "buy_ratio": 60, "ask_tot": 1000, "bid_tot": 1200},
+        [{"price": 10000, "volume": 10, "side": "BUY"}],
+        [
+            {"close": 9900, "high": 10020, "low": 9890, "volume": 1000},
+            {"close": 10000, "high": 10040, "low": 9950, "volume": 1200},
+        ],
+        {"profit_rate": -0.3, "peak_profit": 0.4, "held_sec": 75, "current_ai_score": 31, "worsen_pct": 0.8},
+        flow_history=[{"time": "10:00:00", "action": "HOLD", "flow_state": "흡수", "profit_rate": "+0.10", "exit_rule": "soft"}],
+        decision_kind="intraday_exit",
+    )
+
+    assert result["action"] == "HOLD"
+    assert result["score"] == 23
+    assert result["evidence"] == ["틱 매수 우위"]
+    assert result["next_review_sec"] == 90
 
 
 def test_deepseek_context_aware_backoff_caps_live_and_report_paths(monkeypatch):

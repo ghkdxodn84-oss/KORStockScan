@@ -6,6 +6,14 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 
 이 문서는 체크리스트/Project/Calendar 자동관리 대상이 아닌 독립 workorder다. 목적은 `shadow/canary` 경로를 일괄 삭제하는 것이 아니라, `지속 모니터링 가치`와 `운영/코드 부채`를 함께 평가해 각 경로를 `remove / observe-only / baseline-promote / active-canary` 중 하나로 고정하고, live 전환/병렬 관찰 시 섞이면 안 되는 `cohort`도 함께 분류 기준으로 잠그는 것이다.
 
+운영 정의:
+
+1. `shadow`: 병렬 계산과 로그만 남기고 실주문/실판단은 바꾸지 않는 경로
+2. `active-canary`: ON/OFF 가능한 단일 조작점이 제한된 live cohort에 실제 영향을 주는 경로
+3. `baseline-promote`: 이름은 canary/relief라도 사실상 기본 운영경로처럼 쓰이는 상태
+4. `cohort`: baseline/live/observe/excluded 모집단을 분리해 EV 해석과 rollback을 섞이지 않게 잠그는 단위
+5. `운영 override`: alpha 검증보다 실전 보호/보정 목적이 앞서는 runtime 우선순위 변경. canary와 동일하게 rollback owner와 cohort를 잠가야 한다.
+
 현재 스냅샷:
 
 1. entry live owner는 `mechanical_momentum_latency_relief`다. `latency_quote_fresh_composite`와 `latency_signal_quality_quote_composite`는 `observe-only/historical-reference`로 내린다.
@@ -26,12 +34,14 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 
 | 축 | 상태 | 현재 기준 | 유지/판정 기준 |
 | --- | --- | --- | --- |
-| `mechanical_momentum_latency_relief` | ON, entry active-canary | `SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=True` | 제출 전은 진입병목 회복, 제출 후는 `full/partial` 체결 품질과 BUY 신호 적정성으로 분리 판정 |
+| `mechanical_momentum_latency_relief` | ON, entry operating override | `SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=True` | same-day entry replacement 운영 override다. 제출 전은 진입병목 회복, 제출 후는 `full/partial` 체결 품질과 BUY 신호 적정성으로 분리 판정한다 |
 | `soft_stop_micro_grace` | ON, exit active-canary | `SCALP_SOFT_STOP_MICRO_GRACE_ENABLED=True`, `20초`, emergency `-2.0%` | hard stop 전환, 미체결, same-symbol 손실이 늘면 OFF. 반등 포착 개선이 유지되면 baseline-promote 후보 |
 | `REVERSAL_ADD` | ON, exit active-canary | `REVERSAL_ADD_ENABLED=True` | executed가 계속 0이면 parking 금지. `pnl/hold/supply/qty/position_cap/cooldown/pending/protection` blocker를 좁혀 실행요건을 찾는다 |
 | `bad_entry_refined_canary` | ON, exit active-canary | `SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=True` | naive block 금지. `GOOD_EXIT/MISSED_UPSIDE` 제거가 늘거나 canary cohort 손익이 비적용 후보보다 악화되면 OFF |
 | `initial_entry_qty_cap_1share` | ON, size guard | `SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED=True`, `SCALPING_INITIAL_ENTRY_MAX_QTY=1` | initial/pyramid 원인귀속과 tail 제한이 닫힐 때까지 유지. 확대는 별도 단일축 승인 필요 |
 | `pre_submit_price_guard` | ON, entry guard | `SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED=True` | 비정상 저가 지정가 차단. false block이 확인될 때만 threshold 조정 |
+| `dynamic_entry_price_resolver_p1` | ON, entry baseline-promote 후보 | `SCALPING_ENTRY_PRICE_RESOLVER_ENABLED=True`, `SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS=80` | `target_buy_price`는 reference로만 쓰고 실주문가는 strategy-aware resolver가 결정한다. 일반 스캘핑 `90초`, `BREAKOUT 120초`, `PULLBACK 600초`, `RESERVE 1200초` timeout 분리와 함께 본다 |
+| `dynamic_entry_ai_price_canary_p2` | ON, entry active-canary | `SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED=True`, `entry_price_v1`, min confidence `60`, skip min `80` | submitted 직전 Tier2 AI가 `USE_DEFENSIVE | USE_REFERENCE | IMPROVE_LIMIT | SKIP` 중 하나를 고른다. AI 실패/parse fail/guard 위반은 P1 resolver로 fail-closed하고, best ask 초과나 미체결 방치가 보이면 OFF |
 | `partial_fill_ratio_guard` | ON, fill-quality guard | `SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED=True` | partial/full 분리 판정 유지. partial 악화가 닫히기 전 해제 금지 |
 | `dynamic_vpw` | ON, entry gate | `SCALP_DYNAMIC_VPW_ENABLED=True`, `OBSERVE_ONLY=False` | 체결강도 동적 gate 적용. threshold cycle 산정 후보로 유지 |
 | `dynamic_strength_relief` | ON, baseline-promote 후보 | `SCALP_DYNAMIC_STRENGTH_RELIEF_ENABLED=True` | runtime/log는 relief 기준. 이름상 canary 잔재는 후속 정리 대상 |
@@ -170,6 +180,19 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 | `baseline-promote` | 사실상 운영 기본 경로인데 이름/분기가 아직 canary | 상수명, 로그명, 문서 용어, rollback 표현 정리 범위를 함께 닫는다 |
 | `active-canary` | 아직 실험 축으로 유지해야 함 | 성공 기준, 종료 조건, OFF 조건, baseline 승격 판단 시점을 같이 둔다 |
 
+### 3.0 Canary Live 전환 기준
+
+canary를 `기본 live owner` 또는 `운영 기본값`으로 전환하려면 아래가 같은 판정셋에 함께 닫혀야 한다.
+
+1. `단일 조작점`: 어떤 flag/rule이 live에 영향을 줬는지 코드와 로그에서 1:1 복원 가능
+2. `cohort 복원성`: `applied/not-applied`, `baseline`, `excluded`가 raw event나 compact report에서 분리 가능
+3. `정량 기준`: 최소 `N_min`, 핵심 metric, `COMPLETED + valid profit_rate`, `submitted/full/partial` 등 해당 단계 지표가 문서에 고정
+4. `비악화 조건`: 체결 품질, 손익, missed upside, hard/protect safety, 주문 실패가 허용 guard를 넘지 않음
+5. `rollback 준비`: 즉시 OFF env 또는 restart 절차, rollback owner, 판정 시각이 문서에 존재
+6. `오염 점검`: same-stage 다른 owner, stage-disjoint 다른 축, `initial/pyramid`, `full/partial`, `REVERSAL_ADD` 같은 혼입이 분리돼 있음
+
+위 여섯 항목 중 하나라도 비면 `baseline-promote`나 `기본 live` 전환이 아니라 `active-canary 유지`, `observe-only`, `guarded-off` 중 하나로 남긴다.
+
 후속 코드 액션 연결 규칙은 아래로 고정한다.
 
 1. `remove`
@@ -201,6 +224,7 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 | --- | --- | --- |
 | `baseline-decision` | 기준선 EV/품질 판정의 주 비교모집단 | 기준선 유지 여부 판단에 직접 사용 |
 | `active-canary-decision` | 현재 live canary가 실제로 바꾼 모집단 | baseline과 분리 비교, rollback 직접 연결 |
+| `operating-override-decision` | 운영상 same-day 또는 carry-over override가 실제 live 판단을 바꾼 모집단 | baseline과 분리 비교하되, alpha canary 성과와 합산하지 않고 override owner 기준으로 keep/OFF를 판정 |
 | `provisional-stage-disjoint` | 병렬 canary 예외에서 다른 조작점과 분리된 임시 cohort | hard pass/fail 금지, provisional 판정만 허용 |
 | `observe-only` | 리포트/모니터링에는 남기지만 live go/no-go에는 직접 쓰지 않는 cohort | 오염 탐지/후속 설계 참고용 |
 | `excluded` | fallback, stale snapshot, partial/full 혼합, initial/pyramid 혼합 등 현재 판정에서 제외할 모집단 | 손익/승인 판단 입력 금지 |
@@ -257,7 +281,9 @@ cohort 분류 공통 규칙은 아래로 고정한다.
 | `wait6579_probe_canary_applied` | `guarded-off` | 소량 probe 적용 표본 분리 | `soft_stop_micro_grace` live 관찰 중에는 OFF. 재개하려면 단일 live canary slot을 다시 확보하고 `submitted/full/partial` 회복 기준을 새로 문서화 | `wait6579_ev_cohort`, `2026-04-21 checklist` |
 | `latency_quote_fresh_composite` | `observe-only` | 2026-04-29 이전 live였던 quote freshness 복합 residual 축의 historical/reference cohort | `2026-04-29 08:29 KST` OFF + restart 이후에는 historical/reference 및 감리 비교용으로만 유지. 재개 시 새 승인 항목과 rollback guard 필요 | `Plan Rebase`, `2026-04-29 checklist` |
 | `latency_signal_quality_quote_composite` | `observe-only` | `latency_quote_fresh_composite` replacement로 same-day 시험한 예비 복합축의 post-restart cohort | `2026-04-29 12:21~12:50 KST` replacement cohort 분리와 효과 미약 판정 보존이 끝나면 historical-only로 유지. baseline/live 승격 금지 | `Plan Rebase`, `2026-04-29 checklist` |
-| `mechanical_momentum_latency_relief` | `active-canary-decision` | AI 50/70 mechanical fallback 상태를 포함하는 현재 entry replacement live cohort | `submitted` 전까지는 진입병목 회복으로 보고, `submitted` 이후는 `full/partial` 체결 품질과 `HOLDING/exit_rule/COMPLETED + valid profit_rate`로 BUY 신호 적정성을 분리 판정한 뒤 유지/종료/승격을 결정 | `Plan Rebase`, `2026-04-29 checklist` |
+| `mechanical_momentum_latency_relief` | `operating-override-decision` | AI 50/70 mechanical fallback 상태를 포함하는 현재 entry replacement live cohort | `submitted` 전까지는 진입병목 회복으로 보고, `submitted` 이후는 `full/partial` 체결 품질과 `HOLDING/exit_rule/COMPLETED + valid profit_rate`로 BUY 신호 적정성을 분리 판정한 뒤 keep/OFF/후속 replacement를 결정한다. hard baseline 승격과 분리한다 | `Plan Rebase`, `2026-04-29 checklist` |
+| `dynamic_entry_price_resolver_p1` | `baseline-decision` | reference target과 defensive price 권한을 분리한 기본 entry price resolver cohort | `reference_target_applied/rejected`, `submitted_order_price`, timeout profile, `price_below_bid_bps`가 안정적으로 복원되고 P2 canary의 fallback baseline으로 고정될 때 유지 | `2026-05-04 checklist`, `entry price audit follow-up` |
+| `dynamic_entry_ai_price_canary_p2` | `active-canary-decision` | submitted 직전 Tier2 AI가 live quote/microstructure를 보고 최종 주문가를 조정하는 entry price canary cohort | `USE_DEFENSIVE/REFERENCE/IMPROVE_LIMIT/SKIP` applied 표본과 P1 fallback 표본을 분리해 체결 품질, 미체결 방치, `COMPLETED + valid profit_rate`를 확인한 뒤 유지/종료/승격을 결정 | `2026-05-04 checklist`, `entry price audit follow-up` |
 | `post-restart cohort` | `active-canary-decision` | replacement 이후 same-day 제출 회복 관찰 | replacement 당일 판정이 닫히고 후속 축이 새 `post-change` cohort로 넘어가면 종료. 익일 이후 지속 baseline으로 쓰지 않음 | `2026-04-29 checklist` |
 | `soft_stop qualifying cohort` | `provisional-stage-disjoint` | 보유/청산 live 예외 canary 후보 | `soft_stop_rebound_split` 승인 또는 보류+재시각이 닫히고, qualifying rule이 live 조작점으로 승격되거나 폐기될 때 종료 | `2026-04-27 checklist` |
 | `soft_stop_micro_grace` | `active-canary-decision` | soft_stop 최초 터치 후 짧은 휩쏘 확인유예 | `scalp_soft_stop_pct` 손실/반등 개선이 확인되어 baseline 승격되거나, emergency/hard_stop 악화 또는 soft_stop 지연 부작용으로 OFF 확정될 때 종료 | `2026-04-27 checklist` |
@@ -315,7 +341,7 @@ inventory 운영 규칙은 아래로 고정한다.
 | `latency_guard_canary` | `active-canary` | `guarded-off` | broad fallback override legacy 축 |
 | `latency_quote_fresh_composite` | `observe-only` | `guarded-off` | 2026-04-29 08:29 KST OFF + restart 완료. historical/reference 축 |
 | `latency_signal_quality_quote_composite` | `observe-only` | `guarded-off` | 2026-04-29 12:21~12:50 KST same-day replacement 후 효과 미약 종료 |
-| `mechanical_momentum_latency_relief` | `active-canary` | `limited-live` | current entry live replacement canary. `submitted` 전은 병목, 이후는 fill quality + BUY signal quality observation |
+| `mechanical_momentum_latency_relief` | `operating-override` | `limited-live` | current entry live replacement operating override. `submitted` 전은 병목, 이후는 fill quality + BUY signal quality observation |
 | `soft_stop_expert_defense` | `observe-only` | `guarded-off` | 2026-04-30 same-day v2 수집 종료. 다음 재승인 전 live 유예/청산 변경 없음 |
 | `initial_entry_qty_cap_1share` | `active-canary` | `limited-live` | current initial entry size guard. 2주/3주 확대는 별도 승인 전 observe-only |
 | `reversal_add` | `active-canary` | `limited-live` | valid-entry early pullback recovery. 1주 cap에서도 1주 floor로 소형 canary. current owner is blocker narrowing (`pnl -> hold -> gate`) |
@@ -800,7 +826,7 @@ inventory 운영 규칙은 아래로 고정한다.
 
 ### 4.9A-3 `mechanical_momentum_latency_relief`
 
-- 판정: `active-canary-decision`
+- 판정: `operating-override-decision`
 - live 영향도: `limited-live`
 - 튜닝 모니터링 가치: `High`
   - 이유: `latency_quote_fresh_composite`와 `latency_signal_quality_quote_composite`를 닫은 뒤, AI 50/70 mechanical fallback 상태까지 포함해 제출 drought를 직접 완화하는 현재 entry live replacement 축이다.
@@ -817,7 +843,7 @@ inventory 운영 규칙은 아래로 고정한다.
   3. `2026-04-29 12:57 KST` restart 후 main PID `30566 -> 35539` 교체 provenance가 확보됐다.
 - 다음 액션:
   1. `mechanical_momentum_relief_canary_applied`, `latency_mechanical_momentum_relief_normal_override`, `submitted`까지는 entry 병목 회복으로, `full/partial`, `HOLDING/exit_rule`, `COMPLETED + valid profit_rate`, `fallback_regression=0`는 BUY 신호 품질 관찰로 post-restart cohort를 분리한다.
-  2. baseline 승격 전까지는 same-day 운영 override 1축으로만 유지한다.
+  2. baseline 승격 전까지는 same-day 운영 override 1축으로만 유지한다. 문서상 `active canary`와 혼용하지 않는다.
 
 ### 4.9A-4 `orderbook_stability_observation`
 

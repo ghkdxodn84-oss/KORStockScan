@@ -18,6 +18,7 @@ from src.engine.sniper_time import (
     TIME_09_03,
     TIME_09_05,
     TIME_15_30,
+    TIME_SCALPING_OVERNIGHT_DECISION,
     TIME_SCALPING_NEW_BUY_CUTOFF,
 )
 from src.engine.sniper_condition_handlers_big_bite import (
@@ -55,6 +56,7 @@ from src.engine.sniper_position_tags import (
     normalize_strategy,
 )
 from src.engine.ai_engine import SCALPING_BUY_RECOVERY_CANARY_PROMPT
+from src.trading.order.tick_utils import clamp_price_to_tick
 
 
 KIWOOM_TOKEN = None
@@ -117,6 +119,12 @@ SEND_EXIT_BEST_IOC = None
 DUAL_PERSONA_ENGINE = None
 BIG_BITE_STATE = {}
 _SAME_SYMBOL_SOFT_STOP_TS: dict[str, float] = {}
+_HOLDING_FLOW_OVERRIDE_EXIT_RULES = {
+    "scalp_soft_stop_pct",
+    "scalp_ai_momentum_decay",
+    "scalp_trailing_take_profit",
+    "scalp_bad_entry_refined_canary",
+}
 
 
 def _mutate_stock_state(stock, set_fields: dict | None = None, pop_fields: list | tuple = ()):
@@ -1793,11 +1801,22 @@ def _build_entry_price_snapshot_fields(latency_gate, *, request_price, curr_pric
     reference_target_price = _coerce_int_value(latency_gate.get('target_buy_price'))
     price_below_bid_bps = _compute_price_below_bid_bps(submitted_order_price, best_bid)
 
-    resolution_reason = str(latency_gate.get('entry_price_guard') or 'none')
+    resolution_reason = str(
+        latency_gate.get('price_resolution_reason')
+        or latency_gate.get('entry_price_guard')
+        or 'none'
+    )
     if reference_target_price > 0 and defensive_order_price > 0:
-        if submitted_order_price <= reference_target_price < defensive_order_price:
+        if (
+            submitted_order_price <= reference_target_price < defensive_order_price
+            and not resolution_reason.startswith("ai_tier2_")
+        ):
             resolution_reason = 'reference_target_cap'
-    if defensive_order_price > 0 and submitted_order_price == defensive_order_price:
+    if (
+        defensive_order_price > 0
+        and submitted_order_price == defensive_order_price
+        and resolution_reason not in {'scalping_reference_rejected_defensive'}
+    ):
         resolution_reason = 'defensive_order_price'
 
     return {
@@ -1810,6 +1829,22 @@ def _build_entry_price_snapshot_fields(latency_gate, *, request_price, curr_pric
         'resolved_order_price': submitted_order_price,
         'resolution_reason': resolution_reason,
         'price_below_bid_bps': price_below_bid_bps,
+        'reference_target_applied': bool(latency_gate.get('reference_target_applied')),
+        'reference_target_rejected_reason': str(latency_gate.get('reference_target_rejected_reason') or ''),
+        'reference_target_below_bid_bps': _coerce_int_value(latency_gate.get('reference_target_below_bid_bps')),
+        'reference_target_max_below_bid_bps': _coerce_int_value(
+            latency_gate.get('reference_target_max_below_bid_bps')
+        ),
+        'entry_price_resolver_enabled': bool(latency_gate.get('entry_price_resolver_enabled')),
+        'ai_entry_price_canary_applied': bool(latency_gate.get('ai_entry_price_canary_applied')),
+        'ai_entry_price_canary_action': str(latency_gate.get('ai_entry_price_canary_action') or ''),
+        'ai_entry_price_canary_confidence': _coerce_int_value(
+            latency_gate.get('ai_entry_price_canary_confidence')
+        ),
+        'ai_entry_price_canary_reason': str(latency_gate.get('ai_entry_price_canary_reason') or ''),
+        'ai_entry_price_canary_max_wait_sec': _coerce_int_value(
+            latency_gate.get('ai_entry_price_canary_max_wait_sec')
+        ),
     }
 
 
@@ -1822,6 +1857,209 @@ def _is_pre_submit_price_guard_block(strategy, price, best_bid):
     if threshold_bps < 0:
         return False
     return _compute_price_below_bid_bps(price, best_bid) > threshold_bps
+
+
+def _resolve_buy_order_timeout_sec(stock, strategy):
+    normalized_strategy = 'SCALPING' if str(strategy or '').upper() in ('SCALPING', 'SCALP') else str(strategy or '').upper()
+    if normalized_strategy != 'SCALPING':
+        if _coerce_int_value((stock or {}).get('target_buy_price')) > 0:
+            return _rule_int('RESERVE_TIMEOUT_SEC', 1200)
+        return _rule_int('ORDER_TIMEOUT_SEC', 30)
+
+    explicit_timeout = _coerce_int_value((stock or {}).get('entry_timeout_sec_override'))
+    if explicit_timeout > 0:
+        return max(5, min(1200, explicit_timeout))
+
+    profile = str(
+        (stock or {}).get('entry_timeout_profile')
+        or (stock or {}).get('entry_price_timeout_profile')
+        or (stock or {}).get('entry_mode')
+        or ''
+    ).strip().upper()
+    pos_tag = normalize_position_tag('SCALPING', (stock or {}).get('position_tag'))
+
+    if profile in {'RESERVE', 'RESERVED'} or pos_tag in {'RESERVE', 'RESERVED'}:
+        return _rule_int('SCALPING_RESERVE_ENTRY_TIMEOUT_SEC', 1200)
+    if 'PULLBACK' in profile or 'PULLBACK' in pos_tag:
+        return _rule_int('SCALPING_PULLBACK_ENTRY_TIMEOUT_SEC', 600)
+    if 'BREAKOUT' in profile or 'BREAKOUT' in pos_tag:
+        return _rule_int('SCALPING_BREAKOUT_ENTRY_TIMEOUT_SEC', 120)
+    return _rule_int('SCALPING_ENTRY_TIMEOUT_SEC', 90)
+
+
+def _build_entry_ai_price_context(stock, latency_gate, *, curr_price, best_bid, best_ask):
+    return {
+        "strategy": normalize_strategy((stock or {}).get("strategy")),
+        "position_tag": normalize_position_tag("SCALPING", (stock or {}).get("position_tag")),
+        "current_price": _coerce_int_value(curr_price),
+        "best_bid": _coerce_int_value(best_bid),
+        "best_ask": _coerce_int_value(best_ask),
+        "reference_target_price": _coerce_int_value((latency_gate or {}).get("target_buy_price")),
+        "defensive_order_price": _coerce_int_value((latency_gate or {}).get("latency_guarded_order_price")),
+        "normal_defensive_order_price": _coerce_int_value((latency_gate or {}).get("normal_defensive_order_price")),
+        "resolved_order_price": _coerce_int_value((latency_gate or {}).get("order_price")),
+        "resolution_reason": str((latency_gate or {}).get("price_resolution_reason") or ""),
+        "price_below_bid_bps": _compute_price_below_bid_bps(
+            _coerce_int_value((latency_gate or {}).get("order_price")),
+            best_bid,
+        ),
+        "reference_target_below_bid_bps": _coerce_int_value((latency_gate or {}).get("reference_target_below_bid_bps")),
+        "latency_state": str((latency_gate or {}).get("latency_state") or ""),
+        "ws_age_ms": _coerce_int_value((latency_gate or {}).get("ws_age_ms")),
+        "ws_jitter_ms": _coerce_int_value((latency_gate or {}).get("ws_jitter_ms")),
+        "spread_ratio": float((latency_gate or {}).get("spread_ratio", 0.0) or 0.0),
+        "quote_stale": bool((latency_gate or {}).get("quote_stale")),
+        "signal_score": round(float((stock or {}).get("rt_ai_prob", (stock or {}).get("prob", 0.0)) or 0.0) * 100.0, 2),
+    }
+
+
+def _apply_entry_ai_price_canary(
+    *,
+    stock,
+    code,
+    strategy,
+    ws_data,
+    ai_engine,
+    latency_gate,
+    planned_orders,
+    curr_price,
+    best_bid,
+    best_ask,
+):
+    if strategy not in ("SCALPING", "SCALP"):
+        return planned_orders, False
+    if not bool(_rule("SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED", True)):
+        return planned_orders, False
+    if ai_engine is None or not hasattr(ai_engine, "evaluate_scalping_entry_price"):
+        _log_entry_pipeline(stock, code, "entry_ai_price_canary_fallback", reason="ai_engine_unavailable")
+        return planned_orders, False
+
+    current_price = _coerce_int_value(curr_price)
+    defensive_price = _coerce_int_value((latency_gate or {}).get("latency_guarded_order_price"))
+    reference_price = _coerce_int_value((latency_gate or {}).get("target_buy_price"))
+    resolved_price = _coerce_int_value((latency_gate or {}).get("order_price"))
+    price_ctx = _build_entry_ai_price_context(
+        stock,
+        latency_gate,
+        curr_price=current_price,
+        best_bid=best_bid,
+        best_ask=best_ask,
+    )
+
+    try:
+        tick_limit = int(_rule("SCALPING_ENTRY_AI_PRICE_TICK_LIMIT", 20) or 20)
+        candle_limit = int(_rule("SCALPING_ENTRY_AI_PRICE_CANDLE_LIMIT", 20) or 20)
+        recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=tick_limit) or []
+        recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=candle_limit) or []
+    except Exception as exc:
+        _log_entry_pipeline(stock, code, "entry_ai_price_canary_fallback", reason="context_fetch_failed", error=str(exc)[:160])
+        return planned_orders, False
+
+    result = ai_engine.evaluate_scalping_entry_price(
+        stock.get("name"),
+        code,
+        ws_data or {},
+        recent_ticks,
+        recent_candles,
+        price_ctx,
+    )
+    action = str((result or {}).get("action") or "USE_DEFENSIVE").strip().upper()
+    confidence = _coerce_int_value((result or {}).get("confidence"))
+    min_confidence = int(_rule("SCALPING_ENTRY_AI_PRICE_MIN_CONFIDENCE", 60) or 60)
+    skip_min_confidence = int(_rule("SCALPING_ENTRY_AI_PRICE_SKIP_MIN_CONFIDENCE", 80) or 80)
+    reason = str((result or {}).get("reason") or "")
+    parse_ok = bool((result or {}).get("ai_parse_ok", True))
+    parse_fail = bool((result or {}).get("ai_parse_fail", False))
+    source = str((result or {}).get("ai_result_source") or (result or {}).get("result_source") or "live")
+
+    if parse_fail or not parse_ok:
+        _log_entry_pipeline(
+            stock, code, "entry_ai_price_canary_fallback", reason="parse_or_ai_fail",
+            action=action, confidence=confidence, source=source,
+        )
+        return planned_orders, False
+    if confidence < min_confidence:
+        _log_entry_pipeline(
+            stock, code, "entry_ai_price_canary_fallback", reason="low_confidence",
+            action=action, confidence=confidence, min_confidence=min_confidence,
+        )
+        return planned_orders, False
+
+    if action == "SKIP":
+        if confidence < skip_min_confidence:
+            _log_entry_pipeline(
+                stock, code, "entry_ai_price_canary_fallback", reason="skip_low_confidence",
+                action=action, confidence=confidence, skip_min_confidence=skip_min_confidence,
+            )
+            return planned_orders, False
+        latency_gate["ai_entry_price_canary_action"] = action
+        latency_gate["ai_entry_price_canary_confidence"] = confidence
+        latency_gate["ai_entry_price_canary_reason"] = reason
+        _log_entry_pipeline(
+            stock, code, "entry_ai_price_canary_skip_order",
+            action=action, confidence=confidence, reason=reason[:160],
+        )
+        return [], True
+
+    if action == "USE_REFERENCE":
+        candidate_price = reference_price
+    elif action == "IMPROVE_LIMIT":
+        candidate_price = _coerce_int_value((result or {}).get("order_price"))
+    else:
+        action = "USE_DEFENSIVE"
+        candidate_price = defensive_price or resolved_price
+
+    if candidate_price <= 0:
+        _log_entry_pipeline(stock, code, "entry_ai_price_canary_fallback", reason="invalid_price", action=action)
+        return planned_orders, False
+    candidate_price = clamp_price_to_tick(candidate_price)
+    if candidate_price <= 0:
+        _log_entry_pipeline(stock, code, "entry_ai_price_canary_fallback", reason="invalid_price", action=action)
+        return planned_orders, False
+    if best_ask > 0 and candidate_price > best_ask:
+        _log_entry_pipeline(
+            stock, code, "entry_ai_price_canary_fallback", reason="above_best_ask",
+            action=action, candidate_price=candidate_price, best_ask=best_ask,
+        )
+        return planned_orders, False
+    if _is_pre_submit_price_guard_block(strategy, candidate_price, best_bid):
+        _log_entry_pipeline(
+            stock, code, "entry_ai_price_canary_fallback", reason="pre_submit_price_guard",
+            action=action, candidate_price=candidate_price, best_bid=best_bid,
+        )
+        return planned_orders, False
+
+    adjusted_orders = []
+    for order in planned_orders or []:
+        next_order = dict(order)
+        if str(next_order.get("tif", "DAY") or "DAY").upper() != "IOC":
+            next_order["price"] = candidate_price
+        adjusted_orders.append(next_order)
+
+    max_wait_sec = max(5, min(1200, _coerce_int_value((result or {}).get("max_wait_sec"), 90)))
+    latency_gate["orders"] = adjusted_orders
+    latency_gate["order_price"] = candidate_price
+    latency_gate["price_resolution_reason"] = f"ai_tier2_{action.lower()}"
+    latency_gate["ai_entry_price_canary_applied"] = True
+    latency_gate["ai_entry_price_canary_action"] = action
+    latency_gate["ai_entry_price_canary_confidence"] = confidence
+    latency_gate["ai_entry_price_canary_reason"] = reason
+    latency_gate["ai_entry_price_canary_max_wait_sec"] = max_wait_sec
+    _mutate_stock_state(stock, set_fields={"entry_timeout_sec_override": max_wait_sec})
+    _log_entry_pipeline(
+        stock,
+        code,
+        "entry_ai_price_canary_applied",
+        action=action,
+        confidence=confidence,
+        reason=reason[:160],
+        original_order_price=resolved_price,
+        candidate_price=candidate_price,
+        reference_target_price=reference_price,
+        defensive_order_price=defensive_price,
+        max_wait_sec=max_wait_sec,
+    )
+    return adjusted_orders, True
 
 
 def _get_ws_snapshot_age_sec(ws_data):
@@ -1985,6 +2223,363 @@ def _build_ai_ops_log_fields(
     if ai_cooldown_blocked is not None:
         out["ai_cooldown_blocked"] = bool(ai_cooldown_blocked)
     return out
+
+
+def _append_holding_flow_history(stock: dict, *, now_ts: float, exit_rule: str, profit_rate: float, flow_result: dict) -> None:
+    history = list(stock.get("holding_flow_review_history") or [])
+    history.append(
+        {
+            "time": datetime.fromtimestamp(float(now_ts or time.time())).strftime("%H:%M:%S"),
+            "action": str(flow_result.get("action", "-") or "-"),
+            "flow_state": str(flow_result.get("flow_state", "-") or "-"),
+            "score": _safe_int(flow_result.get("score"), 0),
+            "profit_rate": f"{float(profit_rate or 0.0):+.2f}",
+            "exit_rule": exit_rule or "-",
+            "reason": str(flow_result.get("reason", "-") or "-")[:120],
+        }
+    )
+    _mutate_stock_state(stock, set_fields={"holding_flow_review_history": history[-5:]})
+
+
+def _flow_evidence_text(flow_result: dict) -> str:
+    evidence = flow_result.get("evidence") if isinstance(flow_result, dict) else None
+    if isinstance(evidence, list):
+        cleaned = [str(item).replace("\n", " ").strip() for item in evidence if str(item).strip()]
+        return "|".join(cleaned[:5]) if cleaned else "-"
+    return str(evidence or "-").replace("\n", " ")
+
+
+def _holding_flow_override_applicable(strategy: str, exit_rule: str) -> bool:
+    return (
+        _rule_bool("HOLDING_FLOW_OVERRIDE_ENABLED", True)
+        and str(strategy or "").upper() == "SCALPING"
+        and str(exit_rule or "").strip() in _HOLDING_FLOW_OVERRIDE_EXIT_RULES
+    )
+
+
+def _overnight_flow_override_worsen_from_candidate(stock: dict, profit_rate: float) -> float:
+    candidate_profit = _safe_float(stock.get("overnight_flow_override_candidate_profit"), profit_rate)
+    return float(candidate_profit or 0.0) - float(profit_rate or 0.0)
+
+
+def _should_revert_overnight_flow_override_hold(stock: dict, profit_rate: float, now_t) -> bool:
+    if not stock.get("overnight_flow_override_hold"):
+        return False
+    if not (TIME_SCALPING_OVERNIGHT_DECISION <= now_t < TIME_15_30):
+        return False
+    worsen_pct = max(
+        0.0,
+        _safe_float(
+            stock.get("overnight_flow_override_worsen_pct"),
+            _rule_float("HOLDING_FLOW_OVERRIDE_WORSEN_PCT", 0.80),
+        ),
+    )
+    return (_overnight_flow_override_worsen_from_candidate(stock, profit_rate) + 1e-9) >= worsen_pct
+
+
+def _evaluate_holding_flow_override(
+    *,
+    stock: dict,
+    code: str,
+    strategy: str,
+    ws_data: dict,
+    ai_engine,
+    exit_rule: str,
+    sell_reason_type: str,
+    reason: str,
+    profit_rate: float,
+    peak_profit: float,
+    drawdown: float,
+    current_ai_score: float,
+    held_sec: int,
+    curr_price: int,
+    buy_price: float,
+    now_ts: float,
+) -> bool:
+    """Return True when the original exit should proceed."""
+    if not _holding_flow_override_applicable(strategy, exit_rule):
+        return True
+
+    if ai_engine is None or not hasattr(ai_engine, "evaluate_scalping_holding_flow"):
+        _log_holding_pipeline(
+            stock,
+            code,
+            "holding_flow_override_force_exit",
+            exit_rule=exit_rule,
+            force_reason="ai_engine_unavailable",
+            profit_rate=f"{profit_rate:+.2f}",
+            peak_profit=f"{peak_profit:+.2f}",
+        )
+        return True
+
+    worsen_pct = max(0.0, _rule_float("HOLDING_FLOW_OVERRIDE_WORSEN_PCT", 0.80))
+    max_defer_sec = max(1, _rule_int("HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC", 90))
+    min_review_sec = max(1, _rule_int("HOLDING_FLOW_REVIEW_MIN_INTERVAL_SEC", 30))
+    max_review_sec = max(min_review_sec, _rule_int("HOLDING_FLOW_REVIEW_MAX_INTERVAL_SEC", 90))
+    price_trigger_pct = max(0.0, _rule_float("HOLDING_FLOW_REVIEW_PRICE_TRIGGER_PCT", 0.35))
+    max_ws_age = max(0.0, _rule_float("HOLDING_FLOW_REVIEW_MAX_WS_AGE_SEC", 3.0))
+    candidate_key = f"{exit_rule}:{sell_reason_type}"
+    existing_key = str(stock.get("holding_flow_override_candidate_key", "") or "")
+    candidate_started_at = _safe_float(stock.get("holding_flow_override_started_at"), 0.0)
+    candidate_profit = _safe_float(stock.get("holding_flow_override_candidate_profit"), profit_rate)
+
+    if existing_key != candidate_key or candidate_started_at <= 0:
+        candidate_started_at = now_ts
+        candidate_profit = profit_rate
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "holding_flow_override_candidate_key": candidate_key,
+                "holding_flow_override_started_at": now_ts,
+                "holding_flow_override_candidate_profit": profit_rate,
+                "holding_flow_override_exit_rule": exit_rule,
+            },
+        )
+
+    elapsed_sec = max(0, int(now_ts - candidate_started_at))
+    worsen_from_candidate = float(candidate_profit or 0.0) - float(profit_rate or 0.0)
+    last_review_at = _safe_float(stock.get("holding_flow_override_last_review_at"), 0.0)
+    last_review_profit = _safe_float(stock.get("holding_flow_override_last_review_profit"), profit_rate)
+    last_review_action = str(stock.get("holding_flow_override_last_action", "") or "").upper()
+    review_elapsed_sec = max(0, int(now_ts - last_review_at)) if last_review_at > 0 else None
+    profit_move_since_review = abs(float(profit_rate or 0.0) - float(last_review_profit or 0.0))
+    if elapsed_sec >= max_defer_sec:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "holding_flow_override_force_exit",
+            exit_rule=exit_rule,
+            force_reason="max_defer_sec",
+            elapsed_sec=elapsed_sec,
+            max_defer_sec=max_defer_sec,
+            profit_rate=f"{profit_rate:+.2f}",
+            candidate_profit=f"{candidate_profit:+.2f}",
+        )
+        return True
+    if worsen_from_candidate >= worsen_pct:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "holding_flow_override_force_exit",
+            exit_rule=exit_rule,
+            force_reason="worsen_floor",
+            worsen_from_candidate=f"{worsen_from_candidate:.2f}",
+            worsen_pct=f"{worsen_pct:.2f}",
+            profit_rate=f"{profit_rate:+.2f}",
+            candidate_profit=f"{candidate_profit:+.2f}",
+        )
+        return True
+
+    if (
+        last_review_at > 0
+        and last_review_action in {"HOLD", "TRIM"}
+        and review_elapsed_sec is not None
+        and review_elapsed_sec < max_review_sec
+        and (review_elapsed_sec < min_review_sec or profit_move_since_review < price_trigger_pct)
+    ):
+        _log_holding_pipeline(
+            stock,
+            code,
+            "holding_flow_override_defer_exit",
+            exit_rule=exit_rule,
+            original_sell_reason_type=sell_reason_type,
+            flow_action=last_review_action,
+            flow_state=stock.get("holding_flow_override_last_flow_state", "-"),
+            flow_score=_safe_int(stock.get("holding_flow_override_last_score"), 0),
+            flow_reason=stock.get("holding_flow_override_last_reason", "review_interval_hold"),
+            profit_rate=f"{profit_rate:+.2f}",
+            candidate_profit=f"{candidate_profit:+.2f}",
+            worsen_pct=f"{worsen_pct:.2f}",
+            elapsed_sec=elapsed_sec,
+            review_elapsed_sec=review_elapsed_sec,
+            profit_move_since_review=f"{profit_move_since_review:.2f}",
+            min_review_sec=min_review_sec,
+            max_review_sec=max_review_sec,
+            price_trigger_pct=f"{price_trigger_pct:.2f}",
+        )
+        _emit_stat_action_decision_snapshot(
+            stock=stock,
+            code=code,
+            strategy=strategy,
+            ws_data=ws_data,
+            chosen_action="hold_wait",
+            eligible_actions=["hold_wait", "exit_now"],
+            rejected_actions=[f"exit_now:flow_{last_review_action.lower()}_interval"],
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            current_ai_score=current_ai_score,
+            held_sec=held_sec,
+            curr_price=curr_price,
+            buy_price=buy_price,
+            exit_rule=exit_rule or "-",
+            sell_reason_type=sell_reason_type or "-",
+            reason=f"holding_flow_override_interval:{stock.get('holding_flow_override_last_reason', '-')}",
+            force=True,
+        )
+        return False
+
+    ws_age_sec = _get_ws_snapshot_age_sec(ws_data)
+    if ws_age_sec is not None and max_ws_age > 0 and ws_age_sec > max_ws_age:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "holding_flow_override_force_exit",
+            exit_rule=exit_rule,
+            force_reason="ws_stale",
+            ws_age_sec=f"{ws_age_sec:.2f}",
+            max_ws_age_sec=f"{max_ws_age:.2f}",
+            profit_rate=f"{profit_rate:+.2f}",
+        )
+        return True
+
+    tick_limit = max(1, _rule_int("HOLDING_FLOW_REVIEW_TICK_LIMIT", 30))
+    candle_limit = max(1, _rule_int("HOLDING_FLOW_REVIEW_CANDLE_LIMIT", 60))
+    try:
+        recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=tick_limit)
+        recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=candle_limit)
+    except Exception as exc:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "holding_flow_override_force_exit",
+            exit_rule=exit_rule,
+            force_reason="context_fetch_failed",
+            error=str(exc)[:160],
+            profit_rate=f"{profit_rate:+.2f}",
+        )
+        return True
+
+    if not recent_ticks:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "holding_flow_override_force_exit",
+            exit_rule=exit_rule,
+            force_reason="no_recent_ticks",
+            profit_rate=f"{profit_rate:+.2f}",
+        )
+        return True
+
+    position_ctx = {
+        "exit_rule": exit_rule,
+        "sell_reason_type": sell_reason_type,
+        "reason": reason,
+        "buy_price": buy_price,
+        "curr_price": curr_price,
+        "profit_rate": profit_rate,
+        "peak_profit": peak_profit,
+        "drawdown": drawdown,
+        "held_sec": held_sec,
+        "current_ai_score": current_ai_score,
+        "worsen_pct": worsen_pct,
+    }
+    flow_result = ai_engine.evaluate_scalping_holding_flow(
+        stock.get("name", code),
+        code,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        position_ctx,
+        flow_history=stock.get("holding_flow_review_history") or [],
+        decision_kind="intraday_exit",
+    )
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "holding_flow_override_last_review_at": now_ts,
+            "holding_flow_override_last_review_profit": profit_rate,
+            "holding_flow_override_last_action": str(flow_result.get("action", "EXIT") or "EXIT").upper(),
+            "holding_flow_override_last_flow_state": str(flow_result.get("flow_state", "-") or "-"),
+            "holding_flow_override_last_score": _safe_int(flow_result.get("score"), 0),
+            "holding_flow_override_last_reason": str(flow_result.get("reason", "-") or "-")[:160],
+            "holding_flow_override_next_review_sec": _safe_int(flow_result.get("next_review_sec"), min_review_sec),
+        },
+    )
+    _append_holding_flow_history(
+        stock,
+        now_ts=now_ts,
+        exit_rule=exit_rule,
+        profit_rate=profit_rate,
+        flow_result=flow_result,
+    )
+    flow_action = str(flow_result.get("action", "EXIT") or "EXIT").upper()
+    parse_failed = bool(flow_result.get("ai_parse_fail")) or flow_action not in {"HOLD", "TRIM", "EXIT"}
+    _log_holding_pipeline(
+        stock,
+        code,
+        "holding_flow_override_review",
+        exit_rule=exit_rule,
+        candidate_reason=reason,
+        flow_action=flow_action,
+        flow_state=flow_result.get("flow_state", "-"),
+        flow_score=_safe_int(flow_result.get("score"), 0),
+        flow_reason=flow_result.get("reason", "-"),
+        flow_evidence=_flow_evidence_text(flow_result),
+        profit_rate=f"{profit_rate:+.2f}",
+        peak_profit=f"{peak_profit:+.2f}",
+        held_sec=held_sec,
+        elapsed_sec=elapsed_sec,
+        worsen_from_candidate=f"{worsen_from_candidate:.2f}",
+        ai_parse_fail=parse_failed,
+    )
+    if parse_failed:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "holding_flow_override_force_exit",
+            exit_rule=exit_rule,
+            force_reason="parse_fail",
+            profit_rate=f"{profit_rate:+.2f}",
+        )
+        return True
+    if flow_action == "EXIT":
+        _log_holding_pipeline(
+            stock,
+            code,
+            "holding_flow_override_exit_confirmed",
+            exit_rule=exit_rule,
+            flow_state=flow_result.get("flow_state", "-"),
+            flow_score=_safe_int(flow_result.get("score"), 0),
+            profit_rate=f"{profit_rate:+.2f}",
+        )
+        return True
+
+    _log_holding_pipeline(
+        stock,
+        code,
+        "holding_flow_override_defer_exit",
+        exit_rule=exit_rule,
+        original_sell_reason_type=sell_reason_type,
+        flow_action=flow_action,
+        flow_state=flow_result.get("flow_state", "-"),
+        flow_score=_safe_int(flow_result.get("score"), 0),
+        flow_reason=flow_result.get("reason", "-"),
+        flow_evidence=_flow_evidence_text(flow_result),
+        profit_rate=f"{profit_rate:+.2f}",
+        candidate_profit=f"{candidate_profit:+.2f}",
+        worsen_pct=f"{worsen_pct:.2f}",
+        elapsed_sec=elapsed_sec,
+    )
+    _emit_stat_action_decision_snapshot(
+        stock=stock,
+        code=code,
+        strategy=strategy,
+        ws_data=ws_data,
+        chosen_action="hold_wait",
+        eligible_actions=["hold_wait", "exit_now"],
+        rejected_actions=[f"exit_now:flow_{flow_action.lower()}"],
+        profit_rate=profit_rate,
+        peak_profit=peak_profit,
+        current_ai_score=current_ai_score,
+        held_sec=held_sec,
+        curr_price=curr_price,
+        buy_price=buy_price,
+        exit_rule=exit_rule or "-",
+        sell_reason_type=sell_reason_type or "-",
+        reason=f"holding_flow_override:{flow_result.get('reason', '-')}",
+        force=True,
+    )
+    return False
 
 
 def _extract_buy_recovery_probe_features(ai_engine, ws_data, recent_ticks, recent_candles):
@@ -3047,6 +3642,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     now_ts = runtime["now_ts"]
     cooldowns = runtime["cooldowns"]
     alerted_stocks = runtime["alerted_stocks"]
+    ai_engine = runtime.get("ai_engine")
 
     if not admin_id:
         log_info(f"⚠️ [매수보류] {stock['name']}: 관리자 ID가 없습니다.")
@@ -3221,6 +3817,25 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 f"qty={original_qty}->{scaled_qty} cap={initial_entry_qty_cap} entry_mode={entry_mode}"
             )
 
+    planned_orders, ai_price_canary_touched = _apply_entry_ai_price_canary(
+        stock=stock,
+        code=code,
+        strategy=strategy,
+        ws_data=ws_data,
+        ai_engine=ai_engine,
+        latency_gate=latency_gate,
+        planned_orders=planned_orders,
+        curr_price=curr_price,
+        best_bid=best_bid_at_submit,
+        best_ask=best_ask_at_submit,
+    )
+    if ai_price_canary_touched:
+        latency_gate["orders"] = planned_orders
+        latency_price_snapshot = _build_entry_price_snapshot_fields(
+            latency_gate, request_price=latency_gate.get('order_price', 0), curr_price=curr_price,
+            best_bid=best_bid_at_submit, best_ask=best_ask_at_submit,
+        )
+
     _log_entry_pipeline(
         stock, code, "latency_pass", mode=entry_mode, decision=latency_gate.get('decision'),
         latency=latency_gate.get('latency_state'), orders=len(planned_orders), reason=latency_gate.get('reason'),
@@ -3235,7 +3850,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         normal_defensive_order_price=int(latency_gate.get('normal_defensive_order_price', 0) or 0),
         latency_guarded_order_price=int(latency_gate.get('latency_guarded_order_price', 0) or 0),
         counterfactual_order_price_1tick=int(latency_gate.get('counterfactual_order_price_1tick', 0) or 0),
-        order_price=int(latency_gate.get('order_price', 0) or 0), **latency_price_snapshot,
+        order_price=int(latency_gate.get('order_price', 0) or 0),
+        **latency_price_snapshot,
         **_build_ai_overlap_log_fields(
             stock=stock, ai_score=latency_signal_score, momentum_tag=stock.get("entry_momentum_tag"),
             threshold_profile=stock.get("entry_threshold_profile"), overbought_blocked=False, blocked_stage="-",
@@ -3826,7 +4442,7 @@ def _reconcile_pending_entry_orders(stock, code, strategy):
     if order_time <= 0:
         return
 
-    timeout_sec = 20 if strategy == 'SCALPING' else _rule_int('ORDER_TIMEOUT_SEC', 30)
+    timeout_sec = _resolve_buy_order_timeout_sec(stock, strategy)
     if time.time() - order_time <= timeout_sec:
         return
 
@@ -4075,6 +4691,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
         "cooldowns": cooldowns,
         "alerted_stocks": alerted_stocks,
         "event_bus": event_bus,
+        "ai_engine": ai_engine,
     }
     config = {
         "MAX_SCALP_SURGE_PCT": MAX_SCALP_SURGE_PCT,
@@ -4868,6 +5485,36 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             reason = f"🛑 하드스탑 도달 ({hard_stop_pct}%) [AI: {current_ai_score:.0f}]"
             exit_rule = "scalp_hard_stop_pct"
 
+        elif (
+            _should_revert_overnight_flow_override_hold(stock, profit_rate, now_t)
+        ):
+            overnight_candidate_profit = _safe_float(stock.get("overnight_flow_override_candidate_profit"), profit_rate)
+            overnight_worsen_pct = max(
+                0.0,
+                _safe_float(
+                    stock.get("overnight_flow_override_worsen_pct"),
+                    _rule_float("HOLDING_FLOW_OVERRIDE_WORSEN_PCT", 0.80),
+                ),
+            )
+            overnight_worsen = overnight_candidate_profit - float(profit_rate or 0.0)
+            is_sell_signal = True
+            sell_reason_type = "LOSS" if profit_rate < 0 else "TRAILING"
+            reason = (
+                f"🌙 오버나이트 flow 보류 후 추가악화 "
+                f"({overnight_worsen:.2f}%p >= {overnight_worsen_pct:.2f}%p)"
+            )
+            exit_rule = "overnight_flow_worsen_revert"
+            _log_holding_pipeline(
+                stock,
+                code,
+                "overnight_flow_override_revert_sell_today",
+                exit_rule=exit_rule,
+                profit_rate=f"{profit_rate:+.2f}",
+                candidate_profit=f"{overnight_candidate_profit:+.2f}",
+                worsen_from_candidate=f"{overnight_worsen:.2f}",
+                worsen_pct=f"{overnight_worsen_pct:.2f}",
+            )
+
         elif bad_entry_refined_decision.get("should_exit"):
             is_sell_signal = True
             sell_reason_type = "LOSS"
@@ -5255,6 +5902,26 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             exit_rule = "kospi_regime_stop_loss"
 
     if is_sell_signal:
+        if not _evaluate_holding_flow_override(
+            stock=stock,
+            code=code,
+            strategy=strategy,
+            ws_data=ws_data,
+            ai_engine=ai_engine,
+            exit_rule=exit_rule,
+            sell_reason_type=sell_reason_type,
+            reason=reason,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            drawdown=_safe_float(locals().get("drawdown"), 0.0),
+            current_ai_score=current_ai_score,
+            held_sec=held_sec,
+            curr_price=curr_p,
+            buy_price=buy_p,
+            now_ts=now_ts,
+        ):
+            return
+
         fallback_gate = None
         fallback_action = None
         fallback_candidate = False
@@ -6251,10 +6918,7 @@ def handle_buy_ordered_state(stock, code):
     raw_strategy = (stock.get('strategy') or 'KOSPI_ML').upper()
     strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
 
-    if stock.get('target_buy_price', 0) > 0:
-        timeout_sec = _rule_int('RESERVE_TIMEOUT_SEC', 1200)
-    else:
-        timeout_sec = 20 if strategy == 'SCALPING' else _rule_int('ORDER_TIMEOUT_SEC', 30)
+    timeout_sec = _resolve_buy_order_timeout_sec(stock, strategy)
 
     if _has_open_pending_entry_orders(stock) and time_elapsed > timeout_sec:
         _reconcile_pending_entry_orders(stock, code, strategy)

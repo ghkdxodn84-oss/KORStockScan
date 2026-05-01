@@ -945,6 +945,12 @@ def test_scale_in_guard_ignores_nat_like_last_add_at(monkeypatch):
     )
     monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
     monkeypatch.setattr(state_handlers.time, "time", lambda: 1_000.0)
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 5, 1, 10, 0, 0)
+
+    monkeypatch.setattr(state_handlers, "datetime", FixedDateTime)
 
     stock = {
         "name": "TEST",
@@ -1483,6 +1489,155 @@ def test_watching_state_blocks_deep_below_bid_pre_submit_price(monkeypatch):
     assert by_stage["pre_submit_price_guard_block"]["max_below_bid_bps"] == 80
     assert by_stage["pre_submit_price_guard_block"]["resolution_reason"] == "reference_target_cap"
     assert by_stage["order_bundle_failed"] == {}
+
+
+def test_scalping_entry_timeout_uses_strategy_profile_not_target_price(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALPING_ENTRY_TIMEOUT_SEC=90,
+            SCALPING_BREAKOUT_ENTRY_TIMEOUT_SEC=120,
+            SCALPING_PULLBACK_ENTRY_TIMEOUT_SEC=600,
+            SCALPING_RESERVE_ENTRY_TIMEOUT_SEC=1200,
+        ),
+    )
+
+    assert state_handlers._resolve_buy_order_timeout_sec(
+        {"target_buy_price": 48_800, "position_tag": "SCANNER"},
+        "SCALPING",
+    ) == 90
+    assert state_handlers._resolve_buy_order_timeout_sec(
+        {"target_buy_price": 48_800, "position_tag": "BREAKOUT"},
+        "SCALPING",
+    ) == 120
+    assert state_handlers._resolve_buy_order_timeout_sec(
+        {"target_buy_price": 48_800, "position_tag": "PULLBACK"},
+        "SCALPING",
+    ) == 600
+    assert state_handlers._resolve_buy_order_timeout_sec(
+        {"target_buy_price": 48_800, "entry_timeout_profile": "RESERVE"},
+        "SCALPING",
+    ) == 1200
+
+
+def test_entry_ai_price_canary_improves_live_order_price(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED=True,
+            SCALPING_ENTRY_AI_PRICE_MIN_CONFIDENCE=60,
+            SCALPING_ENTRY_AI_PRICE_SKIP_MIN_CONFIDENCE=80,
+        ),
+    )
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [{"price": 10020}])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [{"close": 10020}])
+    logs = []
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+
+    class DummyAI:
+        def evaluate_scalping_entry_price(self, *args, **kwargs):
+            return {
+                "action": "IMPROVE_LIMIT",
+                "order_price": 10010,
+                "confidence": 72,
+                "reason": "호가 흡수 지속",
+                "max_wait_sec": 45,
+                "ai_parse_ok": True,
+                "ai_parse_fail": False,
+            }
+
+    latency_gate = {
+        "target_buy_price": 9980,
+        "latency_guarded_order_price": 9990,
+        "normal_defensive_order_price": 9990,
+        "order_price": 9990,
+        "price_resolution_reason": "defensive_order_price",
+        "latency_state": "SAFE",
+    }
+    planned_orders = [{"tag": "normal", "qty": 1, "price": 9990, "tif": "DAY", "order_type": "LIMIT"}]
+    stock = {"name": "TEST", "strategy": "SCALPING", "position_tag": "SCANNER", "prob": 0.8}
+
+    adjusted, touched = state_handlers._apply_entry_ai_price_canary(
+        stock=stock,
+        code="123456",
+        strategy="SCALPING",
+        ws_data={"curr": 10020},
+        ai_engine=DummyAI(),
+        latency_gate=latency_gate,
+        planned_orders=planned_orders,
+        curr_price=10020,
+        best_bid=10020,
+        best_ask=10030,
+    )
+
+    assert touched is True
+    assert adjusted[0]["price"] == 10010
+    assert latency_gate["order_price"] == 10010
+    assert latency_gate["price_resolution_reason"] == "ai_tier2_improve_limit"
+    assert stock["entry_timeout_sec_override"] == 45
+    assert any(stage == "entry_ai_price_canary_applied" for stage, _ in logs)
+
+
+def test_entry_ai_price_canary_falls_back_on_guard_block(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED=True,
+            SCALPING_ENTRY_AI_PRICE_MIN_CONFIDENCE=60,
+            SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED=True,
+            SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS=80,
+        ),
+    )
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [{"price": 10020}])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [{"close": 10020}])
+    logs = []
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+
+    class DummyAI:
+        def evaluate_scalping_entry_price(self, *args, **kwargs):
+            return {
+                "action": "USE_REFERENCE",
+                "order_price": 9000,
+                "confidence": 90,
+                "reason": "너무 깊은 대기",
+                "max_wait_sec": 90,
+                "ai_parse_ok": True,
+                "ai_parse_fail": False,
+            }
+
+    latency_gate = {
+        "target_buy_price": 9000,
+        "latency_guarded_order_price": 9990,
+        "normal_defensive_order_price": 9990,
+        "order_price": 9990,
+        "price_resolution_reason": "defensive_order_price",
+        "latency_state": "SAFE",
+    }
+    planned_orders = [{"tag": "normal", "qty": 1, "price": 9990, "tif": "DAY", "order_type": "LIMIT"}]
+
+    adjusted, touched = state_handlers._apply_entry_ai_price_canary(
+        stock={"name": "TEST", "strategy": "SCALPING", "position_tag": "SCANNER"},
+        code="123456",
+        strategy="SCALPING",
+        ws_data={"curr": 10020},
+        ai_engine=DummyAI(),
+        latency_gate=latency_gate,
+        planned_orders=planned_orders,
+        curr_price=10020,
+        best_bid=10020,
+        best_ask=10030,
+    )
+
+    assert touched is False
+    assert adjusted == planned_orders
+    assert latency_gate["order_price"] == 9990
+    assert any(fields.get("reason") == "pre_submit_price_guard" for stage, fields in logs if stage == "entry_ai_price_canary_fallback")
 
 
 def test_entry_arm_skips_strength_recheck_after_ai_confirm(monkeypatch):
@@ -2265,7 +2420,7 @@ def test_reconcile_partial_fill_below_min_ratio_sends_exit_order(monkeypatch):
         "buy_qty": 1,
         "entry_requested_qty": 10,
         "order_price": 10000,
-        "order_time": now - 60,
+        "order_time": now - 120,
         "pending_entry_orders": [{"ord_no": "B1", "status": "OPEN", "qty": 10, "filled_qty": 1}],
     }
 
@@ -2304,7 +2459,7 @@ def test_reconcile_partial_fill_strong_override_uses_relaxed_ratio(monkeypatch):
         "buy_qty": 15,
         "entry_requested_qty": 100,
         "entry_dynamic_reason": "strong_absolute_override",
-        "order_time": now - 60,
+        "order_time": now - 120,
         "pending_entry_orders": [{"ord_no": "B1", "status": "OPEN", "qty": 100, "filled_qty": 15}],
     }
 

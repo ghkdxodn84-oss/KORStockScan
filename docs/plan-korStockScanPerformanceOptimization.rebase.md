@@ -15,6 +15,7 @@
 5. 현재 entry live 축은 `mechanical_momentum_latency_relief`다. `latency_quote_fresh_composite`는 `2026-04-29 08:29 KST` 기준 OFF + restart 반영까지 완료됐고, `latency_signal_quality_quote_composite`는 `2026-04-29 12:50 KST` 운영 override로 효과 미약 판정 후 OFF 했다. 같은 시각 제출 drought를 방치하지 않기 위해 `mechanical_momentum_latency_relief`를 same-day 1축 replacement로 ON 했다. 이 판정은 hard baseline 승격이 아니라 EV/거래수 회복 우선의 운영 override이며, 이후 성과판정은 새 restart 이후 cohort로 분리한다.
 6. 현재 보유/청산 live 축은 `soft_stop_micro_grace`다. `soft_stop_expert_defense`는 `2026-04-30 12:00~15:30 KST` same-day v2 수집 축으로 종료했고, 다음 재승인 전 기본 OFF로 둔다. `gatekeeper_fast_reuse signature/window`는 same-day `종료된 보조 진단축`이며 active 후보가 아니다.
 7. `2026-04-30`부터 soft stop 감소 접근은 단순 유예가 아니라 `valid_entry_reversal_add`와 `bad_entry_block` 가설로 분리한다. `REVERSAL_ADD`는 손실 초기 구간에서 저점 미갱신, AI 회복, 수급 재개가 같이 확인될 때 1주 floor까지 허용하는 소형 포지션 증감 canary이고, `bad_entry_block`은 never-green/AI fade 유형을 관찰하는 classifier다. `2026-04-30` 장후에는 이 표본을 바탕으로 `bad_entry_refined_canary`를 다음 보유/청산 active canary로 준비했다.
+8. `2026-05-04 KST` 장전부터 `holding_flow_override`를 기존 튜닝 관찰축과 별개인 운영 override로 둔다. 적용 대상은 `AI/soft stop/trailing/bad-entry refined` 청산 후보와 오버나이트 `SELL_TODAY` 후보이며, hard stop/protect hard stop/주문·잔고 안전장치는 즉시 실행을 유지한다. 단일 점수구간 컷 대신 최근 tick 30개, 분봉 60개, 최근 flow review history를 넣어 `flow_state/evidence/action` 흐름으로 최종 판단하고, 최초 후보 대비 추가악화 `0.80%p` 또는 최대 보류 `90초` 도달 시 기존 청산을 허용한다.
 
 ## 2. 용어 범례
 
@@ -35,6 +36,8 @@
 | `latency_quote_fresh_composite` | `ws_age`, `ws_jitter`, `spread`, `other_danger`가 단일 사유가 아니라 quote freshness family로 겹쳐 제출을 막는 복합축 | `2026-04-29 08:29 KST` OFF + restart 완료. 현재 standby/off이며, `signal>=88`, `ws_age<=950ms`, `ws_jitter<=450ms`, `spread<=0.0075`, `quote_stale=False` 묶음은 historical/reference 축으로만 남긴다 |
 | `latency_signal_quality_quote_composite` | `latency_quote_fresh_composite` 미회복 시 검토한 예비 복합축. quote freshness 완화폭을 넓히는 대신 `signal>=90`, `latest_strength>=110`, `buy_pressure_10t>=65`를 요구했다 | `2026-04-29 12:50 KST` 운영 override로 OFF. post-restart `budget_pass=972`, `submitted=0`, 후보 통과 0건으로 효과 미약 판정 |
 | `mechanical_momentum_latency_relief` | AI score 50/70 같은 mechanical fallback 상태라도 `budget_pass` 이후 수급/강도와 quote freshness 조건이 충분하면 latency DANGER를 normal 주문으로 넘기는 entry replacement 축 | `2026-04-29 12:50 KST` 운영 override로 live ON. 조건은 `signal_score<=75`, `latest_strength>=110`, `buy_pressure_10t>=50`, `ws_age<=1200ms`, `ws_jitter<=500ms`, `spread<=0.0085`, `quote_stale=False`다. 성과는 post-restart cohort에서 `submitted`까지는 병목 회복으로 보고, `full/partial`, `HOLDING/exit_rule`, `COMPLETED + valid profit_rate`는 체결 품질과 BUY 신호 적정성 관찰축으로 분리한다 |
+| `dynamic_entry_price_resolver_p1` | `signal_radar.target_buy_price`를 참고 기준가로만 쓰고, strategy-aware resolver가 defensive price와 timeout profile을 결정하는 진입가 기본 경로 | `2026-05-01` 구현 완료. `SCALPING_ENTRY_PRICE_RESOLVER_ENABLED=True`, best bid 대비 `80bp` 초과 하향 기준가는 거부하고, 일반 스캘핑 `90초`, `BREAKOUT 120초`, `PULLBACK 600초`, `RESERVE 1200초` timeout을 분리한다. entry price canary의 fallback baseline으로도 사용한다 |
+| `dynamic_entry_ai_price_canary_p2` | submitted 직전 Tier2 AI가 reference target, defensive price, live quote, spread/latency, 호가/체결강도를 보고 최종 주문가를 재결정하는 진입가 canary | `2026-05-01` 구현 완료. `SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED=True`, `entry_price_v1` schema, min confidence `60`, skip min `80`. `USE_DEFENSIVE | USE_REFERENCE | IMPROVE_LIMIT | SKIP` 중 하나를 선택하며 AI 실패/parse fail/guard 위반은 P1 resolver로 fail-closed한다 |
 | `holding_exit_observation` | 보유/청산 후보를 saved snapshot, post-sell, pipeline event로 분해하는 리포트 축 | live canary가 아니라 관찰/후보 고정용. `partial/full`, `initial/pyramid` 합산 결론 금지 |
 | `soft_stop_micro_grace_extend` | soft stop 최초 유예 20초가 너무 짧을 때 threshold 근처에서 1회 추가 유예하는 보조 파라미터 | standby/off. `soft_stop_micro_grace` 20초 축의 hard stop/동일종목 손실/미체결 비악화가 확인되고도 반등 포착이 부족할 때만 검토한다 |
 | `soft_stop_expert_defense` | `soft_stop_micro_grace v2`로 `stop arbitration layer`, `thesis invalidation veto`, `orderbook absorption stop`을 live에 묶고, `MAE/MFE quantile`, `recovery probability`, `partial de-risk`, `adverse fill`은 shadow/observe로 분리한 보유/청산 방어망 | `2026-04-30 12:00~15:30 KST` same-day 수집 축으로 종료. 다음 재승인 전 기본 OFF이며 로그는 다음 방어망 설계 근거로만 유지한다 |
@@ -43,8 +46,17 @@
 | `statistical_action_weight` | 가격대/거래량/시간대별로 `exit_only`, `avg_down_wait`, `pyramid_wait`의 후행 성과를 비교해 threshold weight와 동적 수량화 근거를 만드는 decision-support 축 | report-only. `exit_signal`, `sell_completed`, `scale_in_executed` compact 표본과 completed trade를 연결해 장후에만 본다. 단순 평균이 아니라 empirical-bayes shrinkage와 lower-confidence score를 사용하며, live runtime threshold나 주문 행동을 직접 바꾸지 않는다 |
 | `stat_action_decision_snapshot` | HOLDING 판단 순간의 후보/선택/차단 행동과 포지션·수급·호가 상태를 남기는 statistical action weight용 수집 이벤트 | observe-only. 기본 30초 rate-limit로 IO를 제한하며 `chosen_action`, `eligible_actions`, `rejected_actions`를 남겨 selection bias를 줄인다. live 행동 변경 없음 |
 | `bad_entry_block` | soft stop으로 이어질 가능성이 큰 never-green/AI fade 유형을 조기정리 후보로 분류하는 observe-only classifier | `2026-04-30` observe-only. 표본 수는 충분하지만 `GOOD_EXIT` 제거 위험이 남아 단순 live block은 금지한다. `bad_entry_refined_canary`는 `held_sec>=180`, `profit_rate<=-1.16`, `peak_profit<=+0.05`, `AI<=45`, recovery/thesis/adverse 확인을 붙인 active canary로 다음 장전 로드 확인 대상이다 |
+| `holding_flow_override` | 보유/청산과 오버나이트 `SELL_TODAY` 후보를 단일 점수 컷이 아니라 긴 입력 윈도와 AI flow summary로 재검문하는 운영 override | `2026-05-04` 장전부터 적용. 기존 튜닝 관찰축과 별개이며 `HOLD/TRIM`은 v1에서 전량청산 보류만 뜻한다. `EXIT`, AI/parse/stale/context 실패, 보류 90초 초과, 최초 후보 대비 추가악화 `0.80%p` 도달은 기존 청산 허용이다. 오버나이트 판정은 `15:20 KST`로 앞당기고 `SELL_TODAY`는 flow 재검문 후 `HOLD_OVERNIGHT` 전환 가능, `15:20~15:30` 추가악화 `0.80%p` 시 `SELL_TODAY`로 복귀한다 |
 | `nan_cast_guard_followup` | 주문·체결·DB 복원 숫자 필드에 `NaN/inf`가 유입될 때 런타임 중단과 상태전이 실패를 막기 위한 숫자 정규화/업스트림 source 재분해 계획 | live canary 아님. 런타임 안정화/집계 품질 보강용 follow-up으로만 관리하고, 기대값 해석 입력은 재발건수·영향경로·미진입/미청산 기회비용 분해를 함께 남긴다 |
 | `openai_transport_parity_flag_off` | OpenAI가 Gemini와 같은 endpoint schema registry/contract 기준을 공유하되, transport는 HTTP baseline과 WS shadow를 분리 관찰하는 acceptance 축 | `2026-04-30` 기준 flag-off observe-only. `response schema registry`, `deterministic JSON config`, `Responses WS transport`는 모두 rollback owner와 cohort를 잠근 뒤에만 다음 슬롯으로 넘긴다 |
+
+### 2.1 Shadow / Canary / Cohort 운영 정의
+
+1. `shadow`는 실주문, 실청산, 실판단을 바꾸지 않고 병렬 계산과 로그만 남기는 관찰 경로다. 현재 운영 원칙상 신규 alpha 튜닝축에는 쓰지 않는다.
+2. `canary`는 ON/OFF 가능한 단일 조작점이 실주문 또는 실판단을 실제로 바꾸는 제한적 live 변경이다. 적용 대상, rollback owner, cohort tag가 raw event에서 복원 가능해야 한다.
+3. `cohort`는 live/observe/excluded 모집단을 분리해 성과와 rollback을 섞이지 않게 잠그는 판정 단위다. 최소 `baseline cohort`, `candidate live cohort`, `observe-only cohort`, `excluded cohort`를 함께 기록한다.
+4. `운영 override`는 canary와 달리 튜닝 가설 검증보다 실전 보호/보정 목적이 우선인 runtime 우선순위 변경이다. `holding_flow_override`, `mechanical_momentum_latency_relief`처럼 same-day 적용이 가능하지만, 이 경우에도 cohort와 rollback guard는 동일하게 잠근다.
+5. `baseline-promote`는 이름에 canary가 남아 있어도 실질적으로 기본 운영경로로 굳은 상태를 뜻한다. baseline-promote 후보는 신규 canary로 세지지 않지만, rename과 문서 정리는 별도 change set으로 닫아야 한다.
 
 ## 3. 튜닝 원칙
 
@@ -69,6 +81,8 @@
 19. `offline_live_canary_bundle`은 장중 과부하 방지용 판정 입력이다. fresh 로그가 Codex 작업환경에 없으면 서버에서 lightweight export만 수행하고, 사용자가 로컬 analyzer로 `latency_quote_fresh_composite`와 `soft_stop_micro_grace` summary를 생성해 같은 슬롯 판정을 닫는다. 이 번들은 heavy snapshot/report builder를 호출하지 않으며, 산출물은 hard pass/fail 전제 충족 여부와 direction-only 사유를 확인하는 입력으로만 사용한다.
 20. `latency_signal_quality_quote_composite`와 `soft_stop_micro_grace_extend`는 예비축/예비 파라미터다. active 축이 실패 또는 표본부족 재판정 조건을 충족하기 전에는 live ON 하지 않으며, 활성화하려면 기존 동일 단계 canary OFF, rollback guard, restart 필요 여부, baseline cohort를 같은 checklist에 잠근다.
 21. `NaN cast` 계열 오류는 손익 축이 아니라 런타임 안정화 축으로 분리한다. 판정은 `재발 건수`, `루프 중단 여부`, `BUY_ORDERED->HOLDING/청산 상태전이 실패`, `미진입/미청산 기회비용` 기준으로 남기고, 원격과 동일 패치 복제 여부보다 메인 코드베이스 기준의 최소 안전 캐스팅/업스트림 source 추적 계획을 우선한다.
+22. canary는 `live`로 승격되기 전 `분포 근거`, `candidate cohort`, `rollback guard`, `OFF 조건`, `판정 시각`, `same-stage owner 충돌 여부`가 문서에 모두 닫혀 있어야 한다. 하나라도 비어 있으면 observe-only 또는 guarded-off로 둔다.
+23. canary를 `live 유지`에서 `baseline 운영`으로 전환할 때는 최소 `N_min`, 핵심 metric, canary-applied vs baseline cohort 비교, cross-contamination 부재, restart/rollback 경로를 함께 닫는다. 단순히 “문제 없었다”만으로는 승격하지 않는다.
 
 ## 4. 작업 규칙
 
@@ -77,6 +91,7 @@
 | 동일 단계 단일 live canary | 단일 live canary 원칙은 동일 단계 안에서만 적용한다. 진입병목축과 보유/청산축은 별개 단계이므로 양측에 canary가 동시에 존재할 수 있다. | 동일 단계 안에서 동시 2축 live 금지. 같은 단계 안에서 교체가 필요하면 `기존 축 OFF -> restart.flag -> 새 축 ON` 순서를 강제한다. |
 | stage-disjoint 병렬 canary | 진입병목 canary와 보유/청산 canary는 조작점, 적용 시점, cohort tag, rollback guard가 완전히 분리되면 병렬 live가 가능하다. 이 경우 전체 성과 합산 판정은 금지하고 단계별로 분리 판정한다. | entry canary가 유입 cohort를 크게 바꿔 보유/청산 판정이 오염되거나 rollback guard가 공유되면 병렬 판정 무효. 해당 단계의 단일축 원칙으로 복귀한다. |
 | shadow 금지 | 신규/보완축은 shadow 없이 canary-only | shadow 항목은 폐기 또는 코드정리로 격하 |
+| canary -> live 전환 | canary를 기본 live owner 또는 운영 기본값으로 승격할 때는 `N_min`, 주요 metric 개선, rollback guard 무위반, applied/not-applied cohort 비교, cross-contamination 부재, restart 가능 여부를 checklist와 report에 함께 잠근다. | 수치 기준 미달, applied cohort 복원 불가, same-stage owner 충돌, `COMPLETED + valid profit_rate` 또는 체결품질 악화가 있으면 live 전환 금지. 기존 canary 유지 또는 OFF로 닫는다. |
 | 문서 참조 방향 | `docs/personal-decision-flow-notes.md`는 개인판단 정합성 기록용 노트다. 다른 문서에서 `Source` 또는 판정 근거 링크로 사용하지 않는다. 개인문서는 checklist/report/plan 문서나 코드 레퍼런스를 참조해도 된다. | 개인문서가 판정 근거 링크로 쓰이면 링크를 checklist에서 제거하고 기준문서/감사문서 근거로 대체한다. |
 | 원격 비교 제외 | Plan Rebase 기간은 main-only 기준 | songstock/remote 비교는 의사결정 입력에서 제외 |
 | 라우팅 고정 | live 스캘핑 AI는 Gemini 고정 | A/B는 `entry_filter_quality` 1차 판정 후 별도 판단. 병목 완화 중에는 원격 전체 엔진 라우팅만 GPT로 바꾸는 단순 교체를 금지하고, 진입/보유/청산 단계별 코호트 비교와 품질 가드(`submitted/full/partial/soft_stop/COMPLETED + valid profit_rate`)를 함께 고정한다. |
@@ -168,9 +183,11 @@
 
 | 영역 | 현재 상태 | 다음 판정/소유 문서 | 메모 |
 | --- | --- | --- | --- |
-| entry live canary | `mechanical_momentum_latency_relief` ON (`latency_quote_fresh_composite`, `latency_signal_quality_quote_composite` OFF 후 same-day replacement) | [2026-04-29 checklist](./2026-04-29-stage2-todo-checklist.md) `MechanicalMomentumLatencyRelief0429-Now` | 사용자 운영 override로 제출 drought 지속 방치 불허. hard baseline 승격은 보류하고 post-restart cohort를 별도 판정한다 |
+| entry operating override | `mechanical_momentum_latency_relief` ON (`latency_quote_fresh_composite`, `latency_signal_quality_quote_composite` OFF 후 same-day replacement) | [2026-04-29 checklist](./2026-04-29-stage2-todo-checklist.md) `MechanicalMomentumLatencyRelief0429-Now` | canary 성과와 합산하지 않는 same-day entry replacement 운영 override다. hard baseline 승격은 보류하고 post-restart cohort를 별도 판정한다 |
+| entry price baseline/live | `dynamic_entry_price_resolver_p1` baseline 경로 + `dynamic_entry_ai_price_canary_p2` active canary | [2026-05-04 checklist](./2026-05-04-stage2-todo-checklist.md) `DynamicEntryResolverP10504-*`, `DynamicEntryAIPriceCanary0504-*` | P1은 reference/defensive 권한 분리와 timeout 분리가 목적이고, P2는 submitted 직전 Tier2 가격조정 canary다. 둘 다 entry stage 소유이며 P2 실패는 P1로 fail-closed한다 |
 | entry data-quality gate | `ShadowDiff0428` open | [2026-04-28 checklist](./2026-04-28-stage2-todo-checklist.md) `ShadowDiff0428` | submitted/full/partial mismatch가 닫혀야 hard pass/fail 가능 |
 | holding/exit live canary | `soft_stop_micro_grace` active, `soft_stop_expert_defense` v2는 `2026-04-30` 수집 종료 후 기본 OFF, 다음 신규 owner는 `bad_entry_refined_canary` | 날짜별 checklist + holding audit/report | v2 로그는 다음 방어망 설계 근거로만 유지. `REVERSAL_ADD` 체결 포지션은 excluded cohort로 분리. refined bad-entry는 `bad_entry_refined_candidate/exit`로 applied/not-applied cohort를 분리 |
+| holding/overnight operating override | `holding_flow_override` ON 준비 (`2026-05-04` 장전 로드 확인) | [2026-05-04 checklist](./2026-05-04-stage2-todo-checklist.md) `HoldingFlowOverride0504-*` | 튜닝 관찰축이 아니라 운영 override다. `soft_stop/trailing/AI momentum/bad_entry refined`와 `15:20 SELL_TODAY`에 공통 flow 재검문을 적용하고, hard/protect/order safety는 우회하지 않는다 |
 | holding/exit observation | `holding_exit_observation` 유지 | checklist + observation report | `soft_stop/trailing/same_symbol/EOD-NXT` 분해 입력 소유 |
 | runtime stabilization follow-up | `nan_cast_guard_followup` open | [2026-05-06 checklist](./2026-05-06-stage2-todo-checklist.md) `NaNCastGuard0506HolidayCarry` | canary 아님. `2026-05-05` 어린이날 휴장 이월 후 메인 기준 최소 safe cast 범위와 upstream source 추적 계획만 잠금 |
 | engine parity / transport observation | `openai_transport_parity_flag_off` observe-only | [2026-04-30-openai-enable-acceptance-spec.md](./2026-04-30-openai-enable-acceptance-spec.md), [2026-05-04-stage2-todo-checklist.md](./2026-05-04-stage2-todo-checklist.md) | Gemini/DeepSeek acceptance와 같은 문서 구조로 유지. live 라우팅 승격이 아니라 schema/transport provenance 잠금이 목적 |

@@ -54,6 +54,10 @@ def _build_engine():
     engine.max_consecutive_failures = 5
     engine.last_call_time = 0.0
     engine.min_interval = 0.0
+    engine._annotate_analysis_result = lambda result, **meta: {**dict(result), **{
+        "ai_parse_ok": bool(meta.get("parse_ok", False)),
+        "ai_parse_fail": bool(meta.get("parse_fail", False)),
+    }}
     return engine
 
 
@@ -141,6 +145,49 @@ def test_openai_call_applies_endpoint_response_schema_when_flag_enabled(monkeypa
     assert captured["text"]["format"]["type"] == "json_schema"
     assert captured["text"]["format"]["name"] == "condition_entry_v1"
     assert captured["text"]["format"]["schema"] == OPENAI_RESPONSE_SCHEMA_REGISTRY["condition_entry_v1"]
+
+
+def test_openai_holding_flow_uses_flow_schema_and_normalizes_payload(monkeypatch):
+    engine = _build_engine()
+    captured = {}
+
+    def _fake_call(prompt, user_input, **kwargs):
+        captured["prompt"] = prompt
+        captured["user_input"] = user_input
+        captured["kwargs"] = kwargs
+        return {
+            "action": "TRIM",
+            "score": "67",
+            "flow_state": "회복",
+            "thesis": "눌림 흡수 중",
+            "evidence": ["틱 매수 우위", "분봉 회복"],
+            "reason": "단일 순간 약세보다 회복 흐름 우세",
+            "next_review_sec": "44",
+        }
+
+    monkeypatch.setattr(engine, "_call_openai_safe", _fake_call)
+
+    result = GPTSniperEngine.evaluate_scalping_holding_flow(
+        engine,
+        "테스트",
+        "005930",
+        {"curr": 10000, "v_pw": 130, "buy_ratio": 60, "ask_tot": 1000, "bid_tot": 1200},
+        [{"price": 10000, "volume": 10, "side": "BUY"}],
+        [
+            {"close": 9900, "high": 10020, "low": 9890, "volume": 1000},
+            {"close": 10000, "high": 10040, "low": 9950, "volume": 1200},
+        ],
+        {"profit_rate": -0.3, "peak_profit": 0.4, "held_sec": 75, "current_ai_score": 31, "worsen_pct": 0.8},
+        flow_history=[{"time": "10:00:00", "action": "HOLD", "flow_state": "흡수", "profit_rate": "+0.10", "exit_rule": "soft"}],
+        decision_kind="intraday_exit",
+    )
+
+    assert result["action"] == "TRIM"
+    assert result["score"] == 67
+    assert result["next_review_sec"] == 44
+    assert captured["kwargs"]["schema_name"] == "holding_exit_flow_v1"
+    assert captured["kwargs"]["endpoint_name"] == "holding_flow"
+    assert "단일 score cutoff로 자르지 말고" in captured["user_input"]
 
 
 def test_openai_deterministic_config_is_limited_to_json_path(monkeypatch):

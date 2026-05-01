@@ -173,6 +173,17 @@ class TradingConfig:
     SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP: float = 0.00  # SCALP_PRESET_TP 예외(적용 제외)
     SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED: bool = True  # submitted 전 비정상 저가 지정가 차단
     SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS: int = 80  # best_bid 대비 허용 하향 괴리(bp)
+    SCALPING_ENTRY_PRICE_RESOLVER_ENABLED: bool = True  # 스캘핑 기준가/제출가 분리 resolver
+    SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS: int = 80  # 기준가 적용 허용 하향 괴리(bp)
+    SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED: bool = True  # submitted 직전 Tier2 AI 가격결정 canary
+    SCALPING_ENTRY_AI_PRICE_MIN_CONFIDENCE: int = 60
+    SCALPING_ENTRY_AI_PRICE_SKIP_MIN_CONFIDENCE: int = 80
+    SCALPING_ENTRY_AI_PRICE_TICK_LIMIT: int = 20
+    SCALPING_ENTRY_AI_PRICE_CANDLE_LIMIT: int = 20
+    SCALPING_ENTRY_TIMEOUT_SEC: int = 90  # 스캘핑 일반 매수 미체결 취소 대기
+    SCALPING_BREAKOUT_ENTRY_TIMEOUT_SEC: int = 120  # 돌파형 스캘핑 미체결 취소 대기
+    SCALPING_PULLBACK_ENTRY_TIMEOUT_SEC: int = 600  # 눌림/예약형 스캘핑 미체결 취소 대기
+    SCALPING_RESERVE_ENTRY_TIMEOUT_SEC: int = 1200  # 명시적 예약형 스캘핑 미체결 취소 대기
     SCALP_OPEN_RECLAIM_NEVER_GREEN_HOLD_SEC: int = 300  # OPEN_RECLAIM never-green 조기 정리 최소 보유시간
     SCALP_OPEN_RECLAIM_NEVER_GREEN_PEAK_MAX_PCT: float = 0.20  # OPEN_RECLAIM never-green 최대 허용 고점수익
     SCALP_OPEN_RECLAIM_NEAR_AI_EXIT_SCORE_BUFFER: int = 5  # OPEN_RECLAIM near_ai_exit 점수 여유폭
@@ -332,7 +343,7 @@ class TradingConfig:
     SCALPING_EARLIEST_BUY_TIME: str = "09:03:00"
     SWING_EARLIEST_BUY_TIME: str = "09:05:00"
     SCALPING_NEW_BUY_CUTOFF: str = "15:00:00"
-    SCALPING_OVERNIGHT_DECISION_TIME: str = "15:30:00"
+    SCALPING_OVERNIGHT_DECISION_TIME: str = "15:20:00"
     MARKET_CLOSE_TIME: str = "15:30:00"
     SYSTEM_SHUTDOWN_TIME: str = "20:00:00"
 
@@ -383,7 +394,7 @@ class TradingConfig:
     ML_GATEKEEPER_ERROR_COOLDOWN: int = 60 * 10  # 게이트키퍼 오류 재시도 쿨다운
     # [AI 보유 종목 감시 쿨타임 설정 - 비용 절감형]
     AI_HOLDING_MIN_COOLDOWN = 15          # 💡 (기존 5초 -> 15초) 주가가 미친듯이 널뛰어도 최소 15초는 무조건 대기
-    AI_HOLDING_MAX_COOLDOWN = 50          # 💡 (기존 30초 -> 50초) 평상시 횡보장에서는 50초에 딱 한 번만 AI 호출
+    AI_HOLDING_MAX_COOLDOWN = 75          # 💡 일반구간 완화: 평상시 횡보장에서는 75초에 딱 한 번만 AI 호출
     AI_HOLDING_CRITICAL_COOLDOWN = 10     # 💡 [신규 추가] 익절/손절 임박 구간에서는 20초마다 호출
     AI_WAIT_DROP_COOLDOWN = 300           # 💡 ai score 75점 이하 대기시간 300초
 
@@ -449,6 +460,15 @@ class TradingConfig:
     AI_GATEKEEPER_FAST_REUSE_SEC: float = 30.0  # 동일 감시 스냅샷 재평가 생략
     AI_HOLDING_FAST_REUSE_MAX_WS_AGE_SEC: float = 1.5  # 보유 AI fast reuse 허용 최대 WS 나이
     AI_GATEKEEPER_FAST_REUSE_MAX_WS_AGE_SEC: float = 2.0  # Gatekeeper fast reuse 허용 최대 WS 나이
+    HOLDING_FLOW_OVERRIDE_ENABLED: bool = True  # 운영 override: 단일 보유/청산 점수 대신 흐름 판단으로 최종 청산
+    HOLDING_FLOW_OVERRIDE_WORSEN_PCT: float = 0.80  # 최초 후보 대비 추가 악화 허용폭(%p)
+    HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC: int = 90  # flow HOLD/TRIM 보류 최대 시간
+    HOLDING_FLOW_REVIEW_MIN_INTERVAL_SEC: int = 30
+    HOLDING_FLOW_REVIEW_MAX_INTERVAL_SEC: int = 90
+    HOLDING_FLOW_REVIEW_PRICE_TRIGGER_PCT: float = 0.35
+    HOLDING_FLOW_REVIEW_TICK_LIMIT: int = 30
+    HOLDING_FLOW_REVIEW_CANDLE_LIMIT: int = 60
+    HOLDING_FLOW_REVIEW_MAX_WS_AGE_SEC: float = 3.0
 
     # ==========================================
     # 📝 로그 운영 설정
@@ -707,6 +727,19 @@ def _build_trading_rules() -> TradingConfig:
     env_partial_fill_min_preset = _env_float("KORSTOCKSCAN_SCALP_PARTIAL_FILL_MIN_RATIO_PRESET_TP")
     env_pre_submit_price_guard_enabled = _env_bool("KORSTOCKSCAN_SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED")
     env_pre_submit_max_below_bid_bps = _env_int("KORSTOCKSCAN_SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS")
+    env_entry_price_resolver_enabled = _env_bool("KORSTOCKSCAN_SCALPING_ENTRY_PRICE_RESOLVER_ENABLED")
+    env_entry_price_resolver_max_below_bid_bps = _env_int(
+        "KORSTOCKSCAN_SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS"
+    )
+    env_entry_ai_price_enabled = _env_bool("KORSTOCKSCAN_SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED")
+    env_entry_ai_price_min_confidence = _env_int("KORSTOCKSCAN_SCALPING_ENTRY_AI_PRICE_MIN_CONFIDENCE")
+    env_entry_ai_price_skip_min_confidence = _env_int("KORSTOCKSCAN_SCALPING_ENTRY_AI_PRICE_SKIP_MIN_CONFIDENCE")
+    env_entry_ai_price_tick_limit = _env_int("KORSTOCKSCAN_SCALPING_ENTRY_AI_PRICE_TICK_LIMIT")
+    env_entry_ai_price_candle_limit = _env_int("KORSTOCKSCAN_SCALPING_ENTRY_AI_PRICE_CANDLE_LIMIT")
+    env_scalping_entry_timeout = _env_int("KORSTOCKSCAN_SCALPING_ENTRY_TIMEOUT_SEC")
+    env_scalping_breakout_entry_timeout = _env_int("KORSTOCKSCAN_SCALPING_BREAKOUT_ENTRY_TIMEOUT_SEC")
+    env_scalping_pullback_entry_timeout = _env_int("KORSTOCKSCAN_SCALPING_PULLBACK_ENTRY_TIMEOUT_SEC")
+    env_scalping_reserve_entry_timeout = _env_int("KORSTOCKSCAN_SCALPING_RESERVE_ENTRY_TIMEOUT_SEC")
     env_reversal_add_enabled = _env_bool("KORSTOCKSCAN_REVERSAL_ADD_ENABLED")
     env_reversal_add_size_ratio = _env_float("KORSTOCKSCAN_REVERSAL_ADD_SIZE_RATIO")
     env_reversal_add_min_qty_floor_enabled = _env_bool("KORSTOCKSCAN_REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED")
@@ -732,6 +765,17 @@ def _build_trading_rules() -> TradingConfig:
         or env_partial_fill_min_preset is not None
         or env_pre_submit_price_guard_enabled is not None
         or env_pre_submit_max_below_bid_bps is not None
+        or env_entry_price_resolver_enabled is not None
+        or env_entry_price_resolver_max_below_bid_bps is not None
+        or env_entry_ai_price_enabled is not None
+        or env_entry_ai_price_min_confidence is not None
+        or env_entry_ai_price_skip_min_confidence is not None
+        or env_entry_ai_price_tick_limit is not None
+        or env_entry_ai_price_candle_limit is not None
+        or env_scalping_entry_timeout is not None
+        or env_scalping_breakout_entry_timeout is not None
+        or env_scalping_pullback_entry_timeout is not None
+        or env_scalping_reserve_entry_timeout is not None
         or env_reversal_add_enabled is not None
         or env_reversal_add_size_ratio is not None
         or env_reversal_add_min_qty_floor_enabled is not None
@@ -783,6 +827,39 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS=env_pre_submit_max_below_bid_bps
             if env_pre_submit_max_below_bid_bps is not None
             else config.SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS,
+            SCALPING_ENTRY_PRICE_RESOLVER_ENABLED=env_entry_price_resolver_enabled
+            if env_entry_price_resolver_enabled is not None
+            else config.SCALPING_ENTRY_PRICE_RESOLVER_ENABLED,
+            SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS=env_entry_price_resolver_max_below_bid_bps
+            if env_entry_price_resolver_max_below_bid_bps is not None
+            else config.SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS,
+            SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED=env_entry_ai_price_enabled
+            if env_entry_ai_price_enabled is not None
+            else config.SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED,
+            SCALPING_ENTRY_AI_PRICE_MIN_CONFIDENCE=env_entry_ai_price_min_confidence
+            if env_entry_ai_price_min_confidence is not None
+            else config.SCALPING_ENTRY_AI_PRICE_MIN_CONFIDENCE,
+            SCALPING_ENTRY_AI_PRICE_SKIP_MIN_CONFIDENCE=env_entry_ai_price_skip_min_confidence
+            if env_entry_ai_price_skip_min_confidence is not None
+            else config.SCALPING_ENTRY_AI_PRICE_SKIP_MIN_CONFIDENCE,
+            SCALPING_ENTRY_AI_PRICE_TICK_LIMIT=env_entry_ai_price_tick_limit
+            if env_entry_ai_price_tick_limit is not None
+            else config.SCALPING_ENTRY_AI_PRICE_TICK_LIMIT,
+            SCALPING_ENTRY_AI_PRICE_CANDLE_LIMIT=env_entry_ai_price_candle_limit
+            if env_entry_ai_price_candle_limit is not None
+            else config.SCALPING_ENTRY_AI_PRICE_CANDLE_LIMIT,
+            SCALPING_ENTRY_TIMEOUT_SEC=env_scalping_entry_timeout
+            if env_scalping_entry_timeout is not None
+            else config.SCALPING_ENTRY_TIMEOUT_SEC,
+            SCALPING_BREAKOUT_ENTRY_TIMEOUT_SEC=env_scalping_breakout_entry_timeout
+            if env_scalping_breakout_entry_timeout is not None
+            else config.SCALPING_BREAKOUT_ENTRY_TIMEOUT_SEC,
+            SCALPING_PULLBACK_ENTRY_TIMEOUT_SEC=env_scalping_pullback_entry_timeout
+            if env_scalping_pullback_entry_timeout is not None
+            else config.SCALPING_PULLBACK_ENTRY_TIMEOUT_SEC,
+            SCALPING_RESERVE_ENTRY_TIMEOUT_SEC=env_scalping_reserve_entry_timeout
+            if env_scalping_reserve_entry_timeout is not None
+            else config.SCALPING_RESERVE_ENTRY_TIMEOUT_SEC,
             REVERSAL_ADD_ENABLED=env_reversal_add_enabled
             if env_reversal_add_enabled is not None
             else config.REVERSAL_ADD_ENABLED,
@@ -945,6 +1022,57 @@ def _build_trading_rules() -> TradingConfig:
             OPENAI_PREVIOUS_RESPONSE_ID_ENABLED=env_openai_previous_response_id
             if env_openai_previous_response_id is not None
             else config.OPENAI_PREVIOUS_RESPONSE_ID_ENABLED,
+        )
+
+    env_holding_flow_override_enabled = _env_bool("KORSTOCKSCAN_HOLDING_FLOW_OVERRIDE_ENABLED")
+    env_holding_flow_worsen = _env_float("KORSTOCKSCAN_HOLDING_FLOW_OVERRIDE_WORSEN_PCT")
+    env_holding_flow_max_defer = _env_int("KORSTOCKSCAN_HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC")
+    env_holding_flow_min_interval = _env_int("KORSTOCKSCAN_HOLDING_FLOW_REVIEW_MIN_INTERVAL_SEC")
+    env_holding_flow_max_interval = _env_int("KORSTOCKSCAN_HOLDING_FLOW_REVIEW_MAX_INTERVAL_SEC")
+    env_holding_flow_price_trigger = _env_float("KORSTOCKSCAN_HOLDING_FLOW_REVIEW_PRICE_TRIGGER_PCT")
+    env_holding_flow_tick_limit = _env_int("KORSTOCKSCAN_HOLDING_FLOW_REVIEW_TICK_LIMIT")
+    env_holding_flow_candle_limit = _env_int("KORSTOCKSCAN_HOLDING_FLOW_REVIEW_CANDLE_LIMIT")
+    env_holding_flow_max_ws_age = _env_float("KORSTOCKSCAN_HOLDING_FLOW_REVIEW_MAX_WS_AGE_SEC")
+    if (
+        env_holding_flow_override_enabled is not None
+        or env_holding_flow_worsen is not None
+        or env_holding_flow_max_defer is not None
+        or env_holding_flow_min_interval is not None
+        or env_holding_flow_max_interval is not None
+        or env_holding_flow_price_trigger is not None
+        or env_holding_flow_tick_limit is not None
+        or env_holding_flow_candle_limit is not None
+        or env_holding_flow_max_ws_age is not None
+    ):
+        config = replace(
+            config,
+            HOLDING_FLOW_OVERRIDE_ENABLED=env_holding_flow_override_enabled
+            if env_holding_flow_override_enabled is not None
+            else config.HOLDING_FLOW_OVERRIDE_ENABLED,
+            HOLDING_FLOW_OVERRIDE_WORSEN_PCT=env_holding_flow_worsen
+            if env_holding_flow_worsen is not None
+            else config.HOLDING_FLOW_OVERRIDE_WORSEN_PCT,
+            HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC=env_holding_flow_max_defer
+            if env_holding_flow_max_defer is not None
+            else config.HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC,
+            HOLDING_FLOW_REVIEW_MIN_INTERVAL_SEC=env_holding_flow_min_interval
+            if env_holding_flow_min_interval is not None
+            else config.HOLDING_FLOW_REVIEW_MIN_INTERVAL_SEC,
+            HOLDING_FLOW_REVIEW_MAX_INTERVAL_SEC=env_holding_flow_max_interval
+            if env_holding_flow_max_interval is not None
+            else config.HOLDING_FLOW_REVIEW_MAX_INTERVAL_SEC,
+            HOLDING_FLOW_REVIEW_PRICE_TRIGGER_PCT=env_holding_flow_price_trigger
+            if env_holding_flow_price_trigger is not None
+            else config.HOLDING_FLOW_REVIEW_PRICE_TRIGGER_PCT,
+            HOLDING_FLOW_REVIEW_TICK_LIMIT=env_holding_flow_tick_limit
+            if env_holding_flow_tick_limit is not None
+            else config.HOLDING_FLOW_REVIEW_TICK_LIMIT,
+            HOLDING_FLOW_REVIEW_CANDLE_LIMIT=env_holding_flow_candle_limit
+            if env_holding_flow_candle_limit is not None
+            else config.HOLDING_FLOW_REVIEW_CANDLE_LIMIT,
+            HOLDING_FLOW_REVIEW_MAX_WS_AGE_SEC=env_holding_flow_max_ws_age
+            if env_holding_flow_max_ws_age is not None
+            else config.HOLDING_FLOW_REVIEW_MAX_WS_AGE_SEC,
         )
     return config
 

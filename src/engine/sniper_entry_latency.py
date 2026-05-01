@@ -69,6 +69,69 @@ def _can_apply_target_buy_price_cap(*, target_buy_price: int, best_bid: int) -> 
     return _compute_price_below_bid_bps(target_buy_price, best_bid) <= max_below_bid_bps
 
 
+def _resolve_scalping_order_price(
+    *,
+    strategy_id: str,
+    defensive_order_price: int,
+    target_buy_price: int,
+    best_bid: int,
+) -> dict[str, Any]:
+    target_price = int(target_buy_price or 0)
+    defensive_price = int(defensive_order_price or 0)
+    below_bid_bps = _compute_price_below_bid_bps(target_price, best_bid)
+    resolver_enabled = bool(
+        getattr(TRADING_RULES, "SCALPING_ENTRY_PRICE_RESOLVER_ENABLED", True)
+    ) and str(strategy_id or "").upper() in {"SCALPING", "SCALP"}
+    max_below_bid_bps = int(
+        getattr(
+            TRADING_RULES,
+            "SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS",
+            getattr(TRADING_RULES, "SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS", 80),
+        )
+        or 80
+    )
+
+    resolved = {
+        "order_price": defensive_price,
+        "price_resolution_reason": "defensive_order_price",
+        "reference_target_applied": False,
+        "reference_target_rejected_reason": "",
+        "reference_target_below_bid_bps": below_bid_bps,
+        "reference_target_max_below_bid_bps": max_below_bid_bps,
+        "entry_price_resolver_enabled": resolver_enabled,
+    }
+    if target_price <= 0 or defensive_price <= 0:
+        return resolved
+    if target_price >= defensive_price:
+        resolved["reference_target_rejected_reason"] = "not_better_than_defensive"
+        return resolved
+
+    if not resolver_enabled:
+        if _can_apply_target_buy_price_cap(target_buy_price=target_price, best_bid=best_bid):
+            resolved.update(
+                order_price=target_price,
+                price_resolution_reason="reference_target_cap",
+                reference_target_applied=True,
+            )
+        else:
+            resolved["reference_target_rejected_reason"] = "pre_submit_guard_bps_exceeded"
+        return resolved
+
+    if below_bid_bps <= max_below_bid_bps:
+        resolved.update(
+            order_price=target_price,
+            price_resolution_reason="reference_target_cap",
+            reference_target_applied=True,
+        )
+        return resolved
+
+    resolved.update(
+        price_resolution_reason="scalping_reference_rejected_defensive",
+        reference_target_rejected_reason="target_below_bid_bps_exceeded",
+    )
+    return resolved
+
+
 def _to_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(str(value).replace(",", "").replace("+", "").strip())
@@ -938,6 +1001,21 @@ def evaluate_live_buy_entry(
         "normal_defensive_order_price": 0,
         "latency_guarded_order_price": 0,
         "counterfactual_order_price_1tick": 0,
+        "price_resolution_reason": "none",
+        "reference_target_applied": False,
+        "reference_target_rejected_reason": "",
+        "reference_target_below_bid_bps": 0,
+        "reference_target_max_below_bid_bps": int(
+            getattr(
+                TRADING_RULES,
+                "SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS",
+                getattr(TRADING_RULES, "SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS", 80),
+            )
+            or 80
+        ),
+        "entry_price_resolver_enabled": bool(
+            getattr(TRADING_RULES, "SCALPING_ENTRY_PRICE_RESOLVER_ENABLED", True)
+        ),
         "latency_canary_applied": latency_canary_applied,
         "latency_canary_reason": latency_canary_reason,
         "orderbook_stability": ORDERBOOK_STABILITY_OBSERVER.snapshot(code),
@@ -964,11 +1042,16 @@ def evaluate_live_buy_entry(
         latency_guarded_order_price = int(defensive_order.price)
         counterfactual_order_price_1tick = normal_defensive_order_price
         order_price = int(defensive_order.price)
+        price_resolution = _resolve_scalping_order_price(
+            strategy_id=strategy_id,
+            defensive_order_price=order_price,
+            target_buy_price=int(target_buy_price or 0),
+            best_bid=best_bid,
+        )
         if int(target_buy_price or 0) > 0:
             target_cap = int(target_buy_price)
             counterfactual_order_price_1tick = min(counterfactual_order_price_1tick, target_cap)
-            if _can_apply_target_buy_price_cap(target_buy_price=target_cap, best_bid=best_bid):
-                order_price = min(order_price, target_cap)
+            order_price = int(price_resolution.get("order_price", order_price) or order_price)
         result["allowed"] = True
         result["mode"] = "normal"
         result["order_price"] = order_price
@@ -977,6 +1060,14 @@ def evaluate_live_buy_entry(
         result["normal_defensive_order_price"] = int(normal_defensive_order_price)
         result["latency_guarded_order_price"] = int(latency_guarded_order_price)
         result["counterfactual_order_price_1tick"] = int(counterfactual_order_price_1tick)
+        result["price_resolution_reason"] = price_resolution.get("price_resolution_reason", "defensive_order_price")
+        result["reference_target_applied"] = bool(price_resolution.get("reference_target_applied"))
+        result["reference_target_rejected_reason"] = price_resolution.get("reference_target_rejected_reason", "")
+        result["reference_target_below_bid_bps"] = int(price_resolution.get("reference_target_below_bid_bps", 0) or 0)
+        result["reference_target_max_below_bid_bps"] = int(
+            price_resolution.get("reference_target_max_below_bid_bps", 0) or 0
+        )
+        result["entry_price_resolver_enabled"] = bool(price_resolution.get("entry_price_resolver_enabled"))
         result["orders"] = [
             {
                 "tag": "normal",

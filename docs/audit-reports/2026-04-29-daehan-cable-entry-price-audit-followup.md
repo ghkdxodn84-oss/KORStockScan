@@ -18,8 +18,15 @@
 ### 0-1. 현재 상태 요약
 
 - P0 구현 완료: `pre-submit sanity guard`, `pipeline_events` 가격 스냅샷 분리, 관련 테스트 통과
-- P1 미구현 유지: `strategy-aware resolver`, `SCALPING timeout table`
-- P2 미구현 유지: `microstructure-adaptive band`, `reprice / early cancel loop`
+- P1 구현 완료 (`2026-05-01`): `strategy-aware resolver`, `SCALPING timeout table`
+  - `SCALPING_ENTRY_PRICE_RESOLVER_ENABLED=True`
+  - `SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS=80`
+  - 일반 스캘핑 `90초`, `BREAKOUT 120초`, `PULLBACK 600초`, `RESERVE 1200초`
+  - `target_buy_price`는 제출가의 절대 권한이 아니라 `reference_target_price`로 기록하며, best bid 대비 허용 하향 괴리를 넘으면 `scalping_reference_rejected_defensive`로 방어가 제출을 유지한다.
+- P2 구현 완료 (`2026-05-01`): 운영 규칙상 entry price shadow는 열지 않고, `AI Tier2 entry_price canary`를 submitted 직전 live 경로에 적용한다.
+  - canary 입력: reference target, defensive price, best bid/ask, spread/latency, 체결강도/매수비율, 호가 depth, 최근 tick/candle 요약
+  - canary 출력: `USE_DEFENSIVE | USE_REFERENCE | IMPROVE_LIMIT | SKIP`, `order_price`, `confidence`, `reason`, `max_wait_sec`
+  - fail-closed: AI timeout/parse fail/context fetch fail/low confidence/price guard 위반은 P1 resolver 가격을 유지한다.
 - 코드리뷰 후속 분리: `sniper_state_handlers.py` 구조 debt는 `2026-05-06 checklist`로 이관
 - `80bps`는 확정 정책값이 아니라 provisional threshold로 유지하고, 분포 부록과 rolling KPI로 재앵커한다
 

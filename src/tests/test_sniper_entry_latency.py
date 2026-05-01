@@ -727,6 +727,8 @@ def test_latency_quote_fresh_composite_price_guard_respects_target_buy_price(mon
     assert result["latency_guarded_order_price"] == 9_990
     assert result["counterfactual_order_price_1tick"] == 9_980
     assert result["order_price"] == 9_980
+    assert result["price_resolution_reason"] == "reference_target_cap"
+    assert result["reference_target_applied"] is True
 
 
 def test_scalping_target_buy_price_can_override_defensive_order_price_for_daehan_cable():
@@ -775,6 +777,10 @@ def test_scalping_target_buy_price_can_override_defensive_order_price_for_daehan
     assert result["target_buy_price"] == 48_800
     assert result["counterfactual_order_price_1tick"] == 48_800
     assert result["order_price"] == 50_400
+    assert result["price_resolution_reason"] == "scalping_reference_rejected_defensive"
+    assert result["reference_target_applied"] is False
+    assert result["reference_target_rejected_reason"] == "target_below_bid_bps_exceeded"
+    assert result["reference_target_below_bid_bps"] == 337
 
 
 def test_latency_quote_fresh_composite_price_guard_uses_valid_tick_at_price_boundary(monkeypatch):
