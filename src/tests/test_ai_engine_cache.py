@@ -1,7 +1,10 @@
 import threading
+from types import SimpleNamespace
 from dataclasses import replace
 
 from src.engine import ai_engine as ai_engine_module
+from src.engine import ai_engine_deepseek as ai_engine_deepseek_module
+from src.engine import ai_engine_openai as ai_engine_openai_module
 from src.engine.ai_engine import (
     GeminiSniperEngine,
     SCALPING_BUY_RECOVERY_CANARY_PROMPT,
@@ -10,6 +13,8 @@ from src.engine.ai_engine import (
     SCALPING_SYSTEM_PROMPT_75_CANARY,
     SCALPING_WATCHING_SYSTEM_PROMPT,
 )
+from src.engine.ai_engine_deepseek import DeepSeekSniperEngine
+from src.engine.ai_engine_openai import GPTSniperEngine
 
 
 def _build_engine():
@@ -32,6 +37,35 @@ def _build_engine():
     engine.model_tier3_deep = "tier3-model"
     engine.current_model_name = engine.model_tier1_fast
     return engine
+
+
+def _build_provider_engine(engine_cls):
+    engine = engine_cls.__new__(engine_cls)
+    engine.lock = threading.Lock()
+    engine.cache_lock = threading.RLock()
+    engine._analysis_cache = {}
+    engine._gatekeeper_cache = {}
+    engine.analysis_cache_ttl = 30.0
+    engine.holding_analysis_cache_ttl = 60.0
+    engine.gatekeeper_cache_ttl = 30.0
+    engine.ai_disabled = False
+    engine.last_call_time = 0
+    engine.min_interval = 0.0
+    engine.consecutive_failures = 0
+    engine.max_consecutive_failures = 1
+    engine.current_api_key_index = 0
+    engine.model_tier1_fast = "tier1-model"
+    engine.model_tier2_balanced = "tier2-model"
+    engine.model_tier3_deep = "tier3-model"
+    engine.current_model_name = engine.model_tier1_fast
+    return engine
+
+
+PROVIDER_ENGINES = [
+    (GeminiSniperEngine, ai_engine_module, "_call_gemini_safe"),
+    (GPTSniperEngine, ai_engine_openai_module, "_call_openai_safe"),
+    (DeepSeekSniperEngine, ai_engine_deepseek_module, "_call_deepseek_safe"),
+]
 
 
 def test_analyze_target_uses_short_ttl_cache(monkeypatch):
@@ -427,13 +461,13 @@ def test_analyze_target_routes_scalping_prompt_profiles(monkeypatch):
         SCALPING_HOLDING_SYSTEM_PROMPT,
         SCALPING_SYSTEM_PROMPT,
     ]
-    assert used_models == ["tier1-model", "tier1-model", "tier2-model", "tier1-model"]
+    assert used_models == ["tier1-model", "tier1-model", "tier1-model", "tier1-model"]
     assert watching["ai_prompt_type"] == "scalping_entry"
     assert holding["ai_prompt_type"] == "scalping_holding"
     assert exiting["ai_prompt_type"] == "scalping_holding"
     assert shared["ai_prompt_type"] == "scalping_shared"
     assert watching["ai_model"] == "tier1-model"
-    assert exiting["ai_model"] == "tier2-model"
+    assert exiting["ai_model"] == "tier1-model"
     assert watching["ai_prompt_version"] == "split_v2"
 
 
@@ -522,6 +556,87 @@ def test_condition_entry_and_exit_reuse_scalping_routes(monkeypatch):
     assert entry["confidence"] == 88
     assert exit_result["decision"] == "TRIM"
     assert exit_result["trim_ratio"] == 0.5
+
+
+def test_provider_cache_profile_separates_non_holding_keys():
+    ws_data = {"curr": 10000, "fluctuation": 1.0, "orderbook": {"asks": [], "bids": []}}
+    recent_ticks = [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}]
+    recent_candles = [{"체결시간": "10:00:00", "현재가": 10000, "거래량": 100}]
+
+    for engine_cls, _, _ in PROVIDER_ENGINES:
+        engine = _build_provider_engine(engine_cls)
+        default_key = engine._build_analysis_cache_key_with_profile(
+            target_name="테스트",
+            strategy="SCALPING",
+            ws_data=ws_data,
+            recent_ticks=recent_ticks,
+            recent_candles=recent_candles,
+            program_net_qty=0,
+            cache_profile="default",
+        )
+        shadow_key = engine._build_analysis_cache_key_with_profile(
+            target_name="테스트",
+            strategy="SCALPING",
+            ws_data=ws_data,
+            recent_ticks=recent_ticks,
+            recent_candles=recent_candles,
+            program_net_qty=0,
+            cache_profile="shadow_profile",
+        )
+
+        assert default_key != shadow_key
+
+
+def test_provider_cache_set_enforces_max_entries(monkeypatch):
+    tiny_rules = SimpleNamespace(AI_RESULT_CACHE_MAX_ENTRIES=3)
+
+    for engine_cls, module, _ in PROVIDER_ENGINES:
+        monkeypatch.setattr(module, "TRADING_RULES", tiny_rules)
+        engine = _build_provider_engine(engine_cls)
+
+        for index in range(5):
+            engine._cache_set("_analysis_cache", f"k{index}", {"value": index}, 30.0)
+
+        assert len(engine._analysis_cache) == 3
+        assert "k4" in engine._analysis_cache
+
+
+def test_provider_overnight_engine_disabled_is_annotated():
+    for engine_cls, _, _ in PROVIDER_ENGINES:
+        engine = _build_provider_engine(engine_cls)
+        engine.ai_disabled = True
+
+        result = engine.evaluate_scalping_overnight_decision(
+            "테스트",
+            "000001",
+            {"position_status": "HOLDING", "curr_price": 10000},
+        )
+
+        assert result["action"] == "SELL_TODAY"
+        assert result["ai_prompt_type"] == "scalping_overnight"
+        assert result["ai_prompt_version"] == "overnight_v1"
+        assert result["ai_result_source"] == "engine_disabled"
+        assert result["ai_parse_fail"] is False
+
+
+def test_provider_overnight_failure_disables_engine(monkeypatch):
+    def _raise(*args, **kwargs):
+        raise RuntimeError("provider down")
+
+    for engine_cls, _, call_name in PROVIDER_ENGINES:
+        engine = _build_provider_engine(engine_cls)
+        monkeypatch.setattr(engine, call_name, _raise)
+
+        result = engine.evaluate_scalping_overnight_decision(
+            "테스트",
+            "000001",
+            {"position_status": "HOLDING", "curr_price": 10000},
+        )
+
+        assert engine.ai_disabled is True
+        assert result["action"] == "SELL_TODAY"
+        assert result["ai_result_source"] == "exception"
+        assert result["ai_parse_fail"] is True
 
 
 def test_realtime_report_and_overnight_decision_use_tier2_model(monkeypatch):

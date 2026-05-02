@@ -188,6 +188,31 @@ class DeepSeekSniperEngine:
             value.setdefault("cache_mode", "hit")
             return value
 
+    def _cache_max_entries(self):
+        try:
+            return max(1, int(getattr(TRADING_RULES, "AI_RESULT_CACHE_MAX_ENTRIES", 512) or 512))
+        except Exception:
+            return 512
+
+    def _prune_cache_locked(self, cache, *, now):
+        expired = [
+            item_key
+            for item_key, item in cache.items()
+            if float(item.get("expires_at", 0.0) or 0.0) <= now
+        ]
+        for item_key in expired:
+            cache.pop(item_key, None)
+
+        overflow = len(cache) - self._cache_max_entries()
+        if overflow <= 0:
+            return
+        oldest_keys = sorted(
+            cache,
+            key=lambda item_key: float(cache[item_key].get("expires_at", 0.0) or 0.0),
+        )[:overflow]
+        for item_key in oldest_keys:
+            cache.pop(item_key, None)
+
     def _cache_set(self, cache_name, key, value, ttl_sec):
         cache = getattr(self, cache_name, None)
         lock = getattr(self, "cache_lock", None)
@@ -201,10 +226,7 @@ class DeepSeekSniperEngine:
                 "expires_at": now + float(ttl_sec),
                 "value": payload,
             }
-            if len(cache) > 512:
-                expired = [item_key for item_key, item in cache.items() if float(item.get("expires_at", 0.0) or 0.0) <= now]
-                for item_key in expired[:128]:
-                    cache.pop(item_key, None)
+            self._prune_cache_locked(cache, now=now)
 
     def _build_analysis_cache_key(self, target_name, strategy, ws_data, recent_ticks, recent_candles, program_net_qty):
         return self._build_analysis_cache_key_with_profile(
@@ -240,6 +262,7 @@ class DeepSeekSniperEngine:
                 }
             )
         return self._build_cache_digest({
+            "cache_profile": str(cache_profile or "default"),
             "target_name": target_name,
             "strategy": strategy,
             "ws_data": ws_data,
@@ -399,6 +422,21 @@ class DeepSeekSniperEngine:
         payload["cache_mode"] = str(cache_mode or "miss")
         return payload
 
+    def _mark_successful_ai_call(self):
+        self.consecutive_failures = 0
+        self.last_call_time = time.time()
+
+    def _record_failure_and_maybe_disable(self, *, context_name):
+        self.consecutive_failures += 1
+        failure_count = self.consecutive_failures
+        if failure_count >= self.max_consecutive_failures:
+            self.ai_disabled = True
+            log_error(
+                f"🚨 DeepSeek 엔진 비활성화 (연속 실패 {failure_count}회 초과, "
+                f"API키 인덱스 {self.current_api_key_index}, context={context_name})"
+            )
+        return failure_count
+
     def _resolve_scalping_prompt(self, prompt_profile):
         profile = str(prompt_profile or "shared").strip().lower()
         split_enabled = bool(getattr(TRADING_RULES, "SCALPING_PROMPT_SPLIT_ENABLED", True))
@@ -463,7 +501,7 @@ class DeepSeekSniperEngine:
         return features, flags
 
     def _apply_remote_entry_guard(self, result, *, prompt_type, ws_data, recent_ticks, recent_candles):
-        if prompt_type not in {"scalping_entry", "scalping_watching", "scalping_shared"}:
+        if prompt_type not in {"scalping_entry", "scalping_shared"}:
             return result
         if str(result.get("action", "WAIT")).upper() != "BUY":
             return result
@@ -1232,8 +1270,7 @@ class DeepSeekSniperEngine:
                 model_override=self._get_tier2_model(),
             )
             normalized = normalize_scalping_entry_price_result(result, fallback_price=fallback_price)
-            self.consecutive_failures = 0
-            self.last_call_time = time.time()
+            self._mark_successful_ai_call()
             return self._annotate_analysis_result(
                 normalized,
                 prompt_type="entry_price",
@@ -1247,8 +1284,10 @@ class DeepSeekSniperEngine:
                 result_source="live",
             )
         except Exception as e:
-            self.consecutive_failures += 1
-            log_error(f"🚨 [ENTRY_PRICE] DeepSeek 가격결정 에러 ({stock_name}): {e}")
+            failure_count = self._record_failure_and_maybe_disable(
+                context_name=f"ENTRY_PRICE:{stock_name}:{stock_code}"
+            )
+            log_error(f"🚨 [ENTRY_PRICE] DeepSeek 가격결정 에러 ({stock_name}, 연속 실패 {failure_count}회): {e}")
             return self._annotate_analysis_result(
                 normalize_scalping_entry_price_result(
                     {"action": "USE_DEFENSIVE", "order_price": fallback_price, "confidence": 0, "reason": f"AI 실패: {e}", "max_wait_sec": 90},
@@ -1401,8 +1440,7 @@ class DeepSeekSniperEngine:
                 result = self._normalize_scalping_action_schema(result, prompt_type=prompt_type)
                 result.update(feature_audit_fields)
 
-            self.consecutive_failures = 0
-            self.last_call_time = time.time()
+            self._mark_successful_ai_call()
             self._cache_set(
                 "_analysis_cache",
                 cache_key,
@@ -1423,12 +1461,10 @@ class DeepSeekSniperEngine:
             )
 
         except Exception as e:
-            self.consecutive_failures += 1
-            log_error(f"🚨 [{target_name}][{strategy}] DeepSeek 실시간 분석 에러 (연속 실패 {self.consecutive_failures}회, API키 인덱스 {self.current_api_key_index}): {e}")
-
-            if self.consecutive_failures >= self.max_consecutive_failures:
-                self.ai_disabled = True
-                log_error(f"🚨 DeepSeek 엔진 비활성화 (연속 실패 {self.consecutive_failures}회 초과, API키 인덱스 {self.current_api_key_index})")
+            failure_count = self._record_failure_and_maybe_disable(
+                context_name=f"{target_name}({strategy}:{prompt_type})"
+            )
+            log_error(f"🚨 [{target_name}][{strategy}] DeepSeek 실시간 분석 에러 (연속 실패 {failure_count}회, API키 인덱스 {self.current_api_key_index}): {e}")
 
             return self._annotate_analysis_result(
                 {"action": "WAIT", "score": 50, "reason": f"에러: {e}"},
@@ -1833,7 +1869,7 @@ class DeepSeekSniperEngine:
 단일 score cutoff로 자르지 말고, 위 흐름이 흡수/회복/분배/붕괴/소강 중 어디에 가까운지 먼저 판단한 뒤 HOLD/TRIM/EXIT를 선택하라.
 """
 
-    def _normalize_holding_flow_result(self, result):
+    def _normalize_holding_flow_result(self, result, *, decision_kind="intraday_exit"):
         payload = dict(result or {}) if isinstance(result, dict) else {}
         raw_action = str(payload.get("action", "EXIT") or "EXIT").upper().strip()
         action = raw_action if raw_action in {"HOLD", "TRIM", "EXIT"} else "EXIT"
@@ -1844,6 +1880,12 @@ class DeepSeekSniperEngine:
         evidence = payload.get("evidence")
         if not isinstance(evidence, list):
             evidence = [str(evidence)] if evidence else []
+        next_review_default = 60 if decision_kind != "overnight_sell_today" else 0
+        next_review_raw = int(self._safe_float(payload.get("next_review_sec", next_review_default), next_review_default))
+        if decision_kind == "overnight_sell_today":
+            next_review_sec = max(0, min(600, next_review_raw))
+        else:
+            next_review_sec = max(30, min(90, next_review_raw))
         return {
             "action": action,
             "score": max(0, min(100, score)),
@@ -1851,7 +1893,7 @@ class DeepSeekSniperEngine:
             "thesis": str(payload.get("thesis", "-") or "-")[:160],
             "evidence": [str(item).replace("\n", " ")[:160] for item in evidence[:5]],
             "reason": str(payload.get("reason", "-") or "-").replace("\n", " ")[:180],
-            "next_review_sec": max(30, min(90, int(self._safe_float(payload.get("next_review_sec", 60), 60)))),
+            "next_review_sec": next_review_sec,
             "raw": payload,
         }
 
@@ -1929,9 +1971,8 @@ class DeepSeekSniperEngine:
                 context_name=f"HOLDING_FLOW:{stock_name}:{decision_kind}",
                 model_override=self._get_tier2_model(),
             )
-            normalized = self._normalize_holding_flow_result(result)
-            self.consecutive_failures = 0
-            self.last_call_time = time.time()
+            normalized = self._normalize_holding_flow_result(result, decision_kind=decision_kind)
+            self._mark_successful_ai_call()
             return self._annotate_analysis_result(
                 normalized,
                 prompt_type="holding_exit_flow",
@@ -1945,8 +1986,10 @@ class DeepSeekSniperEngine:
                 result_source="live",
             )
         except Exception as e:
-            self.consecutive_failures += 1
-            log_error(f"🚨 [HOLDING_FLOW] DeepSeek 판정 에러 ({stock_name}/{decision_kind}): {e}")
+            failure_count = self._record_failure_and_maybe_disable(
+                context_name=f"HOLDING_FLOW:{stock_name}:{decision_kind}"
+            )
+            log_error(f"🚨 [HOLDING_FLOW] DeepSeek 판정 에러 ({stock_name}/{decision_kind}, 연속 실패 {failure_count}회): {e}")
             return self._annotate_analysis_result(
                 {
                     "action": "EXIT",
@@ -1972,39 +2015,107 @@ class DeepSeekSniperEngine:
 
     def evaluate_scalping_overnight_decision(self, stock_name, stock_code, realtime_ctx):
         """장마감 전 SCALPING 포지션의 오버나이트/당일청산 의사결정을 JSON으로 반환합니다."""
-        with self.lock:
+        started = time.perf_counter()
+        prompt_type = "scalping_overnight"
+        prompt_version = "overnight_v1"
+        if not self.lock.acquire(blocking=False):
+            return self._annotate_analysis_result(
+                {
+                    'action': 'SELL_TODAY',
+                    'confidence': 0,
+                    'reason': 'AI 경합으로 오버나이트 판정 불가',
+                    'risk_note': 'lock_contention',
+                    'raw': {},
+                },
+                prompt_type=prompt_type,
+                prompt_version=prompt_version,
+                response_ms=int((time.perf_counter() - started) * 1000),
+                parse_ok=False,
+                parse_fail=False,
+                fallback_score_50=False,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="lock_contention",
+            )
+        try:
+            if self.ai_disabled:
+                return self._annotate_analysis_result(
+                    {
+                        'action': 'SELL_TODAY',
+                        'confidence': 0,
+                        'reason': 'AI 엔진 비활성화로 당일청산 폴백',
+                        'risk_note': 'engine_disabled',
+                        'raw': {},
+                    },
+                    prompt_type=prompt_type,
+                    prompt_version=prompt_version,
+                    response_ms=int((time.perf_counter() - started) * 1000),
+                    parse_ok=False,
+                    parse_fail=False,
+                    fallback_score_50=False,
+                    cache_hit=False,
+                    cache_mode="miss",
+                    result_source="engine_disabled",
+                )
             user_input = (
                 f"🚨 [SCALPING 오버나이트 판정 요청]\n"
                 f"종목명: {stock_name}\n종목코드: {stock_code}\n\n"
                 f"📊 [판정 입력 데이터]\n{self._format_scalping_overnight_context(realtime_ctx)}"
             )
-            try:
-                result = self._call_deepseek_safe(
-                    SCALPING_OVERNIGHT_DECISION_PROMPT,
-                    user_input,
-                    require_json=True,
-                    context_name=f"SCALP_OVERNIGHT:{stock_name}",
-                    model_override=self._get_tier2_model(),
-                )
-                action = str(result.get('action', 'SELL_TODAY') or 'SELL_TODAY').upper()
-                if action not in {'SELL_TODAY', 'HOLD_OVERNIGHT'}:
-                    action = 'SELL_TODAY'
-                return {
+            result = self._call_deepseek_safe(
+                SCALPING_OVERNIGHT_DECISION_PROMPT,
+                user_input,
+                require_json=True,
+                context_name=f"SCALP_OVERNIGHT:{stock_name}",
+                model_override=self._get_tier2_model(),
+            )
+            action = str(result.get('action', 'SELL_TODAY') or 'SELL_TODAY').upper()
+            if action not in {'SELL_TODAY', 'HOLD_OVERNIGHT'}:
+                action = 'SELL_TODAY'
+            self._mark_successful_ai_call()
+            return self._annotate_analysis_result(
+                {
                     'action': action,
                     'confidence': int(result.get('confidence', 0) or 0),
                     'reason': str(result.get('reason', '') or ''),
                     'risk_note': str(result.get('risk_note', '') or ''),
                     'raw': result,
-                }
-            except Exception as e:
-                log_error(f"🚨 [SCALPING 오버나이트 판정] DeepSeek 에러: {e}")
-                return {
+                },
+                prompt_type=prompt_type,
+                prompt_version=prompt_version,
+                response_ms=int((time.perf_counter() - started) * 1000),
+                parse_ok=True,
+                parse_fail=False,
+                fallback_score_50=False,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="live",
+            )
+        except Exception as e:
+            failure_count = self._record_failure_and_maybe_disable(
+                context_name=f"SCALP_OVERNIGHT:{stock_name}:{stock_code}"
+            )
+            log_error(f"🚨 [SCALPING 오버나이트 판정] DeepSeek 에러 ({stock_name}, 연속 실패 {failure_count}회): {e}")
+            return self._annotate_analysis_result(
+                {
                     'action': 'SELL_TODAY',
                     'confidence': 0,
                     'reason': f'AI 판정 실패로 보수적 청산 폴백: {e}',
                     'risk_note': '데이터 부족 또는 AI 응답 오류',
                     'raw': {},
-                }
+                },
+                prompt_type=prompt_type,
+                prompt_version=prompt_version,
+                response_ms=int((time.perf_counter() - started) * 1000),
+                parse_ok=False,
+                parse_fail=True,
+                fallback_score_50=False,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="exception",
+            )
+        finally:
+            self.lock.release()
 
     # ==========================================
     # 퍼블릭 메서드: 조건검색식 진입/청산 판단
