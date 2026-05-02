@@ -34,15 +34,14 @@ from src.engine.ai_engine import (
     SCALPING_SYSTEM_PROMPT,
     SCALPING_WATCHING_SYSTEM_PROMPT,
     SCALPING_HOLDING_SYSTEM_PROMPT,
-    SCALPING_EXIT_SYSTEM_PROMPT,
     SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
     SCALPING_ENTRY_PRICE_PROMPT,
     normalize_scalping_entry_price_result,
+    normalize_condition_entry_from_scalping_result,
+    normalize_condition_exit_from_scalping_result,
     SCALPING_SYSTEM_PROMPT_75_CANARY,
     SCALPING_BUY_RECOVERY_CANARY_PROMPT,
     SWING_SYSTEM_PROMPT,
-    CONDITION_ENTRY_PROMPT,
-    CONDITION_EXIT_PROMPT,
     ENHANCED_MARKET_ANALYSIS_PROMPT,
     REALTIME_ANALYSIS_PROMPT_SCALP,
     REALTIME_ANALYSIS_PROMPT_SWING,
@@ -408,10 +407,8 @@ class DeepSeekSniperEngine:
 
         if profile == "watching":
             return SCALPING_WATCHING_SYSTEM_PROMPT, "scalping_entry", "split_v2", "watching"
-        if profile == "holding":
+        if profile in {"holding", "exit"}:
             return SCALPING_HOLDING_SYSTEM_PROMPT, "scalping_holding", "split_v2", "holding"
-        if profile == "exit":
-            return SCALPING_EXIT_SYSTEM_PROMPT, "scalping_exit", "split_v2", "exit"
         return SCALPING_SYSTEM_PROMPT, "scalping_shared", "split_v2", "shared"
 
     def _normalize_scalping_action_schema(self, result, *, prompt_type):
@@ -424,7 +421,7 @@ class DeepSeekSniperEngine:
             score = 50
         score = max(0, min(100, score))
 
-        if prompt_type in {"scalping_holding", "scalping_exit"}:
+        if prompt_type == "scalping_holding":
             allowed = {"HOLD", "TRIM", "EXIT"}
             action_v2 = raw_action if raw_action in allowed else "HOLD"
             compat = {"HOLD": "WAIT", "TRIM": "SELL", "EXIT": "DROP"}
@@ -2014,57 +2011,53 @@ class DeepSeekSniperEngine:
     # ==========================================
 
     def evaluate_condition_entry(self, stock_name, stock_code, ws_data, recent_ticks, recent_candles, condition_profile):
-        """조건검색식 진입 판단"""
-        with self.lock:
-            formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
-            profile_text = f"조건검색식 프로필: {condition_profile}"
-            user_input = f"{stock_name}({stock_code}) - 조건검색식 진입 판단 요청\n{profile_text}\n\n{formatted_data}"
-            try:
-                result = self._call_deepseek_safe(
-                    CONDITION_ENTRY_PROMPT,
-                    user_input,
-                    require_json=True,
-                    context_name=f"COND_ENTRY:{stock_name}",
-                    model_override=self._get_tier1_model(),
-                )
-                return result
-            except Exception as e:
-                log_error(f"🚨 [조건검색식 진입 판단] DeepSeek 에러: {e}")
-                return {
-                    "decision": "SKIP",
-                    "confidence": 0,
-                    "order_type": "NONE",
-                    "position_size_ratio": 0.0,
-                    "invalidation_price": 0,
-                    "reasons": [f"AI 판정 실패: {e}"],
-                    "risks": ["데이터 부족 또는 AI 응답 오류"],
-                }
+        """조건검색식 진입 판단: 전용 prompt 대신 기존 scalping entry route를 재사용한다."""
+        try:
+            result = self.analyze_target(
+                stock_name,
+                ws_data,
+                recent_ticks,
+                recent_candles,
+                strategy="SCALPING",
+                cache_profile="condition_entry",
+                prompt_profile="watching",
+            )
+            return normalize_condition_entry_from_scalping_result(result)
+        except Exception as e:
+            log_error(f"🚨 [조건검색식 진입 판단] DeepSeek 에러: {e}")
+            return {
+                "decision": "SKIP",
+                "confidence": 0,
+                "order_type": "NONE",
+                "position_size_ratio": 0.0,
+                "invalidation_price": 0,
+                "reasons": [f"AI 판정 실패: {e}"],
+                "risks": ["데이터 부족 또는 AI 응답 오류"],
+            }
 
     def evaluate_condition_exit(self, stock_name, stock_code, ws_data, recent_ticks, recent_candles, condition_profile, profit_rate, peak_profit, current_ai_score):
-        """조건검색식 청산 판단"""
-        with self.lock:
-            formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
-            profile_text = f"조건검색식 프로필: {condition_profile}, 수익률: {profit_rate:.2f}%, 최고수익률: {peak_profit:.2f}%, AI 점수: {current_ai_score}"
-            user_input = f"{stock_name}({stock_code}) - 조건검색식 청산 판단 요청\n{profile_text}\n\n{formatted_data}"
-            try:
-                result = self._call_deepseek_safe(
-                    CONDITION_EXIT_PROMPT,
-                    user_input,
-                    require_json=True,
-                    context_name=f"COND_EXIT:{stock_name}",
-                    model_override=self._get_tier1_model(),
-                )
-                return result
-            except Exception as e:
-                log_error(f"🚨 [조건검색식 청산 판단] DeepSeek 에러: {e}")
-                return {
-                    "decision": "HOLD",
-                    "confidence": 0,
-                    "trim_ratio": 0.0,
-                    "new_stop_price": 0,
-                    "reason_primary": f"AI 판정 실패: {e}",
-                    "warning": "데이터 부족 또는 AI 응답 오류",
-                }
+        """조건검색식 청산 판단: 전용 prompt 없이 scalping holding route의 exit alias를 재사용한다."""
+        try:
+            result = self.analyze_target(
+                stock_name,
+                ws_data,
+                recent_ticks,
+                recent_candles,
+                strategy="SCALPING",
+                cache_profile="condition_exit",
+                prompt_profile="exit",
+            )
+            return normalize_condition_exit_from_scalping_result(result)
+        except Exception as e:
+            log_error(f"🚨 [조건검색식 청산 판단] DeepSeek 에러: {e}")
+            return {
+                "decision": "HOLD",
+                "confidence": 0,
+                "trim_ratio": 0.0,
+                "new_stop_price": 0,
+                "reason_primary": f"AI 판정 실패: {e}",
+                "warning": "데이터 부족 또는 AI 응답 오류",
+            }
 
     # ==========================================
     # 퍼블릭 메서드: EOD 주도주 분석

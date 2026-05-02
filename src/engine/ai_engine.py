@@ -39,36 +39,43 @@ def _resolve_gemini_response_schema(schema_name):
 # 1. 🎯 시스템 프롬프트 (스캘핑 전용 - V2.0 틱 가속도 반영)
 # ==========================================
 SCALPING_SYSTEM_PROMPT = """
-너는 매년 꾸준한 수익을 누적하는 상위 1%의 극강 공격적 초단타(Scalping) 프랍 트레이더야. 
-너의 생존 철학은 '돌파 직전의 찰나에 탑승해 수수료를 떼고 1~2%만 먹고 빠지는 것'이며, 모멘텀이 멈추는 순간 자비 없이 칼손절(-1.5% 이내)하는 것이다.
+너는 초저지연 스캘핑 진입 분류기다.
+입력된 정량 피처와 최근 체결/호가 흐름만으로 BUY, WAIT, DROP을 빠르게 결정한다.
+입력에 없는 뉴스, 재무, 장기 전망은 추정하지 않는다.
 
-[스캘핑 타점 판별의 3원칙] - **이 기준을 뼈에 새겨라**
-1. 매도벽 소화(Ask Eating): 매도 잔량이 매수 잔량보다 두꺼운 상태(호가 열위)에서, 틱 체결 속도가 급격히 빨라지며(가속도) 매수 압도율(Buy Pressure)이 70% 이상일 때가 유일한 'BUY' 타점이다.
-2. 속도 저하 = 즉각 도망: 체결강도가 높더라도, 최근 10틱이 체결되는 데 걸린 시간이 느려지거나 고가 부근에서 큰 매도 틱이 찍히면 주저 없이 'DROP' 또는 조기 익절을 지시해라.
-3. 위치의 중요성: 현재가가 Micro-VWAP 아래에 있거나, 당일 최고가를 찍고 줄설거지가 나오는 역배열 패턴이라면 매수 압도율이 높아도 페이크(Fake)다. 절대 진입하지 마라.
+[판정 우선순위]
+1. 수급: buy_pressure_10t, net_aggressive_delta_10t, 체결강도 변화
+2. 속도: tick_acceleration_ratio, 최근 5~10틱 체결 간격
+3. 위치: micro VWAP/MA5 대비 위치, 당일 고점 대비 거리
+4. 호가/리스크: large_sell_print_detected, top3_depth_ratio, spread/quote 악화
+
+[action]
+- BUY: 수급, 속도, 위치가 함께 우호이고 즉시 반응 가능성이 높다.
+- WAIT: 긍정/부정 신호가 섞였거나 BUY 근거가 부족하다.
+- DROP: VWAP/속도/수급/대량매도 중 복수 악화가 확인된다.
 
 [스코어링 기준 (0~100)]
-- 80~100 (BUY): 호가창 매도벽을 뚫어내는 강력한 시장가 매수 폭발. 거래량과 틱 속도가 미친 듯이 가속화되는 돌파 시점.
-- 50~79 (WAIT): 수급은 들어오나 아직 매물대 저항을 맞고 있거나, 방향성이 모호한 눌림목. (지켜볼 것)
-- 0~49 (DROP): 매수벽에 물량을 던지는 투매 발생, VWAP 이탈, 윗꼬리 대량 거래량 발생. (즉시 버릴 것)
+- 80~100 (BUY): 즉시 진입 우호
+- 50~79 (WAIT): 관찰 유지
+- 0~49 (DROP): 진입 금지
 
-분석 결과는 반드시 아래 JSON 형식으로만 출력하고 단 1글자의 부연 설명도 추가하지 마:
+반드시 JSON만 반환:
 {
     "action": "BUY" | "WAIT" | "DROP",
     "score": 0~100 사이의 정수,
-    "reason": "매수 압도율, 틱 속도, 호가벽 소화 상태를 바탕으로 한 타점 근거 1줄 요약"
+    "reason": "핵심 정량 근거 1줄"
 }
 """
 
 SCALPING_WATCHING_SYSTEM_PROMPT = """
-너는 극강 공격적 초단타 진입 트레이더다.
-목표는 '지금 이 순간 진입해도 기대값이 플러스인지'만 판단하는 것이다.
-이미 통과한 기계 게이트(유동성/갭/모멘텀)는 다시 의심하지 말고, 돌파 지속 가능성만 본다.
+너는 초저지연 스캘핑 진입 분류기다.
+목표는 지금 주문 후보를 BUY, WAIT, DROP 중 하나로 빠르게 분류하는 것이다.
+기계 게이트 통과는 전제로 보되, 입력 데이터에 보이는 즉시 악화 신호는 반드시 반영한다.
 
-[최우선 해석 순서]
-1. [정량형 수급 피처]를 가장 먼저 본다.
-2. [초단타 수급/위치 지표]로 정량 피처 해석을 보강한다.
-3. [최근 10틱 상세]와 [실시간 호가창]은 정량 피처와 충돌할 때만 보조적으로 쓴다.
+[해석 순서]
+1. 정량 피처: 수급 -> 속도 -> 위치 -> 호가 리스크
+2. 최근 틱/호가 상세는 정량 피처와 충돌할 때만 보조 근거로 쓴다.
+3. 입력에 없는 가격, 뉴스, 수급 주체는 추정하지 않는다.
 
 [핵심 정량 피처]
 - 위치: curr_vs_micro_vwap_bp, curr_vs_ma5_bp
@@ -78,30 +85,29 @@ SCALPING_WATCHING_SYSTEM_PROMPT = """
 - 경고: large_sell_print_detected, distance_from_day_high_pct, top3_depth_ratio
 
 [BUY 판단 규칙]
-1. 아래 핵심 조합 중 2개 이상이 동시에 우호일 때만 BUY를 검토하라:
+아래 조합 중 2개 이상이 우호이고 명확한 악화 신호가 없을 때만 BUY를 검토한다.
    - 위치 우위: curr_vs_micro_vwap_bp > 0 또는 curr_vs_ma5_bp > 0
    - 속도 우위: tick_acceleration_ratio >= 1.10
    - 수급 우위: buy_pressure_10t >= 68 또는 net_aggressive_delta_10t > 0
    - 흡수 확인: same_price_buy_absorption >= 2
-2. 위 조합이 일부 충족돼도 large_sell_print_detected=true 이거나 distance_from_day_high_pct >= -0.35 이면 추격 부담을 같이 반영하라.
+large_sell_print_detected=true 또는 distance_from_day_high_pct >= -0.35이면 추격 부담을 반영한다.
 
 [DROP 판단 규칙]
-1. 단일 경고 1개만으로 DROP하지 마라.
-2. 아래 복합 조건 중 하나가 확인될 때만 DROP을 준다:
+단일 경고 1개만으로 DROP하지 말고, 아래 복합 조건 중 하나가 확인될 때 DROP을 준다.
    - curr_vs_micro_vwap_bp <= 0 그리고 tick_acceleration_ratio < 1.0
    - large_sell_print_detected=true 그리고 distance_from_day_high_pct >= -0.35
    - top3_depth_ratio >= 1.35 그리고 buy_pressure_10t < 62
 
 [WAIT 판단 규칙]
-1. 핵심 BUY 조합이 부족하거나 긍정/부정 신호가 혼합되면 WAIT다.
-2. reason에는 BUY 또는 DROP을 막은 정량 피처를 1줄로 명시하라.
+핵심 BUY 조합이 부족하거나 긍정/부정 신호가 혼합되면 WAIT다.
+reason에는 BUY 또는 DROP을 막은 정량 피처를 1줄로 쓴다.
 
 [스코어링 기준 (0~100)]
 - 80~100 (BUY): 즉시 진입 유효
 - 50~79 (WAIT): 관찰 유지
 - 0~49 (DROP): 진입 금지
 
-분석 결과는 반드시 아래 JSON 형식으로만 출력:
+반드시 JSON만 반환:
 {
     "action": "BUY" | "WAIT" | "DROP",
     "score": 0~100 사이의 정수,
@@ -119,6 +125,8 @@ SCALPING_ENTRY_PRICE_PROMPT = """
 3. live quote, spread, latency, 체결강도, 매수비율, 호가 depth를 보고 체결 가능성과 불리한 추격 비용을 동시에 판단한다.
 4. 가격을 발명하지 마라. 가능한 선택은 defensive/reference/그 사이의 개선 지정가/스킵이다.
 5. 불확실하면 USE_DEFENSIVE를 선택한다. 명백히 불리하면 SKIP을 선택한다.
+6. price_context.orderbook_micro가 ready이고 micro_state=bearish이며 체결강도/latency/가격 context가 반박하지 않으면 SKIP 근거로 사용할 수 있다.
+7. orderbook_micro가 neutral 또는 insufficient이면 OFI/QI만으로 SKIP하지 않는다.
 
 [action]
 - USE_DEFENSIVE: 방어 제출가를 그대로 사용
@@ -168,49 +176,79 @@ def normalize_scalping_entry_price_result(result, *, fallback_price=0):
     }
 
 
-SCALPING_HOLDING_SYSTEM_PROMPT = """
-너는 초단타 보유 포지션 리스크 매니저다.
-목표는 '추세 유지 vs 즉시 이탈'을 빠르게 판정하는 것이다.
-보유/청산 action schema는 `HOLD | TRIM | EXIT`를 사용한다.
+def _coerce_confidence_score(value, default=0):
+    try:
+        return int(max(0, min(100, float(value))))
+    except Exception:
+        return int(default)
 
-[보유 판단 규칙]
-1. 추세 유지/재가속이면 HOLD.
-2. 모멘텀 둔화 또는 리스크 확대가 시작되면 TRIM.
-3. 모멘텀 붕괴/손실 확대로 즉시 이탈이 유리하면 EXIT.
-3. reason에는 보유/청산 판단의 핵심 트리거를 명시한다.
+
+def normalize_condition_entry_from_scalping_result(result):
+    """Compatibility adapter: condition entry now reuses scalping entry routing."""
+    payload = result if isinstance(result, dict) else {}
+    action = str(payload.get("action") or "WAIT").strip().upper()
+    if action == "BUY":
+        decision = "BUY"
+    elif action == "DROP":
+        decision = "SKIP"
+    else:
+        decision = "WAIT"
+    reason = str(payload.get("reason") or "scalping_route").strip()[:240]
+    return {
+        "decision": decision,
+        "confidence": _coerce_confidence_score(payload.get("score", 0), 0),
+        "order_type": "MARKET" if decision == "BUY" else "NONE",
+        "position_size_ratio": 1.0 if decision == "BUY" else 0.0,
+        "invalidation_price": 0,
+        "reasons": [reason],
+        "risks": [],
+        "raw_scalping_result": payload,
+    }
+
+
+def normalize_condition_exit_from_scalping_result(result):
+    """Compatibility adapter: condition exit now reuses scalping holding/exit routing."""
+    payload = result if isinstance(result, dict) else {}
+    action = str(payload.get("action_v2") or payload.get("action") or "HOLD").strip().upper()
+    if action in {"DROP", "SELL"}:
+        decision = "EXIT"
+    elif action not in {"HOLD", "TRIM", "EXIT"}:
+        decision = "HOLD"
+    else:
+        decision = action
+    reason = str(payload.get("reason") or "scalping_holding_route").strip()[:240]
+    return {
+        "decision": decision,
+        "confidence": _coerce_confidence_score(payload.get("score", 0), 0),
+        "trim_ratio": 0.5 if decision == "TRIM" else (1.0 if decision == "EXIT" else 0.0),
+        "new_stop_price": 0,
+        "reason_primary": reason,
+        "warning": "",
+        "raw_scalping_result": payload,
+    }
+
+
+SCALPING_HOLDING_SYSTEM_PROMPT = """
+너는 초저지연 스캘핑 보유 상태 분류기다.
+목표는 현재 포지션을 HOLD, TRIM, EXIT 후보로 빠르게 라벨링하는 것이다.
+일반 보유감시에서는 점수 갱신에 주로 쓰이고, 일부 호출부에서는 청산 후보 신호로 쓰일 수 있다.
+
+[판정 규칙]
+- HOLD: 수급/속도/위치가 유지되거나 재가속 조짐이 있다.
+- TRIM: 모멘텀 둔화, 매도 압력 증가, 고점 대비 밀림이 시작됐다. 부분주문 지시가 아니라 위험 증가 라벨이다.
+- EXIT: 가격, 수급, 속도 중 복수 축이 붕괴해 청산 후보로 봐야 한다.
+- stale/불충분/혼합 데이터는 과잉 EXIT보다 HOLD 또는 TRIM으로 둔다.
 
 [스코어링 기준 (0~100)]
 - 80~100: 보유 우호
 - 50~79: 중립
-- 0~49: 청산 우호(EXIT 가능성 높음)
+- 0~49: 청산 후보 우호
 
-분석 결과는 반드시 아래 JSON 형식으로만 출력:
+반드시 JSON만 반환:
 {
     "action": "HOLD" | "TRIM" | "EXIT",
     "score": 0~100 사이의 정수,
     "reason": "보유 관점 핵심 근거 1줄"
-}
-"""
-
-SCALPING_EXIT_SYSTEM_PROMPT = """
-너는 초단타 청산 실행 매니저다.
-목표는 "지금 유지/부분청산/전량청산 중 무엇이 기대값이 높은지"를 즉시 결정하는 것이다.
-
-[청산 판단 규칙]
-1. 추세 유지가 명확하면 HOLD.
-2. 추세 둔화/체결 약화/리스크 상승이 시작되면 TRIM.
-3. 손실 확대 위험 또는 추세 붕괴가 확인되면 EXIT.
-
-[스코어링 기준 (0~100)]
-- 80~100: HOLD 우호
-- 50~79: TRIM 우호
-- 0~49: EXIT 우호
-
-분석 결과는 반드시 아래 JSON 형식으로만 출력:
-{
-    "action": "HOLD" | "TRIM" | "EXIT",
-    "score": 0~100 사이의 정수,
-    "reason": "청산 관점 핵심 근거 1줄"
 }
 """
 
@@ -244,14 +282,14 @@ SCALPING_SYSTEM_PROMPT_75_CANARY = (
 )
 
 SCALPING_BUY_RECOVERY_CANARY_PROMPT = """
-너는 WAIT 65~79 BUY 회복 전용 초단타 진입 트레이더다.
-목표는 '기본 프롬프트가 WAIT로 남긴 후보 중 실제 기대값이 살아 있는 돌파 직전만 BUY로 승격'하는 것이다.
-단, 무리한 추격 매수는 금지한다.
+너는 WAIT 65~79 BUY 회복 전용 초저지연 진입 분류기다.
+목표는 기본 프롬프트가 WAIT로 남긴 후보 중 정량 피처가 재개선된 경우만 BUY로 승격하는 것이다.
+무리한 추격 매수는 금지한다.
 
-[최우선 해석 순서]
-1. [정량형 수급 피처]를 가장 먼저 본다.
+[해석 순서]
+1. 정량 수급 피처를 먼저 본다.
 2. WAIT로 남은 이유를 뒤집을 만큼 정량 신호가 재개선됐는지 확인한다.
-3. [최근 10틱 상세]와 [실시간 호가창]은 정량 피처 보조 용도로만 쓴다.
+3. 최근 틱/호가는 정량 피처 보조 용도로만 쓴다.
 
 [회복 승격에 쓰는 핵심 정량 피처]
 - 위치: curr_vs_micro_vwap_bp, curr_vs_ma5_bp
@@ -261,31 +299,30 @@ SCALPING_BUY_RECOVERY_CANARY_PROMPT = """
 - 경고: large_sell_print_detected, distance_from_day_high_pct, top3_depth_ratio
 
 [BUY 승격 규칙]
-1. 이 프롬프트는 WAIT 65~79 후보 전용이다. 기본 WAIT를 뒤집으려면 아래 조합 중 3개 이상이 동시에 우호여야 한다:
+이 프롬프트는 WAIT 65~79 후보 전용이다. 기본 WAIT를 뒤집으려면 아래 조합 중 3개 이상이 동시에 우호여야 한다.
    - 위치 우위: curr_vs_micro_vwap_bp > 0 또는 curr_vs_ma5_bp > 0
    - 속도 회복: tick_acceleration_ratio >= 1.20
    - 수급 회복: buy_pressure_10t >= 65 또는 net_aggressive_delta_10t > 0
    - 흡수 확인: same_price_buy_absorption >= 2
-2. large_sell_print_detected=true 이면 BUY로 승격하지 마라.
-3. distance_from_day_high_pct >= -0.35 이고 top3_depth_ratio >= 1.35 이면 추격 위험으로 보고 BUY 승격을 보수적으로 하라.
+large_sell_print_detected=true이면 BUY로 승격하지 않는다.
+distance_from_day_high_pct >= -0.35 이고 top3_depth_ratio >= 1.35이면 추격 위험으로 보고 보수적으로 판단한다.
 
 [DROP 판단 규칙]
-1. 단일 경고 1개만으로 DROP하지 마라.
-2. 아래 복합 조건 중 하나가 확인될 때만 DROP을 준다:
+단일 경고 1개만으로 DROP하지 말고, 아래 복합 조건 중 하나가 확인될 때 DROP을 준다.
    - curr_vs_micro_vwap_bp <= 0 그리고 tick_acceleration_ratio < 1.0
    - large_sell_print_detected=true 그리고 distance_from_day_high_pct >= -0.35
    - top3_depth_ratio >= 1.35 그리고 buy_pressure_10t < 62
 
 [WAIT 유지 규칙]
-1. BUY 승격 조합이 부족하지만 복합 DROP 조건도 아니면 WAIT를 유지한다.
-2. reason에는 승격을 막은 정량 피처 또는 DROP 근거를 1줄로 명시하라.
+BUY 승격 조합이 부족하지만 복합 DROP 조건도 아니면 WAIT를 유지한다.
+reason에는 승격을 막은 정량 피처 또는 DROP 근거를 1줄로 쓴다.
 
 [스코어링 기준 (0~100)]
 - 75~100 (BUY): 회복 BUY 승격 가능
 - 50~74 (WAIT): 관찰 유지
 - 0~49 (DROP): 진입 금지
 
-분석 결과는 반드시 아래 JSON 형식으로만 출력:
+반드시 JSON만 반환:
 {
     "action": "BUY" | "WAIT" | "DROP",
     "score": 0~100 사이의 정수,
@@ -319,53 +356,6 @@ SWING_SYSTEM_PROMPT = """
 }
 """
 
-
-# ==========================================
-# 1-3. 🎯 조건검색식 진입 판단 프롬프트 (Condition Entry)
-# ==========================================
-CONDITION_ENTRY_PROMPT = """
-너는 키움 조건검색식 실시간 신호를 전문적으로 분석하는 상위 1% 조건검색 트레이더다.
-너의 임무는 조건검색식이 발생한 종목이 진입할만한 가치가 있는지, 아니면 거짓 신호인지 판단하는 것이다.
-
-[판단 원칙]
-1. 조건검색식 패밀리(VCP, S15, Swing Breakout 등)에 맞는 진입 논리를 적용하라.
-2. 실시간 호가창, 체결강도, 프로그램 수급, 거래량 폭발 여부를 종합적으로 평가하라.
-3. 조건검색식이 발생한 직후 3분 이내의 데이터만 신뢰하라. 시간이 지날수록 신호 신뢰도가 떨어진다.
-
-출력 형식은 반드시 아래 JSON으로만 응답하라:
-{
-  "decision": "BUY|WAIT|SKIP",
-  "confidence": 0~100 사이의 정수,
-  "order_type": "MARKET|LIMIT_TOP|NONE",
-  "position_size_ratio": 0.0~1.0,
-  "invalidation_price": 0 (정수),
-  "reasons": [""],
-  "risks": [""]
-}
-"""
-
-# ==========================================
-# 1-4. 🎯 조건검색식 청산 판단 프롬프트 (Condition Exit)
-# ==========================================
-CONDITION_EXIT_PROMPT = """
-너는 조건검색식으로 진입한 포지션의 청산 시점을 판단하는 전문 트레이더다.
-너의 임무는 보유 포지션의 실시간 데이터를 바탕으로 홀드, 부분 청산, 전량 청산을 결정하는 것이다.
-
-[판단 원칙]
-1. 조건검색식 패밀리에 맞는 청산 논리(VCP는 익절 빠르게, S15는 트레일링 등)를 적용하라.
-2. 실시간 수익률, 최고점 대비 하락폭, AI 점수 하락, 매도 압력 증가를 주요 신호로 삼아라.
-3. 손절은 신호 실패 시 즉시, 익절은 추세가 꺾일 때 점진적으로 실행하라.
-
-출력 형식은 반드시 아래 JSON으로만 응답하라:
-{
-  "decision": "HOLD|TRIM|EXIT",
-  "confidence": 0~100 사이의 정수,
-  "trim_ratio": 0.0~1.0,
-  "new_stop_price": 0 (정수),
-  "reason_primary": "",
-  "warning": ""
-}
-"""
 
 # ==========================================
 # 2. 🎯 [신규] 일일 시장 진단 프롬프트 (텔레그램 브리핑용)
@@ -502,11 +492,11 @@ REALTIME_ANALYSIS_PROMPT_DUAL = """
 """
 
 # ==========================================
-# 3-2. 🎯 [신규] 스캘핑 오버나이트 의사결정 프롬프트 (15:30 전용)
+# 3-2. 🎯 [신규] 스캘핑 오버나이트 의사결정 프롬프트 (15:20 선행 판정)
 # ==========================================
 SCALPING_OVERNIGHT_DECISION_PROMPT = """
 너는 장 마감 직전 15년 경력의 베테랑 프랍 트레이더이자 리스크 매니저다.
-네 임무는 원래 당일 청산이 원칙인 SCALPING 포지션을 15시 30분 시점에서 검토해,
+네 임무는 원래 당일 청산이 원칙인 SCALPING 포지션을 15시 20분 시점에서 선행 검토해,
 '오늘 무조건 시장가 청산'할지, 아니면 '예외적으로 오버나이트 보유'할지를 결정하는 것이다.
 
 [핵심 원칙]
@@ -940,10 +930,8 @@ class GeminiSniperEngine:
 
         if profile == "watching":
             return SCALPING_WATCHING_SYSTEM_PROMPT, "scalping_entry", "split_v2", "watching"
-        if profile == "holding":
+        if profile in {"holding", "exit"}:
             return SCALPING_HOLDING_SYSTEM_PROMPT, "scalping_holding", "split_v2", "holding"
-        if profile == "exit":
-            return SCALPING_EXIT_SYSTEM_PROMPT, "scalping_exit", "split_v2", "exit"
         return SCALPING_SYSTEM_PROMPT, "scalping_shared", "split_v2", "shared"
 
     def _normalize_scalping_action_schema(self, result, *, prompt_type):
@@ -956,9 +944,9 @@ class GeminiSniperEngine:
             score = 50
         score = max(0, min(100, score))
 
-        # HOLDING/EXIT 프로파일은 action_v2를 표준으로 사용하고,
+        # HOLDING 프로파일은 action_v2를 표준으로 사용하고,
         # 기존 핸들러 호환을 위해 action에는 legacy 값을 함께 제공한다.
-        if prompt_type in {"scalping_holding", "scalping_exit"}:
+        if prompt_type == "scalping_holding":
             allowed = {"HOLD", "TRIM", "EXIT"}
             action_v2 = raw_action if raw_action in allowed else "HOLD"
             compat = {"HOLD": "WAIT", "TRIM": "SELL", "EXIT": "DROP"}
@@ -1842,7 +1830,7 @@ class GeminiSniperEngine:
                 require_json=True,
                 context_name=f"{target_name}({strategy}:{prompt_type})",
                 model_override=target_model,
-                schema_name="entry_v1" if prompt_type not in {"scalping_holding", "scalping_exit"} else "holding_exit_v1",
+                schema_name="holding_exit_v1" if prompt_type == "scalping_holding" else "entry_v1",
             )
 
             if strategy not in ["KOSPI_ML", "KOSDAQ_ML"]:
@@ -2491,7 +2479,7 @@ class GeminiSniperEngine:
         return "\n".join(lines)
 
     def evaluate_scalping_overnight_decision(self, stock_name, stock_code, realtime_ctx):
-        """15:30 SCALPING 포지션의 오버나이트/당일청산 의사결정을 JSON으로 반환합니다."""
+        """15:20 SCALPING 포지션의 오버나이트/당일청산 의사결정을 JSON으로 반환합니다."""
         with self.lock:
             user_input = (
                 f"🚨 [SCALPING 오버나이트 판정 요청]\n"
@@ -2530,64 +2518,64 @@ class GeminiSniperEngine:
 
     def evaluate_condition_entry(self, stock_name, stock_code, ws_data, recent_ticks, recent_candles, condition_profile):
         """
-        조건검색식 진입 판단 (프롬프트: CONDITION_ENTRY_PROMPT)
+        조건검색식 진입 판단.
+
+        Runtime condition-specific prompts are retired; condition signals now reuse
+        the standard scalping entry route and adapt the result to the legacy
+        condition response shape for callers that still expect it.
         """
-        with self.lock:
-            # 데이터 포맷팅
-            formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
-            # 조건 프로필 정보 추가
-            profile_text = f"조건검색식 프로필: {condition_profile}"
-            user_input = f"{stock_name}({stock_code}) - 조건검색식 진입 판단 요청\n{profile_text}\n\n{formatted_data}"
-            try:
-                result = self._call_gemini_safe(
-                    CONDITION_ENTRY_PROMPT,
-                    user_input,
-                    require_json=True,
-                    context_name=f"COND_ENTRY:{stock_name}",
-                    model_override=self._get_tier1_model(),
-                    schema_name="condition_entry_v1",
-                )
-                return result
-            except Exception as e:
-                log_error(f"🚨 [조건검색식 진입 판단] AI 에러: {e}")
-                return {
-                    "decision": "SKIP",
-                    "confidence": 0,
-                    "order_type": "NONE",
-                    "position_size_ratio": 0.0,
-                    "invalidation_price": 0,
-                    "reasons": [f"AI 판정 실패: {e}"],
-                    "risks": ["데이터 부족 또는 AI 응답 오류"]
-                }
+        try:
+            result = self.analyze_target(
+                stock_name,
+                ws_data,
+                recent_ticks,
+                recent_candles,
+                strategy="SCALPING",
+                cache_profile="condition_entry",
+                prompt_profile="watching",
+            )
+            return normalize_condition_entry_from_scalping_result(result)
+        except Exception as e:
+            log_error(f"🚨 [조건검색식 진입 판단] AI 에러: {e}")
+            return {
+                "decision": "SKIP",
+                "confidence": 0,
+                "order_type": "NONE",
+                "position_size_ratio": 0.0,
+                "invalidation_price": 0,
+                "reasons": [f"AI 판정 실패: {e}"],
+                "risks": ["데이터 부족 또는 AI 응답 오류"],
+            }
 
     def evaluate_condition_exit(self, stock_name, stock_code, ws_data, recent_ticks, recent_candles, condition_profile, profit_rate, peak_profit, current_ai_score):
         """
-        조건검색식 청산 판단 (프롬프트: CONDITION_EXIT_PROMPT)
+        조건검색식 청산 판단.
+
+        Runtime condition-specific prompts are retired; condition exits now reuse
+        the standard scalping holding route through the legacy "exit" alias and adapt the result to the legacy
+        condition response shape for callers that still expect it.
         """
-        with self.lock:
-            formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
-            profile_text = f"조건검색식 프로필: {condition_profile}, 수익률: {profit_rate:.2f}%, 최고수익률: {peak_profit:.2f}%, AI 점수: {current_ai_score}"
-            user_input = f"{stock_name}({stock_code}) - 조건검색식 청산 판단 요청\n{profile_text}\n\n{formatted_data}"
-            try:
-                result = self._call_gemini_safe(
-                    CONDITION_EXIT_PROMPT,
-                    user_input,
-                    require_json=True,
-                    context_name=f"COND_EXIT:{stock_name}",
-                    model_override=self._get_tier1_model(),
-                    schema_name="condition_exit_v1",
-                )
-                return result
-            except Exception as e:
-                log_error(f"🚨 [조건검색식 청산 판단] AI 에러: {e}")
-                return {
-                    "decision": "HOLD",
-                    "confidence": 0,
-                    "trim_ratio": 0.0,
-                    "new_stop_price": 0,
-                    "reason_primary": f"AI 판정 실패: {e}",
-                    "warning": "데이터 부족 또는 AI 응답 오류"
-                }
+        try:
+            result = self.analyze_target(
+                stock_name,
+                ws_data,
+                recent_ticks,
+                recent_candles,
+                strategy="SCALPING",
+                cache_profile="condition_exit",
+                prompt_profile="exit",
+            )
+            return normalize_condition_exit_from_scalping_result(result)
+        except Exception as e:
+            log_error(f"🚨 [조건검색식 청산 판단] AI 에러: {e}")
+            return {
+                "decision": "HOLD",
+                "confidence": 0,
+                "trim_ratio": 0.0,
+                "new_stop_price": 0,
+                "reason_primary": f"AI 판정 실패: {e}",
+                "warning": "데이터 부족 또는 AI 응답 오류",
+            }
 
     # ==========================================
     # 🔍 [신규] 장 마감 후 내일의 주도주 분석 (Tier 3 Pro 전용)

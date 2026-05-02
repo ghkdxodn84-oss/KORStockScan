@@ -4,7 +4,7 @@
 
 - `ai_engine_openai.py`가 `ai_engine.py`와 같은 endpoint schema registry/contract 기준을 따르는지 장전 로드로 닫는다.
 - `OpenAI Responses WS`는 live 전환이 아니라 `shadow-first flag-off` 기준으로 queue/timeout/fallback/request_id 정합성만 관찰한다.
-- phase1 WS 범위는 `analyze_target`, `analyze_target_shadow_prompt`, `condition_entry`, `condition_exit`로만 잠그고 `realtime_report/gatekeeper/overnight/EOD`는 HTTP 유지로 분리한다.
+- phase1 WS 범위는 `analyze_target`, `analyze_target_shadow_prompt`로만 잠그고 `condition_entry/condition_exit`는 전용 프롬프트/endpoint 없이 기존 scalping 라우팅으로 위임한다. `realtime_report/gatekeeper/overnight/EOD`는 HTTP 유지로 분리한다.
 - BUY-side timeout/parse failure/late response는 `DROP/SKIP` 보수 폴백으로만 처리하고, `previous_response_id`는 종목 간 상태 오염 방지 차원에서 금지한다.
 - `soft_stop_expert_defense v2`는 `2026-04-30` same-day 수집 후 기본 OFF다. 다음 보유/청산 신규 owner는 v2 재가동이 아니라 `GOOD_EXIT` 제거를 피하는 refined `bad_entry` canary다.
 - 스캘핑 신규 BUY 최대매수가능 주수는 `1주 cap`이다. 5/4 장전에는 `SCALPING_INITIAL_ENTRY_MAX_QTY=1` 로드와 env override 오염 여부를 확인한다.
@@ -130,7 +130,7 @@
 
 - [ ] `[HoldingFlowOverride0504-Postclose] holding/overnight flow override 장후 판정` (`Due: 2026-05-04`, `Slot: POSTCLOSE`, `TimeWindow: 16:00~16:20`, `Track: ScalpingLogic`)
   - Source: [2026-05-04-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-04-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
-  - 판정 기준: `holding_flow_override_defer_exit` 이후 후행 `COMPLETED + valid profit_rate`, `GOOD_EXIT/MISSED_UPSIDE`, hard/protect bypass, `force_reason` 분포를 full/partial, initial/pyramid, REVERSAL_ADD 혼입 여부로 분리한다. 오버나이트는 `SELL_TODAY -> HOLD_OVERNIGHT` 전환과 `0.80%p` 악화 복귀를 별도 표본으로 본다.
+  - 판정 기준: `holding_flow_override_defer_exit` 이후 후행 `COMPLETED + valid profit_rate`, `GOOD_EXIT/MISSED_UPSIDE`, hard/protect bypass, `force_reason` 분포를 full/partial, initial/pyramid, REVERSAL_ADD 혼입 여부로 분리한다. `+0.8% preset TP AI 1회 검문`은 `SCALPING_HOLDING_SYSTEM_PROMPT`를 사용하지만 normal `ai_holding_review` refresh와 합치지 않고 익절 후보 표본으로 `scalp_preset_tp_ai_exit_action/hold_action`, `scalp_preset_ai_review_exit`를 따로 본다. 오버나이트는 `SELL_TODAY -> HOLD_OVERNIGHT` 전환과 `0.80%p` 악화 복귀를 별도 표본으로 본다.
   - why: 목적은 손실 억제가 아니라 조급한 청산으로 인한 missed upside를 줄이고, 붕괴 흐름은 더 명확하게 청산해 순기대값을 높이는 것이다.
   - 다음 액션: 보류 후 추가악화가 잦거나 hard/protect safety 우회가 보이면 즉시 OFF한다. 보류 후 회복/흡수가 확인되면 다음 운영일에도 운영 override를 유지하되, canary 성과와 합산하지 않고 별도 cohort로 판정한다.
 
@@ -146,3 +146,11 @@
   - why: 이번 change set의 목적은 live 전환이 아니라 동일 계약 parity와 shadow transport 안정성 확인이다.
   - cohort: `baseline cohort=OpenAI HTTP`, `candidate live cohort=none`, `observe-only cohort=openai_responses_ws_shadow_flag_off`, `excluded cohort=Gemini/DeepSeek routing 비교`, `rollback owner=OPENAI_TRANSPORT_MODE + OPENAI_RESPONSES_WS_ENABLED`, `cross-contamination check=transport 판정과 strategy alpha 판정 분리`
   - 다음 액션: 변경이 있으면 checklist와 [2026-04-30-openai-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/2026-04-30-openai-enable-acceptance-spec.md), [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)를 같이 갱신하고, parser 검증 후 사용자 수동 sync 명령 1개만 남긴다.
+
+- [ ] `[OrderbookMicroP2Canary0504-Postclose] OFI/QI P2 내부 feature keep/OFF 판정` (`Due: 2026-05-04`, `Slot: POSTCLOSE`, `TimeWindow: 16:20~16:40`, `Track: ScalpingLogic`)
+  - Source: [2026-05-02-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-02-stage2-todo-checklist.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [orderbook_stability_observer.py](/home/ubuntu/KORStockScan/src/trading/entry/orderbook_stability_observer.py)
+  - 판정 기준: `SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_ENABLED=True` runtime provenance와 `orderbook_micro_ready/state/ofi_z/qi_ewma` 적재를 확인한 뒤, micro-enabled P2 cohort의 `entry_ai_price_canary_skip_order`, `entry_ai_price_canary_skip_followup`, `entry_ai_price_canary_applied/fallback`, `latency_pass`, `order_bundle_submitted`를 연결한다.
+  - hard 판정 전제: `submitted_orders >= 20`, `entry_ai_price_canary_skip_order follow-up >= 10`, baseline cohort 존재. 부족하면 direction-only로 둔다.
+  - 성공 기준: P2 `SKIP`이 늘더라도 `90초 missed upside`가 과도하지 않고, non-skipped submitted cohort의 `soft_stop`, `bad_entry_refined_candidate`, `COMPLETED + valid profit_rate`가 기존 P2 baseline 대비 악화되지 않아야 한다. `full fill`과 `partial fill`은 분리한다.
+  - rollback guard: `SKIP` 후 `90s MFE >= +80bps`가 skip follow-up의 `30%` 이상이면 `SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_ENABLED=False`. non-skipped cohort의 fill 전환율이 baseline 대비 `-5%p` 이상 악화되면 micro flag OFF. P2 parse fail/stale context/pre-submit guard 위반은 기존 P1 resolver fail-closed를 유지한다.
+  - 다음 액션: keep이면 P2 내부 feature로 유지하되 standalone entry canary로 승격하지 않는다. OFF면 P2 canary는 유지하고 `SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_ENABLED=False`만 rollback한다.

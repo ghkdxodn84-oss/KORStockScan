@@ -180,6 +180,7 @@ class TradingConfig:
     SCALPING_ENTRY_AI_PRICE_SKIP_MIN_CONFIDENCE: int = 80
     SCALPING_ENTRY_AI_PRICE_TICK_LIMIT: int = 20
     SCALPING_ENTRY_AI_PRICE_CANDLE_LIMIT: int = 20
+    SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_ENABLED: bool = True  # P2 entry price OFI/QI feature input
     SCALPING_ENTRY_TIMEOUT_SEC: int = 90  # 스캘핑 일반 매수 미체결 취소 대기
     SCALPING_BREAKOUT_ENTRY_TIMEOUT_SEC: int = 120  # 돌파형 스캘핑 미체결 취소 대기
     SCALPING_PULLBACK_ENTRY_TIMEOUT_SEC: int = 600  # 눌림/예약형 스캘핑 미체결 취소 대기
@@ -737,6 +738,9 @@ def _build_trading_rules() -> TradingConfig:
     env_entry_ai_price_skip_min_confidence = _env_int("KORSTOCKSCAN_SCALPING_ENTRY_AI_PRICE_SKIP_MIN_CONFIDENCE")
     env_entry_ai_price_tick_limit = _env_int("KORSTOCKSCAN_SCALPING_ENTRY_AI_PRICE_TICK_LIMIT")
     env_entry_ai_price_candle_limit = _env_int("KORSTOCKSCAN_SCALPING_ENTRY_AI_PRICE_CANDLE_LIMIT")
+    env_entry_price_orderbook_micro_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_ENABLED"
+    )
     env_scalping_entry_timeout = _env_int("KORSTOCKSCAN_SCALPING_ENTRY_TIMEOUT_SEC")
     env_scalping_breakout_entry_timeout = _env_int("KORSTOCKSCAN_SCALPING_BREAKOUT_ENTRY_TIMEOUT_SEC")
     env_scalping_pullback_entry_timeout = _env_int("KORSTOCKSCAN_SCALPING_PULLBACK_ENTRY_TIMEOUT_SEC")
@@ -773,6 +777,7 @@ def _build_trading_rules() -> TradingConfig:
         or env_entry_ai_price_skip_min_confidence is not None
         or env_entry_ai_price_tick_limit is not None
         or env_entry_ai_price_candle_limit is not None
+        or env_entry_price_orderbook_micro_enabled is not None
         or env_scalping_entry_timeout is not None
         or env_scalping_breakout_entry_timeout is not None
         or env_scalping_pullback_entry_timeout is not None
@@ -849,6 +854,9 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_ENTRY_AI_PRICE_CANDLE_LIMIT=env_entry_ai_price_candle_limit
             if env_entry_ai_price_candle_limit is not None
             else config.SCALPING_ENTRY_AI_PRICE_CANDLE_LIMIT,
+            SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_ENABLED=env_entry_price_orderbook_micro_enabled
+            if env_entry_price_orderbook_micro_enabled is not None
+            else config.SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_ENABLED,
             SCALPING_ENTRY_TIMEOUT_SEC=env_scalping_entry_timeout
             if env_scalping_entry_timeout is not None
             else config.SCALPING_ENTRY_TIMEOUT_SEC,

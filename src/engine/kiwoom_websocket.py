@@ -853,10 +853,18 @@ class KiwoomWSManager:
                                 target['orderbook']['bids'] = bids
                                 best_ask = target['orderbook']['asks'][0].get('price', 0) if target['orderbook']['asks'] else 0
                                 best_bid = target['orderbook']['bids'][0].get('price', 0) if target['orderbook']['bids'] else 0
+                                best_ask_qty = target['orderbook']['asks'][0].get('volume', 0) if target['orderbook']['asks'] else 0
+                                best_bid_qty = target['orderbook']['bids'][0].get('volume', 0) if target['orderbook']['bids'] else 0
+                                ask_depth_l = sum(int(level.get('volume', 0) or 0) for level in target['orderbook']['asks'])
+                                bid_depth_l = sum(int(level.get('volume', 0) or 0) for level in target['orderbook']['bids'])
                                 ORDERBOOK_STABILITY_OBSERVER.record_quote(
                                     item_code,
                                     best_bid=best_bid,
                                     best_ask=best_ask,
+                                    best_bid_qty=best_bid_qty,
+                                    best_ask_qty=best_ask_qty,
+                                    bid_depth_l=bid_depth_l,
+                                    ask_depth_l=ask_depth_l,
                                 )
                             
                             # '0w' 프로그램 매매 데이터 파싱

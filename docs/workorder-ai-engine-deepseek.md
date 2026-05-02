@@ -215,13 +215,13 @@ def evaluate_scalping_overnight_decision(self, stock_name, stock_code, realtime_
 ```python
 def evaluate_condition_entry(self, stock_name, stock_code, ws_data, recent_ticks, recent_candles, condition_profile)
 ```
-- 동일 시그니처, `_call_deepseek_safe()` 교체
+- 동일 시그니처 유지. `2026-05-02` 이후 조건검색 전용 프롬프트/endpoint는 런타임에서 제거하고 기존 scalping entry 라우팅 결과를 condition 호환 응답으로 변환한다.
 
 #### (G) `evaluate_condition_exit()` (ai_engine.py 2057행)
 ```python
 def evaluate_condition_exit(self, stock_name, stock_code, ws_data, recent_ticks, recent_candles, condition_profile, profit_rate, peak_profit, current_ai_score)
 ```
-- 동일 시그니처, `_call_deepseek_safe()` 교체
+- 동일 시그니처 유지. `2026-05-02` 이후 조건검색 전용 프롬프트/endpoint는 런타임에서 제거하고 기존 scalping exit 라우팅 결과를 condition 호환 응답으로 변환한다.
 
 ---
 
@@ -236,13 +236,10 @@ from src.engine.ai_engine import (
     SCALPING_SYSTEM_PROMPT,
     SCALPING_WATCHING_SYSTEM_PROMPT,
     SCALPING_HOLDING_SYSTEM_PROMPT,
-    SCALPING_EXIT_SYSTEM_PROMPT,
     SCALPING_SYSTEM_PROMPT_V3,
     SCALPING_SYSTEM_PROMPT_75_CANARY,
     SCALPING_BUY_RECOVERY_CANARY_PROMPT,
     SWING_SYSTEM_PROMPT,
-    CONDITION_ENTRY_PROMPT,
-    CONDITION_EXIT_PROMPT,
     ENHANCED_MARKET_ANALYSIS_PROMPT,
     REALTIME_ANALYSIS_PROMPT_SCALP,
     REALTIME_ANALYSIS_PROMPT_SWING,
@@ -254,6 +251,8 @@ from src.engine.ai_engine import (
     DUAL_PERSONA_CONSERVATIVE_PROMPT,
 )
 ```
+
+`prompt_profile="exit"`는 별도 시스템 프롬프트를 갖지 않고 `SCALPING_HOLDING_SYSTEM_PROMPT` / `holding_exit_v1` 호환 경로로 처리한다. 조건검색 exit adapter도 런타임에서는 scalping holding route를 재사용한다.
 
 ---
 

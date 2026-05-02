@@ -5,7 +5,6 @@ from src.engine import ai_engine as ai_engine_module
 from src.engine.ai_engine import (
     GeminiSniperEngine,
     SCALPING_BUY_RECOVERY_CANARY_PROMPT,
-    SCALPING_EXIT_SYSTEM_PROMPT,
     SCALPING_HOLDING_SYSTEM_PROMPT,
     SCALPING_SYSTEM_PROMPT,
     SCALPING_SYSTEM_PROMPT_75_CANARY,
@@ -357,6 +356,7 @@ def test_analyze_target_routes_scalping_and_swing_to_expected_tiers(monkeypatch)
         return {"action": "BUY", "score": 80, "reason": "ok"}
 
     monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+    monkeypatch.setattr(engine, "_apply_remote_entry_guard", lambda result, **kwargs: result)
 
     ws_data = {"curr": 10000, "fluctuation": 1.0, "orderbook": {"asks": [], "bids": []}}
     recent_ticks = [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}]
@@ -424,13 +424,13 @@ def test_analyze_target_routes_scalping_prompt_profiles(monkeypatch):
     assert used_prompts == [
         SCALPING_WATCHING_SYSTEM_PROMPT,
         SCALPING_HOLDING_SYSTEM_PROMPT,
-        SCALPING_EXIT_SYSTEM_PROMPT,
+        SCALPING_HOLDING_SYSTEM_PROMPT,
         SCALPING_SYSTEM_PROMPT,
     ]
     assert used_models == ["tier1-model", "tier1-model", "tier2-model", "tier1-model"]
     assert watching["ai_prompt_type"] == "scalping_entry"
     assert holding["ai_prompt_type"] == "scalping_holding"
-    assert exiting["ai_prompt_type"] == "scalping_exit"
+    assert exiting["ai_prompt_type"] == "scalping_holding"
     assert shared["ai_prompt_type"] == "scalping_shared"
     assert watching["ai_model"] == "tier1-model"
     assert exiting["ai_model"] == "tier2-model"
@@ -488,44 +488,40 @@ def test_analyze_target_uses_shared_prompt_when_split_disabled(monkeypatch):
     assert result["ai_prompt_version"] == "split_disabled_v1"
 
 
-def test_condition_entry_and_exit_use_tier1_model(monkeypatch):
+def test_condition_entry_and_exit_reuse_scalping_routes(monkeypatch):
     engine = _build_engine()
     used_models = []
+    used_prompts = []
+    used_schemas = []
 
     monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "condition-packet")
 
-    def _fake_call(*args, **kwargs):
+    def _fake_call(prompt, *args, **kwargs):
+        used_prompts.append(prompt)
         used_models.append(kwargs.get("model_override"))
-        if kwargs.get("context_name", "").startswith("COND_ENTRY"):
-            return {
-                "decision": "BUY",
-                "confidence": 88,
-                "order_type": "MARKET",
-                "position_size_ratio": 0.3,
-                "invalidation_price": 9800,
-                "reasons": ["flow"],
-                "risks": ["volatility"],
-            }
-        return {
-            "decision": "HOLD",
-            "confidence": 77,
-            "trim_ratio": 0.0,
-            "new_stop_price": 9700,
-            "reason_primary": "trend intact",
-            "warning": "",
-        }
+        used_schemas.append(kwargs.get("schema_name"))
+        if kwargs.get("schema_name") == "entry_v1":
+            return {"action": "BUY", "score": 88, "reason": "entry flow"}
+        return {"action": "TRIM", "score": 77, "reason": "exit flow"}
 
     monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+    monkeypatch.setattr(engine, "_apply_remote_entry_guard", lambda result, **kwargs: result)
 
     ws_data = {"curr": 10000, "fluctuation": 1.0, "orderbook": {"asks": [], "bids": []}}
     recent_ticks = [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}]
     recent_candles = [{"체결시간": "10:00:00", "현재가": 10000, "거래량": 100}]
     profile = {"name": "VCP", "strategy": "SCALPING"}
 
-    engine.evaluate_condition_entry("조건주", "000001", ws_data, recent_ticks, recent_candles, profile)
-    engine.evaluate_condition_exit("조건주", "000001", ws_data, recent_ticks, recent_candles, profile, 1.2, 2.1, 78)
+    entry = engine.evaluate_condition_entry("조건주", "000001", ws_data, recent_ticks, recent_candles, profile)
+    exit_result = engine.evaluate_condition_exit("조건주", "000001", ws_data, recent_ticks, recent_candles, profile, 1.2, 2.1, 78)
 
     assert used_models == ["tier1-model", "tier1-model"]
+    assert used_prompts == [SCALPING_WATCHING_SYSTEM_PROMPT, SCALPING_HOLDING_SYSTEM_PROMPT]
+    assert used_schemas == ["entry_v1", "holding_exit_v1"]
+    assert entry["decision"] == "BUY"
+    assert entry["confidence"] == 88
+    assert exit_result["decision"] == "TRIM"
+    assert exit_result["trim_ratio"] == 0.5
 
 
 def test_realtime_report_and_overnight_decision_use_tier2_model(monkeypatch):

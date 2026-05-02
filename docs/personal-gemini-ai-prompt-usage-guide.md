@@ -32,8 +32,7 @@ flowchart TD
   C -->|strategy=SCALPING| D{"prompt_profile"}
   D -->|shared (기본)| E["SCALPING_SYSTEM_PROMPT<br/>Action: BUY/WAIT/DROP"]
   D -->|watching| F["SCALPING_WATCHING_SYSTEM_PROMPT<br/>Action: BUY/WAIT/DROP"]
-  D -->|holding| G["SCALPING_HOLDING_SYSTEM_PROMPT<br/>Action: HOLD/TRIM/EXIT (action_v2)"]
-  D -->|exit| H["SCALPING_EXIT_SYSTEM_PROMPT<br/>Action: HOLD/TRIM/EXIT (action_v2)"]
+  D -->|holding / exit alias| G["SCALPING_HOLDING_SYSTEM_PROMPT<br/>Action: HOLD/TRIM/EXIT (action_v2)"]
   D -->|watching 75 shadow 조건| K["SCALPING_SYSTEM_PROMPT_75_CANARY<br/>analyze_target_shadow_prompt()<br/>Action: BUY/WAIT/DROP"]
   D -->|watching buy_recovery_canary 조건| L["SCALPING_BUY_RECOVERY_CANARY_PROMPT<br/>analyze_target_shadow_prompt(prompt_override)<br/>Action: BUY/WAIT/DROP"]
 
@@ -42,7 +41,6 @@ flowchart TD
   E --> M["결과 정규화"]
   F --> M
   G --> M
-  H --> M
   I --> M
   K --> M
   L --> M
@@ -54,7 +52,7 @@ flowchart TD
 
 1. 전략이 `SCALPING`이면 `analyze_target()`에서 프롬프트를 고른다.
 2. 전략이 `KOSPI_ML` 또는 `KOSDAQ_ML`이면 바로 `SWING_SYSTEM_PROMPT` 경로로 이동한다.
-3. `holding/exit`은 공통 스냅샷 포맷을 쓰되, 액션 스키마가 초단타 엔트리와 다르다.
+3. `holding`과 `exit alias`는 같은 `SCALPING_HOLDING_SYSTEM_PROMPT`와 `holding_exit_v1` 스키마를 쓴다.
 4. `watching_prompt75_shadow`/`watching_buy_recovery_canary`는 `analyze_target_shadow_prompt()`를 사용하며, 본문 로직은 "감시 축 보조 판단/비교용 분석" 성격이다.
 
 ---
@@ -81,22 +79,12 @@ flowchart TD
 | 액션 타입 | `BUY`, `WAIT`, `DROP` (`action`, `action_v2` 동일) |
 | 스코어 구간 | 80~100 BUY / 50~79 WAIT / 0~49 DROP |
 
-### SCALPING_HOLDING_SYSTEM_PROMPT (프로파일: `holding`)
+### SCALPING_HOLDING_SYSTEM_PROMPT (프로파일: `holding`, `exit` alias)
 
 | 항목 | 내용 |
 | --- | --- |
-| 호출 위치 | `analyze_target(..., prompt_profile="holding")` |
+| 호출 위치 | `analyze_target(..., prompt_profile="holding")`; legacy/adapter 호환상 `prompt_profile="exit"`도 이 경로로 alias 처리 |
 | 프롬프트명 | `SCALPING_HOLDING_SYSTEM_PROMPT` |
-| 입력 피처명 | SCALPING 공통 정량 피처 전체 + 실시간 주문서/틱/1분봉 맥락 |
-| 액션 타입 | `HOLD`, `TRIM`, `EXIT` (`action_v2`), `action`은 호환용으로 `WAIT`, `SELL`, `DROP` 매핑 |
-| 스키마 | `action_schema=holding_exit_v1`, `reason` 1줄 |
-
-### SCALPING_EXIT_SYSTEM_PROMPT (프로파일: `exit`)
-
-| 항목 | 내용 |
-| --- | --- |
-| 호출 위치 | `analyze_target(..., prompt_profile="exit")` |
-| 프롬프트명 | `SCALPING_EXIT_SYSTEM_PROMPT` |
 | 입력 피처명 | SCALPING 공통 정량 피처 전체 + 실시간 주문서/틱/1분봉 맥락 |
 | 액션 타입 | `HOLD`, `TRIM`, `EXIT` (`action_v2`), `action`은 호환용으로 `WAIT`, `SELL`, `DROP` 매핑 |
 | 스키마 | `action_schema=holding_exit_v1`, `reason` 1줄 |

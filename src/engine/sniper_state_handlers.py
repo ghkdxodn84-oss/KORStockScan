@@ -693,6 +693,7 @@ def _append_reversal_add_probe_fields(fields: dict, probe: dict | None) -> dict:
 def _log_orderbook_stability_observation(stock, code, snapshot):
     if not isinstance(snapshot, dict) or not snapshot:
         return
+    micro_fields = _build_orderbook_micro_log_fields(snapshot.get("orderbook_micro"))
     _log_entry_pipeline(
         stock,
         code,
@@ -707,6 +708,7 @@ def _log_orderbook_stability_observation(stock, code, snapshot):
         best_ask=int(snapshot.get("best_ask", 0) or 0),
         sample_trade_count=int(snapshot.get("sample_trade_count", 0) or 0),
         sample_quote_count=int(snapshot.get("sample_quote_count", 0) or 0),
+        **micro_fields,
     )
 
 
@@ -1848,6 +1850,60 @@ def _build_entry_price_snapshot_fields(latency_gate, *, request_price, curr_pric
     }
 
 
+def _build_orderbook_micro_context(latency_gate, *, curr_price, best_bid, best_ask):
+    if not bool(_rule("SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_ENABLED", True)):
+        return None
+    stability = (latency_gate or {}).get("orderbook_stability") or {}
+    micro = stability.get("orderbook_micro") if isinstance(stability, dict) else None
+    if not isinstance(micro, dict):
+        return {
+            "ready": False,
+            "reason": "missing_snapshot",
+            "micro_state": "insufficient",
+            "sample_quote_count": 0,
+        }
+
+    tick_size = 1
+    try:
+        tick_size = int(kiwoom_utils.get_tick_size(_coerce_int_value(curr_price) or _coerce_int_value(best_bid)) or 1)
+    except Exception:
+        tick_size = 1
+    spread_ticks = 0
+    if _coerce_int_value(best_ask) > 0 and _coerce_int_value(best_bid) > 0 and tick_size > 0:
+        spread_ticks = max(0, int(round((_coerce_int_value(best_ask) - _coerce_int_value(best_bid)) / tick_size)))
+
+    return {
+        "ready": bool(micro.get("ready")),
+        "reason": str(micro.get("reason") or ""),
+        "qi": micro.get("qi"),
+        "qi_ewma": micro.get("qi_ewma"),
+        "ofi_norm": micro.get("ofi_norm"),
+        "ofi_z": micro.get("ofi_z"),
+        "depth_ewma": micro.get("depth_ewma"),
+        "micro_state": str(micro.get("micro_state") or "insufficient"),
+        "sample_quote_count": _coerce_int_value(micro.get("sample_quote_count")),
+        "spread_ticks": spread_ticks,
+    }
+
+
+def _build_orderbook_micro_log_fields(micro):
+    if not isinstance(micro, dict):
+        return {
+            "orderbook_micro_ready": False,
+            "orderbook_micro_state": "missing",
+        }
+    fields = {
+        "orderbook_micro_ready": bool(micro.get("ready")),
+        "orderbook_micro_reason": str(micro.get("reason") or ""),
+        "orderbook_micro_state": str(micro.get("micro_state") or "insufficient"),
+        "orderbook_micro_sample_quote_count": _coerce_int_value(micro.get("sample_quote_count")),
+    }
+    for key in ("qi", "qi_ewma", "ofi_norm", "ofi_z", "depth_ewma", "spread_ticks"):
+        value = micro.get(key)
+        fields[f"orderbook_micro_{key}"] = "-" if value is None else value
+    return fields
+
+
 def _is_pre_submit_price_guard_block(strategy, price, best_bid):
     if strategy not in ('SCALPING', 'SCALP'):
         return False
@@ -1888,7 +1944,7 @@ def _resolve_buy_order_timeout_sec(stock, strategy):
 
 
 def _build_entry_ai_price_context(stock, latency_gate, *, curr_price, best_bid, best_ask):
-    return {
+    ctx = {
         "strategy": normalize_strategy((stock or {}).get("strategy")),
         "position_tag": normalize_position_tag("SCALPING", (stock or {}).get("position_tag")),
         "current_price": _coerce_int_value(curr_price),
@@ -1911,6 +1967,15 @@ def _build_entry_ai_price_context(stock, latency_gate, *, curr_price, best_bid, 
         "quote_stale": bool((latency_gate or {}).get("quote_stale")),
         "signal_score": round(float((stock or {}).get("rt_ai_prob", (stock or {}).get("prob", 0.0)) or 0.0) * 100.0, 2),
     }
+    orderbook_micro = _build_orderbook_micro_context(
+        latency_gate,
+        curr_price=curr_price,
+        best_bid=best_bid,
+        best_ask=best_ask,
+    )
+    if orderbook_micro is not None:
+        ctx["orderbook_micro"] = orderbook_micro
+    return ctx
 
 
 def _apply_entry_ai_price_canary(
@@ -1945,6 +2010,7 @@ def _apply_entry_ai_price_canary(
         best_bid=best_bid,
         best_ask=best_ask,
     )
+    micro_log_fields = _build_orderbook_micro_log_fields(price_ctx.get("orderbook_micro"))
 
     try:
         tick_limit = int(_rule("SCALPING_ENTRY_AI_PRICE_TICK_LIMIT", 20) or 20)
@@ -1952,7 +2018,14 @@ def _apply_entry_ai_price_canary(
         recent_ticks = kiwoom_utils.get_tick_history_ka10003(KIWOOM_TOKEN, code, limit=tick_limit) or []
         recent_candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=candle_limit) or []
     except Exception as exc:
-        _log_entry_pipeline(stock, code, "entry_ai_price_canary_fallback", reason="context_fetch_failed", error=str(exc)[:160])
+        _log_entry_pipeline(
+            stock,
+            code,
+            "entry_ai_price_canary_fallback",
+            reason="context_fetch_failed",
+            error=str(exc)[:160],
+            **micro_log_fields,
+        )
         return planned_orders, False
 
     result = ai_engine.evaluate_scalping_entry_price(
@@ -1975,13 +2048,13 @@ def _apply_entry_ai_price_canary(
     if parse_fail or not parse_ok:
         _log_entry_pipeline(
             stock, code, "entry_ai_price_canary_fallback", reason="parse_or_ai_fail",
-            action=action, confidence=confidence, source=source,
+            action=action, confidence=confidence, source=source, **micro_log_fields,
         )
         return planned_orders, False
     if confidence < min_confidence:
         _log_entry_pipeline(
             stock, code, "entry_ai_price_canary_fallback", reason="low_confidence",
-            action=action, confidence=confidence, min_confidence=min_confidence,
+            action=action, confidence=confidence, min_confidence=min_confidence, **micro_log_fields,
         )
         return planned_orders, False
 
@@ -1989,15 +2062,28 @@ def _apply_entry_ai_price_canary(
         if confidence < skip_min_confidence:
             _log_entry_pipeline(
                 stock, code, "entry_ai_price_canary_fallback", reason="skip_low_confidence",
-                action=action, confidence=confidence, skip_min_confidence=skip_min_confidence,
+                action=action, confidence=confidence, skip_min_confidence=skip_min_confidence, **micro_log_fields,
             )
             return planned_orders, False
         latency_gate["ai_entry_price_canary_action"] = action
         latency_gate["ai_entry_price_canary_confidence"] = confidence
         latency_gate["ai_entry_price_canary_reason"] = reason
+        orderbook_micro = price_ctx.get("orderbook_micro") if isinstance(price_ctx, dict) else {}
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "entry_ai_price_skip_started_at": time.time(),
+                "entry_ai_price_skip_mark_price": current_price,
+                "entry_ai_price_skip_max_price": current_price,
+                "entry_ai_price_skip_min_price": current_price,
+                "entry_ai_price_skip_micro_state": str((orderbook_micro or {}).get("micro_state") or ""),
+                "entry_ai_price_skip_followup_30s": False,
+                "entry_ai_price_skip_followup_90s": False,
+            },
+        )
         _log_entry_pipeline(
             stock, code, "entry_ai_price_canary_skip_order",
-            action=action, confidence=confidence, reason=reason[:160],
+            action=action, confidence=confidence, reason=reason[:160], **micro_log_fields,
         )
         return [], True
 
@@ -2010,22 +2096,26 @@ def _apply_entry_ai_price_canary(
         candidate_price = defensive_price or resolved_price
 
     if candidate_price <= 0:
-        _log_entry_pipeline(stock, code, "entry_ai_price_canary_fallback", reason="invalid_price", action=action)
+        _log_entry_pipeline(
+            stock, code, "entry_ai_price_canary_fallback", reason="invalid_price", action=action, **micro_log_fields
+        )
         return planned_orders, False
     candidate_price = clamp_price_to_tick(candidate_price)
     if candidate_price <= 0:
-        _log_entry_pipeline(stock, code, "entry_ai_price_canary_fallback", reason="invalid_price", action=action)
+        _log_entry_pipeline(
+            stock, code, "entry_ai_price_canary_fallback", reason="invalid_price", action=action, **micro_log_fields
+        )
         return planned_orders, False
     if best_ask > 0 and candidate_price > best_ask:
         _log_entry_pipeline(
             stock, code, "entry_ai_price_canary_fallback", reason="above_best_ask",
-            action=action, candidate_price=candidate_price, best_ask=best_ask,
+            action=action, candidate_price=candidate_price, best_ask=best_ask, **micro_log_fields,
         )
         return planned_orders, False
     if _is_pre_submit_price_guard_block(strategy, candidate_price, best_bid):
         _log_entry_pipeline(
             stock, code, "entry_ai_price_canary_fallback", reason="pre_submit_price_guard",
-            action=action, candidate_price=candidate_price, best_bid=best_bid,
+            action=action, candidate_price=candidate_price, best_bid=best_bid, **micro_log_fields,
         )
         return planned_orders, False
 
@@ -2058,6 +2148,7 @@ def _apply_entry_ai_price_canary(
         reference_target_price=reference_price,
         defensive_order_price=defensive_price,
         max_wait_sec=max_wait_sec,
+        **micro_log_fields,
     )
     return adjusted_orders, True
 
@@ -3853,6 +3944,14 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         counterfactual_order_price_1tick=int(latency_gate.get('counterfactual_order_price_1tick', 0) or 0),
         order_price=int(latency_gate.get('order_price', 0) or 0),
         **latency_price_snapshot,
+        **_build_orderbook_micro_log_fields(
+            _build_orderbook_micro_context(
+                latency_gate,
+                curr_price=curr_price,
+                best_bid=best_bid_at_submit,
+                best_ask=best_ask_at_submit,
+            )
+        ),
         **_build_ai_overlap_log_fields(
             stock=stock, ai_score=latency_signal_score, momentum_tag=stock.get("entry_momentum_tag"),
             threshold_profile=stock.get("entry_threshold_profile"), overbought_blocked=False, blocked_stage="-",
@@ -4119,6 +4218,57 @@ def _build_holding_ai_fast_snapshot(ws_data):
 def _build_holding_ai_fast_signature(ws_data):
     snapshot = _build_holding_ai_fast_snapshot(ws_data)
     return tuple(snapshot.values())
+
+
+def _maybe_emit_entry_ai_price_skip_followup(stock, code, *, curr_price: int, now_ts: float) -> None:
+    started_at = float(stock.get("entry_ai_price_skip_started_at", 0) or 0)
+    mark_price = _coerce_int_value(stock.get("entry_ai_price_skip_mark_price"))
+    if started_at <= 0 or mark_price <= 0 or curr_price <= 0:
+        return
+
+    max_price = max(_coerce_int_value(stock.get("entry_ai_price_skip_max_price")), curr_price)
+    min_price = min(
+        _coerce_int_value(stock.get("entry_ai_price_skip_min_price")) or curr_price,
+        curr_price,
+    )
+    stock["entry_ai_price_skip_max_price"] = max_price
+    stock["entry_ai_price_skip_min_price"] = min_price
+
+    elapsed_sec = max(0, int(now_ts - started_at))
+    for interval_sec in (30, 90):
+        followup_key = f"entry_ai_price_skip_followup_{interval_sec}s"
+        if elapsed_sec < interval_sec or bool(stock.get(followup_key)):
+            continue
+        mfe_bps = int(round(((max_price - mark_price) / mark_price) * 10000))
+        mae_bps = int(round(((min_price - mark_price) / mark_price) * 10000))
+        _log_entry_pipeline(
+            stock,
+            code,
+            "entry_ai_price_canary_skip_followup",
+            elapsed_sec=interval_sec,
+            mark_price=mark_price,
+            followup_price=curr_price,
+            max_price=max_price,
+            min_price=min_price,
+            mfe_bps=mfe_bps,
+            mae_bps=mae_bps,
+            micro_state_at_skip=str(stock.get("entry_ai_price_skip_micro_state") or ""),
+        )
+        stock[followup_key] = True
+
+    if bool(stock.get("entry_ai_price_skip_followup_90s")):
+        _mutate_stock_state(
+            stock,
+            pop_fields=[
+                "entry_ai_price_skip_started_at",
+                "entry_ai_price_skip_mark_price",
+                "entry_ai_price_skip_max_price",
+                "entry_ai_price_skip_min_price",
+                "entry_ai_price_skip_micro_state",
+                "entry_ai_price_skip_followup_30s",
+                "entry_ai_price_skip_followup_90s",
+            ],
+        )
 
 
 def _describe_snapshot_deltas(previous_snapshot, current_snapshot, *, limit=4):
@@ -4669,6 +4819,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
     curr_price = _safe_int(ws_data.get('curr'), 0)
     if curr_price <= 0:
         return
+    _maybe_emit_entry_ai_price_skip_followup(stock, code, curr_price=curr_price, now_ts=now_ts)
 
     current_vpw = float(ws_data.get('v_pw', 0) or 0)
     fluctuation = float(ws_data.get('fluctuation', 0.0) or 0.0)

@@ -1640,6 +1640,88 @@ def test_entry_ai_price_canary_falls_back_on_guard_block(monkeypatch):
     assert any(fields.get("reason") == "pre_submit_price_guard" for stage, fields in logs if stage == "entry_ai_price_canary_fallback")
 
 
+def test_entry_ai_price_context_includes_orderbook_micro_when_enabled(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(CONFIG, SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_ENABLED=True),
+    )
+    latency_gate = {
+        "target_buy_price": 9980,
+        "latency_guarded_order_price": 9990,
+        "normal_defensive_order_price": 9990,
+        "order_price": 9990,
+        "latency_state": "SAFE",
+        "orderbook_stability": {
+            "orderbook_micro": {
+                "ready": True,
+                "reason": "ready",
+                "qi": 0.42,
+                "qi_ewma": 0.44,
+                "ofi_norm": -1.5,
+                "ofi_z": -1.2,
+                "depth_ewma": 1200.0,
+                "micro_state": "bearish",
+                "sample_quote_count": 24,
+            }
+        },
+    }
+
+    ctx = state_handlers._build_entry_ai_price_context(
+        {"strategy": "SCALPING", "position_tag": "SCANNER", "prob": 0.8},
+        latency_gate,
+        curr_price=10020,
+        best_bid=10020,
+        best_ask=10030,
+    )
+
+    assert ctx["orderbook_micro"]["ready"] is True
+    assert ctx["orderbook_micro"]["micro_state"] == "bearish"
+    assert ctx["orderbook_micro"]["spread_ticks"] == 1
+
+
+def test_entry_ai_price_context_omits_orderbook_micro_when_disabled(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(CONFIG, SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_ENABLED=False),
+    )
+
+    ctx = state_handlers._build_entry_ai_price_context(
+        {"strategy": "SCALPING", "position_tag": "SCANNER", "prob": 0.8},
+        {"order_price": 9990, "orderbook_stability": {"orderbook_micro": {"ready": True}}},
+        curr_price=10020,
+        best_bid=10020,
+        best_ask=10030,
+    )
+
+    assert "orderbook_micro" not in ctx
+
+
+def test_entry_ai_price_skip_followup_logs_mfe_mae(monkeypatch):
+    logs = []
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+    stock = {
+        "name": "TEST",
+        "entry_ai_price_skip_started_at": 100.0,
+        "entry_ai_price_skip_mark_price": 10_000,
+        "entry_ai_price_skip_max_price": 10_100,
+        "entry_ai_price_skip_min_price": 9_980,
+        "entry_ai_price_skip_micro_state": "bearish",
+        "entry_ai_price_skip_followup_30s": False,
+        "entry_ai_price_skip_followup_90s": False,
+    }
+
+    state_handlers._maybe_emit_entry_ai_price_skip_followup(stock, "123456", curr_price=10_050, now_ts=130.0)
+
+    assert logs[0][0] == "entry_ai_price_canary_skip_followup"
+    assert logs[0][1]["elapsed_sec"] == 30
+    assert logs[0][1]["mfe_bps"] == 100
+    assert logs[0][1]["mae_bps"] == -20
+    assert logs[0][1]["micro_state_at_skip"] == "bearish"
+    assert stock["entry_ai_price_skip_followup_30s"] is True
+
+
 def test_entry_arm_skips_strength_recheck_after_ai_confirm(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 

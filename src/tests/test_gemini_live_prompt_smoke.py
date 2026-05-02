@@ -22,8 +22,6 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.engine.ai_engine import (
-    CONDITION_ENTRY_PROMPT,
-    CONDITION_EXIT_PROMPT,
     ENHANCED_MARKET_ANALYSIS_PROMPT,
     EOD_TOMORROW_LEADER_JSON_PROMPT,
     REALTIME_ANALYSIS_PROMPT_DUAL,
@@ -134,32 +132,6 @@ LIVE_CASES = [
         "require_json": True,
         "use_google_search": False,
         "validator": validate_scalp_or_swing_json,
-    },
-    {
-        "name": "condition_entry",
-        "model": TRADING_RULES.AI_MODEL_TIER1,
-        "prompt": CONDITION_ENTRY_PROMPT,
-        "user_input": """종목명: 테스트바이오(123456) - 조건검색식 진입 판단 요청
-조건검색식 프로필: {'name': 'VCP', 'strategy': 'SCALPING'}
-
-실시간 호가창은 매수 우위이며 최근 2분 거래량이 직전 20분 평균 대비 4.2배 증가했다.
-체결강도는 146, 프로그램 순매수는 +18,500주, 현재가는 VWAP 위에서 전일 고점 돌파 직전이다.""",
-        "require_json": True,
-        "use_google_search": False,
-        "validator": validate_condition_entry_json,
-    },
-    {
-        "name": "condition_exit",
-        "model": TRADING_RULES.AI_MODEL_TIER1,
-        "prompt": CONDITION_EXIT_PROMPT,
-        "user_input": """종목명: 테스트2차전지(654321) - 조건검색식 청산 판단 요청
-조건검색식 프로필: {'name': 'S15', 'strategy': 'SCALPING'}, 수익률: 2.40%, 최고수익률: 3.10%, AI 점수: 63
-
-현재가가 고가 대비 0.8% 밀렸고 체결강도는 132에서 109로 둔화됐다.
-프로그램 순매수는 여전히 플러스지만 매도 압력이 조금씩 증가하고 있다.""",
-        "require_json": True,
-        "use_google_search": False,
-        "validator": validate_condition_exit_json,
     },
     {
         "name": "swing_system",

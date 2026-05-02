@@ -33,7 +33,7 @@
 
 - [ ] `[AIDecisionMatrixShadow0507] ADM-2 holding/exit shadow prompt matrix 주입 설계` (`Due: 2026-05-07`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~17:00`, `Track: AIPrompt`)
   - Source: [2026-04-30-data-driven-threshold-inventory.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-30-data-driven-threshold-inventory.md), [ai_engine.py](/home/ubuntu/KORStockScan/src/engine/ai_engine.py), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py), [ai_engine_deepseek.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_deepseek.py)
-  - 판정 기준: `holding_exit_decision_matrix`를 `prompt_profile=holding/exit` 경로에 shadow-only context로 넣는 설계를 확정한다. 확인 항목은 token budget, cache key 영향, matrix_version provenance, Gemini/OpenAI/DeepSeek parity, `action_label/confidence/reason` drift 로그다. live AI 응답 변경은 금지한다.
+  - 판정 기준: `holding_exit_decision_matrix`를 `prompt_profile=holding` 경로에 shadow-only context로 넣는 설계를 확정한다. legacy/adapter의 `prompt_profile=exit`는 별도 프롬프트가 아니라 holding route alias로만 본다. 확인 항목은 token budget, cache key 영향, matrix_version provenance, Gemini/OpenAI/DeepSeek parity, `action_label/confidence/reason` drift 로그다. live AI 응답 변경은 금지한다.
   - ON/OFF 기준: `ADM-1 report-only`는 ON, `ADM-2 shadow prompt`는 이 항목에서 ON 후보로 설계, `ADM-3 advisory nudge`, `ADM-4 weighted live`, `ADM-5 policy gate`는 OFF 유지다. ADM-3 이상은 별도 checklist에서 `COMPLETED + valid profit_rate`, `GOOD_EXIT/MISSED_UPSIDE`, soft stop tail, 추가매수 기회비용의 비악화가 확인될 때만 연다.
   - why: threshold 산정 결과가 AI 보유/청산 판단에 쓰이려면 사람이 보는 리포트만으로는 부족하다. 다만 첫 단계는 AI 판단 변경이 아니라 동일 장면에서 matrix context가 응답을 어떻게 바꾸는지 shadow diff로 봐야 한다.
   - 다음 액션: shadow diff가 안정적이면 `ADM-3 observe-only nudge`로 넘어가고, 불안정하면 prompt_hint 표현/토큰 범위부터 줄인다.

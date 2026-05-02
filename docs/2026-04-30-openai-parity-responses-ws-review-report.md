@@ -41,7 +41,7 @@
 
 - `analyze_target` / `analyze_target_shadow_prompt`
   - 기본 `entry_v1`
-  - `scalping_holding`, `scalping_exit`는 `holding_exit_v1`
+  - `scalping_holding`은 `holding_exit_v1`; `prompt_profile="exit"`는 별도 프롬프트 없이 holding route alias로 처리
 - `evaluate_scalping_overnight_decision` -> `overnight_v1`
 - `evaluate_condition_entry` -> `condition_entry_v1`
 - `evaluate_condition_exit` -> `condition_exit_v1`

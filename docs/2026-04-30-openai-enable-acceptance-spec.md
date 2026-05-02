@@ -15,12 +15,10 @@ Source: [2026-04-30-openai-parity-responses-ws-review-report.md](/home/ubuntu/KO
 1. OpenAI JSON 경로는 Gemini와 같은 공용 schema registry를 이미 공유한다.
    - [ai_response_contracts.py](/home/ubuntu/KORStockScan/src/engine/ai_response_contracts.py)
    - [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)
-2. endpoint별 계약도 Gemini와 같은 6개 축으로 분리돼 있다.
+2. endpoint별 계약은 Gemini와 같은 schema registry를 공유한다. 단, `condition_entry/condition_exit`는 `2026-05-02` 이후 runtime 전용 프롬프트/endpoint에서 제외하고 기존 scalping 라우팅 결과를 호환 응답 형태로 변환한다.
    - `entry_v1`
    - `holding_exit_v1`
    - `overnight_v1`
-   - `condition_entry_v1`
-   - `condition_exit_v1`
    - `eod_top5_v1`
 3. 하지만 OpenAI는 현재 `main` live 스캘핑 기준 엔진이 아니라 parity/transport 관찰 대상이다.
    - `OPENAI_TRANSPORT_MODE=http`
@@ -28,8 +26,8 @@ Source: [2026-04-30-openai-parity-responses-ws-review-report.md](/home/ubuntu/KO
    - `OPENAI_RESPONSE_SCHEMA_REGISTRY_ENABLED=False`
    - `OPENAI_JSON_DETERMINISTIC_CONFIG_ENABLED=False`
 4. `Responses WS`는 phase1 scope를 제한해 반영됐다.
-   - 허용 endpoint: `analyze_target`, `analyze_target_shadow_prompt`, `condition_entry`, `condition_exit`
-   - 제외 endpoint: `realtime_report`, `gatekeeper`, `overnight`, `EOD` text/prose path
+   - 허용 endpoint: `analyze_target`, `analyze_target_shadow_prompt`
+   - 제외 endpoint: `condition_entry`, `condition_exit`, `realtime_report`, `gatekeeper`, `overnight`, `EOD` text/prose path
 5. fail-closed guard도 이미 코드와 테스트로 잠겼다.
    - `request_id mismatch`와 `late response`는 HTTP fallback으로 재해석하지 않고 fail-closed
    - BUY-side timeout/parse failure는 `DROP/SKIP` 보수 폴백
