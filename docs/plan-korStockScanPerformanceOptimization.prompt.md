@@ -30,7 +30,7 @@
 | [2026-05-04-stage2-todo-checklist.md](./2026-05-04-stage2-todo-checklist.md) | 다음 KRX 운영일 장전/장중/장후 실행표 | 5/4 운영 작업 수행 시 |
 | [2026-05-06-stage2-todo-checklist.md](./2026-05-06-stage2-todo-checklist.md) | 휴장 이월 후속, threshold/AI/scanner/보유청산 잔여작업 | 5/6 후속 작업 수행 시 |
 | [2026-05-07-stage2-todo-checklist.md](./2026-05-07-stage2-todo-checklist.md) | SAW-3, ADM-2 후속 설계 | 5/7 후속 작업 수행 시 |
-| [2026-05-08-stage2-todo-checklist.md](./2026-05-08-stage2-todo-checklist.md) | SAW-4~SAW-6, 체결품질/시장맥락/orderbook readiness | 5/8 후속 작업 수행 시 |
+| [2026-05-08-stage2-todo-checklist.md](./2026-05-08-stage2-todo-checklist.md) | SAW-4~SAW-6, 체결품질/시장맥락/orderbook readiness, OFI/QI expansion ladder | 5/8 후속 작업 수행 시 |
 | [data/report/README.md](../data/report/README.md) | 정기 report inventory와 Markdown 누락 후보 | JSON/JSONL 대비 Markdown 필요성을 판단할 때 |
 | [data/threshold_cycle/README.md](../data/threshold_cycle/README.md) | threshold collector/report/apply plan 운영방법 | threshold 자동화나 apply plan을 다룰 때 |
 | [workorder-shadow-canary-runtime-classification.md](./workorder-shadow-canary-runtime-classification.md) | shadow/canary/historical 분류와 런타임 ON/OFF 기준 | OFF축 재개나 canary 성격이 애매할 때 |
@@ -70,11 +70,14 @@
 
 ## 현재 기준 우선순위
 
+`active/open` 요약은 현재 owner와 다음 판정 checklist만 남기고, 종료/폐기 축은 [closed observation archive](./archive/closed-observation-axes-2026-05-01.md)에서만 확인한다.
+
 | 워크스트림 | 현재 상태 | 판정 | 다음 닫힘 시점 |
 | --- | --- | --- | --- |
 | `entry operating override` | `mechanical_momentum_latency_relief` ON | 운영 override 유지, 신규 OPEN 아님 | `2026-05-04 PREOPEN` 로드 확인 |
 | `entry price` | P1 resolver + P2 AI price canary live, OFI/QI P2 내부 입력 ON | entry price active owner | `2026-05-04 PREOPEN/POSTCLOSE` health/provenance |
 | `holding/exit` | `soft_stop_micro_grace`, `REVERSAL_ADD`, `bad_entry_refined_canary`, `holding_flow_override` | 보유/청산 active owner | `2026-05-04 POSTCLOSE` keep/OFF 및 flow 판정 |
+| `position sizing` | `initial_entry_qty_cap_1share` 유지, `MAX_*_COUNT`는 attribution counter, `SCALPING_ENABLE_PYRAMID`는 count cap 대신 cooldown/pending/position cap/protection으로 관리 | count gate semantics OPEN | `2026-05-04 PREOPEN`, `2026-05-06 POSTCLOSE` |
 | `AI engine` | Gemini/DeepSeek/OpenAI contract/provenance 보강. OpenAI Responses WS는 flag-off/shadow | live routing 승격 아님 | `2026-05-06 POSTCLOSE` backlog 재분류 |
 | `threshold/action weight` | threshold collector/report/apply plan 자동화. apply는 `manifest_only` | runtime mutation 전 단계 | `2026-05-06 POSTCLOSE` acceptance |
 | `report inventory` | 정기 Markdown/JSON inventory와 누락 후보 정리 | report README 기준으로 작업계획 생성 | 누락 후보 발견 시 날짜별 checklist |
@@ -87,7 +90,7 @@
 | `2026-05-04` | runtime flag, dynamic entry price, OFI/QI provenance, holding flow, refined bad-entry | 신규 다축 추가 금지. active owner health/provenance만 닫음 | PREOPEN 로드, INTRADAY health, POSTCLOSE keep/OFF/보류 사유 |
 | `2026-05-06` | threshold ops transition, statistical action weight, report Markdown 후보, AI engine backlog, scanner/code debt | threshold live mutation 금지. acceptance와 report-only/observe-only 분리 | threshold README 기준 운영확인, Markdown 누락 후보 작업계획 여부 |
 | `2026-05-07` | SAW-3 eligible outcome, ADM-2 shadow prompt | decision-support ladder 유지 | runtime 판단 변경 없는 schema/readiness |
-| `2026-05-08` | SAW-4~SAW-6 체결품질/시장맥락/orderbook readiness | 3축 교차와 live 반영 금지 | 후속 calibration/decision-support 후보 |
+| `2026-05-08` | SAW-4~SAW-6 체결품질/시장맥락/orderbook readiness, OFI/QI expansion ladder | 3축 교차와 live 반영 금지. OFI/QI는 entry-only P2 내부 feature로 확장계획 owner를 고정 | 후속 calibration/decision-support 후보, stale 방지 owner |
 
 ## 승격/보류 게이트
 
