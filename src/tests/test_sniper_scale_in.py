@@ -38,13 +38,6 @@ class _DummyDB:
         return _DummySession()
 
 
-def test_scalping_avg_down_disabled():
-    stock = {"avg_down_count": 0}
-    result = scale_in.evaluate_scalping_avg_down(stock, profit_rate=-4.0)
-    assert result["should_add"] is False
-    assert result["reason"] == "avg_down_disabled"
-
-
 def test_scalping_pyramid_signal():
     stock = {"pyramid_count": 0}
     result = scale_in.evaluate_scalping_pyramid(
@@ -72,28 +65,42 @@ def test_scalping_pyramid_count_is_attribution_only():
         scale_in.TRADING_RULES = original
 
 
-def test_swing_avg_down_count_is_attribution_only():
-    from src.utils.constants import TRADING_RULES as CONFIG
-
+def test_avg_down_count_is_attribution_only_for_receipts():
+    target_stock = {
+        "avg_down_count": 3,
+        "reversal_add_state": "STAGNATION",
+        "reversal_add_profit_floor": -0.30,
+        "reversal_add_ai_bottom": 42,
+        "reversal_add_ai_history": [42, 44, 50, 58],
+        "last_reversal_features": {
+            "buy_pressure_10t": 60.0,
+            "tick_acceleration_ratio": 1.05,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": -2.0,
+        },
+    }
     original = scale_in.TRADING_RULES
-    scale_in.TRADING_RULES = replace(CONFIG, SWING_MAX_AVG_DOWN_COUNT=1)
+    scale_in.TRADING_RULES = replace(
+        CONFIG,
+        REVERSAL_ADD_ENABLED=True,
+        REVERSAL_ADD_PNL_MIN=-0.70,
+        REVERSAL_ADD_PNL_MAX=-0.10,
+        REVERSAL_ADD_MIN_HOLD_SEC=20,
+        REVERSAL_ADD_MAX_HOLD_SEC=180,
+        REVERSAL_ADD_MIN_AI_SCORE=60,
+        REVERSAL_ADD_MIN_AI_RECOVERY_DELTA=15,
+    )
     try:
-        result = scale_in.evaluate_swing_avg_down(
-            {"avg_down_count": 3},
-            profit_rate=-8.0,
-            market_regime="BULL",
+        result = scale_in.evaluate_scalping_reversal_add(
+            target_stock,
+            profit_rate=-0.25,
+            current_ai_score=65,
+            held_sec=50,
         )
         assert result["should_add"] is True
-        assert result["reason"] == "swing_avg_down_ok"
+        assert result["reason"] == "reversal_add_ok"
     finally:
         scale_in.TRADING_RULES = original
-
-
-def test_swing_avg_down_bear_blocked():
-    stock = {"avg_down_count": 0}
-    result = scale_in.evaluate_swing_avg_down(stock, profit_rate=-8.0, market_regime="BEAR")
-    assert result["should_add"] is False
-    assert result["reason"] == "bear_avg_down_blocked"
 
 
 def test_calc_held_minutes_prefers_order_time_epoch():
@@ -498,25 +505,6 @@ def test_calc_scale_in_qty_scalping_reversal_add_uses_configured_ratio():
             add_reason="reversal_add_ok",
         )
         assert qty == 3
-    finally:
-        scale_in.TRADING_RULES = original
-
-
-def test_calc_scale_in_qty_scalping_non_reversal_keeps_default_ratio():
-    from src.utils.constants import TRADING_RULES as CONFIG
-
-    original = scale_in.TRADING_RULES
-    scale_in.TRADING_RULES = replace(CONFIG, MAX_POSITION_PCT=1.0, REVERSAL_ADD_SIZE_RATIO=0.33)
-    try:
-        qty = scale_in.calc_scale_in_qty(
-            stock={"buy_qty": 10},
-            curr_price=10000,
-            deposit=10_000_000,
-            add_type="AVG_DOWN",
-            strategy="SCALPING",
-            add_reason="avg_down_ok",
-        )
-        assert qty == 5
     finally:
         scale_in.TRADING_RULES = original
 
@@ -937,7 +925,7 @@ def test_scale_in_guard_ignores_nat_like_last_add_at(monkeypatch):
         CONFIG,
         SCALE_IN_REQUIRE_HISTORY_TABLE=False,
         ENABLE_SCALE_IN=True,
-        SCALPING_ENABLE_AVG_DOWN=True,
+        REVERSAL_ADD_ENABLED=True,
         SCALPING_MAX_PYRAMID_COUNT=1,
         ADD_JUDGMENT_LOCK_SEC=0,
         SCALE_IN_COOLDOWN_SEC=180,
@@ -986,7 +974,7 @@ def test_scale_in_guard_uses_pyramid_enable_flag_not_count_limit(monkeypatch):
         CONFIG,
         SCALE_IN_REQUIRE_HISTORY_TABLE=False,
         ENABLE_SCALE_IN=True,
-        SCALPING_ENABLE_AVG_DOWN=False,
+        REVERSAL_ADD_ENABLED=False,
         SCALPING_ENABLE_PYRAMID=True,
         SCALPING_MAX_PYRAMID_COUNT=0,
         ADD_JUDGMENT_LOCK_SEC=0,
@@ -1017,7 +1005,7 @@ def test_scale_in_guard_uses_pyramid_enable_flag_not_count_limit(monkeypatch):
     assert result["reason"] == "ok"
 
 
-def test_scale_in_guard_can_disable_pyramid_explicitly(monkeypatch):
+def test_scale_in_guard_allows_reversal_add_without_pyramid(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
     class FixedDateTime(datetime):
@@ -1029,7 +1017,49 @@ def test_scale_in_guard_can_disable_pyramid_explicitly(monkeypatch):
         CONFIG,
         SCALE_IN_REQUIRE_HISTORY_TABLE=False,
         ENABLE_SCALE_IN=True,
-        SCALPING_ENABLE_AVG_DOWN=False,
+        REVERSAL_ADD_ENABLED=True,
+        SCALPING_ENABLE_PYRAMID=False,
+        ADD_JUDGMENT_LOCK_SEC=0,
+        SCALE_IN_COOLDOWN_SEC=0,
+        MAX_POSITION_PCT=1.0,
+    )
+    monkeypatch.setattr(state_handlers, "is_buy_side_paused", lambda: False)
+    monkeypatch.setattr(state_handlers, "datetime", FixedDateTime)
+
+    stock = {
+        "name": "TEST",
+        "code": "123456",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 10,
+    }
+
+    result = state_handlers.can_consider_scale_in(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10000},
+        strategy="SCALPING",
+        market_regime="BULL",
+    )
+
+    assert result["allowed"] is True
+    assert result["reason"] == "ok"
+
+
+def test_scale_in_guard_blocks_when_pyramid_and_reversal_add_disabled(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls):
+            return datetime(2026, 4, 30, 10, 0, 0)
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        ENABLE_SCALE_IN=True,
+        REVERSAL_ADD_ENABLED=False,
         SCALPING_ENABLE_PYRAMID=False,
         ADD_JUDGMENT_LOCK_SEC=0,
         SCALE_IN_COOLDOWN_SEC=0,
@@ -4645,15 +4675,18 @@ def test_reversal_add_tc6_all_conditions_met():
         scale_in.TRADING_RULES = CONFIG
 
 
-# TC-7: reversal_add_used = True → 재트리거 없음
-def test_reversal_add_tc7_already_used():
-    stock = _reversal_add_stock({"reversal_add_used": True})
+# TC-7: 동일 포지션 재평가 허용 → one-shot guard 없음
+def test_reversal_add_tc7_used_flag_does_not_block_retrigger():
+    stock = _reversal_add_stock({
+        "reversal_add_used": True,
+        "reversal_add_ai_history": [42, 44, 50, 58],
+    })
     from src.utils.constants import TRADING_RULES as CONFIG
     scale_in.TRADING_RULES = _reversal_add_rules()
     try:
         result = scale_in.evaluate_scalping_reversal_add(stock, profit_rate=-0.25, current_ai_score=65, held_sec=50)
-        assert result["should_add"] is False
-        assert result["reason"] == "reversal_add_used"
+        assert result["should_add"] is True
+        assert result["reason"] == "reversal_add_ok"
     finally:
         scale_in.TRADING_RULES = CONFIG
 

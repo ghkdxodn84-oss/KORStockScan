@@ -92,7 +92,7 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 | `latency_other_danger_relief` | 2026-04-27 미개선 종료 | other_danger residual이 다시 주병목일 때 | broad fallback 금지. danger reason별 단일축으로 재분해해야 함 |
 | `latency_guard_canary` | broad fallback override OFF | 원칙상 재개 금지 | broad override가 아니라 신규 세분화 축으로만 재등록 |
 | `latency_fallback` / `split_entry` | fallback/split-entry 폐기 확정 | 재개 계획 없음 | 재개하려면 기존 축 복구가 아니라 새 workorder, 새 cohort, 새 rollback guard 필요 |
-| `SCALPING_ENABLE_AVG_DOWN` | generic avg-down OFF | `REVERSAL_ADD`와 별도 일반 물타기 owner를 열 때 | `REVERSAL_ADD` 결과와 충돌하지 않는 단일축, 수량/평단/protection 재설정 검증 필요 |
+| `generic AVG_DOWN` | runtime removed | 재개 계획 없음 | 단순 낙폭형 물타기는 EV/귀속 품질이 거칠어 재오픈 금지. scalping `AVG_DOWN` add_type은 `REVERSAL_ADD` 체결 귀속명으로만 유지 |
 | `SCALPING_PYRAMID_ZERO_QTY_STAGE1` | zero-qty stage1 OFF | pyramid zero-qty 분석을 runtime stage로 다시 남길 때 | 현재 add count blocker 제거 후에도 zero-qty 귀속 공백이 남을 때만 observe로 재개 |
 | `OpenAI Responses WS` | `OPENAI_RESPONSES_WS_ENABLED=False`, transport `http` | 5/4 shadow 결과와 parity acceptance 통과 후 | request_id mismatch=0, late_discard=0, http fallback<=2%, parse_fail<=0.5%, timeout reject<=1% |
 | `OpenAI dual persona` | `OPENAI_DUAL_PERSONA_ENABLED=False` | AI A/B 의제를 다시 열 때 | entry/holding owner 안정화 후, 추가 API/지연 비용과 EV 비교 cohort가 문서화될 때 |

@@ -77,8 +77,8 @@
 | `entry operating override` | `mechanical_momentum_latency_relief` ON | 운영 override 유지, 신규 OPEN 아님 | `2026-05-04 PREOPEN` 로드 확인 |
 | `entry price` | P1 resolver + P2 AI price canary live, OFI/QI P2 내부 입력 ON | entry price active owner | `2026-05-04 PREOPEN/POSTCLOSE` health/provenance |
 | `holding/exit` | `soft_stop_micro_grace`, `REVERSAL_ADD`, `bad_entry_refined_canary`, `holding_flow_override` | 보유/청산 active owner | `2026-05-04 POSTCLOSE` keep/OFF 및 flow 판정 |
-| `position sizing` | `initial_entry_qty_cap_1share` 유지, `MAX_*_COUNT`는 attribution counter, `SCALPING_ENABLE_PYRAMID`는 count cap 대신 cooldown/pending/position cap/protection으로 관리 | count gate semantics OPEN | `2026-05-04 PREOPEN`, `2026-05-06 POSTCLOSE` |
-| `AI engine` | Gemini/DeepSeek/OpenAI contract/provenance 보강. OpenAI Responses WS는 flag-off/shadow | live routing 승격 아님 | `2026-05-06 POSTCLOSE` backlog 재분류 |
+| `position sizing` | `initial_entry_qty_cap_1share` 유지, `MAX_*_COUNT`는 attribution counter, generic `AVG_DOWN` 평가는 제거됐다. scalping `AVG_DOWN` add_type은 `REVERSAL_ADD` 귀속으로만 남고, `SCALPING_ENABLE_PYRAMID`는 cooldown/pending/position cap/protection으로 관리 | count gate semantics 정리 완료, 동적 수량화만 OPEN | `2026-05-04 PREOPEN`, `2026-05-06 POSTCLOSE` |
+| `AI engine` | Gemini/DeepSeek/OpenAI contract/provenance 보강. 현재 `main` 스캘핑 live routing 기본값은 Gemini이며, OpenAI Responses WS와 OpenAI live routing은 flag-off/backlog | live routing 승격 아님 | `2026-05-06 POSTCLOSE` backlog 재분류 |
 | `threshold/action weight` | threshold collector/report/apply plan 자동화. apply는 `manifest_only` | runtime mutation 전 단계 | `2026-05-06 POSTCLOSE` acceptance |
 | `report inventory` | 정기 Markdown/JSON inventory와 누락 후보 정리 | report README 기준으로 작업계획 생성 | 누락 후보 발견 시 날짜별 checklist |
 | `scanner/code debt` | scanner boundary, state handler split, runtime stabilization | 설계/분해 단계 | `2026-05-06~2026-05-08` checklist |

@@ -56,25 +56,19 @@ class TradingConfig:
     # ==========================================
     # 3.2 추가매수(스캘핑) 설정
     # ==========================================
-    SCALPING_ENABLE_AVG_DOWN: bool = False
     SCALPING_ENABLE_PYRAMID: bool = True
-    SCALPING_MAX_AVG_DOWN_COUNT: int = 0  # DEPRECATED: runtime count gate removed; counter remains for attribution
+    SCALPING_MAX_AVG_DOWN_COUNT: int = 0  # DEPRECATED: reversal_add/AVG_DOWN receipt attribution only
     SCALPING_MAX_PYRAMID_COUNT: int = 0  # DEPRECATED: runtime count gate removed; counter remains for attribution
-    SCALPING_AVG_DOWN_MIN_DROP_PCT: float = -3.0
-    SCALPING_AVG_DOWN_MAX_DROP_PCT: float = -6.0
     SCALPING_PYRAMID_MIN_PROFIT_PCT: float = 1.5
     SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED: bool = False
 
     # ==========================================
     # 3.3 추가매수(스윙) 설정
     # ==========================================
-    SWING_ENABLE_AVG_DOWN: bool = True
     SWING_ENABLE_PYRAMID: bool = True
-    SWING_MAX_AVG_DOWN_COUNT: int = 0  # DEPRECATED: runtime count gate removed; counter remains for attribution
+    SWING_MAX_AVG_DOWN_COUNT: int = 0  # DEPRECATED: historical AVG_DOWN receipt attribution only
     SWING_MAX_PYRAMID_COUNT: int = 0  # DEPRECATED: runtime count gate removed; counter remains for attribution
-    SWING_AVG_DOWN_MIN_DROP_PCT: float = -5.0
     SWING_PYRAMID_MIN_PROFIT_PCT: float = 4.0
-    BLOCK_SWING_AVG_DOWN_IN_BEAR: bool = True
 
     # [매매 비중 설정] 전략별 주문 가능 현금 대비 1회 매수 투입 비율
     INVEST_RATIO_KOSPI: float = 0.25  # DEPRECATED: MIN/MAX 비중으로 대체됨
@@ -915,11 +909,9 @@ def _build_trading_rules() -> TradingConfig:
             else config.SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT,
         )
 
-    env_scalping_enable_avg_down = _env_bool("KORSTOCKSCAN_SCALPING_ENABLE_AVG_DOWN")
     env_scalping_enable_pyramid = _env_bool("KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID")
     env_scalping_max_avg_down_count = _env_int("KORSTOCKSCAN_SCALPING_MAX_AVG_DOWN_COUNT")
     env_scalping_max_pyramid_count = _env_int("KORSTOCKSCAN_SCALPING_MAX_PYRAMID_COUNT")
-    env_swing_enable_avg_down = _env_bool("KORSTOCKSCAN_SWING_ENABLE_AVG_DOWN")
     env_swing_enable_pyramid = _env_bool("KORSTOCKSCAN_SWING_ENABLE_PYRAMID")
     env_swing_max_avg_down_count = _env_int("KORSTOCKSCAN_SWING_MAX_AVG_DOWN_COUNT")
     env_swing_max_pyramid_count = _env_int("KORSTOCKSCAN_SWING_MAX_PYRAMID_COUNT")
@@ -935,11 +927,9 @@ def _build_trading_rules() -> TradingConfig:
         "KORSTOCKSCAN_SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED"
     )
     if (
-        env_scalping_enable_avg_down is not None
-        or env_scalping_enable_pyramid is not None
+        env_scalping_enable_pyramid is not None
         or env_scalping_max_avg_down_count is not None
         or env_scalping_max_pyramid_count is not None
-        or env_swing_enable_avg_down is not None
         or env_swing_enable_pyramid is not None
         or env_swing_max_avg_down_count is not None
         or env_swing_max_pyramid_count is not None
@@ -951,9 +941,6 @@ def _build_trading_rules() -> TradingConfig:
     ):
         config = replace(
             config,
-            SCALPING_ENABLE_AVG_DOWN=env_scalping_enable_avg_down
-            if env_scalping_enable_avg_down is not None
-            else config.SCALPING_ENABLE_AVG_DOWN,
             SCALPING_ENABLE_PYRAMID=env_scalping_enable_pyramid
             if env_scalping_enable_pyramid is not None
             else config.SCALPING_ENABLE_PYRAMID,
@@ -963,9 +950,6 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_MAX_PYRAMID_COUNT=env_scalping_max_pyramid_count
             if env_scalping_max_pyramid_count is not None
             else config.SCALPING_MAX_PYRAMID_COUNT,
-            SWING_ENABLE_AVG_DOWN=env_swing_enable_avg_down
-            if env_swing_enable_avg_down is not None
-            else config.SWING_ENABLE_AVG_DOWN,
             SWING_ENABLE_PYRAMID=env_swing_enable_pyramid
             if env_swing_enable_pyramid is not None
             else config.SWING_ENABLE_PYRAMID,

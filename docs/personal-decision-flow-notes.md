@@ -20,6 +20,32 @@
 | threshold 진행현황 | 실시간 자동변경은 폐기했다. 현재는 `장중 적재 -> 장후 산정 -> 다음 장전 적용` 사이클로 고정했고, compact threshold stream을 별도 적재한다. 운영전환 시에는 매일 자동 실행, 다음 장전 승인 threshold 자동 적용 + 봇 기동, 장후 threshold version별 실적분석 제출, 그 결과의 다음 산정 weight 반영까지 닫혀야 한다. sample ready는 `entry_mechanical_momentum`, `bad_entry_block`, `REVERSAL_ADD blocked funnel`, `soft_stop_micro_grace`이며, 다음 holding/exit threshold owner는 `bad_entry_refined_canary`, `REVERSAL_ADD`는 `pnl/hold/gate` blocker 축소 단계다. 새 보조축 `statistical_action_weight`는 가격대/거래량/시간대별 `exit_only`/`avg_down_wait`/`pyramid_wait` 성과를 장후 weight 입력으로만 본다. |
 | 휴장 보정 | `2026-05-01`은 근로자의 날 KRX 휴장, 다음 운영일은 `2026-05-04`. `2026-05-05`는 어린이날 휴장, 이월 작업은 `2026-05-06` checklist가 소유한다. |
 
+## 추가매수 제한 해석 메모
+
+### `MAX_*_COUNT` 제거와 one-shot semantic guard의 차이
+
+| 항목 | 제거된 제한 | 현재 남아 있는 가드 | 해석 포인트 |
+| --- | --- | --- | --- |
+| `AVG_DOWN` | `SCALPING_MAX_AVG_DOWN_COUNT`, `SWING_MAX_AVG_DOWN_COUNT`는 runtime blocker가 아니라 attribution counter다. generic `AVG_DOWN` 평가 경로는 제거했고, scalping `AVG_DOWN` add_type은 `REVERSAL_ADD` 체결 귀속명으로만 남긴다. | `REVERSAL_ADD`의 `pnl/hold/floor/AI recovery/supply`, `scale_in_cooldown`, `pending_add_order`, `position_at_cap`, `near_market_close`, `scale_in_locked` | 물타기는 `몇 번 했는가`보다 `지금 추가해도 되는 포지션인가`를 본다. 단순 낙폭형 일반 물타기는 future swing tuning에서도 재사용하지 않는다. |
+| `REVERSAL_ADD` | 별도 `MAX_REVERSAL_ADD_COUNT` gate는 없다. 일자/전략 단위 count cap으로 막지 않고, 동일 포지션 one-shot semantic도 제거했다. | `pnl/hold/floor/AI recovery/supply` 조건, `POST_ADD_EVAL`, `scale_in_cooldown`, `pending_add_order`, `position_at_cap`, `near_market_close`, protection fail-closed | 동일 거래 동일 종목에서도 반복 추가매수를 count/used 플래그로 막지 않는다. 반복 사용 제한은 count가 아니라 상태/쿨다운/주문중복/리스크 가드가 맡는다. |
+| `PYRAMID` | `SCALPING_MAX_PYRAMID_COUNT`, `SWING_MAX_PYRAMID_COUNT`는 runtime blocker가 아니라 attribution counter다. | `SCALPING_ENABLE_PYRAMID`/`SWING_ENABLE_PYRAMID`, 최소 수익/추세 유지 조건, `scale_in_cooldown`, `pending_add_order`, `position_at_cap`, `near_market_close`, protection fail-closed | 불타기도 count cap이 아니라 추세 지속성과 리스크 가드로 제한한다. 다만 현재 수량 자체는 고정 템플릿 성격이 강해서 동적 수량화는 observe-only 후속 owner다. |
+
+### 코드 기준 해설
+
+| 축 | 현재 코드 기준 |
+| --- | --- |
+| deprecated count gate | [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:59) 기준 `SCALPING_MAX_AVG_DOWN_COUNT`, `SCALPING_MAX_PYRAMID_COUNT`, `SWING_MAX_AVG_DOWN_COUNT`, `SWING_MAX_PYRAMID_COUNT`는 모두 `DEPRECATED: runtime count gate removed; counter remains for attribution`로 남아 있다. |
+| 공통 runtime 가드 | [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py:6728) 기준 추가매수 공통 가드는 `scale_in_locked`, `invalid_position`, `sell_ordered`, `add_judgment_locked`, `scale_in_cooldown`, `pending_add_order`, `position_at_cap`, enable flag, `near_market_close`, `scalping_cutoff`다. |
+| `AVG_DOWN` 판정 | generic `AVG_DOWN` 평가는 제거됐고, [sniper_scale_in.py](/home/ubuntu/KORStockScan/src/engine/sniper_scale_in.py:307) 기준 scalping `AVG_DOWN` add_type은 `evaluate_scalping_reversal_add()`가 만드는 `reversal_add_ok` 체결 경로로만 남는다. |
+| `REVERSAL_ADD` 판정 | [sniper_scale_in.py](/home/ubuntu/KORStockScan/src/engine/sniper_scale_in.py:367) 기준 `reversal_add_used`는 더 이상 반복 차단에 쓰지 않는다. 대신 `pnl`, `hold_sec`, `low_floor`, `ai_recovery`, `supply`를 모두 통과해야 하고, 체결 후에는 `POST_ADD_EVAL`과 공통 `scale_in_cooldown/pending_add_order/position_at_cap/protection` 가드가 반복 사용을 제한한다. |
+| count의 현재 의미 | [sniper_execution_receipts.py](/home/ubuntu/KORStockScan/src/engine/sniper_execution_receipts.py:994) 기준 `avg_down_count`, `pyramid_count`, `add_count`는 체결 후 집계/귀속용으로만 증가한다. 즉 실행 전 blocker가 아니라 체결 후 attribution counter다. |
+
+### 개인 메모 결론
+
+1. `횟수 제한 제거`는 `count-based mechanical block 제거`를 뜻한다.
+2. `reversal_add_used` 같은 one-shot semantic도 제거 대상이다. 동일 거래 동일 종목 반복 추가매수 제한은 count/used가 아니라 상태/쿨다운/리스크 가드로만 남긴다.
+3. 내일 장중 해석은 `count miss`가 아니라 `pnl/hold/AI/supply/cooldown/pending/position_cap/protection` blocker 분포를 봐야 한다.
+
 ## 현재 기준 최종 의사결정 흐름
 
 ### Entry

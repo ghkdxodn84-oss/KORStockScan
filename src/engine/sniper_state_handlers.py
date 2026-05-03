@@ -28,9 +28,7 @@ from src.engine.sniper_condition_handlers_big_bite import (
 )
 from src.engine.sniper_scale_in import (
     describe_scale_in_qty,
-    evaluate_scalping_avg_down,
     evaluate_scalping_pyramid,
-    evaluate_swing_avg_down,
     evaluate_swing_pyramid,
     evaluate_scalping_reversal_add,
     resolve_holding_elapsed_sec,
@@ -5477,8 +5475,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         # STAGNATION 진입 판단
                         _ra_pnl_min = _rule_float('REVERSAL_ADD_PNL_MIN', -0.45)
                         _ra_pnl_max = _rule_float('REVERSAL_ADD_PNL_MAX', -0.10)
-                        if (not stock.get('reversal_add_used')
-                                and not stock.get('reversal_add_state')
+                        if (not stock.get('reversal_add_state')
                                 and _ra_pnl_min <= profit_rate <= _ra_pnl_max
                         ):
                             _mutate_stock_state(
@@ -5533,8 +5530,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                                 _ra_supply_ok = _ra_bp >= _rule_float('REVERSAL_ADD_MIN_BUY_PRESSURE', 55)
 
                             _ra_candidate_ok = (
-                                (not stock.get('reversal_add_used'))
-                                and (_ra_pnl_min <= profit_rate <= _ra_pnl_max)
+                                (_ra_pnl_min <= profit_rate <= _ra_pnl_max)
                                 and (_ra_min_hold <= held_sec <= _ra_max_hold)
                                 and (profit_rate >= _ra_floor - _ra_margin)
                                 and current_ai_score >= _ra_min_ai
@@ -6555,7 +6551,6 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 _mutate_stock_state(
                     stock,
                     set_fields={
-                        'reversal_add_used': True,
                         'reversal_add_state': 'POST_ADD_EVAL',
                         'reversal_add_executed_at': now_ts,
                     },
@@ -6774,23 +6769,14 @@ def can_consider_scale_in(
     # 전략별 허용 여부
     raw_strategy = (strategy or "").upper()
     if raw_strategy == 'SCALPING':
-        allow_avg = _rule_bool('SCALPING_ENABLE_AVG_DOWN', False)
+        allow_reversal = _rule_bool('REVERSAL_ADD_ENABLED', True)
         allow_pyr = _rule_bool('SCALPING_ENABLE_PYRAMID', True)
-        if not (allow_avg or allow_pyr):
+        if not (allow_reversal or allow_pyr):
             return {"allowed": False, "reason": "scalping_scale_in_disabled"}
     elif raw_strategy in ('KOSPI_ML', 'KOSDAQ_ML'):
-        allow_avg = _rule_bool('SWING_ENABLE_AVG_DOWN', False)
         allow_pyr = _rule_bool('SWING_ENABLE_PYRAMID', True)
-        if not (allow_avg or allow_pyr):
+        if not allow_pyr:
             return {"allowed": False, "reason": "swing_scale_in_disabled"}
-
-        if (
-            allow_avg
-            and not allow_pyr
-            and market_regime == 'BEAR'
-            and _rule_bool('BLOCK_SWING_AVG_DOWN_IN_BEAR', True)
-        ):
-            return {"allowed": False, "reason": "bear_avg_down_blocked"}
     else:
         return {"allowed": False, "reason": "unknown_strategy"}
 
@@ -6993,7 +6979,7 @@ def _evaluate_scale_in_signal(
     current_ai_score=50,
     held_sec=0,
 ):
-    """전략별 추가매수 시그널 평가 (퍼센트 기반 1차 버전)."""
+    """전략별 추가매수 시그널 평가."""
     _ = (ws_data,)
 
     raw_strategy = (strategy or "").upper()
@@ -7005,27 +6991,17 @@ def _evaluate_scale_in_signal(
         except Exception as exc:
             log_error(f"[SCALEIN_STATE] highest_prices 비교 실패 ({code}, curr_price={curr_price}): {exc}")
 
-        avg_down = evaluate_scalping_avg_down(stock, profit_rate)
         pyramid = evaluate_scalping_pyramid(stock, profit_rate, peak_profit, is_new_high)
-
-        # reversal_add: 가격낙폭/불타기 모두 미트리거인 경우에만 검토
-        if not avg_down.get("should_add") and not pyramid.get("should_add"):
-            reversal = evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_sec)
-            if reversal.get("should_add"):
-                avg_down = reversal
+        if pyramid.get("should_add"):
+            return pyramid
+        reversal = evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_sec)
+        return reversal if reversal.get("should_add") else None
     elif raw_strategy in ('KOSPI_ML', 'KOSDAQ_ML'):
-        avg_down = evaluate_swing_avg_down(stock, profit_rate, market_regime)
+        _ = market_regime
         pyramid = evaluate_swing_pyramid(stock, profit_rate, peak_profit)
+        return pyramid if pyramid.get("should_add") else None
     else:
         return None
-
-    if avg_down.get("should_add") and pyramid.get("should_add"):
-        return pyramid if profit_rate >= 0 else avg_down
-    if pyramid.get("should_add"):
-        return pyramid
-    if avg_down.get("should_add"):
-        return avg_down
-    return None
 
 
 def _process_scale_in_action(stock, code, ws_data, action, admin_id):

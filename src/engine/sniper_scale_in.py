@@ -126,35 +126,6 @@ def resolve_holding_elapsed_sec(stock, *, now_dt=None, now_ts=None):
     return max(0, int((current_dt - buy_dt).total_seconds()))
 
 
-def evaluate_scalping_avg_down(stock, profit_rate):
-    """
-    스캘핑 물타기(AVG_DOWN) 평가: 1차는 퍼센트 기반 단순 조건.
-    TODO: VWAP/RSI/ATR 기반 필터 추가
-    """
-    result = _base_result()
-
-    if not getattr(TRADING_RULES, 'SCALPING_ENABLE_AVG_DOWN', False):
-        result["reason"] = "avg_down_disabled"
-        return result
-
-    max_loss_pct = float(getattr(TRADING_RULES, 'SCALPING_AVG_DOWN_MIN_DROP_PCT', -3.0))
-    min_loss_pct = float(getattr(TRADING_RULES, 'SCALPING_AVG_DOWN_MAX_DROP_PCT', -6.0))
-    if not (profit_rate <= max_loss_pct and profit_rate >= min_loss_pct):
-        result["reason"] = "drop_range_not_met"
-        return result
-
-    max_hold_min = float(getattr(TRADING_RULES, 'SCALP_TIME_LIMIT_MIN', 30) or 30)
-    held_min = _calc_held_minutes(stock)
-    if held_min > max_hold_min:
-        result["reason"] = "held_too_long"
-        return result
-
-    result["should_add"] = True
-    result["add_type"] = "AVG_DOWN"
-    result["reason"] = "scalping_avg_down_ok"
-    return result
-
-
 def evaluate_scalping_pyramid(stock, profit_rate, peak_profit, is_new_high):
     """
     스캘핑 불타기(PYRAMID) 평가: 1차는 profit/peak 기반 단순 조건.
@@ -175,28 +146,6 @@ def evaluate_scalping_pyramid(stock, profit_rate, peak_profit, is_new_high):
     result["should_add"] = True
     result["add_type"] = "PYRAMID"
     result["reason"] = "scalping_pyramid_ok"
-    return result
-
-
-def evaluate_swing_avg_down(stock, profit_rate, market_regime):
-    """
-    스윙 물타기(AVG_DOWN) 평가: 1차는 퍼센트 기반 단순 조건.
-    TODO: VWAP/RSI/ATR 기반 필터 추가
-    """
-    result = _base_result()
-
-    if market_regime == 'BEAR' and getattr(TRADING_RULES, 'BLOCK_SWING_AVG_DOWN_IN_BEAR', True):
-        result["reason"] = "bear_avg_down_blocked"
-        return result
-
-    min_loss_pct = float(getattr(TRADING_RULES, 'SWING_AVG_DOWN_MIN_DROP_PCT', -7.0))
-    if profit_rate > min_loss_pct:
-        result["reason"] = "drop_not_enough"
-        return result
-
-    result["should_add"] = True
-    result["add_type"] = "AVG_DOWN"
-    result["reason"] = "swing_avg_down_ok"
     return result
 
 
@@ -371,10 +320,6 @@ def evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_se
 
     if not getattr(TRADING_RULES, 'REVERSAL_ADD_ENABLED', False):
         result["reason"] = "reversal_add_disabled"
-        return result
-
-    if stock.get('reversal_add_used'):
-        result["reason"] = "reversal_add_used"
         return result
 
     for reason in (
