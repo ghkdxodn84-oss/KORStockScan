@@ -165,10 +165,7 @@ def _load_pipeline_events_from_jsonl(*, target_date: str) -> tuple[list[PerfEven
         fields_payload = payload.get("fields") or {}
         if not isinstance(fields_payload, dict):
             fields_payload = {}
-        fields = {
-            str(key): _stringify_field_value(value).replace("|", " ")
-            for key, value in fields_payload.items()
-        }
+        fields = {str(key): _stringify_field_value(value) for key, value in fields_payload.items()}
         record_id = payload.get("record_id")
         if record_id not in (None, "", 0):
             fields.setdefault("id", str(record_id))
@@ -1674,6 +1671,77 @@ def _build_holding_axis_summary(holding_events: list[PerfEvent], exit_signals: l
     }
 
 
+def _build_ofi_orderbook_micro_summary(entry_events: list[PerfEvent]) -> dict:
+    micro_events = [
+        event
+        for event in entry_events
+        if str((event.fields or {}).get("orderbook_micro_state") or "").strip()
+    ]
+    state_counts = Counter()
+    threshold_source_counts = Counter()
+    bucket_counts = Counter()
+    warning_counts = Counter()
+    symbol_counts: dict[str, Counter[str]] = defaultdict(Counter)
+
+    for event in micro_events:
+        fields = event.fields or {}
+        state = str(fields.get("orderbook_micro_state") or "missing").strip() or "missing"
+        source = str(fields.get("orderbook_micro_ofi_threshold_source") or "unknown").strip() or "unknown"
+        bucket = str(
+            fields.get("orderbook_micro_ofi_bucket_key")
+            or fields.get("orderbook_micro_ofi_calibration_bucket")
+            or "unknown"
+        ).strip() or "unknown"
+        warning = str(fields.get("orderbook_micro_ofi_calibration_warning") or "").strip()
+        state_counts[state] += 1
+        threshold_source_counts[source] += 1
+        bucket_counts[bucket] += 1
+        if warning and warning != "-":
+            warning_counts[warning] += 1
+        symbol_counts[str(event.code or "")][state] += 1
+
+    symbol_anomalies = []
+    for code, counts in symbol_counts.items():
+        total = sum(counts.values())
+        if total <= 0:
+            continue
+        bearish_rate = _ratio(counts.get("bearish", 0), total)
+        bullish_rate = _ratio(counts.get("bullish", 0), total)
+        warning = ""
+        if total < 20:
+            warning = "insufficient_symbol_samples"
+        elif bearish_rate >= 60.0:
+            warning = "symbol_bearish_rate_high"
+        elif bullish_rate <= 1.0 and counts.get("bearish", 0) > 0:
+            warning = "symbol_bullish_rate_low"
+        if warning:
+            symbol_anomalies.append(
+                {
+                    "code": code,
+                    "sample_count": int(total),
+                    "bearish_rate": bearish_rate,
+                    "bullish_rate": bullish_rate,
+                    "warning": warning,
+                }
+            )
+
+    return {
+        "sample_count": len(micro_events),
+        "state_counts": state_counts,
+        "threshold_source_counts": threshold_source_counts,
+        "bucket_counts": bucket_counts,
+        "warning_counts": warning_counts,
+        "symbol_anomalies": sorted(
+            symbol_anomalies,
+            key=lambda item: (
+                item["warning"] != "symbol_bearish_rate_high",
+                -item["sample_count"],
+                item["code"],
+            ),
+        )[:20],
+    }
+
+
 def build_performance_tuning_report(
     *,
     target_date: str,
@@ -1985,6 +2053,8 @@ def build_performance_tuning_report(
         exit_signals=exit_signals,
         dual_persona_events=dual_persona_events,
     )
+    ofi_micro = _build_ofi_orderbook_micro_summary(entry_events)
+    metrics["ofi_orderbook_micro_samples"] = int(ofi_micro["sample_count"])
 
     top_holding_slow = sorted(
         [
@@ -2045,6 +2115,26 @@ def build_performance_tuning_report(
         "top_dual_persona_slow": top_dual_persona_slow,
         "judgment_gate": judgment_gate,
         "holding_axis": holding_axis,
+        "ofi_orderbook_micro": {
+            "sample_count": int(ofi_micro["sample_count"]),
+            "state_counts": [
+                {"label": key, "count": value}
+                for key, value in ofi_micro["state_counts"].most_common()
+            ],
+            "threshold_source_counts": [
+                {"label": key, "count": value}
+                for key, value in ofi_micro["threshold_source_counts"].most_common()
+            ],
+            "bucket_counts": [
+                {"label": key, "count": value}
+                for key, value in ofi_micro["bucket_counts"].most_common()
+            ],
+            "warning_counts": [
+                {"label": key, "count": value}
+                for key, value in ofi_micro["warning_counts"].most_common()
+            ],
+            "symbol_anomalies": ofi_micro["symbol_anomalies"],
+        },
     }
     breakdowns = {
         "latency_reason_breakdown": [{"label": key, "count": value} for key, value in latency_reason_counts.most_common()],
@@ -2067,6 +2157,10 @@ def build_performance_tuning_report(
         ],
         "preset_exit_sync_status": [{"label": key, "count": value} for key, value in preset_sync_status_counts.most_common()],
         "ai_overlap_blocked_stages": [{"label": key, "count": value} for key, value in ai_overlap_blocked_stage_counts.most_common()],
+        "ofi_orderbook_micro_states": [{"label": key, "count": value} for key, value in ofi_micro["state_counts"].most_common()],
+        "ofi_orderbook_micro_threshold_sources": [{"label": key, "count": value} for key, value in ofi_micro["threshold_source_counts"].most_common()],
+        "ofi_orderbook_micro_buckets": [{"label": key, "count": value} for key, value in ofi_micro["bucket_counts"].most_common()],
+        "ofi_orderbook_micro_warnings": [{"label": key, "count": value} for key, value in ofi_micro["warning_counts"].most_common()],
         "dual_persona_agreement": [{"label": key, "count": value} for key, value in dual_persona_agreement.most_common()],
         "dual_persona_winners": [{"label": key, "count": value} for key, value in dual_persona_winners.most_common()],
         "dual_persona_decision_types": [{"label": key, "count": value} for key, value in dual_persona_decision_types.most_common()],

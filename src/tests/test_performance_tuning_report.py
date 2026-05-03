@@ -131,6 +131,95 @@ def test_performance_tuning_report_filters_since_without_datetime_reparse(monkey
     assert report["metrics"]["holding_reviews"] == 1
 
 
+def test_performance_tuning_report_summarizes_ofi_bucket_calibration(monkeypatch, tmp_path):
+    data_dir = tmp_path / "data"
+    pipeline_dir = data_dir / "pipeline_events"
+    pipeline_dir.mkdir(parents=True, exist_ok=True)
+
+    payloads = [
+        {
+            "event_type": "pipeline_event",
+            "pipeline": "ENTRY_PIPELINE",
+            "stock_name": "테스트A",
+            "stock_code": "000001",
+            "stage": "latency_pass",
+            "emitted_at": "2026-04-03T10:00:00+09:00",
+            "fields": {
+                "orderbook_micro_state": "bearish",
+                "orderbook_micro_ofi_threshold_source": "bucket",
+                "orderbook_micro_ofi_bucket_key": "spread=tight|price=mid|depth=normal|sample=rich",
+                "orderbook_micro_ofi_calibration_warning": "",
+            },
+            "record_id": 101,
+        },
+        {
+            "event_type": "pipeline_event",
+            "pipeline": "ENTRY_PIPELINE",
+            "stock_name": "테스트A",
+            "stock_code": "000001",
+            "stage": "entry_ai_price_canary_skip_order",
+            "emitted_at": "2026-04-03T10:00:01+09:00",
+            "fields": {
+                "orderbook_micro_state": "bullish",
+                "orderbook_micro_ofi_threshold_source": "global",
+                "orderbook_micro_ofi_bucket_key": "spread=normal|price=mid|depth=normal|sample=rich",
+            },
+            "record_id": 101,
+        },
+        {
+            "event_type": "pipeline_event",
+            "pipeline": "ENTRY_PIPELINE",
+            "stock_name": "테스트B",
+            "stock_code": "000002",
+            "stage": "entry_ai_price_canary_fallback",
+            "emitted_at": "2026-04-03T10:00:02+09:00",
+            "fields": {
+                "orderbook_micro_state": "neutral",
+                "orderbook_micro_ofi_threshold_source": "fallback",
+                "orderbook_micro_ofi_bucket_key": "spread=wide|price=low|depth=thin|sample=insufficient",
+                "orderbook_micro_ofi_calibration_warning": "insufficient_symbol_samples",
+            },
+            "record_id": 102,
+        },
+    ]
+    with open(pipeline_dir / "pipeline_events_2026-04-03.jsonl", "w", encoding="utf-8") as handle:
+        for payload in payloads:
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+    monkeypatch.setattr(report_mod, "DATA_DIR", data_dir)
+    import src.engine.dashboard_data_repository as dash_repo
+
+    monkeypatch.setattr(dash_repo, "DATA_DIR", data_dir)
+    monkeypatch.setattr(dash_repo, "PIPELINE_EVENTS_DIR", data_dir / "pipeline_events")
+    monkeypatch.setattr(dash_repo, "MONITOR_SNAPSHOT_DIR", data_dir / "report" / "monitor_snapshots")
+    monkeypatch.setattr(report_mod, "_iter_target_lines", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        report_mod,
+        "build_trade_review_report",
+        lambda target_date, since_time=None, top_n=10000, scope="all": {
+            "meta": {"warnings": []},
+            "sections": {"recent_trades": []},
+        },
+    )
+    monkeypatch.setattr(report_mod, "_fetch_trade_history_rows", lambda target_date, max_dates=20: ([], [], []))
+
+    report = report_mod.build_performance_tuning_report(target_date="2026-04-03", since_time=None)
+
+    assert report["metrics"]["ofi_orderbook_micro_samples"] == 3
+    state_counts = {item["label"]: item["count"] for item in report["breakdowns"]["ofi_orderbook_micro_states"]}
+    source_counts = {
+        item["label"]: item["count"]
+        for item in report["breakdowns"]["ofi_orderbook_micro_threshold_sources"]
+    }
+    bucket_counts = {item["label"]: item["count"] for item in report["breakdowns"]["ofi_orderbook_micro_buckets"]}
+    warning_counts = {item["label"]: item["count"] for item in report["breakdowns"]["ofi_orderbook_micro_warnings"]}
+    assert state_counts == {"bearish": 1, "bullish": 1, "neutral": 1}
+    assert source_counts == {"bucket": 1, "global": 1, "fallback": 1}
+    assert bucket_counts["spread=tight|price=mid|depth=normal|sample=rich"] == 1
+    assert warning_counts == {"insufficient_symbol_samples": 1}
+    assert report["sections"]["ofi_orderbook_micro"]["symbol_anomalies"]
+
+
 def test_performance_tuning_report_prefers_trade_review_snapshot(monkeypatch):
     entry_lines = [
         "[2026-04-03 10:00:00] [ENTRY_PIPELINE] 테스트A(000001) stage=market_regime_pass gatekeeper_eval_ms=420 gatekeeper_cache=miss strategy=SCALPING",

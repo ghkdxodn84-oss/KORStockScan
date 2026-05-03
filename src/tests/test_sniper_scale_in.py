@@ -1663,6 +1663,25 @@ def test_entry_ai_price_context_includes_orderbook_micro_when_enabled(monkeypatc
                 "depth_ewma": 1200.0,
                 "micro_state": "bearish",
                 "sample_quote_count": 24,
+                "captured_at_ms": 100_000,
+                "observer_healthy": True,
+                "observer_missing_reason": "ok",
+                "observer_last_quote_age_ms": 120.0,
+                "observer_last_trade_age_ms": 220.0,
+                "micro_window_sec": 60.0,
+                "micro_z_min_samples": 20,
+                "micro_lambda": 0.3,
+                "ofi_bull_threshold": 1.2,
+                "ofi_bear_threshold": -1.0,
+                "qi_bull_threshold": 0.55,
+                "qi_bear_threshold": 0.48,
+                "ofi_threshold_source": "bucket",
+                "ofi_threshold_bucket_key": "spread=tight|price=mid|depth=normal|sample=normal",
+                "ofi_threshold_manifest_id": "manifest1",
+                "ofi_threshold_manifest_version": "v1",
+                "ofi_threshold_fallback_reason": "",
+                "ofi_bucket_key": "spread=tight|price=mid|depth=normal|sample=normal",
+                "ofi_calibration_warning": "",
             }
         },
     }
@@ -1678,6 +1697,11 @@ def test_entry_ai_price_context_includes_orderbook_micro_when_enabled(monkeypatc
     assert ctx["orderbook_micro"]["ready"] is True
     assert ctx["orderbook_micro"]["micro_state"] == "bearish"
     assert ctx["orderbook_micro"]["spread_ticks"] == 1
+    assert ctx["orderbook_micro"]["ofi_threshold_source"] == "bucket"
+    assert ctx["orderbook_micro"]["ofi_threshold_manifest_id"] == "manifest1"
+    log_fields = state_handlers._build_orderbook_micro_log_fields(ctx["orderbook_micro"])
+    assert log_fields["orderbook_micro_ofi_threshold_source"] == "bucket"
+    assert log_fields["orderbook_micro_observer_healthy"] is True
 
 
 def test_entry_ai_price_context_omits_orderbook_micro_when_disabled(monkeypatch):
@@ -1698,6 +1722,135 @@ def test_entry_ai_price_context_omits_orderbook_micro_when_disabled(monkeypatch)
     assert "orderbook_micro" not in ctx
 
 
+def test_entry_ai_price_skip_logs_bearish_policy_basis(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED=True,
+            SCALPING_ENTRY_AI_PRICE_MIN_CONFIDENCE=60,
+            SCALPING_ENTRY_AI_PRICE_SKIP_MIN_CONFIDENCE=80,
+            SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_ENABLED=True,
+        ),
+    )
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [{"price": 10020}])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [{"close": 10020}])
+    logs = []
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+
+    class DummyAI:
+        def evaluate_scalping_entry_price(self, *args, **kwargs):
+            return {
+                "action": "SKIP",
+                "order_price": 0,
+                "confidence": 90,
+                "reason": "매도 우위",
+                "max_wait_sec": 90,
+                "ai_parse_ok": True,
+                "ai_parse_fail": False,
+            }
+
+    stock = {"name": "TEST", "strategy": "SCALPING", "position_tag": "SCANNER", "prob": 0.8}
+    latency_gate = {
+        "target_buy_price": 9980,
+        "latency_guarded_order_price": 9990,
+        "normal_defensive_order_price": 9990,
+        "order_price": 9990,
+        "latency_state": "SAFE",
+        "orderbook_stability": {
+            "orderbook_micro": {
+                "ready": True,
+                "micro_state": "bearish",
+                "ofi_threshold_source": "bucket",
+                "ofi_bucket_key": "spread=tight|price=mid|depth=normal|sample=normal",
+                "sample_quote_count": 24,
+            }
+        },
+    }
+
+    adjusted, touched = state_handlers._apply_entry_ai_price_canary(
+        stock=stock,
+        code="123456",
+        strategy="SCALPING",
+        ws_data={"curr": 10020},
+        ai_engine=DummyAI(),
+        latency_gate=latency_gate,
+        planned_orders=[{"tag": "normal", "qty": 1, "price": 9990, "tif": "DAY", "order_type": "LIMIT"}],
+        curr_price=10020,
+        best_bid=10020,
+        best_ask=10030,
+    )
+
+    assert adjusted == []
+    assert touched is True
+    skip_log = [fields for stage, fields in logs if stage == "entry_ai_price_canary_skip_order"][0]
+    assert skip_log["entry_ai_price_skip_policy_warning"] == ""
+    assert skip_log["entry_ai_price_skip_policy_basis"] == "ofi_bearish_supported"
+    assert stock["entry_ai_price_skip_policy_warning"] == ""
+    assert stock["entry_ai_price_skip_threshold_source"] == "bucket"
+
+
+def test_entry_ai_price_skip_logs_non_bearish_policy_warning(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED=True,
+            SCALPING_ENTRY_AI_PRICE_MIN_CONFIDENCE=60,
+            SCALPING_ENTRY_AI_PRICE_SKIP_MIN_CONFIDENCE=80,
+            SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_ENABLED=True,
+        ),
+    )
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [{"price": 10020}])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [{"close": 10020}])
+    logs = []
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+
+    class DummyAI:
+        def evaluate_scalping_entry_price(self, *args, **kwargs):
+            return {
+                "action": "SKIP",
+                "order_price": 0,
+                "confidence": 90,
+                "reason": "불리한 호가",
+                "max_wait_sec": 90,
+                "ai_parse_ok": True,
+                "ai_parse_fail": False,
+            }
+
+    state_handlers._apply_entry_ai_price_canary(
+        stock={"name": "TEST", "strategy": "SCALPING", "position_tag": "SCANNER", "prob": 0.8},
+        code="123456",
+        strategy="SCALPING",
+        ws_data={"curr": 10020},
+        ai_engine=DummyAI(),
+        latency_gate={
+            "target_buy_price": 9980,
+            "latency_guarded_order_price": 9990,
+            "normal_defensive_order_price": 9990,
+            "order_price": 9990,
+            "latency_state": "SAFE",
+            "orderbook_stability": {
+                "orderbook_micro": {
+                    "ready": True,
+                    "micro_state": "neutral",
+                    "sample_quote_count": 24,
+                }
+            },
+        },
+        planned_orders=[{"tag": "normal", "qty": 1, "price": 9990, "tif": "DAY", "order_type": "LIMIT"}],
+        curr_price=10020,
+        best_bid=10020,
+        best_ask=10030,
+    )
+
+    skip_log = [fields for stage, fields in logs if stage == "entry_ai_price_canary_skip_order"][0]
+    assert skip_log["entry_ai_price_skip_policy_warning"] == "skip_without_bearish_ofi"
+    assert skip_log["entry_ai_price_skip_policy_basis"] == "neutral"
+
+
 def test_entry_ai_price_skip_followup_logs_mfe_mae(monkeypatch):
     logs = []
     monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
@@ -1708,6 +1861,9 @@ def test_entry_ai_price_skip_followup_logs_mfe_mae(monkeypatch):
         "entry_ai_price_skip_max_price": 10_100,
         "entry_ai_price_skip_min_price": 9_980,
         "entry_ai_price_skip_micro_state": "bearish",
+        "entry_ai_price_skip_policy_warning": "ofi_not_ready",
+        "entry_ai_price_skip_threshold_source": "fallback",
+        "entry_ai_price_skip_bucket_key": "spread=unknown|price=unknown|depth=unknown|sample=insufficient",
         "entry_ai_price_skip_followup_30s": False,
         "entry_ai_price_skip_followup_90s": False,
     }
@@ -1719,6 +1875,9 @@ def test_entry_ai_price_skip_followup_logs_mfe_mae(monkeypatch):
     assert logs[0][1]["mfe_bps"] == 100
     assert logs[0][1]["mae_bps"] == -20
     assert logs[0][1]["micro_state_at_skip"] == "bearish"
+    assert logs[0][1]["ofi_threshold_source_at_skip"] == "fallback"
+    assert logs[0][1]["ofi_bucket_key_at_skip"] == "spread=unknown|price=unknown|depth=unknown|sample=insufficient"
+    assert logs[0][1]["entry_ai_price_skip_policy_warning"] == "ofi_not_ready"
     assert stock["entry_ai_price_skip_followup_30s"] is True
 
 

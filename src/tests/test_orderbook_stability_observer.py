@@ -87,6 +87,18 @@ def test_orderbook_micro_qi_ofi_and_depth_normalization():
     assert micro["ofi_ewma"] == 18.0
     assert micro["ofi_norm"] > 0
     assert micro["depth_ewma"] == 1012.0
+    assert micro["captured_at_ms"] == 101000
+    assert micro["observer_healthy"] is False
+    assert micro["observer_missing_reason"] == "missing_trade"
+    assert micro["micro_window_sec"] == 60.0
+    assert micro["micro_z_min_samples"] == 20
+    assert micro["micro_lambda"] == 0.3
+    assert micro["ofi_threshold_source"] == "global"
+    assert micro["ofi_bull_threshold"] == 1.2
+    assert micro["ofi_bear_threshold"] == -1.0
+    assert micro["qi_bull_threshold"] == 0.55
+    assert micro["qi_bear_threshold"] == 0.48
+    assert micro["ofi_calibration_warning"] == "insufficient_symbol_samples"
 
 
 def test_orderbook_micro_becomes_ready_after_min_samples_and_prunes_window():
@@ -122,3 +134,147 @@ def test_orderbook_micro_becomes_ready_after_min_samples_and_prunes_window():
     pruned_micro = observer.snapshot("123456", now=104.0)["orderbook_micro"]
     assert pruned_micro["sample_quote_count"] == 0
     assert pruned_micro["ready"] is False
+
+
+def test_orderbook_micro_observer_health_fields_with_quote_and_trade():
+    observer = OrderbookStabilityObserver(window_sec=10)
+    observer.record_quote(
+        "123456",
+        best_bid=10_000,
+        best_ask=10_010,
+        best_bid_qty=100,
+        best_ask_qty=100,
+        ts=100.0,
+    )
+    observer.record_trade("123456", price=10_010, ts=100.2)
+
+    snapshot = observer.snapshot("123456", now=100.5)
+    micro = snapshot["orderbook_micro"]
+
+    assert snapshot["observer_healthy"] is True
+    assert snapshot["observer_missing_reason"] == "ok"
+    assert snapshot["observer_last_quote_age_ms"] == 500.0
+    assert snapshot["observer_last_trade_age_ms"] == 300.0
+    assert micro["observer_healthy"] is True
+    assert micro["observer_missing_reason"] == "ok"
+
+
+def test_orderbook_micro_bucket_manifest_can_override_thresholds():
+    manifest = {
+        "enabled": True,
+        "manifest_id": "test_manifest",
+        "version": "v1",
+        "min_bucket_samples": 0,
+        "bucket_thresholds": {
+            "spread=tight|price=mid|depth=normal|sample=normal": {
+                "ofi_bull_threshold": 999.0,
+                "ofi_bear_threshold": 999.0,
+                "qi_bull_threshold": 0.99,
+                "qi_bear_threshold": 0.99,
+                "bucket_sample_count": 100,
+            }
+        },
+    }
+    observer = OrderbookStabilityObserver(
+        window_sec=10,
+        micro_z_min_samples=3,
+        bucket_calibration_enabled=True,
+        threshold_manifest=manifest,
+    )
+    observer.record_quote(
+        "123456",
+        best_bid=10_000,
+        best_ask=10_010,
+        best_bid_qty=100,
+        best_ask_qty=100,
+        bid_depth_l=1000,
+        ask_depth_l=1000,
+        ts=100.0,
+    )
+    for offset in range(1, 4):
+        observer.record_quote(
+            "123456",
+            best_bid=10_000,
+            best_ask=10_010,
+            best_bid_qty=100 + offset * 50,
+            best_ask_qty=100,
+            bid_depth_l=1200,
+            ask_depth_l=1000,
+            ts=100.0 + offset,
+        )
+
+    micro = observer.snapshot("123456", now=104.0)["orderbook_micro"]
+
+    assert micro["ready"] is True
+    assert micro["ofi_threshold_source"] == "bucket"
+    assert micro["ofi_threshold_manifest_id"] == "test_manifest"
+    assert micro["ofi_threshold_manifest_version"] == "v1"
+    assert micro["ofi_threshold_bucket_key"] == "spread=tight|price=mid|depth=normal|sample=normal"
+    assert micro["ofi_bear_threshold"] == 999.0
+    assert micro["micro_state"] == "bearish"
+
+
+def test_orderbook_micro_bucket_manifest_falls_back_when_bucket_missing():
+    observer = OrderbookStabilityObserver(
+        window_sec=10,
+        micro_z_min_samples=3,
+        bucket_calibration_enabled=True,
+        threshold_manifest={"enabled": True, "bucket_thresholds": {}},
+    )
+    for offset in range(4):
+        observer.record_quote(
+            "123456",
+            best_bid=10_000,
+            best_ask=10_010,
+            best_bid_qty=100 + offset,
+            best_ask_qty=100,
+            bid_depth_l=1000,
+            ask_depth_l=1000,
+            ts=100.0 + offset,
+        )
+
+    micro = observer.snapshot("123456", now=104.0)["orderbook_micro"]
+
+    assert micro["ofi_threshold_source"] == "fallback"
+    assert micro["ofi_threshold_fallback_reason"] == "bucket_missing"
+    assert micro["ofi_calibration_warning"] == "bucket_missing"
+
+
+def test_orderbook_micro_bucket_manifest_falls_back_when_symbol_samples_low():
+    manifest = {
+        "enabled": True,
+        "min_symbol_samples": 10,
+        "bucket_thresholds": {
+            "spread=tight|price=mid|depth=normal|sample=normal": {
+                "ofi_bull_threshold": 999.0,
+                "ofi_bear_threshold": 999.0,
+                "qi_bull_threshold": 0.99,
+                "qi_bear_threshold": 0.99,
+                "bucket_sample_count": 100,
+            }
+        },
+    }
+    observer = OrderbookStabilityObserver(
+        window_sec=10,
+        micro_z_min_samples=3,
+        bucket_calibration_enabled=True,
+        threshold_manifest=manifest,
+    )
+    for offset in range(4):
+        observer.record_quote(
+            "123456",
+            best_bid=10_000,
+            best_ask=10_010,
+            best_bid_qty=100 + offset * 50,
+            best_ask_qty=100,
+            bid_depth_l=1000,
+            ask_depth_l=1000,
+            ts=100.0 + offset,
+        )
+
+    micro = observer.snapshot("123456", now=104.0)["orderbook_micro"]
+
+    assert micro["ready"] is True
+    assert micro["ofi_threshold_source"] == "fallback"
+    assert micro["ofi_threshold_fallback_reason"] == "insufficient_symbol_samples"
+    assert micro["ofi_calibration_warning"] == "insufficient_symbol_samples"

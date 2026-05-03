@@ -422,9 +422,10 @@ class DeepSeekSniperEngine:
         payload["cache_mode"] = str(cache_mode or "miss")
         return payload
 
-    def _mark_successful_ai_call(self):
+    def _mark_successful_ai_call(self, *, update_last_call_time=True):
         self.consecutive_failures = 0
-        self.last_call_time = time.time()
+        if update_last_call_time:
+            self.last_call_time = time.time()
 
     def _record_failure_and_maybe_disable(self, *, context_name):
         self.consecutive_failures += 1
@@ -1270,7 +1271,7 @@ class DeepSeekSniperEngine:
                 model_override=self._get_tier2_model(),
             )
             normalized = normalize_scalping_entry_price_result(result, fallback_price=fallback_price)
-            self._mark_successful_ai_call()
+            self._mark_successful_ai_call(update_last_call_time=False)
             return self._annotate_analysis_result(
                 normalized,
                 prompt_type="entry_price",
@@ -1534,6 +1535,20 @@ class DeepSeekSniperEngine:
                 cache_hit=True,
                 cache_mode="hit",
                 result_source="shadow_cache",
+            )
+
+        if self.ai_disabled:
+            return self._annotate_analysis_result(
+                {"action": "WAIT", "score": 50, "reason": "AI 엔진 비활성화로 shadow 호출 생략"},
+                prompt_type=prompt_type,
+                prompt_version="shadow_v1",
+                response_ms=int((time.perf_counter() - analysis_started) * 1000),
+                parse_ok=False,
+                parse_fail=False,
+                fallback_score_50=True,
+                cache_hit=False,
+                cache_mode="miss",
+                result_source="shadow_engine_disabled",
             )
 
         if not self.lock.acquire(blocking=False):
@@ -1834,11 +1849,18 @@ class DeepSeekSniperEngine:
         buy_price = self._safe_float(ctx.get("buy_price", ctx.get("avg_price", 0)), 0.0)
         day_high = self._safe_float(ctx.get("day_high", 0), 0.0)
         distance_from_day_high = ((curr_price - day_high) / day_high * 100.0) if curr_price > 0 and day_high > 0 else self._safe_float(ctx.get("distance_from_day_high_pct", 0), 0.0)
+        cadence_guide = (
+            "오버나이트 SELL_TODAY 재검문은 단발성이다. 추가 호출이 필요 없으면 next_review_sec=0, "
+            "재검문이 꼭 필요할 때만 300~600초를 선택하라."
+            if str(decision_kind or "") == "overnight_sell_today"
+            else "장중 청산 후보 재검문은 30~90초 범위에서만 요청하고, HOLD/TRIM은 근거가 강할 때만 선택하라."
+        )
         return f"""
 [판정 종류]
 - kind: {decision_kind}
 - 종목: {stock_name}({stock_code})
 - 후보 exit_rule: {ctx.get('exit_rule', '-')}
+- review_cadence: {cadence_guide}
 
 [포지션 맥락]
 - 평균단가: {buy_price:,.2f}원 | 현재가: {curr_price:,}원
@@ -1972,7 +1994,7 @@ class DeepSeekSniperEngine:
                 model_override=self._get_tier2_model(),
             )
             normalized = self._normalize_holding_flow_result(result, decision_kind=decision_kind)
-            self._mark_successful_ai_call()
+            self._mark_successful_ai_call(update_last_call_time=False)
             return self._annotate_analysis_result(
                 normalized,
                 prompt_type="holding_exit_flow",
@@ -2072,7 +2094,7 @@ class DeepSeekSniperEngine:
             action = str(result.get('action', 'SELL_TODAY') or 'SELL_TODAY').upper()
             if action not in {'SELL_TODAY', 'HOLD_OVERNIGHT'}:
                 action = 'SELL_TODAY'
-            self._mark_successful_ai_call()
+            self._mark_successful_ai_call(update_last_call_time=False)
             return self._annotate_analysis_result(
                 {
                     'action': action,

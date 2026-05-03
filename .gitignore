@@ -35,6 +35,7 @@ dist/
 *.db
 *.sqlite3
 *.json
+!data/config/ofi_bucket_threshold_manifest.json
 *.jsonl
 *.csv
 *.bak

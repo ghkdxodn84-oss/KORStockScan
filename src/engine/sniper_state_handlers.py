@@ -1861,6 +1861,13 @@ def _build_orderbook_micro_context(latency_gate, *, curr_price, best_bid, best_a
             "reason": "missing_snapshot",
             "micro_state": "insufficient",
             "sample_quote_count": 0,
+            "observer_healthy": False,
+            "observer_missing_reason": "missing_snapshot",
+            "ofi_threshold_source": "fallback",
+            "ofi_threshold_fallback_reason": "missing_snapshot",
+            "ofi_bucket_key": "spread=unknown|price=unknown|depth=unknown|sample=insufficient",
+            "ofi_calibration_bucket": "spread=unknown|price=unknown|depth=unknown|sample=insufficient",
+            "ofi_calibration_warning": "missing_snapshot",
         }
 
     tick_size = 1
@@ -1872,7 +1879,7 @@ def _build_orderbook_micro_context(latency_gate, *, curr_price, best_bid, best_a
     if _coerce_int_value(best_ask) > 0 and _coerce_int_value(best_bid) > 0 and tick_size > 0:
         spread_ticks = max(0, int(round((_coerce_int_value(best_ask) - _coerce_int_value(best_bid)) / tick_size)))
 
-    return {
+    context = {
         "ready": bool(micro.get("ready")),
         "reason": str(micro.get("reason") or ""),
         "qi": micro.get("qi"),
@@ -1884,6 +1891,39 @@ def _build_orderbook_micro_context(latency_gate, *, curr_price, best_bid, best_a
         "sample_quote_count": _coerce_int_value(micro.get("sample_quote_count")),
         "spread_ticks": spread_ticks,
     }
+    for key in (
+        "captured_at_ms",
+        "snapshot_age_ms",
+        "observer_healthy",
+        "observer_missing_reason",
+        "observer_last_quote_age_ms",
+        "observer_last_trade_age_ms",
+        "micro_window_sec",
+        "micro_z_min_samples",
+        "micro_lambda",
+        "ofi_bull_threshold",
+        "ofi_bear_threshold",
+        "qi_bull_threshold",
+        "qi_bear_threshold",
+        "ofi_threshold_source",
+        "ofi_threshold_bucket_key",
+        "ofi_threshold_manifest_id",
+        "ofi_threshold_manifest_version",
+        "ofi_threshold_fallback_reason",
+        "ofi_calibration_bucket",
+        "ofi_bucket_key",
+        "ofi_symbol_sample_count",
+        "ofi_bucket_sample_count",
+        "ofi_symbol_bearish_rate",
+        "ofi_bucket_bearish_rate",
+        "ofi_symbol_bullish_rate",
+        "ofi_bucket_bullish_rate",
+        "ofi_symbol_bucket_deviation",
+        "ofi_calibration_warning",
+    ):
+        if key in micro:
+            context[key] = micro.get(key)
+    return context
 
 
 def _build_orderbook_micro_log_fields(micro):
@@ -1898,10 +1938,70 @@ def _build_orderbook_micro_log_fields(micro):
         "orderbook_micro_state": str(micro.get("micro_state") or "insufficient"),
         "orderbook_micro_sample_quote_count": _coerce_int_value(micro.get("sample_quote_count")),
     }
-    for key in ("qi", "qi_ewma", "ofi_norm", "ofi_z", "depth_ewma", "spread_ticks"):
+    for key in (
+        "qi",
+        "qi_ewma",
+        "ofi_norm",
+        "ofi_z",
+        "depth_ewma",
+        "spread_ticks",
+        "captured_at_ms",
+        "snapshot_age_ms",
+        "observer_healthy",
+        "observer_missing_reason",
+        "observer_last_quote_age_ms",
+        "observer_last_trade_age_ms",
+        "micro_window_sec",
+        "micro_z_min_samples",
+        "micro_lambda",
+        "ofi_bull_threshold",
+        "ofi_bear_threshold",
+        "qi_bull_threshold",
+        "qi_bear_threshold",
+        "ofi_threshold_source",
+        "ofi_threshold_bucket_key",
+        "ofi_threshold_manifest_id",
+        "ofi_threshold_manifest_version",
+        "ofi_threshold_fallback_reason",
+        "ofi_calibration_bucket",
+        "ofi_bucket_key",
+        "ofi_symbol_sample_count",
+        "ofi_bucket_sample_count",
+        "ofi_symbol_bearish_rate",
+        "ofi_bucket_bearish_rate",
+        "ofi_symbol_bullish_rate",
+        "ofi_bucket_bullish_rate",
+        "ofi_symbol_bucket_deviation",
+        "ofi_calibration_warning",
+    ):
         value = micro.get(key)
         fields[f"orderbook_micro_{key}"] = "-" if value is None else value
     return fields
+
+
+def _build_entry_ai_price_skip_policy_fields(orderbook_micro):
+    micro = orderbook_micro if isinstance(orderbook_micro, dict) else {}
+    state = str(micro.get("micro_state") or "missing").strip().lower()
+    ready = bool(micro.get("ready"))
+    if ready and state == "bearish":
+        return {
+            "entry_ai_price_skip_policy_warning": "",
+            "entry_ai_price_skip_policy_basis": "ofi_bearish_supported",
+        }
+    if not ready:
+        return {
+            "entry_ai_price_skip_policy_warning": "ofi_not_ready",
+            "entry_ai_price_skip_policy_basis": state or "missing",
+        }
+    if state in {"neutral", "insufficient", "missing", ""}:
+        return {
+            "entry_ai_price_skip_policy_warning": "skip_without_bearish_ofi",
+            "entry_ai_price_skip_policy_basis": state or "missing",
+        }
+    return {
+        "entry_ai_price_skip_policy_warning": "skip_without_bearish_ofi",
+        "entry_ai_price_skip_policy_basis": state,
+    }
 
 
 def _is_pre_submit_price_guard_block(strategy, price, best_bid):
@@ -2069,6 +2169,7 @@ def _apply_entry_ai_price_canary(
         latency_gate["ai_entry_price_canary_confidence"] = confidence
         latency_gate["ai_entry_price_canary_reason"] = reason
         orderbook_micro = price_ctx.get("orderbook_micro") if isinstance(price_ctx, dict) else {}
+        skip_policy_fields = _build_entry_ai_price_skip_policy_fields(orderbook_micro)
         _mutate_stock_state(
             stock,
             set_fields={
@@ -2077,13 +2178,18 @@ def _apply_entry_ai_price_canary(
                 "entry_ai_price_skip_max_price": current_price,
                 "entry_ai_price_skip_min_price": current_price,
                 "entry_ai_price_skip_micro_state": str((orderbook_micro or {}).get("micro_state") or ""),
+                "entry_ai_price_skip_policy_warning": str(
+                    skip_policy_fields.get("entry_ai_price_skip_policy_warning") or ""
+                ),
+                "entry_ai_price_skip_threshold_source": str((orderbook_micro or {}).get("ofi_threshold_source") or ""),
+                "entry_ai_price_skip_bucket_key": str((orderbook_micro or {}).get("ofi_bucket_key") or ""),
                 "entry_ai_price_skip_followup_30s": False,
                 "entry_ai_price_skip_followup_90s": False,
             },
         )
         _log_entry_pipeline(
             stock, code, "entry_ai_price_canary_skip_order",
-            action=action, confidence=confidence, reason=reason[:160], **micro_log_fields,
+            action=action, confidence=confidence, reason=reason[:160], **skip_policy_fields, **micro_log_fields,
         )
         return [], True
 
@@ -4253,6 +4359,9 @@ def _maybe_emit_entry_ai_price_skip_followup(stock, code, *, curr_price: int, no
             mfe_bps=mfe_bps,
             mae_bps=mae_bps,
             micro_state_at_skip=str(stock.get("entry_ai_price_skip_micro_state") or ""),
+            ofi_threshold_source_at_skip=str(stock.get("entry_ai_price_skip_threshold_source") or ""),
+            ofi_bucket_key_at_skip=str(stock.get("entry_ai_price_skip_bucket_key") or ""),
+            entry_ai_price_skip_policy_warning=str(stock.get("entry_ai_price_skip_policy_warning") or ""),
         )
         stock[followup_key] = True
 
@@ -4265,6 +4374,9 @@ def _maybe_emit_entry_ai_price_skip_followup(stock, code, *, curr_price: int, no
                 "entry_ai_price_skip_max_price",
                 "entry_ai_price_skip_min_price",
                 "entry_ai_price_skip_micro_state",
+                "entry_ai_price_skip_policy_warning",
+                "entry_ai_price_skip_threshold_source",
+                "entry_ai_price_skip_bucket_key",
                 "entry_ai_price_skip_followup_30s",
                 "entry_ai_price_skip_followup_90s",
             ],
@@ -5173,7 +5285,8 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
 
     if strategy == 'SCALPING' and ai_engine and radar:
         safe_profit_pct = _rule_float('SCALP_SAFE_PROFIT', 0.5)
-        is_critical_zone = (profit_rate >= safe_profit_pct) or (profit_rate < 0)
+        near_safe_profit_zone = abs(profit_rate - safe_profit_pct) <= 0.20
+        is_critical_zone = near_safe_profit_zone or (profit_rate >= safe_profit_pct) or (profit_rate < 0)
 
         dynamic_min_cd = (
             _rule_int('AI_HOLDING_CRITICAL_MIN_COOLDOWN', 8)
@@ -5187,7 +5300,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         )
         dynamic_price_trigger = 0.20 if is_critical_zone else 0.40
 
-        if time_elapsed > dynamic_min_cd and (price_change >= dynamic_price_trigger or time_elapsed > dynamic_max_cd):
+        if time_elapsed > dynamic_min_cd and (
+            near_safe_profit_zone
+            or price_change >= dynamic_price_trigger
+            or time_elapsed > dynamic_max_cd
+        ):
             holding_ai_review_started = time.perf_counter()
             try:
                 market_snapshot = _build_holding_ai_fast_snapshot(ws_data)
@@ -5204,7 +5321,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 fast_sig_age_str = "-" if fast_sig_age is None else f"{fast_sig_age:.1f}"
                 sig_delta = _describe_snapshot_deltas(stock.get('last_ai_market_snapshot'), market_snapshot)
                 near_ai_exit_band = abs(profit_rate - near_ai_exit_min_loss_pct) <= 0.20
-                near_safe_profit_band = abs(profit_rate - safe_profit_pct) <= 0.20
+                near_safe_profit_band = near_safe_profit_zone
                 near_low_score_band = current_ai_score <= (near_ai_exit_score_limit + 5)
                 fast_sig_fresh = fast_sig_age is not None and fast_sig_age < reuse_sec
                 price_change_ok = price_change < (dynamic_price_trigger * 1.25)

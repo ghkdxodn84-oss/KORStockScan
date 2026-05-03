@@ -183,11 +183,12 @@
   - 다음 액션: sample-ready이면 다음 장후 산정에서 threshold weight 입력으로 연결하고, 부족하면 누락 필드(`daily_volume`, `buy_time`, `scale_in_executed`, `exit_signal`, `sell_completed`, `stat_action_decision_snapshot`) 적재 품질부터 보강한다. 4월 historical compact는 registry 추가 전 bootstrap이라 action stage가 비어 있을 수 있으므로, 필요하면 IO guard가 있는 maintenance backfill로 action family만 재적재한다.
 
 - [ ] `[StatActionMarkdown0506] statistical_action_weight 운영자용 Markdown 리포트 자동생성 구현` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 22:50~23:10`, `Track: ScalpingLogic`)
-  - Source: [2026-04-30-data-driven-threshold-inventory.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-30-data-driven-threshold-inventory.md), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh)
+  - Source: [2026-04-30-data-driven-threshold-inventory.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-30-data-driven-threshold-inventory.md), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh), [README.md](/home/ubuntu/KORStockScan/data/report/README.md)
   - 판정 기준: 장후 threshold cycle 실행 시 `data/report/statistical_action_weight/statistical_action_weight_YYYY-MM-DD.md`와 `.json`이 자동 생성되는지 확인한다. Markdown은 `판정`, `표본 충분성`, `price/volume/time bucket별 best action`, `no_clear_edge/insufficient_sample`, `threshold 반영 금지/가능 항목`, `다음 액션`을 포함해야 한다.
   - 선반영 메모: `2026-05-01` 휴장 maintenance에서 구현/테스트는 완료했다. 5/6에는 실제 운영일 postclose 자동 실행 산출물 health check와 표본 충분성 판정을 수행한다.
   - why: 현재 `statistical_action_weight`는 기계용 JSON 내부 섹션으로만 존재해 매일 사람이 읽고 의사결정하기 어렵다. 독립 Markdown이 없으면 2차 고급축 판정도 운영 흐름에서 누락될 수 있다.
-  - 다음 액션: 생성 경로와 postclose wrapper 연결을 테스트로 고정하고, Project/Calendar에는 동일 제목으로 추적되게 유지한다.
+  - 추가 확인: [README.md](/home/ubuntu/KORStockScan/data/report/README.md)의 Markdown 누락 후보 중 `threshold_cycle`, `performance_tuning`, `trade_review`를 우선순위 상위 3개로 보고, 5/6 산출물 health check에서 별도 Markdown 구현 workorder가 필요한지 판정한다.
+  - 다음 액션: 생성 경로와 postclose wrapper 연결을 테스트로 고정하고, Project/Calendar에는 동일 제목으로 추적되게 유지한다. 누락 후보를 구현 대상으로 확정하면 별도 단일 작업항목으로 분리한다.
 
 - [ ] `[StatActionAdvancedAxes0506] statistical_action_weight 2차 고급축 SAW-2 설계 및 sample floor 확정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 23:10~23:30`, `Track: ScalpingLogic`)
   - Source: [2026-04-30-data-driven-threshold-inventory.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-30-data-driven-threshold-inventory.md), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py)

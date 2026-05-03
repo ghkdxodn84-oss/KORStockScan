@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import json
+import os
 import threading
 import time
 from collections import deque
 from dataclasses import dataclass, field
 from math import sqrt
+from pathlib import Path
 from statistics import median
 from typing import Any
 
@@ -19,6 +22,11 @@ DEFAULT_MICRO_LAMBDA = 0.3
 DEFAULT_MICRO_WINDOW_SEC = 60.0
 DEFAULT_MICRO_MAX_SAMPLES = 300
 DEFAULT_MICRO_Z_MIN_SAMPLES = 20
+DEFAULT_OFI_BULL_THRESHOLD = 1.2
+DEFAULT_OFI_BEAR_THRESHOLD = -1.0
+DEFAULT_QI_BULL_THRESHOLD = 0.55
+DEFAULT_QI_BEAR_THRESHOLD = 0.48
+DEFAULT_BUCKET_MANIFEST_PATH = Path("data/config/ofi_bucket_threshold_manifest.json")
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -26,6 +34,20 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(float(str(value).replace(",", "").strip()))
     except Exception:
         return default
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(str(value).replace(",", "").strip())
+    except Exception:
+        return default
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
 def _percentile(values: list[float], percentile: float) -> float | None:
@@ -70,6 +92,7 @@ class _SymbolState:
     last_qi: float | None = None
     last_bid_depth: int = 0
     last_ask_depth: int = 0
+    last_trade_ts: float = 0.0
 
 
 class OrderbookStabilityObserver:
@@ -83,12 +106,22 @@ class OrderbookStabilityObserver:
         micro_max_samples: int = DEFAULT_MICRO_MAX_SAMPLES,
         micro_z_min_samples: int = DEFAULT_MICRO_Z_MIN_SAMPLES,
         micro_lambda: float = DEFAULT_MICRO_LAMBDA,
+        bucket_calibration_enabled: bool | None = None,
+        threshold_manifest_path: str | Path | None = None,
+        threshold_manifest: dict[str, Any] | None = None,
     ) -> None:
         self.window_sec = float(window_sec)
         self.micro_window_sec = float(micro_window_sec)
         self.micro_max_samples = int(micro_max_samples)
         self.micro_z_min_samples = int(micro_z_min_samples)
         self.micro_lambda = max(0.0, min(1.0, float(micro_lambda)))
+        self.bucket_calibration_enabled = (
+            _env_bool("KORSTOCKSCAN_SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_BUCKET_CALIBRATION_ENABLED", False)
+            if bucket_calibration_enabled is None
+            else bool(bucket_calibration_enabled)
+        )
+        self.threshold_manifest_path = Path(threshold_manifest_path or DEFAULT_BUCKET_MANIFEST_PATH)
+        self._threshold_manifest_override = threshold_manifest
         self._states: dict[str, _SymbolState] = {}
         self._lock = threading.RLock()
 
@@ -173,6 +206,7 @@ class OrderbookStabilityObserver:
                     "aligned": aligned,
                 }
             )
+            state.last_trade_ts = now
 
     def snapshot(self, code: str, *, now: float | None = None) -> dict[str, Any]:
         safe_code = str(code or "").strip()[:6]
@@ -194,7 +228,24 @@ class OrderbookStabilityObserver:
                 reasons.append("quote_age_p90")
             if alignment is not None and alignment < DEFAULT_ALIGNMENT_THRESHOLD:
                 reasons.append("print_quote_alignment")
+            last_quote_age_ms = (
+                round(max(0.0, (current - state.last_quote_ts) * 1000.0), 3)
+                if state.last_quote_ts > 0
+                else None
+            )
+            last_trade_age_ms = (
+                round(max(0.0, (current - state.last_trade_ts) * 1000.0), 3)
+                if state.last_trade_ts > 0
+                else None
+            )
+            observer_missing_reason = self._observer_missing_reason(state)
             return {
+                "captured_at_ms": int(round(current * 1000)),
+                "snapshot_age_ms": 0,
+                "observer_healthy": observer_missing_reason == "ok",
+                "observer_missing_reason": observer_missing_reason,
+                "observer_last_quote_age_ms": last_quote_age_ms,
+                "observer_last_trade_age_ms": last_trade_age_ms,
                 "fr_10s": int(state.flicker_count),
                 "quote_age_p50_ms": p50,
                 "quote_age_p90_ms": p90,
@@ -205,7 +256,7 @@ class OrderbookStabilityObserver:
                 "best_ask": int(state.last_ask or 0),
                 "sample_trade_count": len(state.trades),
                 "sample_quote_count": len(state.quotes),
-                "orderbook_micro": self._micro_snapshot(state),
+                "orderbook_micro": self._micro_snapshot(state, now=current),
             }
 
     def _prune(self, state: _SymbolState, now: float) -> None:
@@ -317,7 +368,135 @@ class OrderbookStabilityObserver:
             return 0.0
         return (state.last_ofi_norm - mean) / std
 
-    def _micro_snapshot(self, state: _SymbolState) -> dict[str, Any]:
+    def _observer_missing_reason(self, state: _SymbolState) -> str:
+        if state.last_quote_ts <= 0 and state.last_trade_ts <= 0:
+            return "missing_quote_and_trade"
+        if state.last_quote_ts <= 0:
+            return "missing_quote"
+        if state.last_trade_ts <= 0:
+            return "missing_trade"
+        return "ok"
+
+    @staticmethod
+    def _price_bucket(price: int) -> str:
+        if price <= 0:
+            return "unknown"
+        if price < 10_000:
+            return "low"
+        if price <= 50_000:
+            return "mid"
+        return "high"
+
+    @staticmethod
+    def _depth_bucket(depth_total: int) -> str:
+        if depth_total <= 0:
+            return "unknown"
+        if depth_total < 1_000:
+            return "thin"
+        if depth_total < 10_000:
+            return "normal"
+        return "thick"
+
+    @staticmethod
+    def _spread_bucket(bid: int, ask: int) -> str:
+        if bid <= 0 or ask <= 0:
+            return "unknown"
+        tick_size = max(1, int(get_tick_size(max(bid, ask)) or 1))
+        spread_ticks = max(0, int(round((ask - bid) / tick_size)))
+        if spread_ticks <= 1:
+            return "tight"
+        if spread_ticks <= 3:
+            return "normal"
+        return "wide"
+
+    def _sample_bucket(self, sample_count: int) -> str:
+        if sample_count < self.micro_z_min_samples:
+            return "insufficient"
+        if sample_count >= max(self.micro_z_min_samples * 3, 60):
+            return "rich"
+        return "normal"
+
+    def _bucket_key(self, state: _SymbolState, sample_count: int) -> str:
+        depth_total = int(state.last_bid_depth or 0) + int(state.last_ask_depth or 0)
+        parts = {
+            "spread": self._spread_bucket(int(state.last_bid or 0), int(state.last_ask or 0)),
+            "price": self._price_bucket(int(state.last_bid or state.last_ask or 0)),
+            "depth": self._depth_bucket(depth_total),
+            "sample": self._sample_bucket(sample_count),
+        }
+        return "|".join(f"{key}={value}" for key, value in parts.items())
+
+    def _load_threshold_manifest(self) -> dict[str, Any] | None:
+        if self._threshold_manifest_override is not None:
+            return self._threshold_manifest_override
+        try:
+            if not self.threshold_manifest_path.exists():
+                return None
+            with self.threshold_manifest_path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            return payload if isinstance(payload, dict) else None
+        except Exception:
+            return None
+
+    def _resolve_thresholds(self, *, bucket_key: str, sample_count: int) -> dict[str, Any]:
+        thresholds = {
+            "ofi_bull_threshold": DEFAULT_OFI_BULL_THRESHOLD,
+            "ofi_bear_threshold": DEFAULT_OFI_BEAR_THRESHOLD,
+            "qi_bull_threshold": DEFAULT_QI_BULL_THRESHOLD,
+            "qi_bear_threshold": DEFAULT_QI_BEAR_THRESHOLD,
+            "ofi_threshold_source": "global",
+            "ofi_threshold_bucket_key": bucket_key,
+            "ofi_threshold_manifest_id": "",
+            "ofi_threshold_manifest_version": "",
+            "ofi_threshold_fallback_reason": "",
+            "ofi_bucket_sample_count": 0,
+        }
+        if not self.bucket_calibration_enabled:
+            return thresholds
+
+        manifest = self._load_threshold_manifest()
+        if not manifest:
+            thresholds["ofi_threshold_source"] = "fallback"
+            thresholds["ofi_threshold_fallback_reason"] = "manifest_missing_or_invalid"
+            return thresholds
+        thresholds["ofi_threshold_manifest_id"] = str(manifest.get("manifest_id") or "")
+        thresholds["ofi_threshold_manifest_version"] = str(manifest.get("version") or "")
+        if not bool(manifest.get("enabled", False)):
+            thresholds["ofi_threshold_source"] = "fallback"
+            thresholds["ofi_threshold_fallback_reason"] = "manifest_disabled"
+            return thresholds
+        min_symbol_samples = _safe_int(manifest.get("min_symbol_samples"), 0)
+        if min_symbol_samples > 0 and sample_count < min_symbol_samples:
+            thresholds["ofi_threshold_source"] = "fallback"
+            thresholds["ofi_threshold_fallback_reason"] = "insufficient_symbol_samples"
+            return thresholds
+
+        bucket_thresholds = manifest.get("bucket_thresholds") or {}
+        if not isinstance(bucket_thresholds, dict) or bucket_key not in bucket_thresholds:
+            thresholds["ofi_threshold_source"] = "fallback"
+            thresholds["ofi_threshold_fallback_reason"] = "bucket_missing"
+            return thresholds
+
+        min_bucket_samples = _safe_int(manifest.get("min_bucket_samples"), 0)
+        item = bucket_thresholds.get(bucket_key) or {}
+        if not isinstance(item, dict):
+            thresholds["ofi_threshold_source"] = "fallback"
+            thresholds["ofi_threshold_fallback_reason"] = "bucket_invalid"
+            return thresholds
+        bucket_samples = _safe_int(item.get("bucket_sample_count", item.get("sample_count")), sample_count)
+        thresholds["ofi_bucket_sample_count"] = bucket_samples
+        if min_bucket_samples > 0 and bucket_samples < min_bucket_samples:
+            thresholds["ofi_threshold_source"] = "fallback"
+            thresholds["ofi_threshold_fallback_reason"] = "insufficient_bucket_samples"
+            return thresholds
+
+        for key in ("ofi_bull_threshold", "ofi_bear_threshold", "qi_bull_threshold", "qi_bear_threshold"):
+            if key in item:
+                thresholds[key] = _safe_float(item.get(key), thresholds[key])
+        thresholds["ofi_threshold_source"] = "bucket"
+        return thresholds
+
+    def _micro_snapshot(self, state: _SymbolState, *, now: float) -> dict[str, Any]:
         sample_count = len(state.micro_samples)
         reason = ""
         ready = True
@@ -328,18 +507,51 @@ class OrderbookStabilityObserver:
             ready = False
             reason = "insufficient_samples"
 
+        bucket_key = self._bucket_key(state, sample_count)
+        threshold_meta = self._resolve_thresholds(bucket_key=bucket_key, sample_count=sample_count)
         micro_state = "insufficient"
         if ready:
             ofi_z = float(state.last_ofi_z or 0.0)
             qi_ewma = float(state.qi_ewma or 0.0)
-            if ofi_z >= 1.2 and qi_ewma >= 0.55:
+            if (
+                ofi_z >= float(threshold_meta["ofi_bull_threshold"])
+                and qi_ewma >= float(threshold_meta["qi_bull_threshold"])
+            ):
                 micro_state = "bullish"
-            elif ofi_z <= -1.0 and qi_ewma < 0.48:
+            elif (
+                ofi_z <= float(threshold_meta["ofi_bear_threshold"])
+                and qi_ewma < float(threshold_meta["qi_bear_threshold"])
+            ):
                 micro_state = "bearish"
             else:
                 micro_state = "neutral"
 
+        quote_age_ms = (
+            round(max(0.0, (now - state.last_quote_ts) * 1000.0), 3)
+            if state.last_quote_ts > 0
+            else None
+        )
+        trade_age_ms = (
+            round(max(0.0, (now - state.last_trade_ts) * 1000.0), 3)
+            if state.last_trade_ts > 0
+            else None
+        )
+        calibration_warning = ""
+        if sample_count < self.micro_z_min_samples:
+            calibration_warning = "insufficient_symbol_samples"
+        elif threshold_meta["ofi_threshold_source"] == "fallback":
+            calibration_warning = str(threshold_meta["ofi_threshold_fallback_reason"] or "threshold_fallback")
+
         return {
+            "captured_at_ms": int(round(now * 1000)),
+            "snapshot_age_ms": 0,
+            "observer_healthy": self._observer_missing_reason(state) == "ok",
+            "observer_missing_reason": self._observer_missing_reason(state),
+            "observer_last_quote_age_ms": quote_age_ms,
+            "observer_last_trade_age_ms": trade_age_ms,
+            "micro_window_sec": round(float(self.micro_window_sec), 3),
+            "micro_z_min_samples": int(self.micro_z_min_samples),
+            "micro_lambda": round(float(self.micro_lambda), 6),
             "ready": bool(ready),
             "reason": reason or "ready",
             "qi": round(float(state.last_qi), 6) if state.last_qi is not None else None,
@@ -353,6 +565,17 @@ class OrderbookStabilityObserver:
             "sample_quote_count": sample_count,
             "bid_depth_l": int(state.last_bid_depth or 0),
             "ask_depth_l": int(state.last_ask_depth or 0),
+            **threshold_meta,
+            "ofi_calibration_bucket": bucket_key,
+            "ofi_bucket_key": bucket_key,
+            "ofi_symbol_sample_count": sample_count,
+            "ofi_bucket_sample_count": _safe_int(threshold_meta.get("ofi_bucket_sample_count"), 0),
+            "ofi_symbol_bearish_rate": None,
+            "ofi_bucket_bearish_rate": None,
+            "ofi_symbol_bullish_rate": None,
+            "ofi_bucket_bullish_rate": None,
+            "ofi_symbol_bucket_deviation": None,
+            "ofi_calibration_warning": calibration_warning,
         }
 
 

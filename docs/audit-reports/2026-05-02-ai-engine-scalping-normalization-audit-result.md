@@ -451,3 +451,32 @@ P1/P2는 본 보고서 §6에 우선순위로 정렬했다. 순서 변경/병합
 - 본 보고서의 "P0 적용 전에는 2026-05-04 POSTCLOSE `dynamic_entry_ai_price_canary_p2` keep/OFF 판정을 권하지 않는다"는 문장은 2026-05-04 checklist의 `OrderbookMicroP2Canary0504-Postclose` 판정 일정과 조건부 상충이 있었다.
 - 2026-05-02 반영으로 P0 중 overnight 정합화, failure helper 통일, dead code 삭제, 캐시 eviction/profile 분리가 적용되었으므로 해당 상충은 "P0 미적용 상태" 조건에서는 해소됐다.
 - 다만 cooldown 공통화, auto recovery, protocol/shadow 격리는 아직 policy/backlog 성격이므로 2026-05-04 keep/OFF 판정의 필수 선행조건으로 올리면 active canary 일정과 다시 충돌한다.
+
+## 11. 재검토 반영 및 호출량 재산정 (2026-05-02)
+
+### 11.1 코드 재검토 반영 결과
+
+- `_resolve_scalping_model_for_prompt`는 실제 `analyze_target` 경로에서 생성되지 않는 `scalping_watching`, `scalping_exit` 분기를 포함하고 있어 삭제했다. 현재 `analyze_target` 스캘핑 split prompt는 `watching/holding/exit/shared` 모두 Tier1 분석면으로 유지하고, `entry_price`, `holding_flow`, `overnight` 같은 중요 판단면은 각 전용 메서드에서 Tier2를 직접 사용한다.
+- `entry_price`, `holding_flow`, `overnight` Tier2 성공 호출이 `analyze_target`의 `min_interval` 기준인 `last_call_time`을 갱신하지 않도록 분리했다. 이 변경은 provider 호출 횟수를 줄이는 변경은 아니지만, Tier2 판단 직후 Tier1 `analyze_target`이 불필요하게 `cooldown` 폴백되는 부작용을 차단한다.
+- `Gemini/OpenAI/DeepSeek` 공통으로 `holding_flow` 입력 컨텍스트에 `decision_kind`별 `review_cadence` 지시를 추가했다. 장중 청산 후보는 30~90초 범위, 오버나이트 SELL_TODAY 재검문은 불필요하면 `next_review_sec=0`, 필요 시 300~600초를 권장한다.
+- shadow 경로는 메인 `ai_disabled=True` 상태에서 신규 API 호출을 하지 않도록 막았다. shadow 실패를 메인 실패 카운터에 합산하는 정책은 shadow가 메인을 죽일 수 있어 이번 범위에서는 적용하지 않았다.
+- `SCALPING_BUY_RECOVERY_CANARY_PROMPT`는 `ai_engine.py` 내부에서는 정의만 있으나 OpenAI/DeepSeek import, `sniper_state_handlers.py`의 `AI_MAIN_BUY_RECOVERY_CANARY_ENABLED=False` 가드 경로, 기존 shadow prompt 테스트와 연결되어 있다. 현재 live owner가 아니므로 삭제 대신 flag-off/legacy prompt로 유지한다.
+
+### 11.2 Tier별 일간 호출량 추정
+
+아래 수치는 기본 설정 기준의 상한/공식이다. 실제 호출량은 감시 종목 수, 보유 종목 수, 청산 후보 발생 수, cache hit, fast signature reuse에 따라 낮아진다.
+
+| 구분 | 기존 대비 | Tier | 기본 cadence/trigger | 일간 호출량 산식 |
+| --- | --- | --- | --- | --- |
+| `analyze_target` watching | 동일 | Tier1 | `AI_WATCHING_COOLDOWN=45초`, 신규 매수 cutoff 15:00 | 감시 후보 1개당 최대 약 476~480회/일 (`09:03~15:00` 또는 `09:00~15:00`) |
+| `analyze_target` holding/exit profile | 동일 | Tier1 | 일반 `20~90초`, critical `8~20초`, 가격변화 trigger 및 fast reuse 적용 | 보유 1개당 이론상 약 260회/일(90초)~2,925회/일(8초), 실제는 reuse/가격 trigger로 제한 |
+| `evaluate_scalping_entry_price` | canary 신규/유지 | Tier2 | 제출 직전 가격 판단 후보별 1회 | AI 가격 canary 도달 후보 수와 동일 |
+| `evaluate_scalping_holding_flow` intraday | `holding_flow_override` 신규축 | Tier2 | 청산 후보 발생 시 최초 1회, HOLD/TRIM이면 30~90초 재검문, `max_defer=90초` | 청산 후보 1건당 최대 3회 (`t=0/30/60`, `t>=90` force exit) |
+| `evaluate_scalping_overnight_decision` | P0 정합화 후 동일 목적 | Tier2 | 15:20 이후 DB 기준 일 1회 gatekeeper 실행 | 오버나이트 판정 대상 SCALPING 보유 수와 동일 |
+| `holding_flow` overnight SELL_TODAY 재검문 | 제한적 | Tier2 | 오버나이트 SELL_TODAY 후보 중 flow override 대상만 | 후보별 0~1회가 정상 기대값, 재검문 필요 시에만 추가 |
+
+### 11.3 판정
+
+- "HOLDING-only 시간대에 holding_flow가 모든 보유 종목에 대해 30~90초마다 호출된다"는 해석은 코드 기준으로는 부정확하다. 현재 호출점은 모든 HOLDING 루프가 아니라 `_holding_flow_override_applicable()`을 통과한 청산 후보에 한정된다.
+- 다만 후보 1건당 최대 3회 Tier2 호출은 가능하므로, 호출 예산이 문제되면 첫 조정 대상은 `HOLDING_FLOW_REVIEW_MIN_INTERVAL_SEC` 상향이 아니라 `HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC`와 후보 적용 exit_rule 범위다. 현재 90초 max defer는 기대값 방어 목적상 짧은 canary 보류로 해석된다.
+- 이번 수정 후 provider 호출 횟수 자체는 동일하나, Tier2 성공 호출이 Tier1 `analyze_target` cooldown을 밀어내는 비대칭 부작용은 제거됐다.

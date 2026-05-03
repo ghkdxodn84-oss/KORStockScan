@@ -97,6 +97,9 @@
 | 원격 비교 제외 | Plan Rebase 기간은 main-only 기준 | songstock/remote 비교는 의사결정 입력에서 제외 |
 | 라우팅 고정 | live 스캘핑 AI는 Gemini 고정 | A/B는 `entry_filter_quality` 1차 판정 후 별도 판단. 병목 완화 중에는 원격 전체 엔진 라우팅만 GPT로 바꾸는 단순 교체를 금지하고, 진입/보유/청산 단계별 코호트 비교와 품질 가드(`submitted/full/partial/soft_stop/COMPLETED + valid profit_rate`)를 함께 고정한다. |
 | 문서 기준 | 중심 문서는 기준, checklist는 실행, report는 근거 | 중복 작업항목 생성 금지 |
+| report README 기반 리포트 보강 | [data/report/README.md](../data/report/README.md)는 정기 JSON/JSONL 산출물과 Markdown 누락 후보의 inventory다. 운영/감리 중 사람이 매일 읽어야 하는 canonical JSON/JSONL이 탐지되면 먼저 이 README의 누락 후보에 반영하고, 구현이 필요하면 날짜별 checklist에 `Due/Slot/TimeWindow/Track`이 있는 Markdown 생성 작업계획을 만든다. | JSON/JSONL만 있는 항목을 장후 판정 근거로 계속 쓰거나, 누락 후보를 답변에만 남기면 무효다. 단 raw stream/manifest처럼 사람이 직접 판정하지 않는 항목은 README에 Markdown 제외 사유를 남긴다. |
+| threshold 운영문서 | threshold compact collector, POSTCLOSE report, PREOPEN apply plan 운영방법은 [data/threshold_cycle/README.md](../data/threshold_cycle/README.md)를 따른다. 현재 apply mode는 `manifest_only`이며, live runtime threshold 자동 변경은 `ThresholdOpsTransition0506` acceptance와 별도 workorder 없이는 금지한다. | README와 다른 wrapper/cron/apply mode로 운영하거나 sample floor/rollback owner 없이 runtime threshold를 변경하면 즉시 rollback 대상으로 본다. |
+| prompt/rebase 동기화 | [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)는 세션 시작용 경량 포인터지만, Plan Rebase의 active owner, 핵심 참조문서, 문서 운영 규칙이 바뀌면 같은 변경 세트에서 현행화한다. | rebase만 바꾸고 prompt가 과거 일정/owner를 계속 가리키면 다음 문서 변경 때 prompt 현행화를 선행한다. |
 | 일정 날짜 고정 | 모든 작업일정은 `YYYY-MM-DD KST`와 `Slot/TimeWindow`로 고정 | `후보비교 완료시`, `관찰 후`, `다음주` 같은 상대 일정은 무효. 당일 안에 절대 날짜/시각으로 재작성 |
 | checklist 상단 공통화 | 날짜별 checklist 상단은 [stage2-todo-checklist-template.md](./stage2-todo-checklist-template.md) 형식을 기본으로 사용한다. `오늘 목적`/`오늘 강제 규칙` 공통 bullet는 템플릿에서 복사하고, 날짜별 파일에는 당일 예외만 최소 추가한다. | 미래 checklist가 약한 규칙셋으로 되돌아가면 템플릿 위반으로 보고 같은 턴에 상단 규칙을 재정렬한다. |
 | 관찰 반나절 제한 | live 영향 여부 관찰은 오전/오후 반나절을 넘기지 않음 | 반나절에 미관측이면 관찰축 오류, live 영향 없음, 또는 그대로 진행 가능 중 하나로 판정 |
@@ -200,6 +203,7 @@
 
 | 문서 | 무엇을 남기나 | 이 문서에서 뺀 이유 |
 | --- | --- | --- |
+| [plan prompt](./plan-korStockScanPerformanceOptimization.prompt.md) | 다음 세션 진입용 경량 포인터, 현재 active owner와 핵심 참조문서 | 중심 기준은 rebase가 소유하되, rebase 변경 시 prompt도 같은 변경 세트에서 현행화한다 |
 | [execution-delta](./plan-korStockScanPerformanceOptimization.execution-delta.md) | 날짜형 과제 레지스터, 지나간 일정, same-day pivot, 효과 기록, 폐기/종료 이력 | rebase에 남기면 현재 원칙보다 과거 경과가 더 커져 active 판정이 흐려진다 |
 | [qna](./plan-korStockScanPerformanceOptimization.qna.md) | baseline 해석, direction-only 규칙, 감리 확인 포인트, 반복 질의 | 규칙은 중요하지만 매번 중심 문서 본문에 장문 설명으로 둘 필요는 없다 |
 | 날짜별 checklist | 특정 시각 작업, Due/Slot/TimeWindow, 완료/미완 상태 | 자동 파싱과 Project/Calendar 소유 문서는 checklist다 |
@@ -215,8 +219,11 @@
 | [2026-05-07-stage2-todo-checklist.md](./2026-05-07-stage2-todo-checklist.md) | `SAW-3`, `ADM-2` 후속 설계 |
 | [2026-05-08-stage2-todo-checklist.md](./2026-05-08-stage2-todo-checklist.md) | `SAW-4~SAW-6` 체결품질/시장맥락/orderbook readiness |
 | [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md) | 원안 대비 변경, 날짜형 이력, 종료된 축 기록 |
+| [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md) | 다음 세션 시작용 경량 포인터. rebase 변경 시 함께 현행화 |
 | [plan-korStockScanPerformanceOptimization.qna.md](./plan-korStockScanPerformanceOptimization.qna.md) | 반복 판단 기준과 감리 Q&A |
 | [plan-korStockScanPerformanceOptimization.performance-report.md](./plan-korStockScanPerformanceOptimization.performance-report.md) | 정기 성과 기준선과 반복 성과값 |
+| [data/report/README.md](../data/report/README.md) | 정기 report inventory, Markdown 누락 후보, report 생성 작업계획 진입 기준 |
+| [data/threshold_cycle/README.md](../data/threshold_cycle/README.md) | threshold collector/report/apply plan 운영방법과 금지선 |
 | [workorder-shadow-canary-runtime-classification.md](./workorder-shadow-canary-runtime-classification.md) | shadow/canary/historical 분류와 코드베이스 정렬 기준 |
 | [archive/closed-observation-axes-2026-05-01.md](./archive/closed-observation-axes-2026-05-01.md) | 종료된 관찰축 archive |
 | [archive/](./archive/) | 폐기 과제, 과거 workorder, legacy shadow/fallback 경과 |

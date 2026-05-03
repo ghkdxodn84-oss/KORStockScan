@@ -352,6 +352,31 @@ def test_analyze_target_shadow_prompt_uses_shadow_prompt_type(monkeypatch):
     assert result["cache_hit"] is False
 
 
+def test_analyze_target_shadow_prompt_skips_when_engine_disabled(monkeypatch):
+    engine = _build_engine()
+    engine.ai_disabled = True
+    called = {"value": False}
+
+    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "packet")
+
+    def _fake_call(*args, **kwargs):
+        called["value"] = True
+        return {"action": "BUY", "score": 77, "reason": "should-not-call"}
+
+    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+
+    result = engine.analyze_target_shadow_prompt(
+        "테스트",
+        {"curr": 10000, "fluctuation": 2.1, "orderbook": {"asks": [], "bids": []}},
+        [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}],
+        [{"체결시간": "10:00:00", "현재가": 10000, "거래량": 100}],
+        strategy="SCALPING",
+    )
+
+    assert called["value"] is False
+    assert result["ai_result_source"] == "shadow_engine_disabled"
+
+
 def test_analyze_target_shadow_prompt_honors_prompt_override(monkeypatch):
     engine = _build_engine()
     used_prompt = {"value": None}
@@ -376,6 +401,62 @@ def test_analyze_target_shadow_prompt_honors_prompt_override(monkeypatch):
     )
 
     assert used_prompt["value"] == SCALPING_BUY_RECOVERY_CANARY_PROMPT
+
+
+def test_tier2_surfaces_do_not_advance_analyze_target_cooldown(monkeypatch):
+    engine = _build_engine()
+    engine.last_call_time = 1234.5
+
+    def _fake_call(*args, **kwargs):
+        schema_name = kwargs.get("schema_name")
+        if schema_name == "entry_price_v1":
+            return {
+                "action": "USE_REFERENCE",
+                "order_price": 10000,
+                "confidence": 80,
+                "reason": "price ok",
+                "max_wait_sec": 10,
+            }
+        if schema_name == "holding_exit_flow_v1":
+            return {
+                "action": "HOLD",
+                "score": 70,
+                "flow_state": "흡수",
+                "thesis": "flow ok",
+                "evidence": ["buy pressure"],
+                "reason": "hold",
+                "next_review_sec": 45,
+            }
+        if schema_name == "overnight_v1":
+            return {"action": "SELL_TODAY", "confidence": 60, "reason": "risk", "risk_note": "test"}
+        return {"action": "WAIT", "score": 50, "reason": "unexpected"}
+
+    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+
+    engine.evaluate_scalping_entry_price(
+        "테스트",
+        "005930",
+        {"curr": 10000},
+        [{"price": 10000, "volume": 10}],
+        [{"close": 10000}],
+        {"resolved_order_price": 9900},
+    )
+    engine.evaluate_scalping_holding_flow(
+        "테스트",
+        "005930",
+        {"curr": 10000, "v_pw": 130, "buy_ratio": 60},
+        [{"price": 10000, "volume": 10, "side": "BUY"}],
+        [{"close": 10000, "high": 10020, "low": 9980, "volume": 1200}],
+        {"profit_rate": 0.2, "peak_profit": 0.5, "held_sec": 80, "current_ai_score": 50},
+    )
+    engine.evaluate_scalping_overnight_decision(
+        "테스트",
+        "005930",
+        {"curr_price": 10000, "avg_price": 9900, "pnl_pct": 0.7},
+    )
+
+    assert engine.last_call_time == 1234.5
+    assert engine.consecutive_failures == 0
 
 
 def test_analyze_target_routes_scalping_and_swing_to_expected_tiers(monkeypatch):
