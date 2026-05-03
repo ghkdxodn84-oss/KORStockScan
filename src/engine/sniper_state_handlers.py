@@ -6747,6 +6747,11 @@ def can_consider_scale_in(
     if last_add > 0 and (time.time() - last_add) < cooldown_sec:
         return {"allowed": False, "reason": "scale_in_cooldown"}
 
+    cancel_cooldown_sec = _rule_int('SCALE_IN_CANCEL_COOLDOWN_SEC', 120)
+    last_add_cancel = float(stock.get('last_add_cancel_at', 0) or 0)
+    if last_add_cancel > 0 and (time.time() - last_add_cancel) < cancel_cooldown_sec:
+        return {"allowed": False, "reason": "scale_in_cancel_cooldown"}
+
     # 매수 주문이 이미 진행 중인 경우
     if (
         stock.get('pending_add_order')
@@ -6890,6 +6895,7 @@ def _cancel_or_reconcile_pending_add(stock, reason):
 
     res = kiwoom_orders.send_cancel_order(code=code, orig_ord_no=ord_no, token=KIWOOM_TOKEN, qty=0)
     if _is_ok_response(res):
+        now_ts = time.time()
         record_add_history_event(
             DB,
             recommendation_id=stock.get('id'),
@@ -6905,6 +6911,15 @@ def _cancel_or_reconcile_pending_add(stock, reason):
             add_count_after=stock.get('add_count', 0),
             reason=reason,
             note='pending add order cancelled before release',
+        )
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                'last_add_cancel_at': now_ts,
+                'last_add_cancel_reason': reason,
+                'last_add_cancel_type': stock.get('pending_add_type'),
+                'last_add_cancel_ord_no': ord_no,
+            },
         )
         _clear_pending_add_meta(stock, reason=reason)
         return {"cleared": True, "reason": f"{reason}_cancelled"}

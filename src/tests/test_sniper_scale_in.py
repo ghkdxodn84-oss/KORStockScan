@@ -848,6 +848,20 @@ def test_timeout_pending_add_attempts_cancel_before_clear(monkeypatch):
     assert result["reason"] == "pending_add_timeout_released"
     assert len(cancel_calls) == 1
     assert stock.get("pending_add_order") is None
+    assert stock["last_add_cancel_at"] == 100.0
+    assert stock["last_add_cancel_reason"] == "timeout"
+
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 101.0)
+    result = state_handlers.can_consider_scale_in(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10000},
+        strategy="SCALPING",
+        market_regime="BULL",
+    )
+
+    assert result["allowed"] is False
+    assert result["reason"] == "scale_in_cancel_cooldown"
 
 
 def test_missing_pending_ordno_locks_scale_in(monkeypatch):

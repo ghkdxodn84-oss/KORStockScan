@@ -48,6 +48,7 @@ class TradingConfig:
     SCALE_IN_FAIL_CLOSED_ON_PROTECTION_ERROR: bool = True  # 보호선 재설정 실패 시 fail-closed
     MAX_POSITION_PCT: float = 0.20  # 남은 리스크 예산 우선
     SCALE_IN_COOLDOWN_SEC: int = 180  # 추가매수 재시도 쿨다운
+    SCALE_IN_CANCEL_COOLDOWN_SEC: int = 120  # 미체결 추가매수 취소 후 재접수 쿨다운
     ADD_JUDGMENT_LOCK_SEC: int = 20  # 추가매수 판단 락(스팸 판단 방지)
     SCALP_PYRAMID_POST_ADD_TRAILING_GRACE_SEC: int = 180  # 불타기 체결 직후 trailing 조기청산 억제
     STAT_ACTION_DECISION_SNAPSHOT_ENABLED: bool = True  # 행동가중치용 HOLDING decision snapshot observe-only
