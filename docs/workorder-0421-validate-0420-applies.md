@@ -7,8 +7,8 @@
 
 참조 우선순위:
 1. [2026-04-20-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-20-stage2-todo-checklist.md)
-2. [2026-04-20-postclose-audit-result-report.md](/home/ubuntu/KORStockScan/docs/2026-04-20-postclose-audit-result-report.md)
-3. [2026-04-20-operator-response.md](/home/ubuntu/KORStockScan/docs/2026-04-20-operator-response.md)
+2. [2026-04-20-postclose-audit-result-report.md](/home/ubuntu/KORStockScan/docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-20-postclose-audit-result-report.md)
+3. [2026-04-20-operator-response.md](/home/ubuntu/KORStockScan/docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-20-operator-response.md)
 4. [plan-korStockScanPerformanceOptimization.performance-report.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.performance-report.md)
 
 ---

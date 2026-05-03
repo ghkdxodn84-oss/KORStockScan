@@ -16,7 +16,7 @@
 
 - `src/engine/sniper_state_handlers.py`의 현재 HOLDING 경로는 여전히 `BUY/WAIT/DROP` 기반 score 평활화 중심이며, `FORCE_EXIT` 제한형 hybrid 관찰에 필요한 `holding_action_applied`, `holding_force_exit_triggered`, `holding_override_rule_version` 로그 축이 확인되지 않는다.
 - `src/engine/sniper_state_handlers.py`에는 `DROP`을 사실상 exit placeholder로 다루는 주석과 로직이 남아 있어, 문서상 `FORCE_EXIT` 제한형 MVP와 코드 관찰축이 아직 일치하지 않는다.
-- `docs/2026-04-18-nextweek-validation-axis-table-audited.md`는 HOLDING schema 변경 직후 성과 판정을 금지하고 `D+2` 버퍼를 권고한다. 휴일인 `2026-04-19`에는 추가 실표본이 없어 확대 여부를 닫을 수 없다.
+- `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-18-nextweek-validation-axis-table-audited.md`는 HOLDING schema 변경 직후 성과 판정을 금지하고 `D+2` 버퍼를 권고한다. 휴일인 `2026-04-19`에는 추가 실표본이 없어 확대 여부를 닫을 수 없다.
 
 ### 다음 액션
 
@@ -91,4 +91,4 @@ PYTHONPATH=. .venv/bin/python -m py_compile src/engine/scalping_feature_packet.p
 - [2026-04-19-stage2-todo-checklist.md](./2026-04-19-stage2-todo-checklist.md)
 - [2026-04-20-stage2-todo-checklist.md](./2026-04-20-stage2-todo-checklist.md)
 - [2026-04-22-stage2-todo-checklist.md](./2026-04-22-stage2-todo-checklist.md)
-- [2026-04-18-nextweek-validation-axis-table-audited.md](./2026-04-18-nextweek-validation-axis-table-audited.md)
+- [2026-04-18-nextweek-validation-axis-table-audited.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-18-nextweek-validation-axis-table-audited.md)

@@ -3,7 +3,7 @@
 기준 시각: `2026-04-20 KST`  
 기준 데이터 baseline: `2026-04-17` 고밀도 표본일 + DB 우선 스냅샷 + 장후 문서
 
-> 현재 활성 실행 기준은 [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)와 [2026-04-21-plan-rebase-auditor-report.md](./2026-04-21-plan-rebase-auditor-report.md)를 따른다.
+> 현재 활성 실행 기준은 [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)와 [2026-04-21-plan-rebase-auditor-report.md](/home/ubuntu/KORStockScan/docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-21-plan-rebase-auditor-report.md)를 따른다.
 > 본 문서의 `entry_filter` 표기는 감사인 원문 표현이며, 현재 실행명은 `entry_filter_quality`다.
 
 > `2026-04-21 Plan Rebase`:
@@ -12,7 +12,7 @@
 > AI 엔진 A/B 테스트는 `entry_filter` canary 1차 판정 완료 후 재개 여부를 별도 판정하며, 최대 기한은 `2026-04-24 POSTCLOSE`다. Plan Rebase 기간의 live 스캘핑 AI 라우팅은 Gemini로 고정하고 OpenAI dual-persona shadow도 비활성화한다.
 
 이 문서는 장후/주간 반복 성과판정에 쓰는 기준 문서다.  
-일회성 진단은 [2026-04-17-midterm-tuning-performance-report.md](./2026-04-17-midterm-tuning-performance-report.md), 기본계획 대비 실행 변경은 [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)에서 본다.
+일회성 진단은 [2026-04-17-midterm-tuning-performance-report.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-midterm-tuning-performance-report.md), 기본계획 대비 실행 변경은 [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)에서 본다.
 
 ## 1. 판정
 
@@ -307,6 +307,6 @@
 
 ## 참고 문서
 
-- [2026-04-17-midterm-tuning-performance-report.md](./2026-04-17-midterm-tuning-performance-report.md)
+- [2026-04-17-midterm-tuning-performance-report.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-midterm-tuning-performance-report.md)
 - [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)
-- [2026-04-18-nextweek-validation-axis-table-audited.md](./2026-04-18-nextweek-validation-axis-table-audited.md)
+- [2026-04-18-nextweek-validation-axis-table-audited.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-18-nextweek-validation-axis-table-audited.md)

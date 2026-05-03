@@ -51,7 +51,7 @@
 ## 장중 체크리스트 (10:40~11:20)
 
 - [x] `[BuySignal0423] 오전 BUY sufficiency checkpoint` (`Due: 2026-04-23`, `Slot: INTRADAY`, `TimeWindow: 10:40~10:50`, `Track: ScalpingLogic`) (`실행: 2026-04-23 11:03 KST`)
-  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [2026-04-22-auditor-performance-result-report.md](/home/ubuntu/KORStockScan/docs/2026-04-22-auditor-performance-result-report.md)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [2026-04-22-auditor-performance-result-report.md](/home/ubuntu/KORStockScan/docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-22-auditor-performance-result-report.md)
   - 판정 기준: `09:00~10:40 KST main-only` 기준 `primary_buy(ai_confirmed action=BUY)`, `recovered_buy(buy_recovery_canary promoted=true)`, `entry_armed`, `submitted_orders`, `WAIT65~79 recovery_check/promoted`, `blocked_ai_score_share` 또는 동등 blocker 분포를 보고 `BUY 충분 / BUY 부족 / BUY는 충분하나 entry_armed 이후 병목` 중 하나로 닫는다.
   - 실행 메모: 이 항목은 `intraday_light` snapshot을 자동 생성하지 않는다. raw log만으로 우선 판정 가능하되, 근거 파일을 남기거나 raw log가 부족하면 `deploy/run_monitor_snapshot_midcheck_safe.sh 2026-04-23`을 즉시 수동 실행해 `trade_review`, `performance_tuning`, `wait6579_ev_cohort`를 함께 사용한다. 직접 CLI는 timeout 보호가 없으므로 장중 수동 점검에서는 쓰지 않는다. snapshot 근거를 남길 때는 `max_date_basis=2026-04-23`, `evidence_cutoff=10:40 KST`, `trend_max_dates=MONITOR_SNAPSHOT_INTRADAY_TREND_MAX_DATES 또는 기본값`을 같이 기록한다.
   - why 기준: BUY 신호 자체가 계속 부재하면 `entry_filter_quality`, `AI threshold`, HOLDING, EOD/NXT 모든 후속축이 표본 부족으로 밀린다. 반대로 `recovered_buy/entry_armed`가 충분한데 `submitted_orders`가 낮으면 BUY 회복축을 유지관찰로 닫지 말고 `entry_armed -> submitted` 병목을 같은 장중에 즉시 연다.
@@ -148,7 +148,7 @@
   - 재점검 (`2026-04-23 14:15 KST`): `12:00~14:00` latency block 1882건 중 `latency_canary_reason`은 `spread_only_required=964`, `low_signal=842`, `quote_stale=65`, `missing=11`이며 `fresh spread-only` 964건의 `ai_score>=85` 표본은 0건이다. 즉 코드는 이미 `min_signal/tag/spread_only/quote_stale`로 분해해서 보고 있으며, 지금 가능한 판정은 `min_signal 완화 또는 전역 spread 완화 즉시 적용 금지`다.
   - 다음 액션: 장후 항목에서 `spread relief 유지/롤백/조건 재설계`를 닫는다. 그 전까지는 전역 spread 완화, fallback 재개, 다축 동시 ON은 금지한다.
 - [x] `[PlanSync0423] Project 중복 생성 방지 로직 반영` (`Due: 2026-04-23`, `Slot: INTRADAY`, `TimeWindow: 13:40~13:55`, `Track: Plan`) (`실행: 2026-04-23 13:40 KST`)
-  - Source: [sync_docs_backlog_to_project.py](/home/ubuntu/KORStockScan/src/engine/sync_docs_backlog_to_project.py), [sync_docs_backlog_to_project.yml](/home/ubuntu/KORStockScan/.github/workflows/sync_docs_backlog_to_project.yml), [2026-04-11-github-project-google-calendar-setup.md](/home/ubuntu/KORStockScan/docs/2026-04-11-github-project-google-calendar-setup.md)
+  - Source: [sync_docs_backlog_to_project.py](/home/ubuntu/KORStockScan/src/engine/sync_docs_backlog_to_project.py), [sync_docs_backlog_to_project.yml](/home/ubuntu/KORStockScan/.github/workflows/sync_docs_backlog_to_project.yml), [2026-04-11-github-project-google-calendar-setup.md](/home/ubuntu/KORStockScan/docs/archive/reference-and-runbooks/2026-04-11-github-project-google-calendar-setup.md)
   - 판정 기준: 같은 자동관리 제목의 Project 항목이 2건 이상이면 1건만 유지하고 나머지를 삭제하는 로직과, GitHub Actions 동시 실행 방지 concurrency를 반영한다.
   - 판정: 완료. 중복 정리 로직과 Actions concurrency를 코드/운영문서에 반영했다.
   - why: 04-23 장후 체크리스트 자체에는 `[OpsEODSplit0423]` 항목이 1건만 있으므로, 예시 중복은 문서 중복이 아니라 Project upsert/실행 중복 문제다. 생성 단계와 실행 단계 양쪽에 가드를 둬야 같은 항목이 다시 Todo 2건으로 보이는 왜곡을 줄일 수 있다.

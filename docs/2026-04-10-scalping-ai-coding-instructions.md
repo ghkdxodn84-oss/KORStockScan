@@ -1,5 +1,16 @@
 # 스캘핑 AI 코딩 작업지시서
 
+> 상태: `historical seed / parser compatibility doc`
+>
+> 현재 source of truth는 [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)와 날짜별 `stage2 checklist`다. 이 문서는 최초 튜닝 시작 지시를 보존하는 용도이며, 현재 active backlog를 직접 소유하지 않는다.
+>
+> `2026-05-03 KST` 기준 이관 요약:
+> - `Phase 0~1`: 대부분 구현 또는 현재 리포트/관찰축에 흡수됨
+> - `Phase 2`: `원격 선행` 전제와 충돌하므로 현재 Plan Rebase active owner로 채택하지 않음
+> - `Phase 3-1`: `missed_entry_counterfactual` 관찰축과 `counterfactual 손익 미합산` 원칙으로 부분 채택. 단, 원문의 `optimistic/realistic/conservative` 3모드는 아직 미구현
+> - `Phase 3-2`: `exit_decision_source` provenance는 현재 rebase/checklist owner가 비어 있어 follow-up이 필요함
+> - 후속 owner: [2026-05-08-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-08-stage2-todo-checklist.md) `Phase3Quality0508`
+
 ## 목적
 
 - 이번 작업의 목적은 `청산 전면 개편`이 아니다.
@@ -83,7 +94,7 @@
   - `quote_stale=False latency_block` 표본만 바로 필터링 가능
   - 일별로 `why DANGER` 분포를 볼 수 있음
 
-#### 0-1b. 원격 경량 프로파일링
+#### Legacy 0-1b. 원격 경량 프로파일링
 
 - 대상:
   - `songstockscan` only
@@ -210,7 +221,7 @@
 
 ### Phase 2. 원격 전용 로직 변경
 
-#### 2-1. EV-aware latency degrade
+#### Legacy 2-1. EV-aware latency degrade
 
 - 수정 파일:
   - `src/engine/sniper_entry_latency.py`
@@ -233,7 +244,7 @@
 - 완료 기준:
   - 원격에서 `budget_pass -> submitted` 전환율이 개선되고, slippage 악화가 허용 범위 내임
 
-#### 2-2. dynamic strength selective override
+#### Legacy 2-2. dynamic strength selective override
 
 - 선행 조건:
   - `AI overlap audit` 완료
@@ -251,7 +262,7 @@
 
 ### Phase 3. 분석 품질 고도화
 
-#### 3-1. realistic/conservative counterfactual 추가
+#### Legacy 3-1. realistic/conservative counterfactual 추가
 
 - 수정 파일:
   - `src/engine/sniper_missed_entry_counterfactual.py`
@@ -270,7 +281,7 @@
 - 완료 기준:
   - latency 완화 효과를 낙관/현실/보수 3계층으로 비교 가능
 
-#### 3-2. exit authority 명문화
+#### Legacy 3-2. exit authority 명문화
 
 - 수정 파일:
   - `src/engine/sniper_state_handlers.py`

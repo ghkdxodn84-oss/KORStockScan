@@ -149,5 +149,5 @@
 - [2026-04-17-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-17-stage2-todo-checklist.md)
 - [2026-04-16-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-16-stage2-todo-checklist.md)
 - [2026-04-16-budget-pass-submitted-bottleneck-analysis.md](/home/ubuntu/KORStockScan/docs/2026-04-16-budget-pass-submitted-bottleneck-analysis.md)
-- [2026-04-16-holding-profit-conversion-plan.md](/home/ubuntu/KORStockScan/docs/2026-04-16-holding-profit-conversion-plan.md)
+- [2026-04-16-holding-profit-conversion-plan.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-16-holding-profit-conversion-plan.md)
 - [2026-04-17-model-ab-test-scenario-draft.md](/home/ubuntu/KORStockScan/docs/2026-04-17-model-ab-test-scenario-draft.md)

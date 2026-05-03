@@ -15,7 +15,7 @@
 
 - [x] `[VisibleResult0420] split-entry rebase 수량 정합성 shadow 1일차 판정` (`Due: 2026-04-20`, `Slot: PREOPEN`, `TimeWindow: 08:00~08:10`, `Track: ScalpingLogic`) (`실행: 2026-04-20 08:33 KST`)
   - 판정: `승인(단독 shadow 유지)`. `2026-04-20` split-entry 활성 축은 `rebase`만 유지하고, 즉시 재평가/쿨다운은 예정대로 뒤 날짜로 이관.
-  - 근거: [2026-04-18-nextweek-validation-axis-table-audited.md](/home/ubuntu/KORStockScan/docs/2026-04-18-nextweek-validation-axis-table-audited.md) 권고대로 3축 동시가동 금지. 오늘 [performance_tuning_2026-04-20.json](/home/ubuntu/KORStockScan/data/report/monitor_snapshots/performance_tuning_2026-04-20.json) 기준 `position_rebased_after_fill_events=0`, `order_bundle_submitted_events=0`.
+  - 근거: [2026-04-18-nextweek-validation-axis-table-audited.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-18-nextweek-validation-axis-table-audited.md) 권고대로 3축 동시가동 금지. 오늘 [performance_tuning_2026-04-20.json](/home/ubuntu/KORStockScan/data/report/monitor_snapshots/performance_tuning_2026-04-20.json) 기준 `position_rebased_after_fill_events=0`, `order_bundle_submitted_events=0`.
   - 다음 액션: 장후에는 `split_entry_rebase_integrity_shadow` 누적 결과와 `position_rebased_after_fill_events`를 다시 확인해 `2026-04-21` 승격/보류 기준선으로 사용.
 - [x] `[AuditFollowup0418] remote runtime 코드 적재 상태 점검(작업9 반영분)` (`Due: 2026-04-20`, `Slot: PREOPEN`, `TimeWindow: 08:00~08:05`, `Track: AIPrompt`) (`실행: 2026-04-20 08:33 KST`)
   - 판정: `완료`. 원격 runtime 적재와 Gemini 경로 유지 확인.
@@ -23,11 +23,11 @@
   - 다음 액션: A/B preflight 전까지 runtime 차이를 추가로 열지 않고 원격은 Gemini 기준선 유지.
 - [x] `[AuditFix0420] split-entry 즉시 재평가 shadow D+1 이관 확정` (`Due: 2026-04-20`, `Slot: PREOPEN`, `TimeWindow: 08:10~08:15`, `Track: ScalpingLogic`) (`실행: 2026-04-20 08:33 KST`)
   - 판정: `이관 확정`. 오늘은 미활성 유지, earliest start는 `2026-04-21 POSTCLOSE` 판정 이후.
-  - 근거: [2026-04-18-nextweek-validation-axis-table-audited.md](/home/ubuntu/KORStockScan/docs/2026-04-18-nextweek-validation-axis-table-audited.md) 에서 D+1 이관 권고. [2026-04-17-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-stage2-todo-checklist.md) 에는 `partial_then_expand|multi_rebase`, `90초` 설계만 확정.
+  - 근거: [2026-04-18-nextweek-validation-axis-table-audited.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-18-nextweek-validation-axis-table-audited.md) 에서 D+1 이관 권고. [2026-04-17-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-stage2-todo-checklist.md) 에는 `partial_then_expand|multi_rebase`, `90초` 설계만 확정.
   - 다음 액션: `2026-04-21` 체크리스트에서 `false_entry_rate` 상한과 `N_min/Δ_min` 충족 시에만 shadow 착수.
 - [x] `[AuditFix0420] same-symbol split-entry cooldown shadow D+2 이관 확정` (`Due: 2026-04-20`, `Slot: PREOPEN`, `TimeWindow: 08:15~08:20`, `Track: ScalpingLogic`) (`실행: 2026-04-20 08:33 KST`)
   - 판정: `이관 확정`. `D+2` 이후만 허용.
-  - 근거: [2026-04-17-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-stage2-todo-checklist.md) 에서 `same_symbol_soft_stop_cooldown_shadow` 20분 후보 고정, [2026-04-18-nextweek-validation-axis-table-audited.md](/home/ubuntu/KORStockScan/docs/2026-04-18-nextweek-validation-axis-table-audited.md) 에서 D+2 권고.
+  - 근거: [2026-04-17-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-stage2-todo-checklist.md) 에서 `same_symbol_soft_stop_cooldown_shadow` 20분 후보 고정, [2026-04-18-nextweek-validation-axis-table-audited.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-18-nextweek-validation-axis-table-audited.md) 에서 D+2 권고.
   - 다음 액션: `2026-04-22` 체크리스트에서 `rebase/즉시 재평가`와 독립 관찰 가능 여부를 확인한 뒤 최종 착수 판정.
 - [x] `[AuditFix0420] 각 판정행 N_min/Δ_min/PrimaryMetric 확정` (`Due: 2026-04-20`, `Slot: PREOPEN`, `TimeWindow: 08:20~08:30`, `Track: Plan`) (`실행: 2026-04-20 08:33 KST`)
   - 판정: `확정`. `N_min=50`, `Δ_min=+3.0%p`, `PrimaryMetric=budget_pass_to_submitted_rate`.
@@ -51,7 +51,7 @@
   - 다음 액션: `2026-04-20 POSTCLOSE`에는 baseline/관측 lock만 수행하고, 확대 여부는 `2026-04-22`까지 보류.
 - [x] `[VisibleResult0420] live 승격 후보는 split-entry leakage 1축만 유지 확인` (`Due: 2026-04-20`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: Plan`) (`실행: 2026-04-20 08:33 KST`)
   - 판정: `확정`. live 승격 후보는 계속 `split-entry leakage` 1축만 유지.
-  - 근거: [2026-04-17-midterm-tuning-performance-report.md](/home/ubuntu/KORStockScan/docs/2026-04-17-midterm-tuning-performance-report.md) 와 현재 체크리스트 모두 다음 live 변경을 `split-entry leakage` 우선으로 고정. `HOLDING`은 shadow-only + D+2 판정 축.
+  - 근거: [2026-04-17-midterm-tuning-performance-report.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-midterm-tuning-performance-report.md) 와 현재 체크리스트 모두 다음 live 변경을 `split-entry leakage` 우선으로 고정. `HOLDING`은 shadow-only + D+2 판정 축.
   - 다음 액션: 다음 live 변경도 `split-entry leakage` 단일축 canary부터 시작.
 - [x] `[OpsGuard0420] 장전 run_monitor_snapshot full build 보호가드 적용` (`Due: 2026-04-20`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:55`, `Track: Plan`) (`실행: 2026-04-20 08:47 KST`)
   - 판정: `완료`. 장전 시간대 `bot_main` 동작 중 full build 차단 + 실행락 적용.
@@ -185,7 +185,7 @@
 - [2026-04-19-stage2-todo-checklist.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-19-stage2-todo-checklist.md)
 - [2026-04-19-aiprompt-task8-task10-holiday-recheck.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-19-aiprompt-task8-task10-holiday-recheck.md)
 - [2026-04-17-stage2-todo-checklist.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-stage2-todo-checklist.md)
-- [2026-04-17-midterm-tuning-performance-report.md](./2026-04-17-midterm-tuning-performance-report.md)
+- [2026-04-17-midterm-tuning-performance-report.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-midterm-tuning-performance-report.md)
 - [2026-04-11-scalping-ai-prompt-coding-instructions.md](./2026-04-11-scalping-ai-prompt-coding-instructions.md)
 - [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)
 - [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)

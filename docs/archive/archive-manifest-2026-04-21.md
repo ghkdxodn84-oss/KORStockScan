@@ -3,19 +3,19 @@
 ## Active Root Docs Kept
 
 - `docs/2026-04-10-scalping-ai-coding-instructions.md`
-- `docs/2026-04-11-github-project-google-calendar-setup.md`
+- `docs/archive/reference-and-runbooks/2026-04-11-github-project-google-calendar-setup.md`
 - `docs/2026-04-11-scalping-ai-prompt-coding-instructions.md`
-- `docs/2026-04-16-holding-profit-conversion-plan.md`
-- `docs/2026-04-17-midterm-tuning-performance-report.md`
-- `docs/2026-04-18-nextweek-validation-axis-table-audited.md`
-- `docs/2026-04-20-auditor-third-review.md`
-- `docs/2026-04-20-operator-response.md`
-- `docs/2026-04-20-postclose-audit-result-report.md`
+- `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-16-holding-profit-conversion-plan.md`
+- `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-midterm-tuning-performance-report.md`
+- `docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-18-nextweek-validation-axis-table-audited.md`
+- `docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-20-auditor-third-review.md`
+- `docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-20-operator-response.md`
+- `docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-20-postclose-audit-result-report.md`
 - `docs/2026-04-20-stage2-todo-checklist.md`
-- `docs/2026-04-21-auditor-performance-result-report.md`
-- `docs/2026-04-21-plan-rebase-auditor-report.md`
+- `docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-21-auditor-performance-result-report.md`
+- `docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-21-plan-rebase-auditor-report.md`
 - `docs/2026-04-21-stage2-todo-checklist.md`
-- `docs/2026-04-22-ai-generated-code-governance.md`
+- `docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-22-ai-generated-code-governance.md`
 - `docs/2026-04-22-stage2-todo-checklist.md`
 - `docs/2026-04-23-stage2-todo-checklist.md`
 - `docs/2026-04-24-stage2-todo-checklist.md`

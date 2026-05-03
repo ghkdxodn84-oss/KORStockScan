@@ -376,7 +376,7 @@
   - 다음 액션: `덕산하이메탈`은 `soft stop NEUTRAL + reentry escalation` 중첩 anchor case로 유지하고, `soft_stop` 품질과 `재진입가 상승` 축을 분리해 계속 본다.
 
 - [x] `[WorkorderIntradayRefresh0429] 14시 신규 INTRADAY 항목 일일작업지시서 누락 원인분리 및 스케줄 보강` (`Due: 2026-04-29`, `Slot: POSTCLOSE`, `TimeWindow: 19:30~19:40`, `Track: Plan`)
-  - Source: [2026-04-29-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-29-stage2-todo-checklist.md), [2026-04-11-github-project-google-calendar-setup.md](/home/ubuntu/KORStockScan/docs/2026-04-11-github-project-google-calendar-setup.md)
+  - Source: [2026-04-29-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-29-stage2-todo-checklist.md), [2026-04-11-github-project-google-calendar-setup.md](/home/ubuntu/KORStockScan/docs/archive/reference-and-runbooks/2026-04-11-github-project-google-calendar-setup.md)
   - 판정 기준: `MechanicalMomentumLatencyRelief0429-1400`가 `sync_docs_backlog_to_project --print-backlog-only`에는 잡히는데 일일작업지시서에는 누락된 원인이 `Project sync 실패`인지, `workorder 재생성 시각/슬롯 정책`인지 분리한다.
   - 실행 메모 (`2026-04-29`): parser 출력에는 `MechanicalMomentumLatencyRelief0429-1400`가 정상 포함됐다. 추가로 사용자 운영 기준상 Project 동기화 직후마다 `Build Codex Daily Workorder`를 `workflow_dispatch(slot=ALL, target_date=오늘)`로 수동 실행하고 있었는데, 이 경과가 기존 설명에 누락돼 있었다. 따라서 이전 설명의 `자동 13:00 이후 재생성 창 부재`는 부분 설명에 그친다.
   - 판정 결과: `완료 / parser sync 정상, 자동 스케줄 보강 완료, manual ALL 누락 경로 별도 메모`

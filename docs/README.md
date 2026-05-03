@@ -1,29 +1,82 @@
-# KORStockScan Docs Index
+# KORStockScan 문서 구조
 
-## Active Tuning Docs
+작성 기준: 2026-05-03 KST
 
-This directory root keeps only documents used for the current Plan Rebase tuning flow.
+이 디렉터리는 Plan Rebase 이후의 운영 의사결정, 날짜별 실행 체크리스트, 감리/리포트 증적을 관리한다. 현재 판단의 원본은 루트 문서와 날짜별 checklist이고, 과거 전환 증적은 `archive/`에 보존한다.
 
-- `plan-korStockScanPerformanceOptimization.prompt.md`: current operating prompt and document map.
-- `plan-korStockScanPerformanceOptimization.rebase.md`: central Plan Rebase decision axis, glossary, principles, pain points, tasks, schedule, and effects.
-- `plan-korStockScanPerformanceOptimization.execution-delta.md`: deltas from the original plan.
-- `plan-korStockScanPerformanceOptimization.performance-report.md`: recurring baseline and performance criteria.
-- `2026-04-21-stage2-todo-checklist.md`: Plan Rebase transition and main-only baseline lock.
-- `2026-04-22-stage2-todo-checklist.md` through `2026-04-24-stage2-todo-checklist.md`: active/future operating checklists.
-- `workorder-0421-*.md`: Plan Rebase supporting workorders, execution logs, and detailed evidence.
-- Personal operator note docs are intentionally excluded from this index and must not be referenced by other documents.
+## 먼저 볼 문서
 
-## Audit Reports
+- `plan-korStockScanPerformanceOptimization.rebase.md`: 현재 튜닝 원칙, active owner, live/observe/off 판정, rollback guard의 기준 문서.
+- `plan-korStockScanPerformanceOptimization.prompt.md`: 작업 시작 프롬프트와 문서 참조 순서.
+- `plan-korStockScanPerformanceOptimization.execution-delta.md`: 원 계획 대비 실행 차이와 보정 기록.
+- `plan-korStockScanPerformanceOptimization.performance-report.md`: Plan Rebase 성과 판정과 반복 성과 기준.
+- `stage2-todo-checklist-template.md`: 날짜별 checklist 작성 형식.
+- `2026-05-04-stage2-todo-checklist.md` 이후 날짜별 checklist: 실제 실행 작업항목의 소유 문서.
 
-Daily or ad-hoc auditor reports are kept under `audit-reports/`. The central Plan Rebase document may reference these reports, but it should only absorb stable corrective decisions, not the full daily report text.
+작업 시작 시에는 `plan-korStockScanPerformanceOptimization.rebase.md`의 상단 원칙과 당일 checklist의 `오늘 목적`, `오늘 강제 규칙`을 먼저 확인한다.
 
-- `audit-reports/2026-04-22-plan-rebase-central-audit-review.md`: central Plan Rebase structure/principle/schedule audit.
+## 현재 루트 유지 기준
+
+루트 `docs/`에는 아래 성격의 문서만 유지한다.
+
+- 현재 또는 미래 작업을 소유하는 날짜별 checklist.
+- Plan Rebase, prompt, execution delta, performance report처럼 반복 참조되는 기준 문서.
+- 현재 checklist 또는 Plan Rebase가 직접 참조하는 workorder, 코드리뷰, 운영 제안서.
+- 최근 감리 대응, acceptance spec, runtime owner 판정에 필요한 증적 문서.
+
+과거 판단 근거이지만 현재 작업항목을 직접 소유하지 않는 문서는 `archive/`로 이동한다. 이동 시 기존 링크는 새 위치로 보정하고 parser 검증을 수행한다.
+
+## 날짜별 Checklist
+
+- `2026-05-04-stage2-todo-checklist.md`부터 `2026-05-08-stage2-todo-checklist.md`: 현재 Plan Rebase 흐름의 장전/장중/장후 작업 소유 문서.
+- `2026-04-20-stage2-todo-checklist.md`부터 `2026-05-02-stage2-todo-checklist.md`: 과거 실행 증적. 현재 문서에서 직접 참조되는 동안 루트에 유지한다.
+- 완료된 checklist의 `[x]` 항목은 증적이며 현재 OPEN owner로 보지 않는다. 현재 owner는 Plan Rebase와 최신 checklist에서 확인한다.
+
+## Report/Threshold 운영문서
+
+- `../data/report/README.md`: 정기 생성 Markdown report, 입력 JSON/JSONL, 누락 report 후보의 기준.
+- `../data/threshold_cycle/README.md`: threshold cycle 산출물, manifest/report 운영 방법, live mutation 제한 기준.
+- report 또는 threshold 산출물 변경이 작업계획에 영향을 주면 Plan Rebase와 prompt 문서도 함께 현행화한다.
+
+## 감사/감리 문서
+
+- `audit-reports/`: OFI/QI, Plan Rebase, 운영 감리 대응처럼 현재 또는 최근 감리 결과를 보존한다.
+- 루트의 `2026-05-03-order-flow-imbalance-application-audit-report.md`는 OFI/QI 적용 현황의 기존 루트 증적이다.
+- 감리 지적이 실행 작업으로 전환되면 날짜별 checklist에 자동 파싱 가능한 `- [ ]` 항목으로 남긴다.
+
+## Workorder/Review 문서
+
+- `workorder-*.md`: 현재 또는 최근 checklist가 직접 참조하는 작업 지시, 실행 로그, 결과 문서.
+- `code-review-20260430-sniper-engine.md`, `sniper-codebase-performance-audit.md`, `kiwoom_sniper_v2_performance_review.md`, `scalping-scanner-improvement-proposal.md`: 현재 개선축에서 참조되는 코드리뷰/제안 증적.
+- 완료되어 후속 checklist와 Plan Rebase에서 직접 참조하지 않는 workorder는 `archive/legacy-workorders/`로 이동한다.
 
 ## Archive
 
-Documents not directly used for the current tuning flow are under `archive/`.
+- `archive/legacy-tuning-2026-04-06-to-2026-04-20/`: Plan Rebase 이전 튜닝, 감사, remote 비교, 실험 문서.
+- `archive/plan-rebase-transition-2026-04-20-to-2026-04-22/`: Plan Rebase 전환기의 감사/운영자 응답/거버넌스 증적.
+- `archive/legacy-workorders/`: 완료 또는 대체된 과거 workorder.
+- `archive/reference-and-runbooks/`: 과거 runbook, setup, API note, 일반 참조 문서.
+- `archive/archive-manifest-2026-04-21.md`, `archive/archive-manifest-2026-05-03.md`: 이동 이력.
 
-- `archive/legacy-tuning-2026-04-06-to-2026-04-20/`: historical dated tuning, audit, remote, and experiment documents.
-- `archive/legacy-workorders/`: completed or superseded workorders.
-- `archive/reference-and-runbooks/`: older runbooks, specs, API notes, and general references.
-- `archive/archive-manifest-2026-04-21.md`: exact move manifest.
+아카이브 문서는 감사 추적용이다. 현재 의사결정에는 루트 기준 문서와 최신 checklist를 우선한다.
+
+## 개인 문서
+
+- `personal-decision-flow-notes.md`
+- `personal-gemini-ai-prompt-usage-guide.md`
+
+개인 문서는 보조 메모로만 유지한다. checklist, report, Plan Rebase의 `Source` 또는 판정 근거 링크로 사용하지 않는다.
+
+## 문서 변경 후 검증
+
+문서 구조, checklist, Plan Rebase, prompt를 변경하면 parser 검증을 실행한다.
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500
+```
+
+Project/Calendar 동기화가 필요한 경우 사용자가 아래 표준 명령을 실행한다.
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
+```

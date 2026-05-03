@@ -261,7 +261,7 @@
 ## 참고 문서
 
 - [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)
-- [2026-04-16-holding-profit-conversion-plan.md](./2026-04-16-holding-profit-conversion-plan.md)
+- [2026-04-16-holding-profit-conversion-plan.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-16-holding-profit-conversion-plan.md)
 - [2026-04-16-profit-conversion-gap-analysis.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-16-profit-conversion-gap-analysis.md)
 - [2026-04-17-stage2-todo-checklist.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-stage2-todo-checklist.md)
 - [analysis/gemini_scalping_pattern_lab/outputs/final_review_report_for_lead_ai.md](../analysis/gemini_scalping_pattern_lab/outputs/final_review_report_for_lead_ai.md)

@@ -1,7 +1,7 @@
 # 2026-04-21 Plan Rebase 감사인 검토보고서
 
 > Deprecated as active plan: 이 문서는 1차 감사 검토 입력 기록이다.
-> 현재 실행 기준은 [2026-04-21-plan-rebase-auditor-report.md](/home/ubuntu/KORStockScan/docs/2026-04-21-plan-rebase-auditor-report.md)와 날짜별 stage2 checklist를 따른다.
+> 현재 실행 기준은 [2026-04-21-plan-rebase-auditor-report.md](/home/ubuntu/KORStockScan/docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-21-plan-rebase-auditor-report.md)와 날짜별 stage2 checklist를 따른다.
 > 본 문서의 `shadow/counterfactual` 지적 문구는 최종 반영 과정의 감사 의견으로만 읽고, 실행 계획으로 사용하지 않는다.
 
 검토일: `2026-04-21`

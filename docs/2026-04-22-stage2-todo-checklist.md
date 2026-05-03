@@ -35,7 +35,7 @@
   - 정정: 이 항목은 장전 시점 `보류 확정`이 아니라 `12:20 KST 최종 go/no-go 대기`다. 오전 반나절(`09:00~12:00`) 관찰만 허용하고, `12:20~12:30`에 반드시 `watching 특화`, `holding 특화`, `exit 특화`, `shared 제거` 중 1축 착수 또는 미착수를 확정한다.
   - 다음 액션: `12:00~12:20` 스냅샷에서 `ai_prompt_type`, `action_schema`, `ai_confirmed->submitted`, `full/partial` 분리 집계를 잠근 뒤, `12:20~12:30`에 프로파일별 특화 프롬프트 1축 canary go/no-go를 닫는다.
 - [x] `[LatencyPreflight0422] WAIT65~79 recheck/submitted 관측 경로 사전확인` (`Due: 2026-04-22`, `Slot: PREOPEN`, `TimeWindow: 08:30~08:40`, `Track: AIPrompt`) (`실행: 2026-04-22 07:27 KST`)
-  - Source: [2026-04-21-auditor-performance-result-report.md](/home/ubuntu/KORStockScan/docs/2026-04-21-auditor-performance-result-report.md)
+  - Source: [2026-04-21-auditor-performance-result-report.md](/home/ubuntu/KORStockScan/docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-21-auditor-performance-result-report.md)
   - 판정 기준: `wait6579_ev_cohort.preflight`에서 `behavior_change=none`, `observability_passed=true`, `recovery_check_candidates`, `recovery_promoted_candidates`, `probe_applied_candidates`, `budget_pass_candidates`, `latency_block_candidates`, `submitted_candidates`, `submission_blocker_breakdown`이 모두 산출되는지 확인한다. 장전에는 latency/AI threshold 파라미터를 추가 완화하지 않는다.
   - 감사인 응답 반영: `latency_block_reason_breakdown`에서 `latency_state_danger`와 `latency_fallback_disabled`를 분리 확인한다. 특히 `latency_fallback_disabled=7` 경로가 구조적 버그인지 먼저 판정하고, bugfix가 아니면 `[AIPrompt0422]` 1차 판정 전 행동 canary를 추가로 열지 않는다.
   - 판정: 관측 경로 통과, 행동 변경 없음. `2026-04-22` 파일은 장전 시점에 아직 없어 `total_candidates=0`이지만, 최신 실측 파일 `2026-04-21` 재실행 결과 preflight 필드는 모두 산출됐다.
@@ -136,7 +136,7 @@
   - why: 이 항목의 목적은 "현재 Project에 동일 제목 2건이 남아 있지 않음"을 보장하는 것이다. 사용자 확인으로 이미 정리 완료가 확정됐다면, 토큰 부재는 재확인 권한 문제일 뿐 실제 중복 상태를 다시 미완료로 되돌릴 근거는 아니다.
   - 실행 메모: 중복 후보 ID `PVTI_lAHOAXZuE84BUTcPzgqnVSQ`, `PVTI_lAHOAXZuE84BUTcPzgqnVSU`였고, 현재 문서 기준 유지/삭제 재판정은 종료한다.
 - [x] `[Governance0422] GPT 엔진 금지패턴 및 AI 생성 코드 체크게이트 문서 재확인` (`Due: 2026-04-22`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:20`, `Track: AIPrompt`) (`실행: 2026-04-22 16:16 KST`)
-  - Source: [2026-04-22-ai-generated-code-governance.md](/home/ubuntu/KORStockScan/docs/2026-04-22-ai-generated-code-governance.md)
+  - Source: [2026-04-22-ai-generated-code-governance.md](/home/ubuntu/KORStockScan/docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-22-ai-generated-code-governance.md)
   - 판정 기준: `fallback_scout/main`(탐색/본 주문 동시 fallback) 동시 다중 leg 금지, 의도-구현 일치, 단위테스트, 운영자 수동승인, `ai_generated/design_reviewed` 라벨링, rollback guard가 실제 변경/운영 로그에서 위반되지 않았는지 확인한다.
   - 판정: 재확인 완료. 금지패턴/체크게이트 기준과 오늘 장후 판정 항목이 충돌하지 않는다.
   - 근거: 오늘 실전판정은 `main-only buy_recovery_canary` 단일축 유지이며, fallback 재유입이나 shadow 재개 증거가 없다. 비교지표도 손익 파생보다 거래수/퍼널/blocker/체결 품질 우선 규칙을 유지했다.

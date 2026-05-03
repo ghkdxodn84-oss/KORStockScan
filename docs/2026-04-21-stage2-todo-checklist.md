@@ -20,7 +20,7 @@
 - [x] `[Governance0421] partial fill min_fill_ratio canary 승인 로그 고정 + 유지/롤백 조건 점검` (`Due: 2026-04-21`, `Slot: PREOPEN`, `TimeWindow: 08:10~08:20`, `Track: ScalpingLogic`) (`실행: 2026-04-21 07:59 KST`)
   - 판정 기준: `SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED=True` 사용자 승인 로그를 고정한다. 승인 상태를 전제로 유지/롤백 조건만 점검하고, 무승인 예외로 재분류하지 않는다.
   - 판정: 승인 로그 고정 완료, 유지. 무승인 예외 분류는 해제하고 유지/롤백 조건만 장후 성과로 본다.
-  - 근거: [2026-04-20-operator-response.md](/home/ubuntu/KORStockScan/docs/2026-04-20-operator-response.md:77)의 승인 증거와 재분류 기록, [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:147)의 `SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED=True`, [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:462)의 env rollback 경로 확인.
+  - 근거: [2026-04-20-operator-response.md](/home/ubuntu/KORStockScan/docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-20-operator-response.md:77)의 승인 증거와 재분류 기록, [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:147)의 `SCALP_PARTIAL_FILL_RATIO_GUARD_ENABLED=True`, [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:462)의 env rollback 경로 확인.
   - 다음 액션: 장후 `partial_fill_events`, `position_rebased_after_fill_events/partial_fill_events`, `partial_fill_completed_avg_profit_rate` 기준으로 유지/롤백 후보를 판정한다. 원격 반영 상태는 운영 로그/원격 설정 증거가 없으면 별도 원격 정합성 확인으로 분리한다.
 - [x] `[AuditFix0421] 테스트 카운트 불일치 재현 및 증적 기록` (`Due: 2026-04-21`, `Slot: PREOPEN`, `TimeWindow: 08:20~08:30`, `Track: Plan`) (`실행: 2026-04-21 07:59 KST`)
   - 판정 기준: 아래 4개 파일 pytest를 재실행해 `N passed`를 고정한다. 기존 `16 passed` 주장과 불일치하면 장후 보고에서 정정 근거를 함께 기록한다.
@@ -184,11 +184,11 @@
   - Source: [workorder-0421-validate-0420-applies.md](/home/ubuntu/KORStockScan/docs/workorder-0421-validate-0420-applies.md)
   - 판정 기준: 워크오더 지표를 전부 채우고 `canary 착수축 1개/보류축`을 분리해 `2026-04-22` 후속 액션을 같은 문서 세트에 기록한다.
   - 판정: 실행 완료. canary 착수축은 `main-only buy_recovery_canary`, 보류축은 `entry_filter_quality`, `AI engine A/B`, `프로파일별 특화 프롬프트 확대`다.
-  - 근거: `docs/2026-04-21-auditor-performance-result-report.md`에 8개 이상 지표와 D/E/F 상태, 04-22 후속 액션을 기록했다.
+  - 근거: `docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-21-auditor-performance-result-report.md`에 8개 이상 지표와 D/E/F 상태, 04-22 후속 액션을 기록했다.
 - [x] `[AuditorDelivery0421] 감사인 전달용 성과측정결과 및 분석보고서 생성` (`Due: 2026-04-21`, `Slot: POSTCLOSE`, `TimeWindow: 17:40~18:10`, `Track: Plan`) (`실행: 2026-04-21 15:24 KST, 최종갱신: 2026-04-21 15:37 KST`)
   - Source: [workorder-0421-auditor-performance-report.md](/home/ubuntu/KORStockScan/docs/workorder-0421-auditor-performance-report.md)
   - 판정 기준: 감사인 전달 문서 1건을 생성하고 지표 `8개 이상` + 미결 `D/E/F` 상태 + `2026-04-22` 후속 액션을 동일 보고에 명시한다.
-  - 판정: 완료. 산출물: [2026-04-21-auditor-performance-result-report.md](/home/ubuntu/KORStockScan/docs/2026-04-21-auditor-performance-result-report.md).
+  - 판정: 완료. 산출물: [2026-04-21-auditor-performance-result-report.md](/home/ubuntu/KORStockScan/docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-21-auditor-performance-result-report.md).
 - [x] `[OpsVerify0421] system metric sampler 장중 coverage 검증` (`Due: 2026-04-21`, `Slot: POSTCLOSE`, `TimeWindow: 18:10~18:20`, `Track: Plan`) (`실행: 2026-04-21 15:24 KST, 최종확인: 2026-04-21 15:37 KST`)
   - 판정 기준: `logs/system_metric_samples.jsonl`에서 `09:00~15:30 KST` 샘플 `>= 360`, 최대 샘플 간격 `<= 180초`, CPU/load/memory/io/top process 필드 누락 `0건`
   - 판정: 최종 통과. `09:00:01~15:30:01 KST` 샘플 `391건`, 평균 간격 `60.0초`, 최대 간격 `61초`, 필수 필드 누락 `0건`.
@@ -202,7 +202,7 @@
   - 판정: 오늘 실행 대상 Project 항목은 이관 완료. 실제 판정은 `2026-04-24` 체크리스트에 별도 항목으로 유지한다.
 - [x] `[Governance0422] GPT 엔진 금지패턴 및 AI 생성 코드 체크게이트 문서화` (`Due: 2026-04-22`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:20`, `Track: AIPrompt`) (`실행: 2026-04-21 15:24 KST, 문서화 선행 완료`)
   - 판정 기준: `fallback_scout/main` 동시 다중 leg 패턴 금지, AI 생성 코드의 의도-구현 일치/단위테스트/운영자 수동승인 체크게이트, `ai_generated/design_reviewed` 라벨링 규칙을 문서화한다.
-  - 판정: 문서화 완료. 산출물: [2026-04-22-ai-generated-code-governance.md](/home/ubuntu/KORStockScan/docs/2026-04-22-ai-generated-code-governance.md).
+  - 판정: 문서화 완료. 산출물: [2026-04-22-ai-generated-code-governance.md](/home/ubuntu/KORStockScan/docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-22-ai-generated-code-governance.md).
 - [x] `[AIPrompt0422] Gemini BUY recovery canary 1일차 판정` (`Due: 2026-04-22`, `Slot: INTRADAY`, `TimeWindow: 12:00~12:20`, `Track: AIPrompt`) (`실행: 2026-04-21 15:24 KST, Project stale due 이관`)
   - 판정 기준: `2026-04-22` 오전 구간까지만 표본을 수집하고, `12:00` 이후 생성된 스냅샷 시점을 판정 고정 시점으로 사용한다. `ai_confirmed_buy_count/share`, `WAIT 65/70/75~79`, `blocked_ai_score`, `ai_confirmed -> submitted`, `missed_winner_rate`, `full fill / partial fill`을 main-only로 판정하고 유지/롤백/재교정 사유를 기록한다.
   - 판정: 오늘 Project due 정리/이관 완료. 실제 1일차 판정은 04-22 12:00 이후 데이터가 필요하므로 04-22 체크리스트에 동일 제목으로 유지한다.
@@ -210,7 +210,7 @@
 ## 참고 문서
 
 - [2026-04-19-stage2-todo-checklist.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-19-stage2-todo-checklist.md)
-- [2026-04-17-midterm-tuning-performance-report.md](./2026-04-17-midterm-tuning-performance-report.md)
+- [2026-04-17-midterm-tuning-performance-report.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-midterm-tuning-performance-report.md)
 - [2026-04-11-scalping-ai-prompt-coding-instructions.md](./2026-04-11-scalping-ai-prompt-coding-instructions.md)
 - [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)
 - [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)

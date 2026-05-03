@@ -357,6 +357,6 @@ def backfill_dashboard_files(until_date: str) -> dict: ...
 - [plan-korStockScanPerformanceOptimization.qna.md](./plan-korStockScanPerformanceOptimization.qna.md)
 - [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)
 - [prompt-deepseek-integrated-dashboard-db-migration.md](./prompt-deepseek-integrated-dashboard-db-migration.md)
-- [2026-04-18-nextweek-validation-axis-table-audited.md](./2026-04-18-nextweek-validation-axis-table-audited.md)
-- [2026-04-17-midterm-tuning-performance-report.md](./2026-04-17-midterm-tuning-performance-report.md)
+- [2026-04-18-nextweek-validation-axis-table-audited.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-18-nextweek-validation-axis-table-audited.md)
+- [2026-04-17-midterm-tuning-performance-report.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-midterm-tuning-performance-report.md)
 - [web_api_spec_guide.md](./web_api_spec_guide.md)

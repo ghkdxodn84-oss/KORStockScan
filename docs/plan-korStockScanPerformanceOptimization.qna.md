@@ -218,4 +218,4 @@
 - [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)
 - [plan-korStockScanPerformanceOptimization.performance-report.md](./plan-korStockScanPerformanceOptimization.performance-report.md)
 - [plan-korStockScanPerformanceOptimization.archive-2026-04-19.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/plan-korStockScanPerformanceOptimization.archive-2026-04-19.md)
-- [2026-04-18-nextweek-validation-axis-table-audited.md](./2026-04-18-nextweek-validation-axis-table-audited.md)
+- [2026-04-18-nextweek-validation-axis-table-audited.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-18-nextweek-validation-axis-table-audited.md)

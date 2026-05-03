@@ -1,7 +1,7 @@
 # 감사인 3차 검토 의견 (`2026-04-20`)
 
 > 작성시각: `2026-04-20 KST`  
-> 검토 대상: `docs/2026-04-20-operator-response.md`  
+> 검토 대상: `docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-20-operator-response.md`  
 > 검증 방법: 운영자 주장별 소스 코드·스냅샷·문서 직접 대조  
 > 전제: 2차 감사(`auditor-second-review.md`)의 지적 사항이 얼마나 해소됐는가를 기준으로 판정
 
@@ -145,7 +145,7 @@
 
 ## 7. 참고 문서
 
-- [2026-04-20-operator-response.md](./2026-04-20-operator-response.md)
+- [2026-04-20-operator-response.md](/home/ubuntu/KORStockScan/docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-20-operator-response.md)
 - [2026-04-20-auditor-second-review.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-20-auditor-second-review.md)
 - [2026-04-21-stage2-todo-checklist.md](./2026-04-21-stage2-todo-checklist.md)
 - [plan-korStockScanPerformanceOptimization.performance-report.md](./plan-korStockScanPerformanceOptimization.performance-report.md)
