@@ -25,6 +25,7 @@ preclose_sell_target_report.py
 import sys
 import os
 import json
+import argparse
 import pandas as pd
 from pathlib import Path
 from datetime import datetime, date
@@ -40,6 +41,9 @@ from src.database.models import RecommendationHistory, DailyStockQuote
 from src.core.event_bus import EventBus
 from src.utils.constants import TRADING_RULES
 from src.utils.logger import log_error
+
+REPORT_SCHEMA_VERSION = 1
+PRE_CLOSE_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "preclose_sell_target"
 
 # Google GenAI 직접 호출 (신규 SDK google.genai)
 try:
@@ -64,10 +68,18 @@ def _load_config():
         return {}
 
 # --- Public API ---
-def run_preclose_sell_target_report() -> None:
+def run_preclose_sell_target_report(
+    report_date: Optional[str] = None,
+    *,
+    use_ai: bool = True,
+    broadcast: bool = True,
+    write_legacy_markdown: bool = True,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
     """크론탭 / 수동 실행 진입점. 예외 발생 시 로그 후 종료."""
     try:
         print(f"[{datetime.now().isoformat()}] 익일 매도 목표 리포트 시작")
+        report_date = report_date or date.today().isoformat()
         
         # 1. DB 연결
         db = DBManager()
@@ -96,27 +108,58 @@ def run_preclose_sell_target_report() -> None:
         scored_swing = sorted(swing_candidates, key=_score_swing, reverse=True)[:10]
         
         # 6. AI 호출 (가능한 경우)
-        if GENAI_AVAILABLE and len(scored_holding) + len(scored_swing) > 0:
+        if use_ai and GENAI_AVAILABLE and len(scored_holding) + len(scored_swing) > 0:
             ai_result = _call_gemini_preclose(scored_holding, scored_swing)
         else:
+            if not use_ai:
+                ai_summary = "AI 호출 비활성화"
+                ai_caution = "AI 미사용(--no-ai)"
+            elif not GENAI_AVAILABLE:
+                ai_summary = "AI 호출 불가"
+                ai_caution = "google.genai 미설치"
+            else:
+                ai_summary = "후보 없음"
+                ai_caution = "AI 미사용"
             ai_result = {
                 "sell_targets": [],
-                "summary": "AI 호출 불가 또는 후보 없음",
-                "market_caution": "AI 미사용"
+                "summary": ai_summary,
+                "market_caution": ai_caution
             }
         
         # 7. 리포트 생성
-        report_date = date.today().isoformat()
         markdown = _render_markdown(ai_result, report_date, scored_holding, scored_swing, t1_date)
+        structured_report = _build_structured_report(
+            result=ai_result,
+            report_date=report_date,
+            holding_candidates=scored_holding,
+            swing_candidates=scored_swing,
+            t1_date=t1_date,
+            use_ai=use_ai,
+        )
         
         # 8. 파일 저장
-        report_path = _save_report(markdown, report_date)
-        print(f"리포트 저장: {report_path}")
+        artifact_paths = {}
+        if not dry_run:
+            artifact_paths = _save_report_artifacts(
+                markdown,
+                structured_report,
+                report_date,
+                write_legacy_markdown=write_legacy_markdown,
+            )
+            print(f"리포트 저장: {artifact_paths}")
+        else:
+            print("dry-run: 리포트 파일 저장 생략")
         
         # 9. Telegram 전송
-        _broadcast_telegram(ai_result, markdown)
+        if broadcast and not dry_run:
+            _broadcast_telegram(ai_result, markdown, report_date)
         
         print(f"[{datetime.now().isoformat()}] 익일 매도 목표 리포트 완료")
+        return {
+            "report": structured_report,
+            "markdown": markdown,
+            "artifact_paths": {k: str(v) for k, v in artifact_paths.items()},
+        }
         
     except Exception as e:
         log_error(f"preclose_sell_target_report 실패: {e}", exc_info=True)
@@ -475,7 +518,80 @@ def _save_report(markdown: str, report_date: str) -> Path:
     report_path.write_text(markdown, encoding="utf-8")
     return report_path
 
-def _broadcast_telegram(result: Dict[str, Any], markdown: str) -> None:
+def _build_structured_report(
+    *,
+    result: Dict[str, Any],
+    report_date: str,
+    holding_candidates: List[Dict[str, Any]],
+    swing_candidates: List[Dict[str, Any]],
+    t1_date: str,
+    use_ai: bool,
+) -> Dict[str, Any]:
+    """Future threshold/ADM consumers should read this JSON, not parse Markdown."""
+    return {
+        "schema_version": REPORT_SCHEMA_VERSION,
+        "report_type": "preclose_sell_target",
+        "date": report_date,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "automation_stage": "R1_daily_report",
+        "policy_status": "report_only",
+        "live_runtime_effect": False,
+        "consumer_contract": {
+            "primary_consumer": "operator_preclose_review",
+            "future_consumers": [
+                "holding_overnight_decision_support",
+                "threshold_cycle_report_context",
+                "swing_trailing_policy_review",
+                "ADM_ladder_context",
+            ],
+            "forbidden_use_before_acceptance": [
+                "live_threshold_mutation",
+                "bot_restart",
+                "automatic_order_submit",
+                "automatic_sell_submit",
+            ],
+        },
+        "input_summary": {
+            "track_a_holding_count": len(holding_candidates),
+            "track_b_swing_count": len(swing_candidates),
+            "t1_ml_score_date": t1_date,
+            "ai_requested": bool(use_ai),
+            "ai_available": bool(GENAI_AVAILABLE),
+        },
+        "decision_summary": {
+            "sell_target_count": len(result.get("sell_targets", [])),
+            "summary": result.get("summary", ""),
+            "market_caution": result.get("market_caution", ""),
+        },
+        "sell_targets": result.get("sell_targets", []),
+        "track_a_holding_candidates": holding_candidates,
+        "track_b_swing_candidates": swing_candidates,
+        "quality_notes": [
+            "Track B T-1 ML score is stale by design and must not override current-day flow.",
+            "Markdown is human-readable; JSON is canonical for automation.",
+            "Report-only artifact. Runtime action requires a separate checklist owner and acceptance gate.",
+        ],
+    }
+
+def _save_report_artifacts(
+    markdown: str,
+    structured_report: Dict[str, Any],
+    report_date: str,
+    *,
+    write_legacy_markdown: bool = True,
+) -> Dict[str, Path]:
+    """Save canonical JSON/Markdown pair and optional legacy Markdown path."""
+    PRE_CLOSE_REPORT_DIR.mkdir(parents=True, exist_ok=True)
+    json_path = PRE_CLOSE_REPORT_DIR / f"preclose_sell_target_{report_date}.json"
+    md_path = PRE_CLOSE_REPORT_DIR / f"preclose_sell_target_{report_date}.md"
+    json_path.write_text(json.dumps(structured_report, ensure_ascii=False, indent=2), encoding="utf-8")
+    md_path.write_text(markdown, encoding="utf-8")
+    paths = {"json": json_path, "markdown": md_path}
+    if write_legacy_markdown:
+        paths["legacy_markdown"] = _save_report(markdown, report_date)
+    return paths
+
+def _broadcast_telegram(result: Dict[str, Any], markdown: str, report_date: str) -> None:
     """EventBus를 통해 Telegram VIP_ALL 전송"""
     try:
         # Telegram 리스너 등록을 위해 임포트
@@ -503,7 +619,7 @@ def _broadcast_telegram(result: Dict[str, Any], markdown: str) -> None:
             label = "보유" if track == "A" else "스윙"
             telegram_msg += f"{i}. {stock_name}({stock_code}) [{label}]\n"
         
-        telegram_msg += f"\n📄 상세: data/report/preclose_sell_target_{date.today().isoformat()}.md"
+        telegram_msg += f"\n📄 상세: data/report/preclose_sell_target/preclose_sell_target_{report_date}.md"
         
         event_bus.publish('TELEGRAM_BROADCAST', {
             'message': telegram_msg,
@@ -513,6 +629,22 @@ def _broadcast_telegram(result: Dict[str, Any], markdown: str) -> None:
     except Exception as e:
         log_error(f"Telegram 전송 실패: {e}")
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Generate preclose sell target report artifacts.")
+    parser.add_argument("--date", dest="report_date", default=None, help="Report date in YYYY-MM-DD. Default: today.")
+    parser.add_argument("--no-ai", action="store_true", help="Skip Gemini call and emit deterministic report-only artifacts.")
+    parser.add_argument("--no-telegram", action="store_true", help="Skip Telegram broadcast.")
+    parser.add_argument("--no-legacy-markdown", action="store_true", help="Do not write data/report/preclose_sell_target_YYYY-MM-DD.md.")
+    parser.add_argument("--dry-run", action="store_true", help="Build the report in memory without writing files or broadcasting.")
+    return parser.parse_args()
+
 # --- 진입점 ---
 if __name__ == "__main__":
-    run_preclose_sell_target_report()
+    args = _parse_args()
+    run_preclose_sell_target_report(
+        report_date=args.report_date,
+        use_ai=not args.no_ai,
+        broadcast=not args.no_telegram,
+        write_legacy_markdown=not args.no_legacy_markdown,
+        dry_run=args.dry_run,
+    )

@@ -43,7 +43,11 @@
 
 ## 장중 체크리스트 (09:00~15:20)
 
-- 없음
+- [ ] `[PrecloseSellTargetRevival0506-Intraday] preclose sell target report-only 재개 dry-run 및 정기화 판정` (`Due: 2026-05-06`, `Slot: INTRADAY`, `TimeWindow: 14:50~15:10`, `Track: Plan`)
+  - Source: [preclose-sell-target-revival-plan.md](/home/ubuntu/KORStockScan/docs/preclose-sell-target-revival-plan.md), [preclose_sell_target_report.py](/home/ubuntu/KORStockScan/src/scanners/preclose_sell_target_report.py), [data/report/README.md](/home/ubuntu/KORStockScan/data/report/README.md), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - 판정 기준: `deploy/run_preclose_sell_target_report.sh 2026-05-06 --no-ai --no-telegram`로 `data/report/preclose_sell_target/preclose_sell_target_2026-05-06.{json,md}`가 생성되고, JSON에 `policy_status=report_only`, `live_runtime_effect=false`, `automation_stage=R1_daily_report`가 들어가는지 확인한다. 기존 루트 Markdown은 호환성 산출물로만 본다.
+  - why: 2026-04-15 단발 `preclose_sell_target`는 cron 미등록/legacy archive로 중단됐지만, 15:00 기준 보유/오버나이트/스윙 후보를 구조화하면 향후 threshold/ADM/swing trailing 개선의 입력 품질을 높일 수 있다. 즉시 live 주문이나 threshold mutation에 연결하면 원인귀속이 깨지므로 report-only 재개부터 닫는다.
+  - 다음 액션: dry-run이 통과하면 `AI/Telegram acceptance`, `cron 등록`, `threshold/ADM consumer 연결`을 각각 별도 checklist owner로 분리한다. 실패하면 DB 후보 조회, T-1 ML score freshness, schema write, Telegram/AI 의존성 중 어느 축에서 막혔는지 분리하고 cron 등록은 보류한다.
 
 ## 장후 체크리스트 (16:00~23:59)
 
@@ -93,7 +97,8 @@
   - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py:4194), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py:4238)
   - 판정 기준: KOSDAQ 되밀림 폭 `1.0%`와 KOSPI `TRAILING_START_PCT 즉시익절`을 유지/통합/분리 중 하나로 닫고, `TRAILING_DRAWDOWN_PCT`, `TRAILING_START_PCT`, 전략별 적용 범위를 문서 기준으로 명문화한다.
   - why: 코드 주석 TODO로만 남겨두면 실전 trailing 정책이 리뷰 결과와 분리되어 누락될 수 있다.
-  - 다음 액션: 정책이 잠기면 주석 TODO를 제거하고 테스트/체크리스트/기준문서에 동일 용어로 반영한다.
+  - 5/4 anchor 보강: [2026-05-04 checklist](./2026-05-04-stage2-todo-checklist.md) `KAIWideWindowExit0504-Postclose`의 `한국항공우주(047810)` `ID 4932`는 peak `+1.45%`, trailing 체결 `+0.78%`, post-sell 20분 `close_vs_buy=+1.850%`로 스캘핑 익절 후에도 1일 이상 또는 최소 intraday wide-window 후보였는지 검토할 anchor다. 반대로 `ID 4976`은 더 높은 가격 재진입 후 `-1.16%`라, 종목 단위 swing 전환이 아니라 winner 상태 전환 조건으로만 설계한다.
+  - 다음 액션: 정책이 잠기면 주석 TODO를 제거하고 테스트/체크리스트/기준문서에 동일 용어로 반영한다. `would_extend_window`, `winner_wide_window_candidate`, `reentry_after_winner_exit`는 report-only field 후보로만 두고 live 청산 변경은 별도 단일축 canary 전까지 열지 않는다.
 
 - [ ] `[CodeDebt0506] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 18:30~18:45`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
@@ -153,7 +158,8 @@
   - Source: [code-review-20260430-sniper-engine.md](/home/ubuntu/KORStockScan/docs/code-review-20260430-sniper-engine.md), [sniper_execution_receipts.py](/home/ubuntu/KORStockScan/src/engine/sniper_execution_receipts.py:38), [sniper_execution_receipts.py](/home/ubuntu/KORStockScan/src/engine/sniper_execution_receipts.py:1046)
   - 판정 기준: 1차 반영된 `RECEIPT_LOCK` 분리, `state_lock` 주입, `snapshot` 인자화 이후에도 `active order binding`, `BUY/ADD/SELL` 체결, `BROKER_RECOVER` 보정 경로에서 race 또는 truth drift가 없는지 점검한다. `weighted_avg_price` vs `_weighted_avg` canonical 단일화는 `2026-04-30`에 receipt 모듈 정밀 평균가 고정으로 닫혔고, `_find_execution_target` 매칭 우선순위도 `bundle -> terminal -> BUY_ORDERED exact -> pending_add exact -> single candidate` 테스트로 고정됐다. 남은 결정사항은 `RECEIPT_LOCK`/`ENTRY_LOCK` 운영상 ownership guide와 residual race review다.
   - why: 설계 여부 자체는 이미 일부 코드로 굳었다. 이제 남은 리스크는 `락을 왜 나눴는지`, `어떤 경로가 어느 락을 소유하는지`, `주석/테스트로 고정한 규칙과 실제 장중 event order가 어긋나는지`를 운영 기준으로 재검토하지 않은 점이다. 실전 체결 truth 품질이 흔들리면 entry/holding 개선의 원인귀속이 깨진다.
-  - 다음 액션: `1) lock ownership guide 문서화`, `2) residual race review`, `3) 장중 anomaly case와 테스트 우선순위 대조` 순서로 닫는다.
+  - 5/4 anchor 보강: [2026-05-04 checklist](./2026-05-04-stage2-todo-checklist.md) `G2PowerReceiptMismatch0504-Postclose`의 `지투파워(388050)` `ID 4988`은 신규 `holding_started/ENTRY_FILL` 없이 `exit_signal/sell_order_sent`만 발생했고 DB에는 `COMPLETED -0.23%`가 남은 `receipt_mismatch_zero_sellable` excluded cohort다. `ID 4799` 정상 lifecycle과 같은 종목 revive row를 비교해 active order binding과 completed truth drift를 재현 anchor로 둔다.
+  - 다음 액션: `1) lock ownership guide 문서화`, `2) residual race review`, `3) 장중 anomaly case와 테스트 우선순위 대조` 순서로 닫는다. `COMPLETED`라도 receipt-matched fill이 없는 row는 threshold/report 손익 입력에서 제외하거나 flag 처리하는 경로를 함께 확인한다.
 
 - [ ] `[HoldingNetProfitExitRegression0506] holding_state net-profit sell decision 회귀 원인 격리` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 21:10~21:25`, `Track: RuntimeStability`)
   - Source: [test_live_trade_profit_rate.py](/home/ubuntu/KORStockScan/src/tests/test_live_trade_profit_rate.py:540), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
@@ -182,6 +188,7 @@
   - Source: [personal-decision-flow-notes.md](/home/ubuntu/KORStockScan/docs/personal-decision-flow-notes.md), [sniper_scale_in.py](/home/ubuntu/KORStockScan/src/engine/sniper_scale_in.py:400), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
   - 판정 기준: 현재 `REVERSAL_ADD` 수량이 `buy_qty * REVERSAL_ADD_SIZE_RATIO` + `MAX_POSITION_PCT` cap + 1주 floor에 머무르는지 확인하고, `AI 회복폭`, `수급 3/4~4/4`, `soft/hard stop 거리`, `peak_profit never-green`, `remaining_budget`, `volatility`를 반영한 `would_qty` counterfactual 산식을 설계한다. live 수량 변경은 이 항목에서 켜지 않는다.
   - why: 유효 진입 회수형 추가매수라면 수량도 현재 상태 기반으로 재산정하는 편이 EV 관점에서 자연스럽다. 다만 `REVERSAL_ADD` 자체가 신규 holding canary라 수량까지 동시에 바꾸면 같은 단계 다축 변경이 되어 손익/soft stop tail 원인귀속이 깨진다.
+  - 5/4 anchor 보강: `피노(033790)`은 시간창/AI 회복 부족으로 REVERSAL_ADD 미도달, `대한광통신(010170)`은 REVERSAL_ADD 직후 `POST_EVAL 7초` 청산으로 분리한다. 이 둘은 수량 산식과 같은 축에서 조정하지 않고, `would_qty`와 별도로 `would_allow_if_hold_window_extended`, `post_eval_sample_span_sec` 후보를 report-only로 기록할지 판단한다.
   - 다음 액션: 산식 후보가 잠기면 `actual_qty`, `would_qty`, `qty_reason`, `post_add_mfe`, `post_add_stop_rate`, `COMPLETED + valid profit_rate`를 observe-only 로그로 먼저 남기고, 최소 표본 확보 후 별도 단일축 canary로 승격 여부를 판단한다.
 
 - [ ] `[PyramidDynamicQty0506] PYRAMID 불타기 동적 수량 산식 observe-only 설계` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 21:40~21:55`, `Track: ScalpingLogic`)
@@ -194,6 +201,7 @@
   - Source: [2026-05-04-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-04-stage2-todo-checklist.md), [threshold_cycle_2026-05-04.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_2026-05-04.json), [post_sell_evaluations_2026-05-04.jsonl](/home/ubuntu/KORStockScan/data/post_sell/post_sell_evaluations_2026-05-04.jsonl), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
   - 판정 기준: `scalp_trailing_take_profit`의 weak limit `0.4 -> 후보 0.64`, strong AI 경계 `75 -> 70~74 후보`, `protect_trailing_smoothing`의 `min_span_sec/min_samples` 보강을 `initial-only`, `pyramid_signaled_not_executed`, `pyramid_executed`, `protect_hard_stop` 제외 표본으로 나눠 재판정한다. live runtime mutation은 이 항목에서 켜지지 않고, `ThresholdOpsTransition0506` 승인 전에는 manifest/report-only로만 둔다.
   - why: 5/4 trailing은 평균 수익이 양호했지만 `weak_borderline=13`, `would_hold_if_weak_limit_plus_10bp=13`으로 조급한 익절 후보가 많았다. protect trailing은 `유안타증권/한화투자증권`처럼 손실 확대 차단 표본과 `리노공업` 같은 missed upside가 섞여 단일 tick 민감도만으로 판단하면 기대값이 왜곡된다.
+  - 5/4 anchor 보강: `한국항공우주(047810) ID 4932`는 winner wide-window 후보, `자람테크놀로지(389020) ID 4982`는 positive peak `+0.95%` 후 soft stop `-2.25%`와 signal-to-fill 약 `0.51%p` 불리 체결 표본, `유안타증권(003470) ID 4902`는 PYRAMID 후 protect trailing 손실 확대 차단 표본이다. 세 표본을 하나의 trailing 완화 결론으로 합치지 않는다.
   - 다음 액션: 5/6 리포트에서 같은 방향성이 반복되면 threshold manifest 후보로만 산출하고, live 적용은 별도 단일축 canary/rollback guard/코호트가 준비된 뒤 검토한다.
 
 - [ ] `[CooldownPolicyInventory0506] 쿨다운 단독 blocker 목록 및 복합 threshold 전환 필요성 점검` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 21:55~22:05`, `Track: ScalpingLogic`)

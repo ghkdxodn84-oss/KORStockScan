@@ -30,12 +30,13 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 | Server Comparison | `data/report/server_comparison/server_comparison_YYYY-MM-DD.md` | `src.engine.log_archive_service._save_server_comparison_artifacts` | full monitor snapshot에서 server comparison이 enabled일 때 | 정기 경로 존재. 최근 기본 wrapper는 `MONITOR_SNAPSHOT_SKIP_SERVER_COMPARISON=1`이라 자동 생성이 정책상 꺼질 수 있음 |
 | Statistical Action Weight | `data/report/statistical_action_weight/statistical_action_weight_YYYY-MM-DD.md` | `src.engine.daily_threshold_cycle_report` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | 2026-04-30, 2026-05-01 생성 확인 |
 | Holding/Exit Decision Matrix | `data/report/holding_exit_decision_matrix/holding_exit_decision_matrix_YYYY-MM-DD.md` | `src.engine.daily_threshold_cycle_report` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | 2026-04-30, 2026-05-01 생성 확인 |
+| Preclose Sell Target | `data/report/preclose_sell_target/preclose_sell_target_YYYY-MM-DD.md` | `src.scanners.preclose_sell_target_report` | `deploy/run_preclose_sell_target_report.sh YYYY-MM-DD --no-ai --no-telegram`로 1차 검증 후 정기화 판단 | 재개 준비. canonical JSON과 같은 디렉터리에 생성하며 현재는 report-only |
 
 ## 비정기/legacy Markdown
 
 | 리포트 | 경로 | 비고 |
 |---|---|---|
-| Preclose Sell Target | `data/report/preclose_sell_target_YYYY-MM-DD.md` | 2026-04-15 산출물만 확인. 현재 stage2 정기 장후 체인의 핵심 산출물은 아님 |
+| Preclose Sell Target legacy root | `data/report/preclose_sell_target_YYYY-MM-DD.md` | 2026-04-15 단발 산출물 경로. 재개 후에는 호환성 Markdown으로만 유지하고 canonical 산출물은 `data/report/preclose_sell_target/`를 사용 |
 | Add Blocked Lock Markdown | `data/report/monitor_snapshots/add_blocked_lock_2026-04-16.md` | legacy 단발 산출물로 보이며 최근 snapshot 체인에서는 JSON만 생성됨 |
 
 ## 정기 JSON Snapshot
@@ -56,6 +57,7 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 | Daily Report | `data/report/report_YYYY-MM-DD.json` | `src.engine.daily_report_service` | 없음 |
 | Threshold Cycle Report | `data/report/threshold_cycle_YYYY-MM-DD.json` | `src.engine.daily_threshold_cycle_report` | 없음. 단, 파생 Markdown 3종 생성 |
 | Cumulative Threshold Cycle Report | `data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_YYYY-MM-DD.json` | `src.engine.daily_threshold_cycle_report` | `data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_YYYY-MM-DD.md` |
+| Preclose Sell Target | `data/report/preclose_sell_target/preclose_sell_target_YYYY-MM-DD.json` | `src.scanners.preclose_sell_target_report` | `data/report/preclose_sell_target/preclose_sell_target_YYYY-MM-DD.md` |
 | Threshold Compact Events | `data/threshold_cycle/date=YYYY-MM-DD/family=*/part-*.jsonl`, `data/threshold_cycle/threshold_events_YYYY-MM-DD.jsonl` | `src.engine.backfill_threshold_cycle_events` | 없음 |
 | Pipeline Events | `data/pipeline_events/pipeline_events_YYYY-MM-DD.jsonl` | runtime pipeline event writer | 없음 |
 | Gatekeeper Snapshots | `data/gatekeeper/gatekeeper_snapshots_YYYY-MM-DD.jsonl` | gatekeeper snapshot writer | 없음 |
@@ -106,3 +108,15 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 - daily, rolling, cumulative가 같은 방향을 가리킬 때만 다음 checklist의 threshold 후보로 넘긴다.
 - 이 산출물은 runtime change, bot restart, live threshold auto-mutation을 수행하지 않는다.
 - 자동 threshold 적용과 적용 후 version attribution은 `report-based-automation-traceability.md`의 `R5/R6` gate가 별도 checklist owner로 닫힌 뒤에만 구현 완료로 본다.
+
+## Preclose Sell Target 재개 기준
+
+`preclose_sell_target`는 2026-04-15 legacy 단발 산출물에서 report-only 구조화 산출물로 재개한다. 현재 허용 단계는 `R1_daily_report`이며 live runtime effect는 없다.
+
+운영 해석 원칙:
+
+- canonical data는 `data/report/preclose_sell_target/preclose_sell_target_YYYY-MM-DD.json`이다.
+- Markdown은 운영자 검토용이며 자동화 소비자는 JSON만 읽는다.
+- 검증은 먼저 `deploy/run_preclose_sell_target_report.sh YYYY-MM-DD --no-ai --no-telegram`로 수행한다.
+- cron 등록, AI/Telegram enable, threshold/ADM 소비자 연결은 각각 별도 checklist owner가 닫힌 뒤 진행한다.
+- 별도 acceptance 없이 이 리포트를 live threshold mutation, bot restart, 자동 주문 제출 근거로 쓰지 않는다.
