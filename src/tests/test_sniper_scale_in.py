@@ -10,6 +10,7 @@ import src.engine.sniper_sync as sniper_sync
 import src.engine.trade_pause_control as trade_pause_control
 import src.utils.runtime_flags as runtime_flags
 from src.engine import kiwoom_orders
+from src.engine.kiwoom_websocket import KiwoomWSManager
 from src.utils.constants import TRADING_RULES as CONFIG
 
 
@@ -180,6 +181,7 @@ def test_describe_buy_capacity_respects_absolute_budget_cap():
 def test_scalping_initial_entry_qty_cap_config_defaults_to_one_share():
     assert CONFIG.SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED is True
     assert CONFIG.SCALPING_INITIAL_ENTRY_MAX_QTY == 1
+    assert CONFIG.SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED is True
 
 
 def test_orderbook_stability_observation_logs_entry_pipeline(monkeypatch):
@@ -509,7 +511,7 @@ def test_calc_scale_in_qty_scalping_reversal_add_uses_configured_ratio():
         scale_in.TRADING_RULES = original
 
 
-def test_describe_scale_in_qty_stage1_keeps_flag_off_by_default():
+def test_describe_scale_in_qty_stage1_can_still_be_disabled_by_flag():
     from src.utils.constants import TRADING_RULES as CONFIG
 
     original = scale_in.TRADING_RULES
@@ -548,6 +550,25 @@ def test_describe_scale_in_qty_stage1_applies_one_share_floor_when_enabled():
             stock={"buy_qty": 1},
             curr_price=10000,
             deposit=10_000_000,
+            add_type="PYRAMID",
+            strategy="SCALPING",
+        )
+        assert details["qty"] == 1
+        assert details["template_qty"] == 1
+        assert details["cap_qty"] >= 1
+        assert details["floor_applied"] is True
+    finally:
+        scale_in.TRADING_RULES = original
+
+
+def test_describe_scale_in_qty_stage1_default_prevents_one_share_pyramid_zero_qty():
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(CONFIG, MAX_POSITION_PCT=1.0)
+    try:
+        details = scale_in.describe_scale_in_qty(
+            stock={"buy_qty": 1},
+            curr_price=19_320,
+            deposit=9_645_069,
             add_type="PYRAMID",
             strategy="SCALPING",
         )
@@ -739,7 +760,7 @@ def test_recent_pyramid_add_suppresses_scalp_trailing(monkeypatch):
     assert any(stage == "pyramid_post_add_trailing_grace" for stage, _ in calls["stages"])
 
 
-def test_recent_pyramid_add_suppresses_protect_trailing(monkeypatch):
+def test_protect_trailing_uses_smoothing_not_single_tick(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
     class _RulesProxy:
@@ -747,6 +768,11 @@ def test_recent_pyramid_add_suppresses_protect_trailing(monkeypatch):
             overrides = {
                 "SCALE_IN_REQUIRE_HISTORY_TABLE": False,
                 "SCALP_PYRAMID_POST_ADD_TRAILING_GRACE_SEC": 180,
+                "SCALP_PROTECT_TRAILING_SMOOTH_ENABLED": True,
+                "SCALP_PROTECT_TRAILING_SMOOTH_MIN_SAMPLES": 3,
+                "SCALP_PROTECT_TRAILING_SMOOTH_MIN_SPAN_SEC": 8,
+                "SCALP_PROTECT_TRAILING_SMOOTH_BUFFER_PCT": 0.80,
+                "SCALP_PROTECT_TRAILING_EMERGENCY_PCT": -2.0,
             }
             if name in overrides:
                 return overrides[name]
@@ -788,7 +814,7 @@ def test_recent_pyramid_add_suppresses_protect_trailing(monkeypatch):
         "buy_qty": 3,
         "trailing_stop_price": 17305,
         "last_add_type": "PYRAMID",
-        "last_add_time": now_ts - 90,
+        "last_add_time": now_ts - 240,
         "rt_ai_prob": 0.68,
     }
 
@@ -805,7 +831,133 @@ def test_recent_pyramid_add_suppresses_protect_trailing(monkeypatch):
     )
 
     assert calls["sell"] == 0
-    assert any(stage == "pyramid_post_add_trailing_grace" for stage, _ in calls["stages"])
+    assert any(stage == "protect_trailing_smooth_hold" for stage, _ in calls["stages"])
+
+
+def test_protect_trailing_confirms_sustained_smoothed_break(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALE_IN_REQUIRE_HISTORY_TABLE=False,
+        SCALP_PROTECT_TRAILING_SMOOTH_ENABLED=True,
+        SCALP_PROTECT_TRAILING_SMOOTH_MIN_SAMPLES=3,
+        SCALP_PROTECT_TRAILING_SMOOTH_MIN_SPAN_SEC=8,
+        SCALP_PROTECT_TRAILING_SMOOTH_BELOW_RATIO=0.67,
+        SCALP_PROTECT_TRAILING_SMOOTH_BUFFER_PCT=0.80,
+        SCALP_PROTECT_TRAILING_EMERGENCY_PCT=-2.0,
+    )
+    now_ts = 1_000_000.0
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 10100}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = None
+
+    calls = {"sell": 0}
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_no_add"},
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: calls.__setitem__("sell", calls["sell"] + 1) or {"return_code": "0", "ord_no": "S1"},
+    )
+
+    stock = {
+        "id": 1,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10000,
+        "buy_qty": 3,
+        "trailing_stop_price": 10000,
+        "rt_ai_prob": 0.68,
+        "holding_price_samples": [
+            {"ts": now_ts - 12, "price": 9900},
+            {"ts": now_ts - 8, "price": 9910},
+        ],
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 9900},
+        admin_id=1,
+        market_regime="BULL",
+        now_ts=now_ts,
+        now_dt=datetime(2026, 4, 30, 12, 45, 57),
+        radar=None,
+        ai_engine=None,
+    )
+
+    assert calls["sell"] == 1
+
+
+def test_holding_flow_override_candidate_clears_when_exit_candidate_resolves(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
+    now_ts = 1_000_000.0
+    state_handlers.COOLDOWNS = {}
+    state_handlers.ALERTED_STOCKS = set()
+    state_handlers.HIGHEST_PRICES = {"123456": 10_050}
+    state_handlers.LAST_AI_CALL_TIMES = {}
+    state_handlers.LAST_LOG_TIMES = {}
+    state_handlers.DB = None
+
+    calls = {"sell": 0, "stages": []}
+    monkeypatch.setattr(
+        state_handlers,
+        "can_consider_scale_in",
+        lambda *args, **kwargs: {"allowed": False, "reason": "test_no_add"},
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: calls.__setitem__("sell", calls["sell"] + 1) or {"return_code": "0", "ord_no": "S1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: calls["stages"].append((stage, fields)),
+    )
+
+    stock = {
+        "id": 1,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "strategy": "SCALPING",
+        "buy_price": 10_000,
+        "buy_qty": 1,
+        "rt_ai_prob": 0.68,
+        "holding_flow_override_candidate_key": "scalp_soft_stop_pct:LOSS",
+        "holding_flow_override_started_at": now_ts - 240,
+        "holding_flow_override_candidate_profit": -1.80,
+        "holding_flow_override_last_review_at": now_ts - 210,
+        "holding_flow_override_last_action": "HOLD",
+    }
+
+    state_handlers.handle_holding_state(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10_050},
+        admin_id=1,
+        market_regime="BULL",
+        now_ts=now_ts,
+        now_dt=datetime(2026, 5, 4, 10, 5, 0),
+        radar=None,
+        ai_engine=None,
+    )
+
+    assert calls["sell"] == 0
+    assert "holding_flow_override_candidate_key" not in stock
+    assert any(stage == "holding_flow_override_candidate_cleared" for stage, _ in calls["stages"])
 
 
 def test_timeout_pending_add_attempts_cancel_before_clear(monkeypatch):
@@ -2408,6 +2560,43 @@ def test_order_notice_backfills_missing_entry_order_number(monkeypatch):
     assert stock["buy_qty"] == 3
     assert stock["status"] == "HOLDING"
     assert stock.get("pending_entry_orders") is None
+
+
+def test_cancel_order_notice_does_not_bind_as_buy_order():
+    receipts.ACTIVE_TARGETS = []
+
+    stock = {
+        "id": 1,
+        "code": "123456",
+        "name": "TEST",
+        "status": "BUY_ORDERED",
+        "strategy": "SCALPING",
+        "position_tag": "MIDDLE",
+        "pending_entry_orders": [
+            {"tag": "normal", "qty": 1, "ord_no": "", "status": "OPEN", "filled_qty": 0},
+        ],
+    }
+    receipts.ACTIVE_TARGETS.append(stock)
+
+    receipts.handle_order_notice({"code": "123456", "type": "BUY_CANCEL", "order_no": "C1", "status": "접수"})
+
+    assert stock.get("odno") in (None, "")
+    assert stock["pending_entry_orders"][0]["ord_no"] == ""
+    assert "notice_status" not in stock["pending_entry_orders"][0]
+
+
+def test_order_execution_notice_parses_cancel_side_separately():
+    manager = KiwoomWSManager.__new__(KiwoomWSManager)
+
+    notice = manager._parse_order_execution_notice({
+        "913": "접수",
+        "9001": "A123456",
+        "9203": "C1",
+        "905": "매수취소",
+    })
+
+    assert notice["exec_type"] == "BUY_CANCEL"
+    assert notice["order_type_str"] == "매수취소"
 
 
 def test_stage_buy_order_submission_preserves_early_fill_state(monkeypatch):

@@ -483,6 +483,24 @@ def _build_bad_entry_family(events: list[dict]) -> dict:
         "ai_score_limit": int(getattr(TRADING_RULES, "SCALP_BAD_ENTRY_BLOCK_AI_SCORE_LIMIT", 45) or 45),
     }
     observed = [event for event in events if str(event.get("stage") or "") == "bad_entry_block_observed"]
+    refined_candidates = [
+        event for event in events if str(event.get("stage") or "") == "bad_entry_refined_candidate"
+    ]
+    refined_exits = [event for event in events if str(event.get("stage") or "") == "bad_entry_refined_exit"]
+    exclusion_counter = Counter(
+        str((event.get("fields") or {}).get("exclusion_reason") or "-") for event in refined_candidates
+    )
+    soft_stop_zone_candidates = [
+        event
+        for event in refined_candidates
+        if str((event.get("fields") or {}).get("exclusion_reason") or "") == "soft_stop_zone"
+    ]
+    early_capture_candidates = [
+        event
+        for event in refined_candidates
+        if str((event.get("fields") or {}).get("exclusion_reason") or "") not in ("soft_stop_zone", "-")
+        and str((event.get("fields") or {}).get("should_exit") or "").lower() == "true"
+    ]
     hold_values = [_safe_float((event.get("fields") or {}).get("held_sec"), None) for event in observed]
     loss_values = [_safe_float((event.get("fields") or {}).get("profit_rate"), None) for event in observed]
     peak_values = [_safe_float((event.get("fields") or {}).get("peak_profit"), None) for event in observed]
@@ -501,7 +519,14 @@ def _build_bad_entry_family(events: list[dict]) -> dict:
     return {
         "family": "bad_entry_block",
         "stage": "holding_exit",
-        "sample": {"observed": len(observed)},
+        "sample": {
+            "observed": len(observed),
+            "refined_candidate": len(refined_candidates),
+            "refined_exit": len(refined_exits),
+            "soft_stop_zone_candidate": len(soft_stop_zone_candidates),
+            "early_capture_candidate": len(early_capture_candidates),
+            "exclusion_top": dict(exclusion_counter.most_common(5)),
+        },
         "apply_ready": sample_ready,
         "current": current,
         "recommended": recommended,
@@ -509,6 +534,8 @@ def _build_bad_entry_family(events: list[dict]) -> dict:
         "notes": [
             "today live block은 열지 않고 observe->postclose->next_preopen 순서만 허용한다.",
             "후행 soft_stop/hard_stop 연결이 불충분하면 추천값은 shadow 유지다.",
+            "soft_stop_zone_candidate는 refined canary가 이미 soft stop 영역에 들어간 뒤 제외한 표본이다.",
+            "early_capture_candidate가 0이면 soft stop threshold보다 앞서 잡을 수 있었던 표본은 아직 확인되지 않은 것으로 본다.",
         ],
     }
 
@@ -522,7 +549,46 @@ def _build_reversal_add_family(events: list[dict]) -> dict:
     }
     blocked = [event for event in events if str(event.get("stage") or "") == "reversal_add_blocked_reason"]
     candidates = [event for event in events if str(event.get("stage") or "") == "reversal_add_candidate"]
-    reason_counter = Counter(str((event.get("fields") or {}).get("reason") or "") for event in blocked)
+    reason_counter = Counter(
+        str((event.get("fields") or {}).get("blocked_reason") or (event.get("fields") or {}).get("reason") or "-")
+        for event in blocked
+    )
+    predicate_names = (
+        "pnl_ok",
+        "hold_ok",
+        "low_floor_ok",
+        "ai_score_ok",
+        "ai_recover_ok",
+        "supply_ok",
+        "buy_pressure_ok",
+        "tick_accel_ok",
+        "large_sell_absent_ok",
+        "micro_vwap_ok",
+    )
+    predicate_pass_counts = {
+        name: sum(1 for event in blocked if str((event.get("fields") or {}).get(name) or "").lower() == "true")
+        for name in predicate_names
+    }
+    all_but_hold = sum(
+        1
+        for event in blocked
+        if str((event.get("fields") or {}).get("hold_ok") or "").lower() != "true"
+        and all(
+            str((event.get("fields") or {}).get(name) or "").lower() == "true"
+            for name in predicate_names
+            if name != "hold_ok"
+        )
+    )
+    all_but_ai_recovery = sum(
+        1
+        for event in blocked
+        if str((event.get("fields") or {}).get("ai_recover_ok") or "").lower() != "true"
+        and all(
+            str((event.get("fields") or {}).get(name) or "").lower() == "true"
+            for name in predicate_names
+            if name != "ai_recover_ok"
+        )
+    )
     pnl_values = [_safe_float((event.get("fields") or {}).get("profit_rate"), None) for event in blocked + candidates]
     hold_values = [_safe_float((event.get("fields") or {}).get("held_sec"), None) for event in blocked + candidates]
     ai_values = [_safe_float((event.get("fields") or {}).get("ai_score"), None) for event in blocked + candidates]
@@ -541,7 +607,14 @@ def _build_reversal_add_family(events: list[dict]) -> dict:
     return {
         "family": "reversal_add",
         "stage": "holding_exit",
-        "sample": {"blocked": len(blocked), "candidate": len(candidates)},
+        "sample": {
+            "blocked": len(blocked),
+            "candidate": len(candidates),
+            "blocker_top": dict(reason_counter.most_common(5)),
+            "predicate_pass_counts": predicate_pass_counts,
+            "near_miss_all_but_hold": all_but_hold,
+            "near_miss_all_but_ai_recovery": all_but_ai_recovery,
+        },
         "apply_ready": sample_ready,
         "current": current,
         "recommended": recommended,
@@ -549,6 +622,169 @@ def _build_reversal_add_family(events: list[dict]) -> dict:
         "notes": [
             "first-fail 로그면 all-predicate 복원이 안 되므로 상한 추정치로만 본다.",
             f"주요 blocker={dict(reason_counter.most_common(3))}",
+            "near_miss_all_but_*는 한 축만 열면 체결됐을 가능성이 있는 표본 수다. 0이면 복합조건 미충족으로 본다.",
+        ],
+    }
+
+
+def _build_scalp_trailing_take_profit_family(events: list[dict]) -> dict:
+    current = {
+        "start_pct": float(getattr(TRADING_RULES, "SCALP_TRAILING_START_PCT", 0.6) or 0.6),
+        "weak_limit": float(getattr(TRADING_RULES, "SCALP_TRAILING_LIMIT_WEAK", 0.4) or 0.4),
+        "strong_limit": float(getattr(TRADING_RULES, "SCALP_TRAILING_LIMIT_STRONG", 0.8) or 0.8),
+        "strong_ai_score": 75,
+    }
+    trailing_exits = [
+        event
+        for event in events
+        if str(event.get("stage") or "") == "exit_signal"
+        and str((event.get("fields") or {}).get("exit_rule") or "") == "scalp_trailing_take_profit"
+    ]
+    completed = [
+        event
+        for event in events
+        if str(event.get("stage") or "") == "sell_completed"
+        and str((event.get("fields") or {}).get("exit_rule") or "") == "scalp_trailing_take_profit"
+    ]
+    pyramid_signaled_ids = {
+        event.get("record_id")
+        for event in events
+        if str(event.get("stage") or "") == "stat_action_decision_snapshot"
+        and (
+            str((event.get("fields") or {}).get("chosen_action") or "") == "pyramid_wait"
+            or str((event.get("fields") or {}).get("scale_in_action_type") or "") == "PYRAMID"
+        )
+        and event.get("record_id") is not None
+    }
+    pyramid_executed_ids = {
+        event.get("record_id")
+        for event in events
+        if str(event.get("stage") or "") in {"scale_in_executed", "scale_in_completed"}
+        and event.get("record_id") is not None
+    }
+    drawdown_values: list[float] = []
+    profit_values: list[float] = []
+    ai_values: list[float] = []
+    weak_borderline = 0
+    would_hold_if_weak_plus_10bp = 0
+    would_hold_if_strong_ai_relaxed_5pt = 0
+    initial_only = 0
+    pyramid_signaled_not_executed = 0
+    pyramid_executed = 0
+    borderline_examples: list[dict] = []
+    strong_ai_boundary_examples: list[dict] = []
+    for event in trailing_exits:
+        fields = event.get("fields") or {}
+        profit = _safe_float(fields.get("profit_rate"), None)
+        peak = _safe_float(fields.get("peak_profit"), None)
+        ai_score = _safe_float(fields.get("current_ai_score"), None)
+        record_id = event.get("record_id")
+        if record_id in pyramid_executed_ids:
+            pyramid_executed += 1
+            pyramid_state = "pyramid_executed"
+        elif record_id in pyramid_signaled_ids:
+            pyramid_signaled_not_executed += 1
+            pyramid_state = "pyramid_signaled_not_executed"
+        else:
+            initial_only += 1
+            pyramid_state = "initial_only"
+        if profit is not None:
+            profit_values.append(profit)
+        if ai_score is not None:
+            ai_values.append(ai_score)
+        if profit is None or peak is None:
+            continue
+        drawdown = peak - profit
+        drawdown_values.append(drawdown)
+        limit = current["strong_limit"] if (ai_score or 0) >= current["strong_ai_score"] else current["weak_limit"]
+        limit_bucket = "strong" if (ai_score or 0) >= current["strong_ai_score"] else "weak"
+        if abs(drawdown - limit) <= 0.05:
+            weak_borderline += 1
+        if (ai_score or 0) < current["strong_ai_score"] and drawdown < current["weak_limit"] + 0.10:
+            would_hold_if_weak_plus_10bp += 1
+        strong_ai_boundary = (
+            ai_score is not None
+            and current["strong_ai_score"] - 5 <= ai_score < current["strong_ai_score"]
+            and drawdown < current["strong_limit"]
+        )
+        if strong_ai_boundary:
+            would_hold_if_strong_ai_relaxed_5pt += 1
+        if abs(drawdown - limit) <= 0.10 and len(borderline_examples) < 8:
+            borderline_examples.append(
+                {
+                    "emitted_at": event.get("emitted_at"),
+                    "stock_code": event.get("stock_code"),
+                    "stock_name": event.get("stock_name"),
+                    "record_id": record_id,
+                    "profit_rate": round(profit, 4),
+                    "peak_profit": round(peak, 4),
+                    "drawdown_from_peak": round(drawdown, 4),
+                    "current_ai_score": round(ai_score, 2) if ai_score is not None else None,
+                    "active_limit": round(limit, 4),
+                    "limit_bucket": limit_bucket,
+                    "pyramid_state": pyramid_state,
+                    "would_hold_if_weak_limit_plus_10bp": bool(
+                        (ai_score or 0) < current["strong_ai_score"]
+                        and drawdown < current["weak_limit"] + 0.10
+                    ),
+                }
+            )
+        if strong_ai_boundary and len(strong_ai_boundary_examples) < 8:
+            strong_ai_boundary_examples.append(
+                {
+                    "emitted_at": event.get("emitted_at"),
+                    "stock_code": event.get("stock_code"),
+                    "stock_name": event.get("stock_name"),
+                    "record_id": record_id,
+                    "profit_rate": round(profit, 4),
+                    "peak_profit": round(peak, 4),
+                    "drawdown_from_peak": round(drawdown, 4),
+                    "current_ai_score": round(ai_score, 2),
+                    "active_limit": round(limit, 4),
+                    "strong_limit": round(current["strong_limit"], 4),
+                    "pyramid_state": pyramid_state,
+                }
+            )
+    completed_profit_values = [
+        value
+        for value in (_safe_float((event.get("fields") or {}).get("profit_rate"), None) for event in completed)
+        if value is not None
+    ]
+    sample_ready = len(trailing_exits) >= 20
+    recommended_weak = _clamp(_percentile(drawdown_values, 60, current["weak_limit"]), 0.4, 0.8)
+    return {
+        "family": "scalp_trailing_take_profit",
+        "stage": "holding_exit",
+        "sample": {
+            "exit_signal": len(trailing_exits),
+            "completed": len(completed),
+            "avg_profit_rate_at_signal": round(_avg(profit_values) or 0.0, 4) if profit_values else None,
+            "avg_completed_profit_rate": round(_avg(completed_profit_values) or 0.0, 4)
+            if completed_profit_values
+            else None,
+            "avg_drawdown_from_peak": round(_avg(drawdown_values) or 0.0, 4) if drawdown_values else None,
+            "weak_borderline": weak_borderline,
+            "would_hold_if_weak_limit_plus_10bp": would_hold_if_weak_plus_10bp,
+            "would_hold_if_strong_ai_score_relaxed_5pt": would_hold_if_strong_ai_relaxed_5pt,
+            "initial_only": initial_only,
+            "pyramid_signaled_not_executed": pyramid_signaled_not_executed,
+            "pyramid_executed": pyramid_executed,
+            "borderline_examples": borderline_examples,
+            "strong_ai_boundary_examples": strong_ai_boundary_examples,
+        },
+        "apply_ready": sample_ready,
+        "current": current,
+        "recommended": {
+            "weak_limit": round(recommended_weak, 2),
+            "strong_limit": current["strong_limit"],
+        },
+        "apply_mode": "next_preopen_single_owner" if sample_ready else "observe_only",
+        "notes": [
+            "일반 트레일링 익절 민감도 표본이다. protect_trailing_smoothing과 합산하지 않는다.",
+            "pyramid_signaled_not_executed는 불타기 조건은 열렸지만 실제 추가 체결 없이 일반 보유 수량으로 청산된 표본이다.",
+            "weak_borderline은 현행 weak limit 근처에서 잘린 표본이며, missed-upside와 연결되기 전에는 live 변경 근거가 아니다.",
+            "would_hold_if_weak_limit_plus_10bp는 +0.10%p 완화 시 같은 tick에서 청산되지 않았을 후보 수다.",
+            "would_hold_if_strong_ai_score_relaxed_5pt는 AI strong 경계 5점 이내에서 strong limit를 적용했다면 같은 tick 청산이 보류됐을 후보 수다.",
         ],
     }
 
@@ -579,6 +815,66 @@ def _build_soft_stop_family(events: list[dict]) -> dict:
         "notes": [
             "rebound/missed-upside 연결이 없으면 grace_sec 추천은 direction-only로 본다.",
             "holding_exit stage는 same-day 다른 live owner와 동시 적용 금지다.",
+        ],
+    }
+
+
+def _build_protect_trailing_smoothing_family(events: list[dict]) -> dict:
+    current = {
+        "window_sec": int(getattr(TRADING_RULES, "SCALP_PROTECT_TRAILING_SMOOTH_WINDOW_SEC", 20) or 20),
+        "min_span_sec": int(getattr(TRADING_RULES, "SCALP_PROTECT_TRAILING_SMOOTH_MIN_SPAN_SEC", 8) or 8),
+        "min_samples": int(getattr(TRADING_RULES, "SCALP_PROTECT_TRAILING_SMOOTH_MIN_SAMPLES", 3) or 3),
+        "below_ratio": float(getattr(TRADING_RULES, "SCALP_PROTECT_TRAILING_SMOOTH_BELOW_RATIO", 0.67) or 0.67),
+        "buffer_pct": float(getattr(TRADING_RULES, "SCALP_PROTECT_TRAILING_SMOOTH_BUFFER_PCT", 1.0) or 1.0),
+        "emergency_pct": float(getattr(TRADING_RULES, "SCALP_PROTECT_TRAILING_EMERGENCY_PCT", -2.0) or -2.0),
+    }
+    holds = [event for event in events if str(event.get("stage") or "") == "protect_trailing_smooth_hold"]
+    confirmed = [event for event in events if str(event.get("stage") or "") == "protect_trailing_smooth_confirmed"]
+    completed = [
+        event
+        for event in events
+        if str(event.get("stage") or "") == "sell_completed"
+        and str((event.get("fields") or {}).get("exit_rule") or "") == "protect_trailing_stop"
+    ]
+    candidate_events = holds + confirmed
+    span_values = [_safe_float((event.get("fields") or {}).get("sample_span_sec"), None) for event in candidate_events]
+    sample_values = [_safe_float((event.get("fields") or {}).get("sample_count"), None) for event in candidate_events]
+    below_values = [_safe_float((event.get("fields") or {}).get("below_ratio"), None) for event in candidate_events]
+    buffer_values = [_safe_float((event.get("fields") or {}).get("buffer_pct"), None) for event in candidate_events]
+    emergency_values = [_safe_float((event.get("fields") or {}).get("emergency_pct"), None) for event in candidate_events]
+    profit_values = [_safe_float((event.get("fields") or {}).get("profit_rate"), None) for event in completed]
+    span_values = [v for v in span_values if v is not None]
+    sample_values = [v for v in sample_values if v is not None]
+    below_values = [v for v in below_values if v is not None]
+    buffer_values = [v for v in buffer_values if v is not None]
+    emergency_values = [v for v in emergency_values if v is not None]
+    profit_values = [v for v in profit_values if v is not None]
+    sample_ready = len(candidate_events) >= 20 and (len(confirmed) + len(holds)) >= 20
+    recommended = {
+        "window_sec": int(round(_clamp(_percentile(span_values, 90, current["window_sec"]), 10.0, 45.0))),
+        "min_span_sec": int(round(_clamp(_percentile(span_values, 50, current["min_span_sec"]), 5.0, 20.0))),
+        "min_samples": int(round(_clamp(_percentile(sample_values, 50, current["min_samples"]), 3.0, 8.0))),
+        "below_ratio": round(_clamp(_percentile(below_values, 75, current["below_ratio"]), 0.50, 0.90), 2),
+        "buffer_pct": round(_clamp(_percentile(buffer_values, 50, current["buffer_pct"]), 0.50, 1.50), 2),
+        "emergency_pct": round(_clamp(_percentile(emergency_values, 10, current["emergency_pct"]), -2.5, -1.5), 2),
+    }
+    return {
+        "family": "protect_trailing_smoothing",
+        "stage": "holding_exit",
+        "sample": {
+            "smooth_hold": len(holds),
+            "smooth_confirmed": len(confirmed),
+            "protect_trailing_completed": len(completed),
+            "completed_avg_profit_rate": round(_avg(profit_values) or 0.0, 4) if profit_values else None,
+        },
+        "apply_ready": sample_ready,
+        "current": current,
+        "recommended": recommended,
+        "apply_mode": "next_preopen_single_owner" if sample_ready else "observe_only",
+        "notes": [
+            "protect_trailing smoothing 값은 장중 자동 변경하지 않고 장후 report와 다음 장전 manifest 후보로만 산출한다.",
+            "protect_hard_stop과 emergency_pct 이탈은 평탄화 대상이 아니므로 별도 safety로 유지한다.",
+            "sample floor 미달이면 추천값은 direction-only이며 리노공업 단일 케이스로 live 재조정하지 않는다.",
         ],
     }
 
@@ -790,6 +1086,8 @@ def _build_family_reports(events: list[dict], completed_rows: list[dict] | None 
         _build_bad_entry_family(events),
         _build_reversal_add_family(events),
         _build_soft_stop_family(events),
+        _build_scalp_trailing_take_profit_family(events),
+        _build_protect_trailing_smoothing_family(events),
         _build_statistical_action_weight_family(events, completed_rows),
     ]
 

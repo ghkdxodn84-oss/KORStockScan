@@ -16,11 +16,60 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
             {"stage": "order_bundle_submitted", "fields": {"price_below_bid_bps": "77"}},
             {"stage": "bad_entry_block_observed", "fields": {"held_sec": "65", "profit_rate": "-0.88", "peak_profit": "0.12", "ai_score": "41"}},
             {"stage": "bad_entry_block_observed", "fields": {"held_sec": "72", "profit_rate": "-0.94", "peak_profit": "0.18", "ai_score": "43"}},
+            {"stage": "bad_entry_refined_candidate", "fields": {"exclusion_reason": "soft_stop_zone", "should_exit": "False"}},
+            {"stage": "bad_entry_refined_candidate", "fields": {"exclusion_reason": "loss_too_shallow", "should_exit": "False"}},
             {"stage": "reversal_add_candidate", "fields": {"profit_rate": "-0.62", "held_sec": "88", "ai_score": "63", "ai_recovery_delta": "17"}},
             {"stage": "reversal_add_candidate", "fields": {"profit_rate": "-0.55", "held_sec": "94", "ai_score": "66", "ai_recovery_delta": "18"}},
-            {"stage": "reversal_add_blocked_reason", "fields": {"reason": "hold_sec_out_of_range", "profit_rate": "-0.48", "held_sec": "210", "ai_score": "62", "ai_recovery_delta": "14"}},
+            {
+                "stage": "reversal_add_blocked_reason",
+                "fields": {
+                    "blocked_reason": "hold_sec_out_of_range",
+                    "profit_rate": "-0.48",
+                    "held_sec": "210",
+                    "ai_score": "62",
+                    "ai_recovery_delta": "14",
+                    "pnl_ok": "True",
+                    "hold_ok": "False",
+                    "low_floor_ok": "True",
+                    "ai_score_ok": "True",
+                    "ai_recover_ok": "True",
+                    "supply_ok": "True",
+                    "buy_pressure_ok": "True",
+                    "tick_accel_ok": "True",
+                    "large_sell_absent_ok": "True",
+                    "micro_vwap_ok": "True",
+                },
+            },
             {"stage": "soft_stop_micro_grace", "fields": {"profit_rate": "-1.74", "held_sec": "37"}},
             {"stage": "soft_stop_micro_grace", "fields": {"profit_rate": "-1.95", "held_sec": "42"}},
+            {
+                "stage": "stat_action_decision_snapshot",
+                "record_id": 1001,
+                "fields": {"chosen_action": "pyramid_wait", "scale_in_action_type": "PYRAMID"},
+            },
+            {
+                "stage": "exit_signal",
+                "record_id": 1001,
+                "stock_code": "456040",
+                "stock_name": "OCI",
+                "emitted_at": "2026-04-30T09:47:37",
+                "fields": {"exit_rule": "scalp_trailing_take_profit", "profit_rate": "0.59", "peak_profit": "1.00", "current_ai_score": "62"},
+            },
+            {"stage": "sell_completed", "record_id": 1001, "fields": {"exit_rule": "scalp_trailing_take_profit", "profit_rate": "0.59"}},
+            {
+                "stage": "stat_action_decision_snapshot",
+                "record_id": 1002,
+                "fields": {"chosen_action": "pyramid_wait", "scale_in_action_type": "PYRAMID"},
+            },
+            {
+                "stage": "exit_signal",
+                "record_id": 1002,
+                "stock_code": "042370",
+                "stock_name": "비츠로테크",
+                "emitted_at": "2026-04-30T09:56:09",
+                "fields": {"exit_rule": "scalp_trailing_take_profit", "profit_rate": "2.79", "peak_profit": "3.48", "current_ai_score": "74"},
+            },
+            {"stage": "sell_completed", "record_id": 1002, "fields": {"exit_rule": "scalp_trailing_take_profit", "profit_rate": "3.58"}},
         ]
         + [
             {"stage": "budget_pass", "fields": {"signal_score": "73", "latest_strength": "116", "buy_pressure_10t": "57", "ws_age_ms": "970", "ws_jitter_ms": "420", "spread_ratio": "0.0079"}}
@@ -29,7 +78,40 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
         + [{"stage": "order_bundle_submitted", "fields": {"price_below_bid_bps": "75"}} for _ in range(25)]
         + [{"stage": "bad_entry_block_observed", "fields": {"held_sec": "70", "profit_rate": "-0.90", "peak_profit": "0.15", "ai_score": "42"}} for _ in range(30)]
         + [{"stage": "reversal_add_candidate", "fields": {"profit_rate": "-0.58", "held_sec": "92", "ai_score": "65", "ai_recovery_delta": "16"}} for _ in range(22)]
-        + [{"stage": "soft_stop_micro_grace", "fields": {"profit_rate": "-1.82", "held_sec": "40"}} for _ in range(30)],
+        + [{"stage": "soft_stop_micro_grace", "fields": {"profit_rate": "-1.82", "held_sec": "40"}} for _ in range(30)]
+        + [
+            {
+                "stage": "protect_trailing_smooth_hold",
+                "fields": {
+                    "sample_span_sec": "10",
+                    "sample_count": "4",
+                    "below_ratio": "0.50",
+                    "buffer_pct": "1.00",
+                    "emergency_pct": "-2.00",
+                },
+            }
+            for _ in range(12)
+        ]
+        + [
+            {
+                "stage": "protect_trailing_smooth_confirmed",
+                "fields": {
+                    "sample_span_sec": "12",
+                    "sample_count": "4",
+                    "below_ratio": "0.75",
+                    "buffer_pct": "1.00",
+                    "emergency_pct": "-2.00",
+                },
+            }
+            for _ in range(10)
+        ]
+        + [
+            {
+                "stage": "sell_completed",
+                "fields": {"exit_rule": "protect_trailing_stop", "profit_rate": "-0.20"},
+            }
+            for _ in range(2)
+        ],
     }
 
     completed_rows = [
@@ -53,6 +135,11 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
 
     bad_entry = report["threshold_snapshot"]["bad_entry_block"]
     assert bad_entry["apply_ready"] is True
+    assert bad_entry["sample"]["soft_stop_zone_candidate"] == 1
+
+    reversal_add = report["threshold_snapshot"]["reversal_add"]
+    assert reversal_add["sample"]["blocker_top"]["hold_sec_out_of_range"] == 1
+    assert reversal_add["sample"]["near_miss_all_but_hold"] == 1
 
     pre_submit = report["threshold_snapshot"]["pre_submit_price_guard"]
     assert pre_submit["apply_ready"] is False
@@ -60,6 +147,17 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
 
     soft_stop = report["threshold_snapshot"]["soft_stop_micro_grace"]
     assert soft_stop["apply_ready"] is True
+    protect_trailing = report["threshold_snapshot"]["protect_trailing_smoothing"]
+    assert protect_trailing["apply_ready"] is True
+    assert protect_trailing["recommended"]["min_samples"] >= 3
+    assert protect_trailing["recommended"]["buffer_pct"] == 1.0
+    scalp_trailing = report["threshold_snapshot"]["scalp_trailing_take_profit"]
+    assert scalp_trailing["sample"]["weak_borderline"] == 1
+    assert scalp_trailing["sample"]["would_hold_if_weak_limit_plus_10bp"] == 1
+    assert scalp_trailing["sample"]["would_hold_if_strong_ai_score_relaxed_5pt"] == 1
+    assert scalp_trailing["sample"]["pyramid_signaled_not_executed"] == 2
+    assert scalp_trailing["sample"]["borderline_examples"][0]["pyramid_state"] == "pyramid_signaled_not_executed"
+    assert scalp_trailing["sample"]["strong_ai_boundary_examples"][0]["stock_code"] == "042370"
     action_weight = report["threshold_snapshot"]["statistical_action_weight"]
     assert action_weight["apply_ready"] is False
     assert action_weight["recommended"]["data_completeness"]["price_known"] == 3

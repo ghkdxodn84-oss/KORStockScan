@@ -280,6 +280,131 @@ def _log_pyramid_post_add_trailing_grace(stock, code, *, now_ts, exit_rule_candi
     )
 
 
+def _append_holding_price_sample(stock, *, now_ts, curr_price):
+    if curr_price <= 0:
+        return list(stock.get('holding_price_samples') or [])
+    window_sec = max(1, _rule_int('SCALP_PROTECT_TRAILING_SMOOTH_WINDOW_SEC', 20))
+    cutoff_ts = float(now_ts or time.time()) - window_sec
+    samples = []
+    for item in list(stock.get('holding_price_samples') or []):
+        if not isinstance(item, dict):
+            continue
+        ts = _safe_float(item.get('ts'), 0.0)
+        price = _safe_int(item.get('price'), 0)
+        if ts >= cutoff_ts and price > 0:
+            samples.append({'ts': ts, 'price': price})
+    samples.append({'ts': float(now_ts or time.time()), 'price': int(curr_price)})
+    samples = samples[-60:]
+    _mutate_stock_state(stock, set_fields={'holding_price_samples': samples})
+    return samples
+
+
+def _median_price(values):
+    cleaned = sorted(_safe_float(item, 0.0) for item in values if _safe_float(item, 0.0) > 0)
+    if not cleaned:
+        return 0.0
+    mid = len(cleaned) // 2
+    if len(cleaned) % 2:
+        return cleaned[mid]
+    return (cleaned[mid - 1] + cleaned[mid]) / 2.0
+
+
+def _protect_trailing_break_confirmed(
+    stock,
+    code,
+    *,
+    now_ts,
+    curr_price,
+    trailing_stop_price,
+    profit_rate,
+    peak_profit,
+):
+    if not _rule_bool('SCALP_PROTECT_TRAILING_SMOOTH_ENABLED', True):
+        return True
+    emergency_pct = _rule_float('SCALP_PROTECT_TRAILING_EMERGENCY_PCT', -2.0)
+    if profit_rate <= emergency_pct:
+        return True
+
+    samples = list(stock.get('holding_price_samples') or [])
+    min_samples = max(1, _rule_int('SCALP_PROTECT_TRAILING_SMOOTH_MIN_SAMPLES', 3))
+    min_span_sec = max(0, _rule_int('SCALP_PROTECT_TRAILING_SMOOTH_MIN_SPAN_SEC', 8))
+    below_ratio_min = max(0.0, min(1.0, _rule_float('SCALP_PROTECT_TRAILING_SMOOTH_BELOW_RATIO', 0.67)))
+    buffer_pct = max(0.0, _rule_float('SCALP_PROTECT_TRAILING_SMOOTH_BUFFER_PCT', 0.80))
+    window_sec = max(1, _rule_int('SCALP_PROTECT_TRAILING_SMOOTH_WINDOW_SEC', 20))
+    buffered_stop = float(trailing_stop_price) * (1.0 - (buffer_pct / 100.0))
+
+    usable = [
+        item for item in samples
+        if isinstance(item, dict) and _safe_int(item.get('price'), 0) > 0
+    ]
+    prices = [_safe_int(item.get('price'), 0) for item in usable]
+    if not usable:
+        span_sec = 0
+    else:
+        ts_values = [_safe_float(item.get('ts'), 0.0) for item in usable]
+        span_sec = max(0, int(max(ts_values) - min(ts_values)))
+    median_price = _median_price(prices)
+    below_count = sum(1 for price in prices if price <= buffered_stop)
+    below_ratio = (below_count / len(prices)) if prices else 0.0
+    confirmed = (
+        len(prices) >= min_samples
+        and span_sec >= min_span_sec
+        and median_price <= buffered_stop
+        and below_ratio >= below_ratio_min
+    )
+    if confirmed:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "protect_trailing_smooth_confirmed",
+            threshold_family="protect_trailing_smoothing",
+            exit_rule_candidate="protect_trailing_stop",
+            curr_price=curr_price,
+            trailing_stop_price=f"{float(trailing_stop_price):.0f}",
+            buffered_stop_price=f"{buffered_stop:.0f}",
+            median_price=f"{median_price:.0f}",
+            sample_count=len(prices),
+            sample_span_sec=span_sec,
+            below_ratio=f"{below_ratio:.2f}",
+            min_below_ratio=f"{below_ratio_min:.2f}",
+            window_sec=window_sec,
+            min_span_sec=min_span_sec,
+            min_samples=min_samples,
+            buffer_pct=f"{buffer_pct:.2f}",
+            profit_rate=f"{profit_rate:+.2f}",
+            peak_profit=f"{peak_profit:+.2f}",
+            emergency_pct=f"{emergency_pct:+.2f}",
+        )
+        return True
+
+    last_log = float(stock.get('last_protect_trailing_smooth_hold_log_ts', 0) or 0)
+    if float(now_ts or time.time()) - last_log >= 5:
+        _mutate_stock_state(stock, set_fields={'last_protect_trailing_smooth_hold_log_ts': float(now_ts or time.time())})
+        _log_holding_pipeline(
+            stock,
+            code,
+            "protect_trailing_smooth_hold",
+            threshold_family="protect_trailing_smoothing",
+            exit_rule_candidate="protect_trailing_stop",
+            curr_price=curr_price,
+            trailing_stop_price=f"{float(trailing_stop_price):.0f}",
+            buffered_stop_price=f"{buffered_stop:.0f}",
+            median_price=f"{median_price:.0f}",
+            sample_count=len(prices),
+            sample_span_sec=span_sec,
+            below_ratio=f"{below_ratio:.2f}",
+            min_below_ratio=f"{below_ratio_min:.2f}",
+            window_sec=window_sec,
+            min_span_sec=min_span_sec,
+            min_samples=min_samples,
+            buffer_pct=f"{buffer_pct:.2f}",
+            profit_rate=f"{profit_rate:+.2f}",
+            peak_profit=f"{peak_profit:+.2f}",
+            emergency_pct=f"{emergency_pct:+.2f}",
+        )
+    return False
+
+
 def bind_state_dependencies(
     *,
     kiwoom_token=None,
@@ -2450,6 +2575,36 @@ def _holding_flow_override_applicable(strategy: str, exit_rule: str) -> bool:
         _rule_bool("HOLDING_FLOW_OVERRIDE_ENABLED", True)
         and str(strategy or "").upper() == "SCALPING"
         and str(exit_rule or "").strip() in _HOLDING_FLOW_OVERRIDE_EXIT_RULES
+    )
+
+
+def _clear_holding_flow_override_candidate(stock: dict, code: str, *, reason: str, profit_rate: float | None = None):
+    if not stock.get("holding_flow_override_candidate_key"):
+        return
+    previous_key = str(stock.get("holding_flow_override_candidate_key") or "-")
+    _mutate_stock_state(
+        stock,
+        pop_fields=(
+            "holding_flow_override_candidate_key",
+            "holding_flow_override_started_at",
+            "holding_flow_override_candidate_profit",
+            "holding_flow_override_exit_rule",
+            "holding_flow_override_last_review_at",
+            "holding_flow_override_last_review_profit",
+            "holding_flow_override_last_action",
+            "holding_flow_override_last_flow_state",
+            "holding_flow_override_last_score",
+            "holding_flow_override_last_reason",
+            "holding_flow_override_next_review_sec",
+        ),
+    )
+    _log_holding_pipeline(
+        stock,
+        code,
+        "holding_flow_override_candidate_cleared",
+        reason=reason,
+        previous_key=previous_key,
+        profit_rate=f"{profit_rate:+.2f}" if profit_rate is not None else "-",
     )
 
 
@@ -5024,6 +5179,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
     _reconcile_pending_entry_orders(stock, code, strategy)
     if curr_p <= 0 or buy_p <= 0:
         return
+    _append_holding_price_sample(stock, now_ts=now_ts, curr_price=curr_p)
 
     # --------------------------------------------------------
     # HOLDING 제어 흐름(요약)
@@ -5614,18 +5770,15 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         exit_rule = "protect_hard_stop"
 
     elif trailing_stop_price > 0 and curr_p <= trailing_stop_price:
-        in_pyramid_trailing_grace, _, _ = _pyramid_post_add_trailing_grace(stock, now_ts)
-        if in_pyramid_trailing_grace:
-            _log_pyramid_post_add_trailing_grace(
-                stock,
-                code,
-                now_ts=now_ts,
-                exit_rule_candidate="protect_trailing_stop",
-                profit_rate=profit_rate,
-                peak_profit=peak_profit,
-                drawdown=0.0,
-            )
-        else:
+        if _protect_trailing_break_confirmed(
+            stock,
+            code,
+            now_ts=now_ts,
+            curr_price=curr_p,
+            trailing_stop_price=trailing_stop_price,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+        ):
             is_sell_signal = True
             sell_reason_type = "TRAILING"
             reason = f"🔥 보호 트레일링 이탈 ({trailing_stop_price:,.0f}원)"
@@ -6169,6 +6322,14 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             sell_reason_type = "LOSS"
             reason = f"🛑 손절선 도달 ({regime_name} 기준 {current_stop_loss}%)"
             exit_rule = "kospi_regime_stop_loss"
+
+    if not is_sell_signal:
+        _clear_holding_flow_override_candidate(
+            stock,
+            code,
+            reason="exit_candidate_resolved",
+            profit_rate=profit_rate,
+        )
 
     if is_sell_signal:
         if not _evaluate_holding_flow_override(

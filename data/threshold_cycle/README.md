@@ -31,6 +31,21 @@
 | `data/report/statistical_action_weight/statistical_action_weight_YYYY-MM-DD.{json,md}` | action weight 파생 artifact |
 | `data/report/holding_exit_decision_matrix/holding_exit_decision_matrix_YYYY-MM-DD.{json,md}` | AI decision-support matrix 파생 artifact |
 
+## 보호트레일링 평탄화 threshold family
+
+`protect_trailing_smoothing` family는 `protect_trailing_smooth_hold`와 `protect_trailing_smooth_confirmed` stage를 수집한다.
+
+관리 대상 값:
+
+- `SCALP_PROTECT_TRAILING_SMOOTH_WINDOW_SEC`
+- `SCALP_PROTECT_TRAILING_SMOOTH_MIN_SPAN_SEC`
+- `SCALP_PROTECT_TRAILING_SMOOTH_MIN_SAMPLES`
+- `SCALP_PROTECT_TRAILING_SMOOTH_BELOW_RATIO`
+- `SCALP_PROTECT_TRAILING_SMOOTH_BUFFER_PCT`
+- `SCALP_PROTECT_TRAILING_EMERGENCY_PCT`
+
+런타임 override 키는 각각 `KORSTOCKSCAN_` prefix를 붙인 동일 이름이다. 단, 현재 apply mode는 `manifest_only`이므로 threshold-cycle은 장후 추천값과 다음 장전 apply plan만 생성하고, 봇 runtime 값을 자동 변경하지 않는다. live 반영은 별도 workorder, sample floor, rollback guard, env/code 반영, restart 절차가 닫힌 경우에만 허용한다.
+
 ## 운영 판정 기준
 
 1. `threshold_events`와 family partition은 canonical raw/compact data다. 사람이 읽는 판정은 `data/report/README.md`의 Markdown 생성 기준을 따른다.

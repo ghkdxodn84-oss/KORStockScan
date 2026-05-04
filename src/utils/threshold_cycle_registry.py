@@ -31,6 +31,8 @@ THRESHOLD_STAGE_FAMILY_MAP = {
     "soft_stop_absorption_extend": "soft_stop_expert_defense",
     "soft_stop_absorption_exit": "soft_stop_expert_defense",
     "soft_stop_absorption_recovered": "soft_stop_expert_defense",
+    "protect_trailing_smooth_hold": "protect_trailing_smoothing",
+    "protect_trailing_smooth_confirmed": "protect_trailing_smoothing",
     "adverse_fill_observed": "adverse_fill_detector",
     "exit_signal": "statistical_action_weight",
     "sell_completed": "statistical_action_weight",

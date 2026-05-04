@@ -93,7 +93,7 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 | `latency_guard_canary` | broad fallback override OFF | 원칙상 재개 금지 | broad override가 아니라 신규 세분화 축으로만 재등록 |
 | `latency_fallback` / `split_entry` | fallback/split-entry 폐기 확정 | 재개 계획 없음 | 재개하려면 기존 축 복구가 아니라 새 workorder, 새 cohort, 새 rollback guard 필요 |
 | `generic AVG_DOWN` | runtime removed | 재개 계획 없음 | 단순 낙폭형 물타기는 EV/귀속 품질이 거칠어 재오픈 금지. scalping `AVG_DOWN` add_type은 `REVERSAL_ADD` 체결 귀속명으로만 유지 |
-| `SCALPING_PYRAMID_ZERO_QTY_STAGE1` | zero-qty stage1 OFF | pyramid zero-qty 분석을 runtime stage로 다시 남길 때 | 현재 add count blocker 제거 후에도 zero-qty 귀속 공백이 남을 때만 observe로 재개 |
+| `SCALPING_PYRAMID_ZERO_QTY_STAGE1` | active bugfix | `2026-05-04` 사용자 지시로 스캘핑 PYRAMID 1주 floor 기본 ON | 신규 진입 cap 확대가 아니라 `buy_qty=1 -> int(1 * 0.50)=0` 실행불능 제거다. 예수금/position cap이 1주 이상 허용할 때만 `floor_applied=True`로 1주 주문을 허용하고, `initial-only`/`pyramid-activated`는 계속 분리한다. |
 | `OpenAI Responses WS` | `OPENAI_RESPONSES_WS_ENABLED=False`, transport `http` | 5/4 shadow 결과와 parity acceptance 통과 후 | request_id mismatch=0, late_discard=0, http fallback<=2%, parse_fail<=0.5%, timeout reject<=1% |
 | `OpenAI dual persona` | `OPENAI_DUAL_PERSONA_ENABLED=False` | AI A/B 의제를 다시 열 때 | entry/holding owner 안정화 후, 추가 API/지연 비용과 EV 비교 cohort가 문서화될 때 |
 | `OpenAI schema registry` / deterministic config | `OPENAI_RESPONSE_SCHEMA_REGISTRY_ENABLED=False`, `OPENAI_JSON_DETERMINISTIC_CONFIG_ENABLED=False` | endpoint contract acceptance 완료 후 | schema gap 0, parse failure 기준 통과, rollback env와 endpoint별 scope 고정 |

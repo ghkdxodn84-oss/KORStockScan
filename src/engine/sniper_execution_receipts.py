@@ -668,7 +668,7 @@ def handle_order_notice(notice_data):
     order_no = str(notice_data.get('order_no', '') or '').strip()
     status = str(notice_data.get('status', '') or '').strip()
 
-    if not code or not exec_type or not order_no:
+    if not code or exec_type not in {'BUY', 'SELL'} or not order_no:
         return
 
     with _active_state_lock():

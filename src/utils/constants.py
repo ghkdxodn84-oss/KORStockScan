@@ -61,7 +61,7 @@ class TradingConfig:
     SCALPING_MAX_AVG_DOWN_COUNT: int = 0  # DEPRECATED: reversal_add/AVG_DOWN receipt attribution only
     SCALPING_MAX_PYRAMID_COUNT: int = 0  # DEPRECATED: runtime count gate removed; counter remains for attribution
     SCALPING_PYRAMID_MIN_PROFIT_PCT: float = 1.5
-    SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED: bool = False
+    SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED: bool = True  # 1주 cap에서도 PYRAMID 1주 소형 canary 허용
 
     # ==========================================
     # 3.3 추가매수(스윙) 설정
@@ -258,6 +258,13 @@ class TradingConfig:
     SCALP_SAFE_PROFIT = 0.5            # 💡 [신규] 수수료/세금/슬리피지를 커버하는 최소 안전 마진 (이 선을 넘으면 무조건 수익 마감 모드 돌입)
     SCALP_TRAILING_LIMIT_STRONG = 0.8  # 💡 [신규] AI 점수가 75점 이상(수급 폭발)일 때 허용하는 고점 대비 눌림폭 (%)
     SCALP_TRAILING_LIMIT_WEAK = 0.4    # 💡 [신규] AI 점수가 75점 미만(수급 애매)일 때 타이트하게 끊어내는 고점 대비 눌림폭 (%)
+    SCALP_PROTECT_TRAILING_SMOOTH_ENABLED: bool = True  # 보호 트레일링은 단일 tick 대신 평탄화 이탈 확인
+    SCALP_PROTECT_TRAILING_SMOOTH_WINDOW_SEC: int = 20  # 보호 트레일링 평탄화 샘플 윈도우
+    SCALP_PROTECT_TRAILING_SMOOTH_MIN_SPAN_SEC: int = 8  # 최소 관측 기간
+    SCALP_PROTECT_TRAILING_SMOOTH_MIN_SAMPLES: int = 3  # 최소 샘플 수
+    SCALP_PROTECT_TRAILING_SMOOTH_BELOW_RATIO: float = 0.67  # 버퍼 하단 이탈 샘플 비율
+    SCALP_PROTECT_TRAILING_SMOOTH_BUFFER_PCT: float = 1.00  # 보호선 대비 노이즈 허용폭
+    SCALP_PROTECT_TRAILING_EMERGENCY_PCT: float = -2.0  # 평탄화 전에도 즉시 청산할 손실폭
 
     # ── reversal_add ────────────────────────────────────────
     REVERSAL_ADD_ENABLED: bool = True              # 2026-04-30 canary: 역전 확인 추가매수 소형 실험
@@ -756,6 +763,13 @@ def _build_trading_rules() -> TradingConfig:
     env_bad_entry_refined_recovery_max = _env_float("KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_RECOVERY_PROB_MAX")
     env_soft_stop_expert_enabled = _env_bool("KORSTOCKSCAN_SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED")
     env_soft_stop_expert_activate_at = _env_str("KORSTOCKSCAN_SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT")
+    env_protect_trailing_smooth_enabled = _env_bool("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_ENABLED")
+    env_protect_trailing_smooth_window = _env_int("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_WINDOW_SEC")
+    env_protect_trailing_smooth_min_span = _env_int("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_MIN_SPAN_SEC")
+    env_protect_trailing_smooth_min_samples = _env_int("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_MIN_SAMPLES")
+    env_protect_trailing_smooth_below_ratio = _env_float("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_BELOW_RATIO")
+    env_protect_trailing_smooth_buffer = _env_float("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_BUFFER_PCT")
+    env_protect_trailing_emergency = _env_float("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_EMERGENCY_PCT")
     if (
         env_dynamic_strength_enabled is not None
         or env_dynamic_strength_tags is not None
@@ -794,6 +808,13 @@ def _build_trading_rules() -> TradingConfig:
         or env_bad_entry_refined_recovery_max is not None
         or env_soft_stop_expert_enabled is not None
         or env_soft_stop_expert_activate_at is not None
+        or env_protect_trailing_smooth_enabled is not None
+        or env_protect_trailing_smooth_window is not None
+        or env_protect_trailing_smooth_min_span is not None
+        or env_protect_trailing_smooth_min_samples is not None
+        or env_protect_trailing_smooth_below_ratio is not None
+        or env_protect_trailing_smooth_buffer is not None
+        or env_protect_trailing_emergency is not None
     ):
         config = replace(
             config,
@@ -908,6 +929,27 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT=env_soft_stop_expert_activate_at
             if env_soft_stop_expert_activate_at is not None
             else config.SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT,
+            SCALP_PROTECT_TRAILING_SMOOTH_ENABLED=env_protect_trailing_smooth_enabled
+            if env_protect_trailing_smooth_enabled is not None
+            else config.SCALP_PROTECT_TRAILING_SMOOTH_ENABLED,
+            SCALP_PROTECT_TRAILING_SMOOTH_WINDOW_SEC=env_protect_trailing_smooth_window
+            if env_protect_trailing_smooth_window is not None
+            else config.SCALP_PROTECT_TRAILING_SMOOTH_WINDOW_SEC,
+            SCALP_PROTECT_TRAILING_SMOOTH_MIN_SPAN_SEC=env_protect_trailing_smooth_min_span
+            if env_protect_trailing_smooth_min_span is not None
+            else config.SCALP_PROTECT_TRAILING_SMOOTH_MIN_SPAN_SEC,
+            SCALP_PROTECT_TRAILING_SMOOTH_MIN_SAMPLES=env_protect_trailing_smooth_min_samples
+            if env_protect_trailing_smooth_min_samples is not None
+            else config.SCALP_PROTECT_TRAILING_SMOOTH_MIN_SAMPLES,
+            SCALP_PROTECT_TRAILING_SMOOTH_BELOW_RATIO=env_protect_trailing_smooth_below_ratio
+            if env_protect_trailing_smooth_below_ratio is not None
+            else config.SCALP_PROTECT_TRAILING_SMOOTH_BELOW_RATIO,
+            SCALP_PROTECT_TRAILING_SMOOTH_BUFFER_PCT=env_protect_trailing_smooth_buffer
+            if env_protect_trailing_smooth_buffer is not None
+            else config.SCALP_PROTECT_TRAILING_SMOOTH_BUFFER_PCT,
+            SCALP_PROTECT_TRAILING_EMERGENCY_PCT=env_protect_trailing_emergency
+            if env_protect_trailing_emergency is not None
+            else config.SCALP_PROTECT_TRAILING_EMERGENCY_PCT,
         )
 
     env_scalping_enable_pyramid = _env_bool("KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID")
