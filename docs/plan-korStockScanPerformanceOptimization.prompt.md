@@ -62,8 +62,8 @@
 8. BUY 후 미진입은 `latency guard miss`, `liquidity gate miss`, `AI threshold miss`, `overbought gate miss`로 분리 해석한다.
 9. `full fill`과 `partial fill`은 같은 표본으로 합치지 않는다.
 10. 원인 귀속이 불명확하면 먼저 `리포트 정합성`, `이벤트 복원`, `집계 품질`을 점검한다.
-11. 현재 entry owner는 `mechanical_momentum_latency_relief`, `dynamic_entry_price_resolver_p1`, `dynamic_entry_ai_price_canary_p2`다. OFI/QI는 P2 내부 live 입력 feature이며 standalone hard gate가 아니다.
-12. 현재 보유/청산 owner는 `soft_stop_micro_grace`, `REVERSAL_ADD`, `bad_entry_refined_canary`, `holding_flow_override`다. `same_symbol_loss_reentry_cooldown`은 손실 후 동일종목 반복진입을 막는 임시 운영가드이며, 5/6에는 단독 hard cooldown이 아니라 하향 재진입 복합 threshold 후보로 재판정한다.
+11. 현재 entry owner는 `mechanical_momentum_latency_relief`, `dynamic_entry_price_resolver_p1`, `dynamic_entry_ai_price_canary_p2`다. 단, `AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED=True`라 score 50 fallback/neutral은 신규 BUY 제출로 내려보내지 않고 `blocked_ai_score`로 보류한다. OFI/QI는 P2 내부 live 입력 feature이며 standalone hard gate가 아니다.
+12. 현재 보유/청산 owner는 `soft_stop_micro_grace`, `REVERSAL_ADD`, `holding_flow_override`다. `bad_entry_refined_canary`는 `2026-05-04` 장후 OFF됐고 refined 후보는 report-only counterfactual로만 유지한다. `same_symbol_loss_reentry_cooldown`은 손실 후 동일종목 반복진입을 막는 임시 운영가드이며, 5/6에는 단독 hard cooldown이 아니라 하향 재진입 복합 threshold 후보로 재판정한다.
 13. AI provider routing은 live 승격이 아니라 prompt별 model tier/endpoint contract/provenance 기준으로 관리한다. Gemini live enable, OpenAI live routing, Responses WS live 전환은 별도 checklist 없이 열지 않는다.
 14. threshold 자동화는 POSTCLOSE report와 PREOPEN apply plan까지만 허용한다. `ThresholdOpsTransition0506` 전 live runtime mutation은 금지하며 현재 apply mode는 `manifest_only`다.
 15. 기준선/롤백/승격 판단은 문서 파생값이 아니라 DB 우선 스냅샷 실필드와 canonical JSON/JSONL에서 생성된 report를 기준으로 한다.
@@ -74,9 +74,9 @@
 
 | 워크스트림 | 현재 상태 | 판정 | 다음 닫힘 시점 |
 | --- | --- | --- | --- |
-| `entry operating override` | `mechanical_momentum_latency_relief` ON | 운영 override 유지, 신규 OPEN 아님 | `2026-05-04 PREOPEN` 로드 확인 |
+| `entry operating override` | `mechanical_momentum_latency_relief` ON, score 50 buy-hold override ON | score 50 fallback은 신규 BUY 보류. mechanical relief는 score 70대/저신호 제출병목 회복축으로만 유지 | `2026-05-04 INTRADAY` override 반영, `2026-05-06 POSTCLOSE` composite 판정 |
 | `entry price` | P1 resolver + P2 AI price canary live, OFI/QI P2 내부 입력 ON | entry price active owner | `2026-05-04 PREOPEN/POSTCLOSE` health/provenance |
-| `holding/exit` | `soft_stop_micro_grace`, `REVERSAL_ADD`, `bad_entry_refined_canary`, `holding_flow_override`, 임시 `same_symbol_loss_reentry_cooldown` 운영가드 | 보유/청산 active owner. 동일종목 손실 후 60분 쿨다운은 최종 threshold가 아니라 5/6 복합축 전환 후보 | `2026-05-04 POSTCLOSE` keep/OFF 및 flow 판정, `2026-05-06 POSTCLOSE` cooldown/composite 판정 |
+| `holding/exit` | `soft_stop_micro_grace`, `REVERSAL_ADD`, `holding_flow_override`, 임시 `same_symbol_loss_reentry_cooldown` 운영가드. `bad_entry_refined_canary`는 5/4 장후 OFF | 보유/청산 active owner. 동일종목 손실 후 60분 쿨다운은 최종 threshold가 아니라 5/6 복합축 전환 후보. trailing/protect 민감도는 5/4 수익 실현 양호에도 weak borderline/PYRAMID 교차가 커서 5/6 단일 owner로 재판정. 오버나이트 flow `TRIM`은 부분청산 구현 전까지 `SELL_TODAY` 유지 | `2026-05-06 PREOPEN` refined OFF/overnight TRIM 로드 확인, `2026-05-06 POSTCLOSE` cooldown/composite/trailing-protect 판정 |
 | `position sizing` | `initial_entry_qty_cap_1share` 유지, `MAX_*_COUNT`는 attribution counter, generic `AVG_DOWN` 평가는 제거됐다. scalping `AVG_DOWN` add_type은 `REVERSAL_ADD` 귀속으로만 남고, `SCALPING_ENABLE_PYRAMID`는 cooldown/pending/position cap/protection으로 관리 | count gate semantics 정리 완료, 동적 수량화만 OPEN | `2026-05-04 PREOPEN`, `2026-05-06 POSTCLOSE` |
 | `AI engine` | Gemini/DeepSeek/OpenAI contract/provenance 보강. 현재 `main` 스캘핑 live routing 기본값은 Gemini이며, OpenAI Responses WS와 OpenAI live routing은 flag-off/backlog | live routing 승격 아님 | `2026-05-06 POSTCLOSE` backlog 재분류 |
 | `threshold/action weight` | threshold collector/report/apply plan 자동화. apply는 `manifest_only` | runtime mutation 전 단계 | `2026-05-06 POSTCLOSE` acceptance |

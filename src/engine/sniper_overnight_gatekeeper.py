@@ -506,13 +506,17 @@ def _apply_overnight_flow_override(record, mem_stock, ws_data, ctx, decision, ai
         profit_rate=f"{pnl_pct:+.2f}",
         ai_parse_fail=parse_failed,
     )
-    if parse_failed or flow_action == "EXIT":
+    if parse_failed or flow_action in {"EXIT", "TRIM"}:
         _log_holding_pipeline(
             name,
             code,
             "overnight_flow_override_exit_confirmed",
             flow_action=flow_action,
-            force_reason="parse_fail" if parse_failed else "flow_exit",
+            force_reason=(
+                "parse_fail"
+                if parse_failed
+                else ("flow_trim_unsupported" if flow_action == "TRIM" else "flow_exit")
+            ),
             profit_rate=f"{pnl_pct:+.2f}",
         )
         return decision

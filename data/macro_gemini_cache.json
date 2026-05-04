@@ -1,84 +1,85 @@
 {
-  "bundle_as_of": "2026-04-29T22:20:12Z",
+  "bundle_as_of": "2026-05-03T22:20:14Z",
   "sp500": {
-    "name": "S&P500",
-    "value": 7135.95,
-    "prev_value": 7138.8,
-    "change": -2.85,
-    "change_pct": -0.04,
-    "as_of": "2026-04-29T20:00:00Z",
-    "source": "Morningstar"
+    "name": "S&P 500",
+    "value": 7230.12,
+    "prev_value": 7209.01,
+    "change": 21.11,
+    "change_pct": 0.29,
+    "as_of": "2026-05-01T20:00:00Z",
+    "source": "The Street / Washington Post"
   },
   "nasdaq": {
-    "name": "NASDAQ",
-    "value": 24673.24,
-    "prev_value": 24663.8,
-    "change": 9.44,
-    "change_pct": 0.04,
-    "as_of": "2026-04-29T20:00:00Z",
-    "source": "Morningstar"
+    "name": "NASDAQ Composite",
+    "value": 25114.44,
+    "prev_value": 24892.31,
+    "change": 222.13,
+    "change_pct": 0.89,
+    "as_of": "2026-05-01T20:00:00Z",
+    "source": "Morningstar / AP News"
   },
   "vix": {
     "name": "VIX",
-    "value": 18.54,
-    "prev_value": 17.83,
-    "change": 0.71,
-    "change_pct": 3.93,
-    "as_of": "2026-04-29T20:00:00Z",
-    "source": "r/StockMarket"
+    "value": 16.99,
+    "prev_value": 16.89,
+    "change": 0.1,
+    "change_pct": 0.59,
+    "as_of": "2026-05-01T20:00:00Z",
+    "source": "YCharts / StreetStats"
   },
   "us10y": {
-    "name": "US10Y",
-    "value": 4.407,
-    "prev_value": 4.35,
-    "change": 0.057,
-    "change_pct": 1.31,
-    "as_of": "2026-04-29T20:00:00Z",
-    "source": "Babypips"
+    "name": "US 10-Year Treasury Yield",
+    "value": 4.39,
+    "prev_value": 4.4,
+    "change": -0.01,
+    "change_pct": -0.23,
+    "as_of": "2026-05-01T20:00:00Z",
+    "source": "AhaSignals"
   },
   "brent": {
-    "name": "BRENT",
-    "value": 115.29,
-    "prev_value": 111.26,
-    "change": 4.03,
-    "change_pct": 3.62,
-    "as_of": "2026-04-29T20:00:00Z",
-    "source": "TradingView"
+    "name": "Brent Crude",
+    "value": 108.17,
+    "prev_value": 110.39,
+    "change": -2.22,
+    "change_pct": -2.02,
+    "as_of": "2026-05-01T21:00:00Z",
+    "source": "Trading Economics"
   },
   "headlines": [
     {
-      "title": "FOMC holds rates steady at 3.5%-3.75% with four hawkish dissents in Powell's final meeting",
-      "source": "Babypips",
-      "published_at": "2026-04-29T18:00:00Z",
-      "url": "https://www.babypips.com/"
+      "title": "Middle East War to Spark Biggest Energy Price Surge in Four Years: World Bank",
+      "source": "Maaal",
+      "published_at": "2026-05-03T12:00:00Z",
+      "url": "https://www.maaal.com"
     },
     {
-      "title": "Brent crude breaks $115 amid ongoing Hormuz closure and UAE's surprise OPEC exit",
-      "source": "TradingView",
-      "published_at": "2026-04-29T18:30:00Z",
-      "url": "https://www.tradingview.com/"
+      "title": "Trump fast-tracks $8.6B arms deal to Middle East amid Iran tensions",
+      "source": "Financial Times / Crypto Briefing",
+      "published_at": "2026-05-02T12:00:00Z",
+      "url": "https://cryptobriefing.com"
     },
     {
-      "title": "Kevin Warsh advances to become next Fed Chair as Senate Banking Committee backs nomination",
-      "source": "Babypips",
-      "published_at": "2026-04-29T18:15:00Z",
-      "url": "https://www.babypips.com/"
+      "title": "Oil posts second weekly gain as Hormuz closure persists",
+      "source": "MUFG Research",
+      "published_at": "2026-05-01T15:00:00Z",
+      "url": "https://mufgresearch.com"
     },
     {
-      "title": "Wall Street awaits Mag 7 earnings as Alphabet, Meta, Microsoft, and Amazon report post-market",
-      "source": "MarketPulse",
-      "published_at": "2026-04-29T13:00:00Z",
-      "url": "https://www.marketpulse.com/"
+      "title": "S&P 500, Nasdaq end higher, notch weekly gains after earnings-heavy week",
+      "source": "Reuters",
+      "published_at": "2026-05-01T20:30:00Z",
+      "url": "https://www.reuters.com"
     },
     {
-      "title": "U.S. durable goods orders and housing starts post solid growth in March despite global tensions",
-      "source": "StoneX",
-      "published_at": "2026-04-29T12:00:00Z",
-      "url": "https://www.stonex.com/"
+      "title": "Gold supported by weaker dollar despite war-driven inflation risks",
+      "source": "MUFG Research",
+      "published_at": "2026-05-01T15:00:00Z",
+      "url": "https://mufgresearch.com"
     }
   ],
   "notes": [
-    "Market data reflects the US trading session close on April 29, 2026.",
-    "Markets reacted to the Federal Reserve's split rate decision and soaring oil prices due to an ongoing blockade of the Strait of Hormuz."
+    "AllvaluesreflectthemarketcloseonFriday, May1, 2026[1.2].",
+    "US indexes (S&P 500, NASDAQ) recorded fresh all-time highs driven by robust earnings from major tech companies.",
+    "Energy markets continue to experience high volatility and supply constraints due to the prolonged closure of the Strait of Hormuz amid the Middle East conflict."
   ]
 }

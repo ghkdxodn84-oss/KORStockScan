@@ -34,7 +34,8 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 
 | 축 | 상태 | 현재 기준 | 유지/판정 기준 |
 | --- | --- | --- | --- |
-| `mechanical_momentum_latency_relief` | ON, entry operating override | `SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=True` | same-day entry replacement 운영 override다. 제출 전은 진입병목 회복, 제출 후는 `full/partial` 체결 품질과 BUY 신호 적정성으로 분리 판정한다 |
+| `mechanical_momentum_latency_relief` | ON, entry operating override | `SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=True` | same-day entry replacement 운영 override다. 단, score 50 fallback/neutral은 `AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED=True`가 우선해 `blocked_ai_score`로 보류한다. 제출 전은 진입병목 회복, 제출 후는 `full/partial` 체결 품질과 BUY 신호 적정성으로 분리 판정한다 |
+| `ai_score_50_buy_hold_override` | ON, entry operating override | `AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED=True` | AI parse/error/neutral score 50을 신규 BUY 제출로 내려보내지 않는다. 5/6에는 avoided loser와 missed winner를 분리해 하향 재진입 복합 threshold로 대체 가능성을 본다 |
 | `soft_stop_micro_grace` | ON, exit active-canary | `SCALP_SOFT_STOP_MICRO_GRACE_ENABLED=True`, `20초`, emergency `-2.0%` | hard stop 전환, 미체결, same-symbol 손실이 늘면 OFF. 반등 포착 개선이 유지되면 baseline-promote 후보 |
 | `REVERSAL_ADD` | ON, exit active-canary | `REVERSAL_ADD_ENABLED=True` | executed가 계속 0이면 parking 금지. `pnl/hold/supply/qty/position_cap/cooldown/pending/protection` blocker를 좁혀 실행요건을 찾는다 |
 | `bad_entry_refined_canary` | ON, exit active-canary | `SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=True` | naive block 금지. `GOOD_EXIT/MISSED_UPSIDE` 제거가 늘거나 canary cohort 손익이 비적용 후보보다 악화되면 OFF |
@@ -281,7 +282,7 @@ cohort 분류 공통 규칙은 아래로 고정한다.
 | `wait6579_probe_canary_applied` | `guarded-off` | 소량 probe 적용 표본 분리 | `soft_stop_micro_grace` live 관찰 중에는 OFF. 재개하려면 단일 live canary slot을 다시 확보하고 `submitted/full/partial` 회복 기준을 새로 문서화 | `wait6579_ev_cohort`, `2026-04-21 checklist` |
 | `latency_quote_fresh_composite` | `observe-only` | 2026-04-29 이전 live였던 quote freshness 복합 residual 축의 historical/reference cohort | `2026-04-29 08:29 KST` OFF + restart 이후에는 historical/reference 및 감리 비교용으로만 유지. 재개 시 새 승인 항목과 rollback guard 필요 | `Plan Rebase`, `2026-04-29 checklist` |
 | `latency_signal_quality_quote_composite` | `observe-only` | `latency_quote_fresh_composite` replacement로 same-day 시험한 예비 복합축의 post-restart cohort | `2026-04-29 12:21~12:50 KST` replacement cohort 분리와 효과 미약 판정 보존이 끝나면 historical-only로 유지. baseline/live 승격 금지 | `Plan Rebase`, `2026-04-29 checklist` |
-| `mechanical_momentum_latency_relief` | `operating-override-decision` | AI 50/70 mechanical fallback 상태를 포함하는 현재 entry replacement live cohort | `submitted` 전까지는 진입병목 회복으로 보고, `submitted` 이후는 `full/partial` 체결 품질과 `HOLDING/exit_rule/COMPLETED + valid profit_rate`로 BUY 신호 적정성을 분리 판정한 뒤 keep/OFF/후속 replacement를 결정한다. hard baseline 승격과 분리한다 | `Plan Rebase`, `2026-04-29 checklist` |
+| `mechanical_momentum_latency_relief` | `operating-override-decision` | score 70대 mechanical fallback 상태를 포함하는 현재 entry replacement live cohort | `AI score 50`은 5/4 buy-hold override로 제외한다. `submitted` 전까지는 진입병목 회복으로 보고, `submitted` 이후는 `full/partial` 체결 품질과 `HOLDING/exit_rule/COMPLETED + valid profit_rate`로 BUY 신호 적정성을 분리 판정한 뒤 keep/OFF/후속 replacement를 결정한다. hard baseline 승격과 분리한다 | `Plan Rebase`, `2026-04-29 checklist` |
 | `dynamic_entry_price_resolver_p1` | `baseline-decision` | reference target과 defensive price 권한을 분리한 기본 entry price resolver cohort | `reference_target_applied/rejected`, `submitted_order_price`, timeout profile, `price_below_bid_bps`가 안정적으로 복원되고 P2 canary의 fallback baseline으로 고정될 때 유지 | `2026-05-04 checklist`, `entry price audit follow-up` |
 | `dynamic_entry_ai_price_canary_p2` | `active-canary-decision` | submitted 직전 Tier2 AI가 live quote/microstructure를 보고 최종 주문가를 조정하는 entry price canary cohort | `USE_DEFENSIVE/REFERENCE/IMPROVE_LIMIT/SKIP` applied 표본과 P1 fallback 표본을 분리해 체결 품질, 미체결 방치, `COMPLETED + valid profit_rate`를 확인한 뒤 유지/종료/승격을 결정 | `2026-05-04 checklist`, `entry price audit follow-up` |
 | `post-restart cohort` | `active-canary-decision` | replacement 이후 same-day 제출 회복 관찰 | replacement 당일 판정이 닫히고 후속 축이 새 `post-change` cohort로 넘어가면 종료. 익일 이후 지속 baseline으로 쓰지 않음 | `2026-04-29 checklist` |
@@ -839,7 +840,7 @@ inventory 운영 규칙은 아래로 고정한다.
 - 향후 재개 가능성: `High`
 - 근거:
   1. `2026-04-29 12:50 KST` 운영 override로 `latency_signal_quality_quote_composite=False`, `mechanical_momentum_latency_relief=True` replacement가 반영됐다.
-  2. same-day counterfactual 기준 약 `91`건 후보가 확인돼, AI score 50/70 기계 fallback 표본을 완전히 버리지 않는 현재 가장 직접적인 제출 회복 축이다.
+  2. same-day counterfactual 기준 약 `91`건 후보가 확인돼, mechanical fallback 표본을 완전히 버리지 않는 현재 가장 직접적인 제출 회복 축이었다. 단, `2026-05-04` 유안타증권 반복손실 이후 `AI score 50`은 신규 BUY 보류 override가 우선한다.
   3. `2026-04-29 12:57 KST` restart 후 main PID `30566 -> 35539` 교체 provenance가 확보됐다.
 - 다음 액션:
   1. `mechanical_momentum_relief_canary_applied`, `latency_mechanical_momentum_relief_normal_override`, `submitted`까지는 entry 병목 회복으로, `full/partial`, `HOLDING/exit_rule`, `COMPLETED + valid profit_rate`, `fallback_regression=0`는 BUY 신호 품질 관찰로 post-restart cohort를 분리한다.

@@ -6,19 +6,21 @@
 
 | 항목 | 현재 기준 |
 | --- | --- |
-| 기준일 | `2026-04-30 KST` 장후 정렬 기준 |
-| entry live owner | `mechanical_momentum_latency_relief`. `latency_quote_fresh_composite`는 `2026-04-29 08:29 KST` OFF + restart 완료, `latency_signal_quality_quote_composite`는 `2026-04-29 12:50 KST` 효과 미약으로 OFF |
-| submitted 이후 해석 | `mechanical_momentum_latency_relief` post-restart cohort에서 제출 회복 방향성은 확인됐다. `2026-04-30 09:00~10:00` 기준 `budget_pass=951`, `submitted=27`, `mechanical_momentum_relief_canary_applied=22`였다. 다만 `submitted` 이후는 더 이상 진입병목이 아니라 체결 품질과 BUY 신호 적정성 관찰 구간이다. `full/partial`은 주문이 전량/일부 체결됐는지의 실행 품질 분리값이고, 이후 `HOLDING -> exit_rule -> COMPLETED + valid profit_rate`로 BUY 신호가 적정했는지 본다. |
-| entry 수량축 | 스캘핑 신규 BUY는 `2026-04-30` 장후 사용자 지시로 최대매수가능 주수 `1주 cap`으로 회귀한다. `2주 cap`은 pyramid zero_qty 왜곡 완화 목적이었지만, 현재 우선순위는 신규 BUY exposure와 soft stop tail 오염 축소다. |
-| 보유/청산 live owner | `soft_stop_micro_grace` active. `soft_stop_expert_defense v2`는 `2026-04-30 12:00~15:30 KST` same-day 수집 축으로 운용한 뒤 다음 재승인 전 기본 OFF로 정렬한다. 최종 집계는 `shadow/adverse unique 11`, `probe unique 6`, `extend/recovered unique 1`, touched 평균 `-1.567%`로 live 지속 근거가 아니라 다음 방어망 설계 근거다. |
-| 추가매수 횟수 제한 | 물타기/불타기 `MAX_*_COUNT`는 더 이상 runtime blocker가 아니라 attribution counter다. 반복 추가매수 리스크는 별도 enable flag, cooldown, pending order, position cap, protection 재설정 fail-closed, near-close gate로 제한한다. |
-| soft stop 해석 | 4월 soft stop post-sell 61건 중 10분 내 매도가 재상회 57건, +0.5% 이상 반등 43건, +1.0% 이상 반등 23건, 매수가 회복 16건이다. 즉 휩쏘 가능성은 높지만 무조건 더 오래 버티는 결론은 아니다. |
-| 2026-04-29 soft stop 표본 | `올릭스`는 `GOOD_EXIT`, `덕산하이메탈`은 `NEUTRAL`, `지앤비에스 에코`는 `MISSED_UPSIDE + 고가 재진입 체결 + 익절 완료`, `코오롱`은 `GOOD_EXIT`지만 고가 재진입 제출 흔적이 있다. |
-| 2026-04-30 보유/청산 실험 | 오전 `09:00~10:30`에는 `REVERSAL_ADD` 체결이 없었고 blocker는 `pnl_out_of_range`, `hold_sec_out_of_range`가 지배적이었다. 이에 `2026-04-30 10:14 KST` 재기동 기준 `REVERSAL_ADD_PNL_MIN -0.45 -> -0.70`, `REVERSAL_ADD_MAX_HOLD_SEC 120 -> 180`만 intraday widen 했다. `bad_entry_block`은 표본 부족이 아니라 단순 차단 시 `GOOD_EXIT` 제거 위험 때문에 refined canary가 필요했고, `2026-04-30` 장후에 코드/테스트 준비를 완료했다. |
-| trailing 위치 | trailing 과민 여부는 active live 축이 아니라 `2순위 candidate`다. 판단축은 `GOOD_EXIT/MISSED_UPSIDE`, `same_symbol reentry`, `mfe_10m`, `peak-to-exit giveback`이며, soft stop 축보다 뒤에 둔다. |
-| runtime truth 이슈 | `SK이노베이션(096770)`은 BUY/SELL 모두 WS 실제체결이 들어왔으나 `EXEC_IGNORED`가 발생했고, 정기 계좌동기화가 HOLDING/COMPLETED를 복구했다. 수동 HTS 매도 기준 실손익은 비용 반영 약 `+4.2%`다. 핵심 후속은 order-binding 품질이다. |
-| threshold 진행현황 | 실시간 자동변경은 폐기했다. 현재는 `장중 적재 -> 장후 산정 -> 다음 장전 적용` 사이클로 고정했고, compact threshold stream을 별도 적재한다. 운영전환 시에는 매일 자동 실행, 다음 장전 승인 threshold 자동 적용 + 봇 기동, 장후 threshold version별 실적분석 제출, 그 결과의 다음 산정 weight 반영까지 닫혀야 한다. sample ready는 `entry_mechanical_momentum`, `bad_entry_block`, `REVERSAL_ADD blocked funnel`, `soft_stop_micro_grace`이며, 다음 holding/exit threshold owner는 `bad_entry_refined_canary`, `REVERSAL_ADD`는 `pnl/hold/gate` blocker 축소 단계다. 새 보조축 `statistical_action_weight`는 가격대/거래량/시간대별 `exit_only`/`avg_down_wait`/`pyramid_wait` 성과를 장후 weight 입력으로만 본다. |
-| 휴장 보정 | `2026-05-01`은 근로자의 날 KRX 휴장, 다음 운영일은 `2026-05-04`. `2026-05-05`는 어린이날 휴장, 이월 작업은 `2026-05-06` checklist가 소유한다. |
+| 기준일 | `2026-05-04 KST` 장후 정렬 기준 |
+| entry live owner | `mechanical_momentum_latency_relief` 운영 override와 `dynamic_entry_price_resolver_p1`/`dynamic_entry_ai_price_canary_p2` 가격축이다. `latency_quote_fresh_composite`, `latency_signal_quality_quote_composite`, fallback/split-entry 계열은 종료/폐기 축이다. |
+| AI score 50 | `AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED=True`로 score 50 또는 `ai_fallback_score_50=True`는 신규 BUY가 아니라 `blocked_ai_score` 보류로 본다. 유안타증권형 반복 손실은 단순 쿨다운 문제가 아니라 손절 thesis invalidation과 WATCHING 재진입 판단이 분리된 구조 문제로 본다. |
+| submitted 이후 해석 | submitted 이후는 진입병목이 아니라 체결 품질과 BUY 신호 적정성 관찰 구간이다. `full/partial`은 합치지 않고, 이후 `HOLDING -> exit_rule -> COMPLETED + valid profit_rate`로 BUY 품질을 본다. |
+| entry 수량축 | 스캘핑 신규 BUY는 `1주 cap` 유지다. `PYRAMID zero_qty`는 신규 BUY cap 확대가 아니라 `buy_qty=1`에서도 불타기 신호가 실행 가능하도록 1주 floor bugfix로 처리했다. |
+| 보유/청산 live owner | `soft_stop_micro_grace`, `REVERSAL_ADD`, `holding_flow_override`다. `bad_entry_refined_canary`는 5/4 장후 flow defer와 장마감 주문실패 혼입으로 OFF했고, refined 후보는 `SCALP_BAD_ENTRY_REFINED_OBSERVE_ENABLED=True` report-only counterfactual로만 유지한다. |
+| holding_flow_override | 보유/청산 및 오버나이트 `SELL_TODAY` 후보를 단일 점수 컷이 아니라 긴 입력 윈도와 AI flow summary로 재검문한다. hard/protect/order safety는 우회하지 않는다. 오버나이트 flow `TRIM`은 부분청산 구현 전까지 `HOLD_OVERNIGHT`가 아니라 원래 `SELL_TODAY` 유지다. |
+| 장마감 매도 safety | 15:30 KST 이후 SCALPING 매도 신호는 주문을 보내지 않고 `sell_order_blocked_market_closed` 1회와 `market_closed_sell_pending=True`로 분리한다. 이는 주문 실패를 숨기는 것이 아니라 after-close impossible truth를 보존하는 safety gap 보정이다. |
+| 추가매수 횟수 제한 | 물타기/불타기 `MAX_*_COUNT`는 runtime blocker가 아니라 attribution counter다. 반복 추가매수 리스크는 enable flag, cooldown, pending order, position cap, protection 재설정 fail-closed, near-close gate로 제한한다. 단독 hard cooldown은 임시 안전장치 외에는 복합 threshold 전환 후보로 본다. |
+| REVERSAL_ADD/PYRAMID | `REVERSAL_ADD`와 `PYRAMID`는 기대값을 키우는 상위 행동 후보지만, 수량 산식은 아직 고정 템플릿 성격이다. 5/6에는 `ReversalAddDynamicQty0506`, `PyramidDynamicQty0506`에서 observe-only `would_qty`부터 설계한다. |
+| trailing/protect 위치 | trailing/protect 민감도는 5/4 장후 기준 active live 변경 없이 5/6 `TrailingProtectSensitivity0506` 단일 owner로 재판정한다. `scalp_trailing_take_profit`은 평균 완료수익이 양호하지만 weak borderline과 PYRAMID 교차가 크고, protect trailing은 손실 확대 차단과 missed upside가 섞여 있다. |
+| OFI/QI 위치 | OFI/QI는 P2 entry price 내부 입력 품질개선축이다. standalone hard gate가 아니며, `watching/holding/exit` 확장은 별도 workorder 없이는 금지한다. 5/4 장후 P2 stage 111건 중 `USE_DEFENSIVE=96`, `SKIP=8`, `skip_without_bearish_ofi=4`라 neutral/insufficient SKIP demotion 후보는 5/8 `OFIQExpansionLadder0508`에서 본다. |
+| OpenAI 위치 | OpenAI Responses WS/schema/deterministic config는 live routing 승격이 아니라 flag-off backlog다. 5/4 장후 실측 WS/shadow stage는 0건이므로 `runtime 미사용 backlog 유지`로 보고, 5/6 `AIEngineFlagOffBacklog0506`에서 route/diagnostic 존재 여부만 재분류한다. |
+| threshold/report 진행현황 | 실시간 자동변경은 금지다. 현재는 장전 manifest와 장후 report 생성까지만 허용하며, live runtime threshold mutation은 `ThresholdOpsTransition0506` acceptance 전까지 열지 않는다. `statistical_action_weight`, `holding_exit_decision_matrix`, 누적/rolling threshold report는 report-only/decision-support다. |
+| 휴장/이월 보정 | `2026-05-05`는 어린이날 휴장이다. 5/6 PREOPEN은 이미 코드/가드가 준비된 carry-over 로드 확인만 받고, 설계 가능한 항목은 5/4 장후에 즉시 닫거나 5/6 POSTCLOSE 단일 owner로 분리한다. |
 
 ## 추가매수 제한 해석 메모
 
@@ -50,22 +52,23 @@
 
 ### Entry
 
-1. `mechanical_momentum_latency_relief`가 현재 entry live owner다.
-2. `latency_quote_fresh_composite`, `latency_signal_quality_quote_composite`, `spread relief`는 active owner가 아니라 historical/reference 또는 guarded-off다.
-3. 현재 판정 순서는 `BUY 후보 생성 부족 여부`가 아니라 `budget_pass -> submitted 회복 확인 -> 체결 품질과 BUY 신호 적정성 확인`이다.
+1. `mechanical_momentum_latency_relief` 운영 override와 `dynamic_entry_price_resolver_p1`/`dynamic_entry_ai_price_canary_p2`가 현재 entry owner다.
+2. `latency_quote_fresh_composite`, `latency_signal_quality_quote_composite`, `spread relief`, fallback/split-entry 계열은 active owner가 아니라 historical/reference 또는 guarded-off다.
+3. 현재 판정 순서는 `budget_pass -> submitted 회복 확인 -> 체결 품질과 BUY 신호 적정성 확인`이다. 단, `AI score 50 fallback`은 더 이상 신규 BUY로 내려보내지 않고 `blocked_ai_score` 보류로 본다.
 4. 따라서 entry의 현재 최종 의사결정 흐름은:
    - upstream `buy_recovery_canary`는 고정 배경축
-   - live owner는 `DF-ENTRY-007 mechanical_momentum_latency_relief`
+   - live owner는 `DF-ENTRY-007 mechanical_momentum_latency_relief`와 P1/P2 entry price canary
    - 제출 전까지는 병목 판정, `submitted` 이후는 `full/partial` 체결 품질과 `HOLDING/exit_rule/COMPLETED + valid profit_rate`로 BUY 신호 적정성 관찰
    - 이 downstream 품질이 닫혀야 entry baseline 승격 또는 다음 replacement 축 논의가 가능하다
 
 ### Holding/Exit
 
-1. 보유/청산 live owner는 `soft_stop_micro_grace`다.
+1. 보유/청산 live owner는 `soft_stop_micro_grace`, `REVERSAL_ADD`, `holding_flow_override`다.
 2. `DF-HOLDING-004 soft_stop_expert_defense`는 `2026-04-30` same-day v2 수집 축으로 종료했고, 다음 승인 전 기본 OFF다.
-3. `REVERSAL_ADD`는 parking 대상이 아니라 `valid_entry_reversal_add` active canary다.
-4. 다만 현재 실행 owner는 `pnl_out_of_range -> hold_sec_out_of_range -> gate blocker` 순서로 좁히는 단계다.
-5. `bad_entry_block`은 관찰표본은 충분하지만 단순 live block은 보류다. 다음 holding/exit 신규 owner는 `GOOD_EXIT` 제거를 피하는 `bad_entry_refined_canary`이며, 5/4 장전에는 설계가 아니라 로드/override/cohort만 확인한다.
+3. `REVERSAL_ADD`는 parking 대상이 아니라 `valid_entry_reversal_add` active canary다. 현재 후속은 live 수량 변경이 아니라 5/6 observe-only 동적 수량 산식이다.
+4. `bad_entry_refined_canary`는 5/4 장후 OFF다. 이는 bad-entry 조기정리 필요가 사라졌다는 뜻이 아니라, flow defer와 장마감 주문실패가 canary cohort에 섞여 원인귀속이 깨졌다는 뜻이다.
+5. 다음 bad-entry 축은 live canary가 아니라 `SCALP_BAD_ENTRY_REFINED_OBSERVE_ENABLED=True` report-only counterfactual enrichment다. `would_exit`와 `should_exit`를 분리해 다음 단일축 설계 입력으로 남긴다.
+6. trailing/protect 민감도는 5/4 당일 live 변경 없이 5/6 `TrailingProtectSensitivity0506`에서 `initial-only`, `pyramid_signaled_not_executed`, `pyramid_executed`로 나눠 재판정한다.
 
 ### Threshold
 
@@ -131,7 +134,7 @@
     |- 실패 -> blocked_gatekeeper_reject / blocked_gatekeeper_error / blocked_gatekeeper_missing
     v
 [BUY 신호]
-    |- AI WAIT/보류 + Score 50 fallback -> mechanical fallback
+    |- AI WAIT/보류 + Score 50 fallback -> blocked_ai_score 보류
     |
     v
 [entry_armed]
@@ -167,9 +170,9 @@
 
 - 텔레그램 BUY 신호는 대체로 `gatekeeper 통과`까지는 온 상태로 본다.
 - 다만 `BUY 신호 = 주문접수 완료`는 아니다. `entry_armed`, 예산/수량, 주문 제출, 체결은 다음 단계다.
-- `AI 판단 보류(Score 50)`는 항상 종료 상태가 아니다. 실제 주문 흐름에서는 `mechanical fallback -> entry_armed -> budget_pass`로 이어질 수 있다.
+- `AI 판단 보류(Score 50)`는 현재 기준으로 신규 BUY가 아니다. 2026-05-04 이후 score 50 또는 `ai_fallback_score_50=True`는 `blocked_ai_score`로 보류한다.
 - `entry_armed`에 들어간 뒤에는 `latency_block`, `quote_stale`, `ws_age/ws_jitter` 같은 제출 전 병목 때문에 곧바로 `submitted`로 가지 못할 수 있다.
-- 오늘 `2026-04-23 KST` 덕산하이메탈(`077360`)은 `Score 50 fallback -> entry_armed -> budget_pass -> latency_block 반복 -> 주문접수/체결` 사례로, 플로우차트의 주문 전 구간 예시로 본다.
+- 과거 `2026-04-23 KST` 덕산하이메탈(`077360`)은 `Score 50 fallback -> entry_armed -> budget_pass -> latency_block 반복 -> 주문접수/체결` 사례였지만, 현재는 score 50 fallback 신규 BUY를 보류로 바꿨으므로 historical reference로만 본다.
 - `gatekeeper_fast_reuse`는 같은 종목의 직전 gatekeeper 판단을 매우 짧은 시간창에서 재사용한 경우다. fast signature, 재사용 가능 시간, websocket freshness, score 경계값, 직전 action/allow_entry 기록이 모두 맞아야 성립한다.
 - `fallback_scout/main`, `fallback_single`, `latency fallback split-entry`는 현재 기준으로 재개 후보가 아니다. live 주문 경로와 runtime guard는 제거됐고, 남아 있는 fallback 표기는 과거 로그/리포트 해석용 historical trace로만 읽는다.
 - 여기서 `window`는 “직전 판단이 아직 재사용해도 될 만큼 최근인가”를 보는 시간 조건이고, `signature`는 “지금 장면이 직전 판단과 사실상 같은가”를 보는 상태 조건이다.

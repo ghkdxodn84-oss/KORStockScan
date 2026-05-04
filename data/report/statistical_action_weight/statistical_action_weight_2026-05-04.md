@@ -10,58 +10,57 @@
 
 | metric | value |
 | --- | ---: |
-| completed_valid | 119 |
-| exit_only | 106 |
-| avg_down_wait | 0 |
-| pyramid_wait | 13 |
-| compact_exit_signal | 65 |
-| compact_sell_completed | 24 |
-| compact_scale_in_executed | 55 |
-| compact_decision_snapshot | 697 |
+| completed_valid | 132 |
+| exit_only | 114 |
+| avg_down_wait | 1 |
+| pyramid_wait | 17 |
+| compact_exit_signal | 345 |
+| compact_sell_completed | 99 |
+| compact_scale_in_executed | 199 |
+| compact_decision_snapshot | 4564 |
 
 ## 데이터 완성도
 
 | field | known |
 | --- | ---: |
-| price_known | 119 |
-| volume_known | 111 |
-| time_known | 119 |
+| price_known | 132 |
+| volume_known | 124 |
+| time_known | 132 |
 
 ## Policy Counts
 
 | policy | count |
 | --- | ---: |
-| candidate_weight_source | 12 |
-| defensive_only_high_loss_rate | 1 |
+| candidate_weight_source | 13 |
 | insufficient_sample | 1 |
 
 ## Price Bucket
 
 | bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| price_10k_30k | exit_only | -0.7358 | - | 27 | -0.4215 | 0.5556 | candidate_weight_source |
-| price_30k_70k | exit_only | -0.9056 | - | 12 | -0.4833 | 0.5 | candidate_weight_source |
-| price_gte_70k | pyramid_wait | 0.1225 | 0.7016 | 5 | 0.4 | 0.2 | candidate_weight_source |
-| price_lt_10k | exit_only | -1.3307 | - | 17 | -1.3259 | 0.8235 | defensive_only_high_loss_rate |
+| price_10k_30k | exit_only | -0.8097 | - | 29 | -0.5159 | 0.5862 | candidate_weight_source |
+| price_30k_70k | exit_only | -1.0307 | - | 14 | -0.6936 | 0.5714 | candidate_weight_source |
+| price_gte_70k | pyramid_wait | -0.2515 | 0.322 | 6 | 0.1383 | 0.3333 | candidate_weight_source |
+| price_lt_10k | pyramid_wait | -0.4392 | 0.9424 | 5 | 0.432 | 0.4 | candidate_weight_source |
 
 ## Volume Bucket
 
 | bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| volume_2m_10m | exit_only | -0.8169 | - | 28 | -0.5775 | 0.5714 | candidate_weight_source |
-| volume_500k_2m | exit_only | -0.7955 | - | 40 | -0.54 | 0.6 | candidate_weight_source |
-| volume_gte_10m | exit_only | -1.0453 | - | 13 | -0.7115 | 0.6154 | candidate_weight_source |
-| volume_lt_500k | exit_only | -0.7272 | - | 19 | -0.3284 | 0.5263 | candidate_weight_source |
-| volume_unknown | exit_only | -1.0779 | - | 6 | -0.5567 | 0.5 | candidate_weight_source |
+| volume_2m_10m | pyramid_wait | -0.3157 | 0.5689 | 5 | -0.248 | 0.6 | candidate_weight_source |
+| volume_500k_2m | exit_only | -0.8226 | - | 44 | -0.5807 | 0.6136 | candidate_weight_source |
+| volume_gte_10m | exit_only | -1.0901 | - | 14 | -0.7786 | 0.6429 | candidate_weight_source |
+| volume_lt_500k | exit_only | -0.8084 | - | 20 | -0.4245 | 0.55 | candidate_weight_source |
+| volume_unknown | exit_only | -1.1138 | - | 6 | -0.5567 | 0.5 | candidate_weight_source |
 
 ## Time Bucket
 
 | bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| time_0900_0930 | exit_only | -0.9383 | - | 21 | -0.6952 | 0.5714 | candidate_weight_source |
-| time_0930_1030 | exit_only | -0.6234 | - | 31 | -0.2742 | 0.4839 | candidate_weight_source |
-| time_1030_1400 | pyramid_wait | 0.6572 | 1.5935 | 7 | 0.78 | 0 | candidate_weight_source |
-| time_1400_1530 | exit_only | -0.4435 | - | 8 | 0.3613 | 0.125 | candidate_weight_source |
+| time_0900_0930 | exit_only | -0.9556 | - | 21 | -0.6952 | 0.5714 | candidate_weight_source |
+| time_0930_1030 | exit_only | -0.6363 | - | 31 | -0.2742 | 0.4839 | candidate_weight_source |
+| time_1030_1400 | pyramid_wait | -0.0612 | 0.9723 | 10 | 0.192 | 0.3 | candidate_weight_source |
+| time_1400_1530 | exit_only | -0.5005 | - | 10 | 0.213 | 0.2 | candidate_weight_source |
 | time_outside_regular | insufficient_sample | - | - | - | - | - | insufficient_sample |
 
 ## Threshold 반영 원칙

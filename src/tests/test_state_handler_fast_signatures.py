@@ -7,6 +7,7 @@ from src.engine.sniper_state_handlers import (
     _build_ai_ops_log_fields,
     _build_gatekeeper_fast_signature,
     _build_holding_ai_fast_signature,
+    _should_apply_ai_score_50_buy_hold_override,
     _should_run_main_buy_recovery_canary,
     _resolve_gatekeeper_fast_reuse_sec,
     _resolve_holding_ai_fast_reuse_sec,
@@ -339,6 +340,22 @@ def test_should_run_main_buy_recovery_canary_rejects_large_sell_or_danger(monkey
         )
         is False
     )
+
+
+def test_ai_score_50_buy_hold_override_blocks_neutral_and_fallback(monkeypatch):
+    rules = replace(TRADING_RULES, AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED=True)
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+
+    assert _should_apply_ai_score_50_buy_hold_override(50, {"ai_fallback_score_50": False}) is True
+    assert _should_apply_ai_score_50_buy_hold_override(72, {"ai_fallback_score_50": True}) is True
+    assert _should_apply_ai_score_50_buy_hold_override(72, {"ai_fallback_score_50": False}) is False
+
+
+def test_ai_score_50_buy_hold_override_can_be_disabled(monkeypatch):
+    rules = replace(TRADING_RULES, AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED=False)
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+
+    assert _should_apply_ai_score_50_buy_hold_override(50, {"ai_fallback_score_50": True}) is False
 
 
 def test_apply_wait6579_probe_canary_caps_qty_and_budget():

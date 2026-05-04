@@ -1123,6 +1123,7 @@ def _build_bad_entry_refined_decision(
 ) -> dict:
     features, feature_valid = _normalize_soft_stop_expert_features(stock)
     enabled = _rule_bool("SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED", False)
+    observe_enabled = _rule_bool("SCALP_BAD_ENTRY_REFINED_OBSERVE_ENABLED", True)
     min_hold_sec = _rule_int("SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC", 180)
     min_loss_pct = _rule_float("SCALP_BAD_ENTRY_REFINED_MIN_LOSS_PCT", -1.16)
     max_peak_pct = _rule_float("SCALP_BAD_ENTRY_REFINED_MAX_PEAK_PROFIT_PCT", 0.05)
@@ -1181,9 +1182,7 @@ def _build_bad_entry_refined_decision(
     )
 
     exclusion_reason = "-"
-    if not enabled:
-        exclusion_reason = "disabled"
-    elif (strategy or "").upper() != "SCALPING":
+    if (strategy or "").upper() != "SCALPING":
         exclusion_reason = "not_scalping"
     elif _has_active_sell_order_pending(stock):
         exclusion_reason = "active_sell_pending"
@@ -1208,11 +1207,14 @@ def _build_bad_entry_refined_decision(
     elif not confirmation:
         exclusion_reason = "no_confirmation"
 
+    would_exit = exclusion_reason == "-"
     return {
         "enabled": enabled,
+        "observe_enabled": observe_enabled,
         "feature_valid": feature_valid,
         "features": features,
-        "should_exit": exclusion_reason == "-",
+        "should_exit": bool(enabled and would_exit),
+        "would_exit": bool(would_exit),
         "exclusion_reason": exclusion_reason,
         "thesis_invalidated": thesis_invalidated,
         "adverse_fill": adverse_fill,
@@ -1236,10 +1238,10 @@ def _emit_bad_entry_refined_candidate(
     current_ai_score: float,
     held_sec: int,
 ) -> None:
-    if not decision.get("enabled"):
+    if not decision.get("enabled") and not decision.get("observe_enabled"):
         return
     bucket = max(0, int(held_sec or 0) // 30)
-    logged_key = f"{bucket}:{decision.get('exclusion_reason', '-')}"
+    logged_key = f"{bucket}:{decision.get('exclusion_reason', '-')}:{bool(decision.get('enabled'))}"
     if stock.get("_bad_entry_refined_candidate_logged_key") == logged_key:
         return
 
@@ -1248,8 +1250,10 @@ def _emit_bad_entry_refined_candidate(
         stock,
         code,
         "bad_entry_refined_candidate",
-        canary_enabled=True,
+        canary_enabled=bool(decision.get("enabled")),
         should_exit=bool(decision.get("should_exit")),
+        would_exit=bool(decision.get("would_exit")),
+        observe_only=not bool(decision.get("enabled")),
         exclusion_reason=decision.get("exclusion_reason", "-"),
         classifier="never_green_ai_fade_refined",
         profit_rate=f"{profit_rate:+.2f}",
@@ -3066,6 +3070,60 @@ def _should_run_main_buy_recovery_canary(
     return True
 
 
+def _should_apply_ai_score_50_buy_hold_override(ai_score, ai_decision=None) -> bool:
+    if not _rule_bool("AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED", True):
+        return False
+    if bool((ai_decision or {}).get("ai_fallback_score_50", False)):
+        return True
+    try:
+        return abs(float(ai_score or 0.0) - 50.0) < 1e-9
+    except Exception:
+        return False
+
+
+def _block_ai_score_50_buy_hold_override_if_needed(
+    *,
+    stock,
+    code,
+    current_ai_score,
+    ai_decision,
+    config,
+    cooldowns,
+    now_ts,
+) -> bool:
+    if not _should_apply_ai_score_50_buy_hold_override(current_ai_score, ai_decision):
+        return False
+    cooldown_time = config["AI_WAIT_DROP_COOLDOWN"]
+    with ENTRY_LOCK:
+        cooldowns[code] = now_ts + cooldown_time
+    _log_entry_pipeline(
+        stock,
+        code,
+        "blocked_ai_score",
+        threshold=75,
+        cooldown_sec=cooldown_time,
+        blocked_reason="ai_score_50_buy_hold_override",
+        ai_score_50_buy_hold_override=True,
+        **_build_ai_overlap_log_fields(
+            stock=stock,
+            ai_score=current_ai_score,
+            momentum_tag=stock.get("entry_momentum_tag"),
+            threshold_profile=stock.get("entry_threshold_profile"),
+            overbought_blocked=False,
+            blocked_stage="blocked_ai_score",
+        ),
+        **_build_ai_ops_log_fields(
+            ai_decision,
+            ai_score_raw=current_ai_score,
+            ai_score_after_bonus=current_ai_score,
+            entry_score_threshold=75,
+            big_bite_bonus_applied=False,
+            ai_cooldown_blocked=False,
+        ),
+    )
+    return True
+
+
 def _resolve_holding_elapsed_sec(stock):
     return resolve_holding_elapsed_sec(stock)
 
@@ -3587,18 +3645,29 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                         {'message': ai_msg, 'audience': target_audience, 'parse_mode': 'HTML'},
                                     )
                             else:
-                                log_info(f"⚠️ [{stock['name']}] AI 판단 보류(Score 50). 기계적 로직으로 폴백합니다.")
+                                log_info(f"⚠️ [{stock['name']}] AI 판단 보류(Score 50). 매수보류 override를 적용합니다.")
                                 current_ai_score = 50
                     except Exception as e:
                         log_error(
                             f"🚨 [AI 엔진 오류] {stock['name']}({code}): {e} | "
-                            "기계적 매수 모드로 폴백(Fallback)합니다."
+                            "Score 50 매수보류 override로 처리합니다."
                         )
                         current_ai_score = 50
 
                     if ai_call_executed:
                         with ENTRY_LOCK:
                             LAST_AI_CALL_TIMES[code] = now_ts
+
+                    if _block_ai_score_50_buy_hold_override_if_needed(
+                        stock=stock,
+                        code=code,
+                        current_ai_score=current_ai_score,
+                        ai_decision=ai_decision,
+                        config=config,
+                        cooldowns=cooldowns,
+                        now_ts=now_ts,
+                    ):
+                        return False
 
                     if ai_call_executed and last_ai_time == 0:
                         if not big_bite_confirmed:
@@ -3611,6 +3680,17 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 vip_target=is_vip_target,
                             )
                             return False
+
+                if _block_ai_score_50_buy_hold_override_if_needed(
+                    stock=stock,
+                    code=code,
+                    current_ai_score=current_ai_score,
+                    ai_decision=ai_decision,
+                    config=config,
+                    cooldowns=cooldowns,
+                    now_ts=now_ts,
+                ):
+                    return False
 
                 boost_applied_value = 0
                 if big_bite_confirmed:
@@ -6446,6 +6526,62 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         rejected_actions = []
         if fallback_gate and not fallback_candidate:
             rejected_actions.append(f"avg_down_wait:{fallback_gate.get('reason') or fallback_reason or 'not_candidate'}")
+
+        if strategy == "SCALPING" and now_t >= TIME_15_30:
+            block_key = f"{exit_rule or '-'}:{sell_reason_type or '-'}:{now_dt.date().isoformat()}"
+            if stock.get("_market_closed_sell_block_key") != block_key:
+                _mutate_stock_state(
+                    stock,
+                    set_fields={
+                        "_market_closed_sell_block_key": block_key,
+                        "market_closed_sell_pending": True,
+                        "market_closed_sell_exit_rule": exit_rule or "-",
+                        "last_exit_reason": reason,
+                    },
+                )
+                _remember_exit_context(
+                    stock=stock,
+                    exit_rule=exit_rule,
+                    peak_profit=peak_profit,
+                    held_sec=int(held_time_min * 60),
+                    current_ai_score=current_ai_score,
+                    soft_stop_threshold_pct=dynamic_stop_pct if str(exit_rule or "").strip() == "scalp_soft_stop_pct" else None,
+                )
+                _emit_stat_action_decision_snapshot(
+                    stock=stock,
+                    code=code,
+                    strategy=strategy,
+                    ws_data=ws_data,
+                    chosen_action="hold_wait",
+                    eligible_actions=["hold_wait"],
+                    rejected_actions=["exit_now:market_closed"],
+                    profit_rate=profit_rate,
+                    peak_profit=peak_profit,
+                    current_ai_score=current_ai_score,
+                    held_sec=held_sec,
+                    curr_price=curr_p,
+                    buy_price=buy_p,
+                    exit_rule=exit_rule or "-",
+                    sell_reason_type=sell_reason_type or "-",
+                    scale_in_gate=fallback_gate,
+                    scale_in_action=fallback_action,
+                    reason="market_closed_sell_block",
+                    force=True,
+                )
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "sell_order_blocked_market_closed",
+                    sell_reason_type=sell_reason_type,
+                    exit_rule=exit_rule or "-",
+                    status=stock.get("status", "-"),
+                    profit_rate=f"{profit_rate:+.2f}",
+                    peak_profit=f"{peak_profit:+.2f}",
+                    current_ai_score=f"{current_ai_score:.0f}",
+                    market_close_time=TIME_15_30.isoformat(),
+                )
+            return
+
         _emit_stat_action_decision_snapshot(
             stock=stock,
             code=code,

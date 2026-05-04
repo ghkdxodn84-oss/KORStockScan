@@ -17,19 +17,19 @@
 
 | axis | bucket | bias | score | edge | sample | loss_rate | policy |
 | --- | --- | --- | ---: | ---: | ---: | ---: | --- |
-| price_bucket | price_10k_30k | no_clear_edge | -0.7358 | - | 27 | 0.5556 | candidate_weight_source |
-| price_bucket | price_30k_70k | no_clear_edge | -0.9056 | - | 12 | 0.5 | candidate_weight_source |
-| price_bucket | price_gte_70k | prefer_pyramid_wait | 0.1225 | 0.7016 | 5 | 0.2 | candidate_weight_source |
-| price_bucket | price_lt_10k | no_clear_edge | -1.3307 | - | 17 | 0.8235 | defensive_only_high_loss_rate |
-| volume_bucket | volume_2m_10m | no_clear_edge | -0.8169 | - | 28 | 0.5714 | candidate_weight_source |
-| volume_bucket | volume_500k_2m | no_clear_edge | -0.7955 | - | 40 | 0.6 | candidate_weight_source |
-| volume_bucket | volume_gte_10m | no_clear_edge | -1.0453 | - | 13 | 0.6154 | candidate_weight_source |
-| volume_bucket | volume_lt_500k | no_clear_edge | -0.7272 | - | 19 | 0.5263 | candidate_weight_source |
-| volume_bucket | volume_unknown | no_clear_edge | -1.0779 | - | 6 | 0.5 | candidate_weight_source |
-| time_bucket | time_0900_0930 | no_clear_edge | -0.9383 | - | 21 | 0.5714 | candidate_weight_source |
-| time_bucket | time_0930_1030 | no_clear_edge | -0.6234 | - | 31 | 0.4839 | candidate_weight_source |
-| time_bucket | time_1030_1400 | prefer_pyramid_wait | 0.6572 | 1.5935 | 7 | 0 | candidate_weight_source |
-| time_bucket | time_1400_1530 | no_clear_edge | -0.4435 | - | 8 | 0.125 | candidate_weight_source |
+| price_bucket | price_10k_30k | no_clear_edge | -0.8097 | - | 29 | 0.5862 | candidate_weight_source |
+| price_bucket | price_30k_70k | no_clear_edge | -1.0307 | - | 14 | 0.5714 | candidate_weight_source |
+| price_bucket | price_gte_70k | prefer_pyramid_wait | -0.2515 | 0.322 | 6 | 0.3333 | candidate_weight_source |
+| price_bucket | price_lt_10k | prefer_pyramid_wait | -0.4392 | 0.9424 | 5 | 0.4 | candidate_weight_source |
+| volume_bucket | volume_2m_10m | prefer_pyramid_wait | -0.3157 | 0.5689 | 5 | 0.6 | candidate_weight_source |
+| volume_bucket | volume_500k_2m | no_clear_edge | -0.8226 | - | 44 | 0.6136 | candidate_weight_source |
+| volume_bucket | volume_gte_10m | no_clear_edge | -1.0901 | - | 14 | 0.6429 | candidate_weight_source |
+| volume_bucket | volume_lt_500k | no_clear_edge | -0.8084 | - | 20 | 0.55 | candidate_weight_source |
+| volume_bucket | volume_unknown | no_clear_edge | -1.1138 | - | 6 | 0.5 | candidate_weight_source |
+| time_bucket | time_0900_0930 | no_clear_edge | -0.9556 | - | 21 | 0.5714 | candidate_weight_source |
+| time_bucket | time_0930_1030 | no_clear_edge | -0.6363 | - | 31 | 0.4839 | candidate_weight_source |
+| time_bucket | time_1030_1400 | prefer_pyramid_wait | -0.0612 | 0.9723 | 10 | 0.3 | candidate_weight_source |
+| time_bucket | time_1400_1530 | no_clear_edge | -0.5005 | - | 10 | 0.2 | candidate_weight_source |
 | time_bucket | time_outside_regular | no_clear_edge | - | - | - | - | insufficient_sample |
 
 ## Prompt Hints
@@ -37,8 +37,8 @@
 - `price_bucket=price_10k_30k` / `no_clear_edge`: price_bucket=price_10k_30k 과거 표본은 행동 우위가 불명확하다. 기존 보유/청산 원칙을 우선한다.
 - `price_bucket=price_30k_70k` / `no_clear_edge`: price_bucket=price_30k_70k 과거 표본은 행동 우위가 불명확하다. 기존 보유/청산 원칙을 우선한다.
 - `price_bucket=price_gte_70k` / `prefer_pyramid_wait`: price_bucket=price_gte_70k 과거 표본은 winner size-up 대기 후보가 상대적으로 우위다. trailing giveback과 체결품질을 확인한다.
-- `price_bucket=price_lt_10k` / `no_clear_edge`: price_bucket=price_lt_10k 과거 표본은 행동 우위가 불명확하다. 기존 보유/청산 원칙을 우선한다.
-- `volume_bucket=volume_2m_10m` / `no_clear_edge`: volume_bucket=volume_2m_10m 과거 표본은 행동 우위가 불명확하다. 기존 보유/청산 원칙을 우선한다.
+- `price_bucket=price_lt_10k` / `prefer_pyramid_wait`: price_bucket=price_lt_10k 과거 표본은 winner size-up 대기 후보가 상대적으로 우위다. trailing giveback과 체결품질을 확인한다.
+- `volume_bucket=volume_2m_10m` / `prefer_pyramid_wait`: volume_bucket=volume_2m_10m 과거 표본은 winner size-up 대기 후보가 상대적으로 우위다. trailing giveback과 체결품질을 확인한다.
 - `volume_bucket=volume_500k_2m` / `no_clear_edge`: volume_bucket=volume_500k_2m 과거 표본은 행동 우위가 불명확하다. 기존 보유/청산 원칙을 우선한다.
 - `volume_bucket=volume_gte_10m` / `no_clear_edge`: volume_bucket=volume_gte_10m 과거 표본은 행동 우위가 불명확하다. 기존 보유/청산 원칙을 우선한다.
 - `volume_bucket=volume_lt_500k` / `no_clear_edge`: volume_bucket=volume_lt_500k 과거 표본은 행동 우위가 불명확하다. 기존 보유/청산 원칙을 우선한다.

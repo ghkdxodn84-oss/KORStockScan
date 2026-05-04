@@ -300,7 +300,8 @@ class TradingConfig:
     SCALP_BAD_ENTRY_BLOCK_MAX_PEAK_PROFIT_PCT: float = 0.20
     SCALP_BAD_ENTRY_BLOCK_AI_SCORE_LIMIT: int = 45
     SCALP_BAD_ENTRY_BLOCK_LOG_INTERVAL_SEC: int = 30
-    SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED: bool = True  # 2026-04-30 postclose: v2 OFF 이후 refined bad_entry 1축 canary
+    SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED: bool = False  # 2026-05-04 postclose rollback: sell_order_failed/flow-defer 혼입으로 OFF
+    SCALP_BAD_ENTRY_REFINED_OBSERVE_ENABLED: bool = True  # canary OFF 이후 refined counterfactual 후보는 report-only로 유지
     SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC: int = 180
     SCALP_BAD_ENTRY_REFINED_MIN_LOSS_PCT: float = -1.16
     SCALP_BAD_ENTRY_REFINED_MAX_PEAK_PROFIT_PCT: float = 0.05
@@ -387,6 +388,7 @@ class TradingConfig:
     AI_SCORE_THRESHOLD_KOSDAQ: int = 60    # KOSDAQ_ML AI 점수 매수 보류 임계값 (60점 미만 보류)
     AI_SCORE_THRESHOLD_KOSPI: int = 60     # KOSPI_ML AI 점수 매수 보류 임계값 (60점 미만 보류)
     AI_WATCHING_COOLDOWN: int = 90  # 신규 진입 감시(WATCHING) 재평가 간격 (초)
+    AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED: bool = True  # score=50 fallback/neutral 진입은 매수보류
     AI_MAIN_BUY_RECOVERY_CANARY_ENABLED: bool = False  # same-day 교체: BUY recovery canary 기본 OFF
     AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE: int = 65  # 재평가 시작 점수
     AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE: int = 79  # 재평가 종료 점수
@@ -664,6 +666,7 @@ def _build_trading_rules() -> TradingConfig:
     env_ai_holding_max_cooldown = _env_int("KORSTOCKSCAN_AI_HOLDING_MAX_COOLDOWN")
     env_ai_holding_critical_min_cooldown = _env_int("KORSTOCKSCAN_AI_HOLDING_CRITICAL_MIN_COOLDOWN")
     env_ai_holding_critical_cooldown = _env_int("KORSTOCKSCAN_AI_HOLDING_CRITICAL_COOLDOWN")
+    env_ai_score_50_buy_hold = _env_bool("KORSTOCKSCAN_AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED")
     if (
         env_main_buy_recovery_enabled is not None
         or env_main_buy_recovery_min is not None
@@ -682,6 +685,7 @@ def _build_trading_rules() -> TradingConfig:
         or env_ai_holding_max_cooldown is not None
         or env_ai_holding_critical_min_cooldown is not None
         or env_ai_holding_critical_cooldown is not None
+        or env_ai_score_50_buy_hold is not None
     ):
         config = replace(
             config,
@@ -736,6 +740,9 @@ def _build_trading_rules() -> TradingConfig:
             AI_HOLDING_CRITICAL_COOLDOWN=env_ai_holding_critical_cooldown
             if env_ai_holding_critical_cooldown is not None
             else config.AI_HOLDING_CRITICAL_COOLDOWN,
+            AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED=env_ai_score_50_buy_hold
+            if env_ai_score_50_buy_hold is not None
+            else config.AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED,
         )
 
     env_dynamic_strength_enabled = _env_bool("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_RELIEF_ENABLED")

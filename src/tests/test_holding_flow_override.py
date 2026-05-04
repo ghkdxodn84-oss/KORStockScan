@@ -234,6 +234,53 @@ def test_overnight_sell_today_flow_hold_flips_to_hold_overnight(monkeypatch):
     assert any(stage == "overnight_flow_override_hold" for stage, _ in logs)
 
 
+def test_overnight_sell_today_flow_trim_keeps_sell_today(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        overnight.kiwoom_utils,
+        "get_tick_history_ka10003",
+        lambda token, code, limit=30: [{"price": 10000, "volume": 10, "side": "SELL"}],
+    )
+    monkeypatch.setattr(
+        overnight.kiwoom_utils,
+        "get_minute_candles_ka10080",
+        lambda token, code, limit=60: [{"close": 9950, "high": 10050, "low": 9900, "volume": 1000}],
+    )
+    monkeypatch.setattr(
+        overnight,
+        "_log_holding_pipeline",
+        lambda name, code, stage, **fields: logs.append((stage, fields)),
+    )
+    ai = DummyFlowAI("TRIM")
+    record = SimpleNamespace(
+        id=1,
+        stock_code="005930",
+        stock_name="삼성전자",
+        status="HOLDING",
+        buy_qty=1,
+        buy_price=10000,
+    )
+    mem_stock = {"name": "삼성전자", "buy_qty": 1}
+
+    decision = overnight._apply_overnight_flow_override(
+        record,
+        mem_stock,
+        {"curr": 9900, "v_pw": 95, "buy_ratio": 45},
+        {"avg_price": 10000, "curr_price": 9900, "pnl_pct": -1.0, "score": 42},
+        {"action": "SELL_TODAY", "confidence": 35, "reason": "overnight sell"},
+        ai,
+    )
+
+    assert decision["action"] == "SELL_TODAY"
+    assert "overnight_flow_override_hold" not in mem_stock
+    assert any(
+        stage == "overnight_flow_override_exit_confirmed"
+        and fields.get("flow_action") == "TRIM"
+        and fields.get("force_reason") == "flow_trim_unsupported"
+        for stage, fields in logs
+    )
+
+
 def test_overnight_flow_hold_reverts_between_1520_and_1530_on_worsen_floor():
     stock = {
         "overnight_flow_override_hold": True,

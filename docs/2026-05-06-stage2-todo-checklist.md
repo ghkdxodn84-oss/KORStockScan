@@ -29,7 +29,17 @@
 
 ## 장전 체크리스트 (08:50~09:00)
 
-- 없음
+- [ ] `[BadEntryRefinedRollback0506-Preopen] refined bad_entry canary OFF 로드 및 재승격 금지 확인` (`Due: 2026-05-06`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: ScalpingLogic`)
+  - Source: [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py), [2026-05-04-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-04-stage2-todo-checklist.md)
+  - 판정 기준: `SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=False`가 런타임에 로드되고, env `KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=true` 오염이 없으며, `bad_entry_refined_candidate`는 관찰/리포트 입력으로만 남고 `bad_entry_refined_exit` 실청산은 발생하지 않아야 한다.
+  - why: 5/4 장후 `BadEntryRefinedCanary0504-Postclose`에서 canary-applied cohort가 `holding_flow_override` 유예와 장마감 `sell_order_failed` 반복에 섞여 원인귀속과 rollback guard를 통과하지 못했다.
+  - 다음 액션: 재개하려면 기존 축 keep이 아니라 `adverse fill detector` 또는 `MAE/MFE quantile stop` 중 하나를 새 단일축 canary/workorder로 다시 열고, 같은 날 `holding_flow_override` semantics 변경과 합산하지 않는다.
+
+- [ ] `[OvernightFlowTrimSemantics0506-Preopen] 오버나이트 flow TRIM=SELL_TODAY 유지 로드 확인` (`Due: 2026-05-06`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: ScalpingLogic`)
+  - Source: [sniper_overnight_gatekeeper.py](/home/ubuntu/KORStockScan/src/engine/sniper_overnight_gatekeeper.py), [2026-05-04-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-04-stage2-todo-checklist.md)
+  - 판정 기준: 오버나이트 `SELL_TODAY` 재검문에서 flow `HOLD`만 `HOLD_OVERNIGHT`로 승격하고, flow `TRIM`은 `overnight_flow_override_exit_confirmed(force_reason=flow_trim_unsupported)`로 원래 `SELL_TODAY`를 유지하는지 확인한다.
+  - why: 5/4 `쏠리드(050890)`처럼 `TRIM/소강/음수 profit`을 전량 보유로 바꾸면 리스크 축소 라벨이 정반대로 해석된다. 부분청산 구현이 없는 v1에서는 `TRIM`을 HOLD로 승격하지 않는다.
+  - 다음 액션: 부분청산을 실제로 구현하려면 `TRIM` 실주문 수량, 주문 가능 시간, 잔고/영수증 attribution, rollback guard를 별도 작업항목으로 분리한다.
 
 ## 장중 체크리스트 (09:00~15:20)
 
@@ -151,6 +161,23 @@
   - why: 이번 change set의 타깃 테스트는 green이지만 broader regression 기준으로는 holding exit 경로 1건이 여전히 실패한다. 이 상태를 문서화하지 않으면 `타깃 검증 통과`가 `전체 hold/exit 회귀 없음`으로 오해될 수 있다.
   - 다음 액션: 원인이 기존 정책 변경이면 테스트 기대값을 Plan Rebase 기준으로 재정의하고, 실제 회귀면 별도 patch로 분리해 고친다.
 
+- [x] `[PostCloseSellFailureLoopGuard0506] 장마감 주문불가 sell_order_failed 반복 방지 가드 설계` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 21:10~21:25`, `Track: RuntimeStability`)
+  - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [2026-05-04-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-04-stage2-todo-checklist.md), [pipeline_events_2026-05-04.jsonl](/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-05-04.jsonl)
+  - 판정 기준: `15:30 KST` 이후 regular-session 매도 주문이 `[2000](999999:주문 불가능합니다.)`로 반복될 때 같은 종목/exit_rule에 대해 초 단위 재시도가 계속되지 않도록 `market_closed_sell_block`, 상태 유지/익일 처리, DB status, 알림, rollback guard를 확정한다.
+  - why: 5/4 `쏠리드(050890)`에서 `15:31~15:32` `scalp_soft_stop_pct` 매도 주문 실패가 `98건` 반복됐다. 이 문제는 손실 최소화가 아니라 주문/상태 truth와 다음 장전 처리 품질을 훼손해 기대값 분석 기반을 깨뜨린다.
+  - 다음 액션: 단순히 주문을 숨기지 말고 `after-close impossible`, `temporary broker rejection`, `sellable_qty mismatch`, `already sold`를 다른 stage로 분리하고, report에서는 `COMPLETED + valid profit_rate`에 섞지 않는다.
+  - 조기 완료 (`2026-05-04 16:30 KST`): 현재 장후에 처리 가능한 safety gap이라 5/6까지 미루지 않고 [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)에 반영했다. `15:30 KST` 이후 SCALPING 매도 신호는 실주문 전송 없이 `sell_order_blocked_market_closed` 1회 로그와 `market_closed_sell_pending=True` 상태로 남긴다.
+  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_scale_in.py -k 'market_close_blocks_order_once or sell_reject_with_zero_sellable_qty or sell_reject_with_positive_sellable_qty'` -> `3 passed, 121 deselected`.
+
+- [x] `[BadEntryNextAxisDesign0506] refined bad_entry OFF 이후 다음 단일축 설계 판정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 21:25~21:40`, `Track: ScalpingLogic`)
+  - Source: [2026-05-04-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-04-stage2-todo-checklist.md), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
+  - 판정 기준: `bad_entry_refined_canary`를 그대로 keep/retry하지 않는다. 5/4 후보/exit 표본을 `soft_stop_zone`, `loss_too_shallow`, `peak_recovered`, `ai_recovered`, `flow_defer_cross`, `sell_order_failed_cross`로 분리하고, 다음 단일축 후보를 `adverse_fill_detector`, `MAE/MFE quantile stop`, `bad-entry report-only counterfactual enrichment` 중 하나로 선택한다.
+  - why: 5/4 OFF 판정은 "bad-entry 조기정리 필요 없음"이 아니라 canary-applied cohort가 flow defer와 주문 실패에 섞여 원인귀속이 깨졌다는 뜻이다. 다음 축 owner 없이 작업을 닫으면 soft stop tail 절단 과제가 누락된다.
+  - 다음 액션: 선택한 축은 같은 항목에서 바로 live로 켜지 않는다. `단일 조작점`, `cohort tag`, `rollback guard`, `excluded cohort`, `full/partial 및 initial/pyramid 분리`, `holding_flow_override와의 arbitration 순서`를 잠근 뒤 별도 날짜별 checklist로 구현/관찰을 올린다.
+  - 조기 완료 (`2026-05-04 16:30 KST`): 현재 데이터로 판정 가능하므로 5/6까지 미루지 않았다. 선택축은 `bad-entry report-only counterfactual enrichment`다. `adverse_fill_detector`와 `MAE/MFE quantile stop`은 바로 live canary로 열지 않고, refined 후보가 flow defer/order failure와 교차될 때의 arbitration/excluded cohort를 먼저 복원한다.
+  - 코드 조치: `SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=False`는 유지하고, `SCALP_BAD_ENTRY_REFINED_OBSERVE_ENABLED=True`로 `bad_entry_refined_candidate` report-only 로그를 유지한다. `would_exit`와 `should_exit`를 분리해 counterfactual 후보와 실청산을 분리한다.
+  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_scale_in.py -k 'bad_entry_refined'` -> `3 passed, 121 deselected`; `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_constants.py -k 'runtime_shadow_defaults_are_off'` -> `1 passed, 6 deselected`.
+
 - [ ] `[ReversalAddDynamicQty0506] REVERSAL_ADD 동적 수량 산식 observe-only 설계` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 21:25~21:40`, `Track: ScalpingLogic`)
   - Source: [personal-decision-flow-notes.md](/home/ubuntu/KORStockScan/docs/personal-decision-flow-notes.md), [sniper_scale_in.py](/home/ubuntu/KORStockScan/src/engine/sniper_scale_in.py:400), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
   - 판정 기준: 현재 `REVERSAL_ADD` 수량이 `buy_qty * REVERSAL_ADD_SIZE_RATIO` + `MAX_POSITION_PCT` cap + 1주 floor에 머무르는지 확인하고, `AI 회복폭`, `수급 3/4~4/4`, `soft/hard stop 거리`, `peak_profit never-green`, `remaining_budget`, `volatility`를 반영한 `would_qty` counterfactual 산식을 설계한다. live 수량 변경은 이 항목에서 켜지 않는다.
@@ -163,17 +190,23 @@
   - why: 불타기는 손실 회수형 `REVERSAL_ADD`보다 winner size-up 효과가 직접적이라 EV 개선 여지가 크다. 그러나 `initial-only`, `pyramid-activated`, `REVERSAL_ADD`, `soft_stop` 표본을 섞으면 원인귀속이 깨지므로 불타기 수량 동적화는 독립 observe-only 축으로만 연다.
   - 다음 액션: 산식 후보가 잠기면 `actual_qty`, `pyramid_would_qty`, `qty_reason`, `post_add_mfe`, `trailing_exit`, `COMPLETED + valid profit_rate`, `soft_stop` 전환율을 분리 로깅하고, 최소 표본 확보 후 별도 단일축 canary 후보로만 승격 검토한다.
 
+- [ ] `[TrailingProtectSensitivity0506] trailing/protect 익절 민감도 단일 owner 재판정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 22:35~22:50`, `Track: ScalpingLogic`)
+  - Source: [2026-05-04-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-04-stage2-todo-checklist.md), [threshold_cycle_2026-05-04.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_2026-05-04.json), [post_sell_evaluations_2026-05-04.jsonl](/home/ubuntu/KORStockScan/data/post_sell/post_sell_evaluations_2026-05-04.jsonl), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
+  - 판정 기준: `scalp_trailing_take_profit`의 weak limit `0.4 -> 후보 0.64`, strong AI 경계 `75 -> 70~74 후보`, `protect_trailing_smoothing`의 `min_span_sec/min_samples` 보강을 `initial-only`, `pyramid_signaled_not_executed`, `pyramid_executed`, `protect_hard_stop` 제외 표본으로 나눠 재판정한다. live runtime mutation은 이 항목에서 켜지지 않고, `ThresholdOpsTransition0506` 승인 전에는 manifest/report-only로만 둔다.
+  - why: 5/4 trailing은 평균 수익이 양호했지만 `weak_borderline=13`, `would_hold_if_weak_limit_plus_10bp=13`으로 조급한 익절 후보가 많았다. protect trailing은 `유안타증권/한화투자증권`처럼 손실 확대 차단 표본과 `리노공업` 같은 missed upside가 섞여 단일 tick 민감도만으로 판단하면 기대값이 왜곡된다.
+  - 다음 액션: 5/6 리포트에서 같은 방향성이 반복되면 threshold manifest 후보로만 산출하고, live 적용은 별도 단일축 canary/rollback guard/코호트가 준비된 뒤 검토한다.
+
 - [ ] `[CooldownPolicyInventory0506] 쿨다운 단독 blocker 목록 및 복합 threshold 전환 필요성 점검` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 21:55~22:05`, `Track: ScalpingLogic`)
   - Source: [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [scalping_scanner.py](/home/ubuntu/KORStockScan/src/scanners/scalping_scanner.py), [2026-05-04-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-04-stage2-todo-checklist.md)
-  - 판정 기준: `SCALE_IN_COOLDOWN_SEC`, `SCALE_IN_CANCEL_COOLDOWN_SEC`, `ADD_JUDGMENT_LOCK_SEC`, scanner `reentry_cooldown_sec=25분`, `AI_WATCHING_COOLDOWN`, `AI_HOLDING_*_COOLDOWN`, `AI_WAIT_DROP_COOLDOWN`, `ML_GATEKEEPER_*_COOLDOWN`, `ZERO_DEPOSIT_RETRY_COOLDOWN_SEC`, `same_symbol_loss_reentry_cooldown`을 `단독 hard blocker`, `중복/스팸 방지 안전장치`, `임시 운영가드`, `복합 threshold 후보`로 분류한다. `same_symbol_soft_stop_cooldown_shadow`/`hard_time_stop_shadow`/`partial_only_timeout_shadow`는 5/4 runtime 기본 OFF 정리 상태로 확인만 한다.
+  - 판정 기준: `SCALE_IN_COOLDOWN_SEC`, `SCALE_IN_CANCEL_COOLDOWN_SEC`, `ADD_JUDGMENT_LOCK_SEC`, scanner `reentry_cooldown_sec=25분`, `AI_WATCHING_COOLDOWN`, `AI_HOLDING_*_COOLDOWN`, `AI_WAIT_DROP_COOLDOWN`, `AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED`, `ML_GATEKEEPER_*_COOLDOWN`, `ZERO_DEPOSIT_RETRY_COOLDOWN_SEC`, `same_symbol_loss_reentry_cooldown`을 `단독 hard blocker`, `중복/스팸 방지 안전장치`, `임시 운영가드`, `복합 threshold 후보`로 분류한다. `same_symbol_soft_stop_cooldown_shadow`/`hard_time_stop_shadow`/`partial_only_timeout_shadow`는 5/4 runtime 기본 OFF 정리 상태로 확인만 한다.
   - why: 불타기/물타기는 기대값을 직접 키우는 상위 행동 후보인데, 시간 쿨다운 하나만으로 후보 평가를 막으면 의도한 PYRAMID/REVERSAL_ADD 작동이 깨질 수 있다. 쿨다운은 가능하면 `pending/protection/position_cap/near-close/token` 같은 안전장치가 아닌 이상, 수급/가격경로/호가품질/AI 회복과 결합된 복합 threshold로만 hard blocker가 되어야 한다.
   - 다음 액션: `scale_in_cooldown`이 PYRAMID 후 REVERSAL_ADD를 막는 표본이 반복되면 `post_pyramid_reversal_add_override`를 바로 켜지 말고, `cooldown_remaining_sec`, `post_add_elapsed_sec`, `true_adverse_flow`, `micro_noise`, `reversal_add_predicate_pass_count`, `would_allow_if_composite`를 report-only로 먼저 남기는 단일 작업항목으로 분리한다. 주문 중복 방지용 pending/cancel/protection 계열은 safety guard로 유지하되, 기대값 행동 선택을 단독 시간값으로 차단하는지 별도 표시한다.
 
 - [ ] `[DowntrendReentryComposite0506] 손실 후 하향 재진입 복합 threshold 설계 여부 판정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 22:20~22:35`, `Track: ScalpingLogic`)
   - Source: [2026-05-04-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-04-stage2-todo-checklist.md), [sniper_strength_momentum.py](/home/ubuntu/KORStockScan/src/engine/sniper_strength_momentum.py), [sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/engine/sniper_entry_latency.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
-  - 판정 기준: `유안타증권`, `SK네트웍스`처럼 손실 청산 후 동일종목이 하향 가격구조에서 다시 entry armed/submitted 되는 표본을 모아 `previous_same_symbol_completed_loss`, `last_same_symbol_sell_price`, `entry_vs_last_loss_price_bps`, `recent lower-high/lower-low`, `AI score 50 fallback`, `strong_absolute_override`, `latency_mechanical_momentum_relief`, `OFI/QI state`를 하나의 복합 feature 후보로 잠근다.
+  - 판정 기준: `유안타증권`, `SK네트웍스`처럼 손실 청산 후 동일종목이 하향 가격구조에서 다시 entry armed/submitted 되는 표본을 모아 `previous_same_symbol_completed_loss`, `last_same_symbol_sell_price`, `entry_vs_last_loss_price_bps`, `recent lower-high/lower-low`, `AI score 50 fallback/blocked`, `strong_absolute_override`, `latency_mechanical_momentum_relief`, `OFI/QI state`를 하나의 복합 feature 후보로 잠근다. `다시 살 논리`가 있으면 기존 보유 중 `REVERSAL_ADD/POST_ADD_EVAL`에서 처리하고, 손절 thesis invalidation 뒤 revive된 신규 WATCHING은 별도 회복 근거 없이는 막는 상태전이 규칙을 함께 검토한다.
   - why: 5/4의 60분 동일종목 손실 재진입 쿨다운은 반복손실을 막는 임시 운영가드다. 기대값 관점의 최종 형태는 단순 시간 차단이 아니라, 회복 수급이 확인될 때는 재진입 기회를 살리고 하향 추세/AI fallback/중립 orderbook 조합은 막는 복합 threshold여야 한다.
-  - 다음 액션: 복합 feature가 report에서 복원 가능하면 `manifest_only` 추천값으로 먼저 산출하고, live 전환은 별도 단일축 canary/rollback guard/코호트가 준비된 뒤에만 검토한다. 5/6에는 live mutation을 열지 않는다.
+  - 다음 액션: 복합 feature가 report에서 복원 가능하면 `manifest_only` 추천값으로 먼저 산출하고, score 50 보류 override가 막은 missed winner/avoided loser를 별도 분리한다. live 전환은 별도 단일축 canary/rollback guard/코호트가 준비된 뒤에만 검토한다. 5/6에는 live mutation을 열지 않는다.
 
 - [ ] `[ThresholdCollectorIO0506] threshold 데이터 수집 IO 과부하 재발성 판정 및 증분 collector 설계` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 21:55~22:10`, `Track: RuntimeStability`)
   - Source: [2026-04-30-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-30-stage2-todo-checklist.md), [2026-04-30-data-driven-threshold-inventory.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-30-data-driven-threshold-inventory.md)
