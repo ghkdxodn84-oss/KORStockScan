@@ -28,6 +28,7 @@ _DISPLAY_STAGE_LABELS = {
     "scale_in_executed": "추가매수 체결",
     "preset_exit_setup": "기본 익절망 설치",
     "ai_holding_shadow_band": "AI band shadow",
+    "ai_holding_fast_reuse_band": "AI fast reuse band",
     "ai_holding_review": "AI 보유감시",
     "ai_holding_reuse_bypass": "AI 재사용 우회",
     "ai_holding_skip_unchanged": "AI 재사용 생략",

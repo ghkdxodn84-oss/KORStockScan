@@ -6,15 +6,16 @@ KORStockScan 작업 기본 규칙:
 - 튜닝 원칙, 판정축, 일정, rollback guard는 `Plan Rebase` 문서를 기준으로 삼고, 실행 작업항목은 날짜별 checklist가 소유한다.
 - 현재 active/open 상태는 `Plan Rebase` §7~§8을 기준으로 읽되, 과거 checklist의 `[x]` 완료 항목은 현재 OPEN owner로 보지 않는다. 완료 항목은 증적/근거 링크이고, 현재 owner는 같은 행에 명시된 다음 checklist 또는 현재 runtime owner다.
 
-## 1.1 현재 상태 기준 (`2026-05-01 KST`)
+## 1.1 현재 상태 기준 (`2026-05-04 KST`)
 
 - 현재 단계는 `Plan Rebase`이며, 목적은 손실 억제가 아니라 기대값/순이익 극대화다.
 - 현재 entry owner는 `mechanical_momentum_latency_relief` 운영 override와 `dynamic_entry_price_resolver_p1`/`dynamic_entry_ai_price_canary_p2` 가격축이다.
   - `MechanicalMomentumLatencyRelief0430-*`는 반영/판정 완료 기록이다. 신규 OPEN 작업이 아니며, 5/4에는 `RuntimeFlagInventory0504-Preopen`에서 로드/상태만 확인한다.
   - `latency_quote_fresh_composite`, `latency_signal_quality_quote_composite`, legacy `other_danger/ws_jitter/spread` relief, fallback/split-entry 계열은 종료/폐기 축이다. 재개하려면 새 workorder, 새 rollback guard, 새 checklist가 필요하다.
-- 현재 보유/청산 owner는 `soft_stop_micro_grace`, `REVERSAL_ADD`, `bad_entry_refined_canary`다. `soft_stop_expert_defense v2`는 종료했고, naive `bad_entry_block`은 observe-only 근거로만 본다.
+- 현재 보유/청산 owner는 `soft_stop_micro_grace`, `REVERSAL_ADD`, `bad_entry_refined_canary`다. `same_symbol_loss_reentry_cooldown`은 유안타증권 반복손실 대응 임시 운영가드이며, 단독 hard cooldown 고정이 아니라 5/6 `DowntrendReentryComposite0506`/`CooldownPolicyInventory0506`에서 복합 threshold 전환 여부를 본다. `soft_stop_expert_defense v2`는 종료했고, naive `bad_entry_block`은 observe-only 근거로만 본다.
 - `holding_flow_override`는 `2026-05-04` 장전부터 보유/청산 및 오버나이트 `SELL_TODAY` 후보를 재검문하는 운영 override다. hard stop/protect hard stop/주문·잔고 안전장치는 우회하지 않는다.
 - `stat_action_decision_snapshot`, `statistical_action_weight`, `holding_exit_decision_matrix`는 report-only/observe-only다. runtime 판단 변경이나 AI live 반영은 ADM ladder 승인 전까지 금지한다.
+- `hard_time_stop_shadow`, `same_symbol_soft_stop_cooldown_shadow`, `partial_only_timeout_shadow`는 2026-05-04 runtime 기본 OFF로 정리했다. `ai_holding_fast_reuse_band`는 shadow가 아니라 HOLDING fast-reuse telemetry다.
 - threshold cycle 자동화는 장전 manifest와 장후 report 생성까지만 허용한다. `ThresholdOpsTransition0506` 전에는 live threshold runtime mutation을 열지 않는다.
 - Gemini/DeepSeek/OpenAI 후속은 live routing 승격이 아니라 flag-off acceptance, endpoint schema contract, transport provenance로 분리한다. Gemini live enable과 OpenAI live routing은 별도 checklist 없이 열지 않는다.
 

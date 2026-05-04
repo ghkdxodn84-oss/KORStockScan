@@ -4635,14 +4635,14 @@ def test_hard_time_stop_shadow_skips_completed_position(monkeypatch):
     assert pipeline_logs == []
 
 
-def test_holding_shadow_band_logs_review_for_near_safe_profit(monkeypatch):
+def test_holding_fast_reuse_band_logs_review_for_near_safe_profit(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
     state_handlers.TRADING_RULES = replace(CONFIG, SCALE_IN_REQUIRE_HISTORY_TABLE=False)
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()
     state_handlers.HIGHEST_PRICES = {"123456": 10080}
-    state_handlers.LAST_AI_CALL_TIMES = {"123456": state_handlers.time.time() - 15}
+    state_handlers.LAST_AI_CALL_TIMES = {"123456": state_handlers.time.time() - 25}
     state_handlers.LAST_LOG_TIMES = {}
     state_handlers.DB = _DummyDB()
 
@@ -4721,13 +4721,13 @@ def test_holding_shadow_band_logs_review_for_near_safe_profit(monkeypatch):
         ai_engine=DummyAI(),
     )
 
-    shadow_logs = [fields for stage, fields in pipeline_logs if stage == "ai_holding_shadow_band"]
+    fast_reuse_logs = [fields for stage, fields in pipeline_logs if stage == "ai_holding_fast_reuse_band"]
 
-    assert shadow_logs
-    assert shadow_logs[-1]["action"] == "review"
-    assert shadow_logs[-1]["near_safe_profit"] is True
-    assert shadow_logs[-1]["near_ai_exit"] is False
-    assert shadow_logs[-1]["shadow_only"] is True
+    assert fast_reuse_logs
+    assert fast_reuse_logs[-1]["action"] == "review"
+    assert fast_reuse_logs[-1]["near_safe_profit"] is True
+    assert fast_reuse_logs[-1]["near_ai_exit"] is False
+    assert fast_reuse_logs[-1]["telemetry_only"] is True
 
 
 # ─────────────────────────────────────────────
@@ -4994,6 +4994,38 @@ def test_resolve_sell_order_sign_trailing_negative_treated_as_loss():
     assert state_handlers._resolve_sell_order_sign("TRAILING", -0.01) == "📉 [손절 주문]"
     assert state_handlers._resolve_sell_order_sign("TRAILING", 0.0) == "📉 [손절 주문]"
     assert state_handlers._resolve_sell_order_sign("TRAILING", 0.15) == "🎊 [익절 주문]"
+
+
+def test_same_symbol_loss_reentry_cooldown_targets_loss_exits_only():
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    class _RulesProxy:
+        def __init__(self, base, **overrides):
+            self._base = base
+            self._overrides = overrides
+
+        def __getattr__(self, name):
+            if name in self._overrides:
+                return self._overrides[name]
+            return getattr(self._base, name)
+
+    state_handlers.TRADING_RULES = _RulesProxy(
+        CONFIG,
+        SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_ENABLED=True,
+        SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC=3600,
+    )
+
+    assert state_handlers._resolve_same_symbol_loss_reentry_cooldown_sec("scalp_soft_stop_pct", -1.5) == 3600
+    assert state_handlers._resolve_same_symbol_loss_reentry_cooldown_sec("protect_trailing_stop", -0.01) == 3600
+    assert (
+        state_handlers._resolve_same_symbol_loss_reentry_cooldown_sec(
+            "scalp_bad_entry_refined_canary",
+            -1.2,
+        )
+        == 3600
+    )
+    assert state_handlers._resolve_same_symbol_loss_reentry_cooldown_sec("scalp_trailing_take_profit", 1.2) == 0
+    assert state_handlers._resolve_same_symbol_loss_reentry_cooldown_sec("protect_trailing_stop", 0.19) == 0
 
 
 def test_emit_same_symbol_soft_stop_cooldown_shadow_once(monkeypatch):

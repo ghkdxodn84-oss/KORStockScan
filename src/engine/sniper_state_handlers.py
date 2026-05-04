@@ -861,7 +861,25 @@ def _resolve_sell_order_sign(sell_reason_type: str, profit_rate) -> str:
     return "📉 [손절 주문]" if is_loss else "🎊 [익절 주문]"
 
 
+def _resolve_same_symbol_loss_reentry_cooldown_sec(exit_rule: str | None, profit_rate) -> int:
+    if not _rule_bool("SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_ENABLED", True):
+        return 0
+    if not _is_non_positive_numeric(profit_rate):
+        return 0
+    loss_exit_rules = {
+        "scalp_soft_stop_pct",
+        "protect_trailing_stop",
+        "scalp_bad_entry_refined_canary",
+        "reversal_add_post_eval_fail",
+    }
+    if str(exit_rule or "").strip() not in loss_exit_rules:
+        return 0
+    return max(0, _rule_int("SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC", 3600))
+
+
 def _mark_same_symbol_soft_stop(code: str, *, now_ts: float) -> None:
+    if not _rule_bool("SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED", False):
+        return
     cooldown_sec = _rule_int("SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_SEC", 600)
     if cooldown_sec <= 0:
         return
@@ -887,7 +905,7 @@ def _remember_exit_context(
         stock.pop("last_exit_soft_stop_threshold_pct", None)
 
     cooldown_sec = _rule_int("SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_SEC", 600)
-    cooldown_enabled = _rule_bool("SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED", True)
+    cooldown_enabled = _rule_bool("SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED", False)
     stock["last_exit_same_symbol_soft_stop_cooldown_would_block"] = bool(
         str(exit_rule or "").strip() == "scalp_soft_stop_pct" and cooldown_enabled and cooldown_sec > 0
     )
@@ -900,7 +918,7 @@ def _emit_same_symbol_soft_stop_cooldown_shadow(
     now_ts: float,
     runtime_remaining_sec: int,
 ) -> None:
-    enabled = _rule_bool("SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED", True)
+    enabled = _rule_bool("SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED", False)
     if not enabled:
         return
 
@@ -999,7 +1017,7 @@ def _emit_partial_only_timeout_shadow(
     peak_profit: float,
     current_ai_score: float,
 ) -> None:
-    enabled = _rule_bool("SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_ENABLED", True)
+    enabled = _rule_bool("SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_ENABLED", False)
     if not enabled:
         return
 
@@ -1534,7 +1552,7 @@ def _emit_scalp_hard_time_stop_shadow(
     current_ai_score: float,
     ai_exit_min_loss_pct: float,
 ) -> None:
-    if not _rule_bool("SCALP_COMMON_HARD_TIME_STOP_SHADOW_ONLY", True):
+    if not _rule_bool("SCALP_COMMON_HARD_TIME_STOP_SHADOW_ONLY", False):
         return
     if _safe_int(stock.get("buy_qty"), 0) <= 0:
         return
@@ -5495,7 +5513,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     _log_holding_pipeline(
                         stock,
                         code,
-                        "ai_holding_shadow_band",
+                        "ai_holding_fast_reuse_band",
                         profit_rate=f"{profit_rate:+.2f}",
                         ai_score=f"{current_ai_score:.0f}",
                         ai_exit_min_loss_pct=f"{near_ai_exit_min_loss_pct:+.2f}",
@@ -5505,7 +5523,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         distance_to_ai_exit=f"{profit_rate - near_ai_exit_min_loss_pct:+.2f}",
                         distance_to_safe_profit=f"{profit_rate - safe_profit_pct:+.2f}",
                         action=shadow_action,
-                        shadow_only=True,
+                        telemetry_only=True,
                     )
                     _log_holding_pipeline(
                         stock,
@@ -5523,7 +5541,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     _log_holding_pipeline(
                         stock,
                         code,
-                        "ai_holding_shadow_band",
+                        "ai_holding_fast_reuse_band",
                         profit_rate=f"{profit_rate:+.2f}",
                         ai_score=f"{current_ai_score:.0f}",
                         ai_exit_min_loss_pct=f"{near_ai_exit_min_loss_pct:+.2f}",
@@ -5533,7 +5551,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         distance_to_ai_exit=f"{profit_rate - near_ai_exit_min_loss_pct:+.2f}",
                         distance_to_safe_profit=f"{profit_rate - safe_profit_pct:+.2f}",
                         action=shadow_action,
-                        shadow_only=True,
+                        telemetry_only=True,
                     )
                     _log_holding_pipeline(
                         stock,
@@ -6594,10 +6612,30 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             )
 
             if strategy == 'SCALPING' and now_t < TIME_15_30:
+                base_cooldown_sec = 1200
+                loss_reentry_cooldown_sec = _resolve_same_symbol_loss_reentry_cooldown_sec(
+                    exit_rule or stock.get("last_exit_rule"),
+                    profit_rate,
+                )
+                cooldown_sec = max(base_cooldown_sec, loss_reentry_cooldown_sec)
                 with ENTRY_LOCK:
-                    cooldowns[code] = now_ts + 1200
+                    cooldowns[code] = now_ts + cooldown_sec
                     alerted_stocks.discard(code)
-                log_info(f"♻️ [{stock['name']}] 스캘핑 청산 완료 후 20분 쿨타임 진입.")
+                if loss_reentry_cooldown_sec > base_cooldown_sec:
+                    _log_entry_pipeline(
+                        stock,
+                        code,
+                        "same_symbol_loss_reentry_cooldown",
+                        exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
+                        profit_rate=f"{profit_rate:+.2f}",
+                        cooldown_sec=cooldown_sec,
+                        base_cooldown_sec=base_cooldown_sec,
+                    )
+                    log_info(
+                        f"♻️ [{stock['name']}] 손실 청산 후 동일종목 재진입 {cooldown_sec}초 쿨타임 진입."
+                    )
+                else:
+                    log_info(f"♻️ [{stock['name']}] 스캘핑 청산 완료 후 20분 쿨타임 진입.")
         else:
             err_msg = str(res.get('return_msg', '') if isinstance(res, dict) else '')
             sellable_qty = _extract_sellable_qty_from_error(err_msg)

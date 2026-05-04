@@ -55,9 +55,9 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 | `statistical_action_weight` | report-only ON | 장후 행동가중치 리포트 생성 | live 적용은 별도 단일축 canary와 rollback guard가 있을 때만 가능 |
 | `holding_exit_decision_matrix` | report-only ON | AI 보유/청산 판단 보조 매트릭스 | `ADM-1 report-only -> ADM-2 shadow prompt -> ADM-3 advisory nudge -> ADM-4 weighted live -> ADM-5 policy gate` 순서로만 전환 |
 | `threshold_cycle` | automation ON, mutation OFF | 07:35 manifest, 16:10 collector/report | `ThresholdOpsTransition0506` 전까지 `manifest_only`; runtime threshold mutation/restart 자동화 금지 |
-| `hard_time_stop_shadow` | shadow ON | `SCALP_COMMON_HARD_TIME_STOP_SHADOW_ONLY=True` | 실주문 승격 후보 아님. time-based exit 의제 재개 시 새 단일축으로 정의 |
-| `same_symbol_soft_stop_cooldown_shadow` | shadow ON | soft stop 직후 same-symbol cooldown 관찰 | same-symbol 손실이 독립 리스크로 확인될 때만 canary 후보 |
-| `partial_only_timeout_shadow` | shadow ON | partial-only timeout 관찰 | partial 장기체류 손익 훼손이 반복될 때만 canary 후보 |
+| `hard_time_stop_shadow` | OFF, historical/replay only | `SCALP_COMMON_HARD_TIME_STOP_SHADOW_ONLY=False` | 실주문 승격 후보 아님. time-based exit 의제 재개 시 새 단일축으로 정의 |
+| `same_symbol_soft_stop_cooldown_shadow` | OFF, live cooldown으로 대체 | `SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED=False` | `same_symbol_loss_reentry_cooldown` live 운영가드로 전환. 복합 threshold 전환은 5/6 후속 |
+| `partial_only_timeout_shadow` | OFF, historical/replay only | `SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_ENABLED=False` | partial 장기체류 손익 훼손이 반복될 때 새 report-only 항목으로 재등록 |
 | `SCALP_LOSS_FALLBACK` | observe-only ON, live OFF | `SCALP_LOSS_FALLBACK_ENABLED=False`, `OBSERVE_ONLY=True` | `REVERSAL_ADD`와 충돌하지 않는 별도 owner/rollback 기준 없이는 live 금지 |
 
 #### `holding_exit_decision_matrix` 전환 ladder
@@ -328,10 +328,10 @@ inventory 운영 규칙은 아래로 고정한다.
 | `dual_persona` | `observe-only` | `guarded-off` | gatekeeper/overnight dual-persona shadow |
 | `watching_shared_prompt_shadow` | `observe-only` | `guarded-off` | WATCHING shared prompt 비교 shadow |
 | `watching_prompt_75_shadow` | `remove` | `guarded-off` | 제거 완료, historical 판정만 유지 |
-| `hard_time_stop_shadow` | `observe-only` | `none` | 공통 hard time stop 관찰 |
-| `ai_holding_shadow_band` | `observe-only` | `none` | HOLDING review/skip 경계 관찰 |
-| `same_symbol_soft_stop_cooldown_shadow` | `observe-only` | `none` | same-symbol cooldown 가설 관찰 |
-| `partial_only_timeout_shadow` | `observe-only` | `none` | partial-only timeout 가설 관찰 |
+| `hard_time_stop_shadow` | `remove/guarded-off` | `none` | 5/4 기본 OFF. historical/replay label만 유지 |
+| `ai_holding_fast_reuse_band` | `telemetry` | `live fast-reuse cadence` | HOLDING review/skip 경계 telemetry. shadow-only 축 아님 |
+| `same_symbol_soft_stop_cooldown_shadow` | `remove/guarded-off` | `none` | 5/4 `same_symbol_loss_reentry_cooldown` live 가드로 대체 |
+| `partial_only_timeout_shadow` | `remove/guarded-off` | `none` | 5/4 기본 OFF. 재개 시 새 report-only 항목 필요 |
 | `split_entry_rebase_integrity_shadow` | `remove` | `guarded-off` | split-entry 폐기 정합화로 runtime shadow 기본 OFF |
 | `split_entry_immediate_recheck_shadow` | `remove` | `guarded-off` | split-entry 폐기 정합화로 runtime shadow 기본 OFF |
 | `strength_shadow_feedback` | `observe-only` | `none` | dynamic strength 후보 장후 평가 |
@@ -409,10 +409,10 @@ inventory 운영 규칙은 아래로 고정한다.
 
 ### 4.3 `hard_time_stop_shadow`
 
-- 판정: `observe-only`
+- 판정: `remove/guarded-off`
 - live 영향도: `none`
-- 튜닝 모니터링 가치: `Medium`
-  - 이유: 실주문 개입 없이 `시간기반 강제정리` 가설의 false positive와 ghost event를 관찰하는 용도로는 아직 가치가 있다.
+- 튜닝 모니터링 가치: `Low`
+  - 이유: 신규 alpha shadow 금지 원칙과 5/4 runtime shadow purge 기준에 따라 기본 OFF로 내렸다. 과거 report/UI label은 historical 해석용으로만 남긴다.
   - 상향 조건: `soft_stop_rebound_split`과 별도로 `time-based exit` 후보를 다시 검토할 때
   - 하향 조건: `post_sell`/`trade_review`만으로 동일 판단이 충분하고, ghost event 점검도 더 이상 필요 없을 때
 - EV 판정 기여도: `Low`
@@ -422,13 +422,13 @@ inventory 운영 규칙은 아래로 고정한다.
 - 코드 유지비: `Low`
 - 향후 재개 가능성: `Medium`
 - 근거:
-  1. 실주문에 연결되지 않고 `hard_time_stop_shadow` 이벤트만 남긴다.
-  2. trade review/performance tuning UI에서 이미 관찰 지표로 쓰인다.
-  3. 과거 ghost event 점검 이력이 있어 완전 삭제 전 관측 가치가 남아 있다.
+  1. `SCALP_COMMON_HARD_TIME_STOP_SHADOW_ONLY=False`가 기본값이다.
+  2. trade review/performance tuning UI의 historical label은 과거 이벤트를 읽기 위한 backward compatibility다.
+  3. 다시 보려면 shadow 재개가 아니라 새 report-only/checklist owner로 정의한다.
 - 다음 액션:
-  1. 유지 범위를 `trade_review + performance_tuning 관찰`로만 명시
-  2. 실주문 승격 후보로는 두지 않는다
-  3. 동일 정보가 `post_sell/trade_review`로 충분히 대체되는 시점이 오면 `remove` 재판정한다
+  1. runtime 기본 OFF 유지
+  2. 실주문 승격 후보로 두지 않는다
+  3. UI/report의 historical label 정리는 `CodeDebt0506`에서 backward-compatible rename으로 처리한다
 
 ### 4.3A `watching_shared_prompt_shadow`
 
@@ -450,10 +450,10 @@ inventory 운영 규칙은 아래로 고정한다.
   1. `dual_persona`와 같이 OFF 유지
   2. prompt split 비교 의제가 사라지면 `remove` 재판정
 
-### 4.4 `ai_holding_shadow_band`
+### 4.4 `ai_holding_fast_reuse_band`
 
-- 판정: `observe-only`
-- live 영향도: `none`
+- 판정: `telemetry`
+- live 영향도: `live fast-reuse cadence`
 - 튜닝 모니터링 가치: `Medium`
   - 이유: HOLDING AI fast reuse에서 `skip/review` 경계가 얼마나 자주 흔들리는지 보는 관측 신호로는 아직 유효하다.
   - 상향 조건: `holding reuse blocker`나 `holding AI review 지연`을 직접 튜닝 후보로 다시 올릴 때
@@ -465,20 +465,20 @@ inventory 운영 규칙은 아래로 고정한다.
 - 코드 유지비: `Medium`
 - 향후 재개 가능성: `High`
 - 근거:
-  1. `ai_holding_reuse_bypass`와 짝을 이루는 관측축으로 남아 있다.
+  1. `ai_holding_reuse_bypass`와 짝을 이루는 fast-reuse 경계 telemetry다.
   2. holding fast reuse를 다시 건드릴 때 band 관측이 있으면 원인귀속이 더 쉬워진다.
-  3. 현재는 live 판단이 아니라 observability 성격이다.
+  3. 5/4부터 stage 명칭을 `ai_holding_shadow_band`에서 `ai_holding_fast_reuse_band`로 바꿔 shadow-only 축과 분리했다.
 - 다음 액션:
-  1. live 판단 비사용을 문서 기준으로 고정
+  1. shadow-only가 아니라 live fast-reuse telemetry로 문서 기준을 고정
   2. 유지 리포트 범위는 `trade_review`와 raw holding pipeline 해석으로 제한
-  3. 향후 `holding reuse` 축을 재개하지 않으면 `hard_time_stop_shadow`와 묶어 `observe-only 축 축소`를 재판정한다
+  3. historical `ai_holding_shadow_band` label은 report backward compatibility로만 둔다
 
 ### 4.4A `same_symbol_soft_stop_cooldown_shadow`
 
-- 판정: `observe-only`
+- 판정: `remove/guarded-off`
 - live 영향도: `none`
-- 튜닝 모니터링 가치: `Medium`
-  - 이유: soft stop 직후 동일 종목 재진입 cooldown이 필요한지 확인하는 관찰축이다.
+- 튜닝 모니터링 가치: `Low`
+  - 이유: 5/4 유안타증권 반복손실로 `same_symbol_loss_reentry_cooldown` live 운영가드가 열렸으므로 shadow 가설은 닫는다.
   - 상향 조건: soft stop 휩쏘와 same-symbol 재진입 손실을 같이 튜닝할 때
   - 하향 조건: same-symbol cooldown live 후보를 접을 때
 - EV 판정 기여도: `Medium`
@@ -487,11 +487,11 @@ inventory 운영 규칙은 아래로 고정한다.
 - 코드 유지비: `Low`
 - 향후 재개 가능성: `Medium`
 - 근거:
-  1. `shadow_only=True`로 entry pipeline에만 기록하고 실주문 차단에는 연결하지 않는다.
-  2. 보유/청산 cooldown 가설과 직접 연결된다.
+  1. `SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED=False`가 기본값이다.
+  2. live 차단 owner는 `same_symbol_loss_reentry_cooldown`이며, 최종 형태는 5/6 복합 threshold 후보로 분리한다.
 - 다음 액션:
-  1. 보유/청산 관찰축으로만 유지
-  2. 재개 가능성이 사라지면 `remove` 재판정
+  1. runtime 기본 OFF 유지
+  2. post-loss reentry 분석은 `YuantaDowntrendReentry0504-Postclose`, `DowntrendReentryComposite0506`에서 소유한다
 
 ### 4.4A-1 `soft_stop_micro_grace`
 
@@ -557,10 +557,10 @@ inventory 운영 규칙은 아래로 고정한다.
 
 ### 4.4B `partial_only_timeout_shadow`
 
-- 판정: `observe-only`
+- 판정: `remove/guarded-off`
 - live 영향도: `none`
-- 튜닝 모니터링 가치: `Medium`
-  - 이유: partial fill만 남은 장기 체류를 timeout 후보로 봐야 하는지 확인하는 관찰축이다.
+- 튜닝 모니터링 가치: `Low`
+  - 이유: 신규 alpha shadow 금지 원칙에 따라 기본 OFF로 내렸다. partial 장기체류가 다시 문제화되면 report-only feature로 새로 연다.
   - 상향 조건: partial-only 장기보유가 손익 훼손으로 반복 확인될 때
   - 하향 조건: `partial_fill_ratio`와 post-sell 평가만으로 충분할 때
 - EV 판정 기여도: `Medium`
@@ -995,15 +995,16 @@ inventory 운영 규칙은 아래로 고정한다.
 
 1. `remove`
    - `watching_prompt_75_shadow`
+   - `hard_time_stop_shadow`
+   - `same_symbol_soft_stop_cooldown_shadow`
+   - `partial_only_timeout_shadow`
 2. `observe-only 유지 문서화`
    - `dual_persona`
    - `watching_shared_prompt_shadow`
-   - `hard_time_stop_shadow`
-   - `ai_holding_shadow_band`
-   - `same_symbol_soft_stop_cooldown_shadow`
-   - `partial_only_timeout_shadow`
    - `strength_shadow_feedback`
-3. `baseline-promote historical/current 표기 유지`
+3. `telemetry 유지 문서화`
+   - `ai_holding_fast_reuse_band`
+4. `baseline-promote historical/current 표기 유지`
    - `dynamic_strength_canary` (`dynamic_strength_relief`)
    - `partial_fill_ratio_canary` (`partial_fill_ratio_guard`)
 4. `active-canary 운영/parking 판정`

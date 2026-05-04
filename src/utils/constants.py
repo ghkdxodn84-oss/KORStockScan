@@ -62,6 +62,10 @@ class TradingConfig:
     SCALPING_MAX_PYRAMID_COUNT: int = 0  # DEPRECATED: runtime count gate removed; counter remains for attribution
     SCALPING_PYRAMID_MIN_PROFIT_PCT: float = 1.5
     SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED: bool = True  # 1주 cap에서도 PYRAMID 1주 소형 canary 허용
+    SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_ENABLED: bool = True  # 손실 청산 후 동일종목 신규 BUY 재시도 차단
+    SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC: int = 3600  # soft/protect/refined 손실 후 60분 재진입 금지
+    SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED: bool = False  # live loss reentry cooldown 전환 후 shadow 기본 OFF
+    SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_SEC: int = 600  # historical/replay 전용 기준
 
     # ==========================================
     # 3.3 추가매수(스윙) 설정
@@ -245,10 +249,13 @@ class TradingConfig:
     SCALP_DYNAMIC_STRENGTH_RELIEF_MIN_BUY_VALUE_RATIO: float = 0.85  # buy_value 최소 허용 비율
     SCALP_DYNAMIC_STRENGTH_RELIEF_BUY_RATIO_TOL: float = 0.03  # buy_ratio 부족 허용폭
     SCALP_DYNAMIC_STRENGTH_RELIEF_EXEC_BUY_RATIO_TOL: float = 0.03  # exec_buy_ratio 부족 허용폭
-    SCALP_COMMON_HARD_TIME_STOP_SHADOW_ONLY: bool = True  # 공통 hard time stop은 shadow-only 관찰 고정
+    SCALP_COMMON_HARD_TIME_STOP_SHADOW_ONLY: bool = False  # shadow-only hard time stop 기본 OFF
     SCALP_COMMON_HARD_TIME_STOP_SHADOW_MINUTES: tuple = (3, 5, 7)  # 공통 hard time stop shadow 후보 분(실전 미적용)
     SCALP_COMMON_HARD_TIME_STOP_SHADOW_MIN_LOSS_PCT: float = -0.7  # shadow 후보 기록 최소 손실폭
     SCALP_COMMON_HARD_TIME_STOP_SHADOW_MAX_PEAK_PCT: float = 0.20  # shadow 후보 기록 최대 고점수익(never-green 기준)
+    SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_ENABLED: bool = False  # partial-only timeout shadow 기본 OFF
+    SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_SEC: int = 180  # historical/replay 전용 기준
+    SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_MAX_PEAK_PCT: float = 0.20  # historical/replay 전용 기준
     SCALP_TRAILING_START_PCT: float = 0.6  # 초단타 트레일링 시작 수익률
     SCALP_TRAILING_LIMIT: float = 0.5  # DEPRECATED: STRONG/WEAK로 대체됨
     MIN_SCALP_LIQUIDITY: int = 500_000_000  # 최소 호가 잔량 대금 (5억)
@@ -421,7 +428,7 @@ class TradingConfig:
     OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED: bool = True  # buy-side hot path timeout/parse failure 시 reject fallback
     OPENAI_PREVIOUS_RESPONSE_ID_ENABLED: bool = False  # phase1: stateless 유지
     OPENAI_DUAL_PERSONA_ENABLED: bool = False  # Plan Rebase: AI 엔진 A/B/shadow 비교는 기본 튜닝 로직 정렬 이후 재개
-    OPENAI_DUAL_PERSONA_SHADOW_MODE: bool = True
+    OPENAI_DUAL_PERSONA_SHADOW_MODE: bool = False
     OPENAI_DUAL_PERSONA_APPLY_GATEKEEPER: bool = False  # 장중 긴급 완화: Gatekeeper dual-persona shadow 일시 비활성화
     OPENAI_DUAL_PERSONA_APPLY_OVERNIGHT: bool = True
     OPENAI_DUAL_PERSONA_WORKERS: int = 2
@@ -994,6 +1001,12 @@ def _build_trading_rules() -> TradingConfig:
     env_scalping_pyramid_zero_qty_stage1_enabled = _env_bool(
         "KORSTOCKSCAN_SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED"
     )
+    env_same_symbol_loss_reentry_cooldown_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_ENABLED"
+    )
+    env_same_symbol_loss_reentry_cooldown_sec = _env_int(
+        "KORSTOCKSCAN_SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC"
+    )
     if (
         env_scalping_enable_pyramid is not None
         or env_scalping_max_avg_down_count is not None
@@ -1006,6 +1019,8 @@ def _build_trading_rules() -> TradingConfig:
         or env_scalping_initial_entry_qty_cap_enabled is not None
         or env_scalping_initial_entry_max_qty is not None
         or env_scalping_pyramid_zero_qty_stage1_enabled is not None
+        or env_same_symbol_loss_reentry_cooldown_enabled is not None
+        or env_same_symbol_loss_reentry_cooldown_sec is not None
     ):
         config = replace(
             config,
@@ -1042,6 +1057,12 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED=env_scalping_pyramid_zero_qty_stage1_enabled
             if env_scalping_pyramid_zero_qty_stage1_enabled is not None
             else config.SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED,
+            SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_ENABLED=env_same_symbol_loss_reentry_cooldown_enabled
+            if env_same_symbol_loss_reentry_cooldown_enabled is not None
+            else config.SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_ENABLED,
+            SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC=env_same_symbol_loss_reentry_cooldown_sec
+            if env_same_symbol_loss_reentry_cooldown_sec is not None
+            else config.SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC,
         )
 
     env_openai_json_deterministic = _env_bool("KORSTOCKSCAN_OPENAI_JSON_DETERMINISTIC_CONFIG_ENABLED")

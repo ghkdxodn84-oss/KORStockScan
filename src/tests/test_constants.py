@@ -86,6 +86,15 @@ def test_trading_rules_ai_cadence_defaults_are_rate_limited(monkeypatch):
     assert reloaded.TRADING_RULES.AI_HOLDING_CRITICAL_COOLDOWN == 45
 
 
+def test_trading_rules_runtime_shadow_defaults_are_off(monkeypatch):
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.SCALP_COMMON_HARD_TIME_STOP_SHADOW_ONLY is False
+    assert reloaded.TRADING_RULES.SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED is False
+    assert reloaded.TRADING_RULES.SCALP_PARTIAL_ONLY_TIMEOUT_SHADOW_ENABLED is False
+    assert reloaded.TRADING_RULES.OPENAI_DUAL_PERSONA_SHADOW_MODE is False
+
+
 def test_trading_rules_ai_cadence_env_override(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_AI_WATCHING_COOLDOWN", "120")
     monkeypatch.setenv("KORSTOCKSCAN_AI_HOLDING_MIN_COOLDOWN", "60")

@@ -1,6 +1,6 @@
 # 계획: KORStockScan 성능 최적화 실행안 (Session Prompt)
 
-기준 시각: `2026-05-03 KST (Plan Rebase 현행화)`  
+기준 시각: `2026-05-04 KST (Plan Rebase 현행화)`  
 역할: 다음 세션에서 중심 기준 문서로 진입하기 위한 **경량 포인터**다.
 
 이 문서는 세션 시작용 경량 포인터다.  
@@ -63,7 +63,7 @@
 9. `full fill`과 `partial fill`은 같은 표본으로 합치지 않는다.
 10. 원인 귀속이 불명확하면 먼저 `리포트 정합성`, `이벤트 복원`, `집계 품질`을 점검한다.
 11. 현재 entry owner는 `mechanical_momentum_latency_relief`, `dynamic_entry_price_resolver_p1`, `dynamic_entry_ai_price_canary_p2`다. OFI/QI는 P2 내부 live 입력 feature이며 standalone hard gate가 아니다.
-12. 현재 보유/청산 owner는 `soft_stop_micro_grace`, `REVERSAL_ADD`, `bad_entry_refined_canary`, `holding_flow_override`다.
+12. 현재 보유/청산 owner는 `soft_stop_micro_grace`, `REVERSAL_ADD`, `bad_entry_refined_canary`, `holding_flow_override`다. `same_symbol_loss_reentry_cooldown`은 손실 후 동일종목 반복진입을 막는 임시 운영가드이며, 5/6에는 단독 hard cooldown이 아니라 하향 재진입 복합 threshold 후보로 재판정한다.
 13. AI provider routing은 live 승격이 아니라 prompt별 model tier/endpoint contract/provenance 기준으로 관리한다. Gemini live enable, OpenAI live routing, Responses WS live 전환은 별도 checklist 없이 열지 않는다.
 14. threshold 자동화는 POSTCLOSE report와 PREOPEN apply plan까지만 허용한다. `ThresholdOpsTransition0506` 전 live runtime mutation은 금지하며 현재 apply mode는 `manifest_only`다.
 15. 기준선/롤백/승격 판단은 문서 파생값이 아니라 DB 우선 스냅샷 실필드와 canonical JSON/JSONL에서 생성된 report를 기준으로 한다.
@@ -76,7 +76,7 @@
 | --- | --- | --- | --- |
 | `entry operating override` | `mechanical_momentum_latency_relief` ON | 운영 override 유지, 신규 OPEN 아님 | `2026-05-04 PREOPEN` 로드 확인 |
 | `entry price` | P1 resolver + P2 AI price canary live, OFI/QI P2 내부 입력 ON | entry price active owner | `2026-05-04 PREOPEN/POSTCLOSE` health/provenance |
-| `holding/exit` | `soft_stop_micro_grace`, `REVERSAL_ADD`, `bad_entry_refined_canary`, `holding_flow_override` | 보유/청산 active owner | `2026-05-04 POSTCLOSE` keep/OFF 및 flow 판정 |
+| `holding/exit` | `soft_stop_micro_grace`, `REVERSAL_ADD`, `bad_entry_refined_canary`, `holding_flow_override`, 임시 `same_symbol_loss_reentry_cooldown` 운영가드 | 보유/청산 active owner. 동일종목 손실 후 60분 쿨다운은 최종 threshold가 아니라 5/6 복합축 전환 후보 | `2026-05-04 POSTCLOSE` keep/OFF 및 flow 판정, `2026-05-06 POSTCLOSE` cooldown/composite 판정 |
 | `position sizing` | `initial_entry_qty_cap_1share` 유지, `MAX_*_COUNT`는 attribution counter, generic `AVG_DOWN` 평가는 제거됐다. scalping `AVG_DOWN` add_type은 `REVERSAL_ADD` 귀속으로만 남고, `SCALPING_ENABLE_PYRAMID`는 cooldown/pending/position cap/protection으로 관리 | count gate semantics 정리 완료, 동적 수량화만 OPEN | `2026-05-04 PREOPEN`, `2026-05-06 POSTCLOSE` |
 | `AI engine` | Gemini/DeepSeek/OpenAI contract/provenance 보강. 현재 `main` 스캘핑 live routing 기본값은 Gemini이며, OpenAI Responses WS와 OpenAI live routing은 flag-off/backlog | live routing 승격 아님 | `2026-05-06 POSTCLOSE` backlog 재분류 |
 | `threshold/action weight` | threshold collector/report/apply plan 자동화. apply는 `manifest_only` | runtime mutation 전 단계 | `2026-05-06 POSTCLOSE` acceptance |
@@ -87,8 +87,8 @@
 
 | 일자 | 핵심 실행축 | 실행 원칙 | 기대 산출물 |
 | --- | --- | --- | --- |
-| `2026-05-04` | runtime flag, dynamic entry price, OFI/QI provenance, holding flow, refined bad-entry | 신규 다축 추가 금지. active owner health/provenance만 닫음 | PREOPEN 로드, INTRADAY health, POSTCLOSE keep/OFF/보류 사유 |
-| `2026-05-06` | threshold ops transition, statistical action weight, report Markdown 후보, AI engine backlog, scanner/code debt | threshold live mutation 금지. acceptance와 report-only/observe-only 분리 | threshold README 기준 운영확인, Markdown 누락 후보 작업계획 여부 |
+| `2026-05-04` | runtime flag, dynamic entry price, OFI/QI provenance, holding flow, refined bad-entry, same-symbol loss reentry guard | 신규 다축 추가 금지. active owner health/provenance와 긴급 운영가드만 닫음 | PREOPEN 로드, INTRADAY health, POSTCLOSE keep/OFF/보류 사유, 유안타 하향 재진입 root-cause |
+| `2026-05-06` | threshold ops transition, statistical action weight, report Markdown 후보, AI engine backlog, scanner/code debt, downtrend reentry composite | threshold live mutation 금지. acceptance와 report-only/observe-only 분리. 단독 cooldown은 복합 threshold 후보로만 판정 | threshold README 기준 운영확인, Markdown 누락 후보 작업계획 여부, cooldown/composite 전환 판정 |
 | `2026-05-07` | SAW-3 eligible outcome, ADM-2 shadow prompt | decision-support ladder 유지 | runtime 판단 변경 없는 schema/readiness |
 | `2026-05-08` | SAW-4~SAW-6 체결품질/시장맥락/orderbook readiness, OFI/QI expansion ladder | 3축 교차와 live 반영 금지. OFI/QI는 entry-only P2 내부 feature로 확장계획 owner를 고정 | 후속 calibration/decision-support 후보, stale 방지 owner |
 
