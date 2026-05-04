@@ -468,8 +468,8 @@ P1/P2는 본 보고서 §6에 우선순위로 정렬했다. 순서 변경/병합
 
 | 구분 | 기존 대비 | Tier | 기본 cadence/trigger | 일간 호출량 산식 |
 | --- | --- | --- | --- | --- |
-| `analyze_target` watching | 동일 | Tier1 | `AI_WATCHING_COOLDOWN=45초`, 신규 매수 cutoff 15:00 | 감시 후보 1개당 최대 약 476~480회/일 (`09:03~15:00` 또는 `09:00~15:00`) |
-| `analyze_target` holding/exit profile | 동일 | Tier1 | 일반 `20~90초`, critical `8~20초`, 가격변화 trigger 및 fast reuse 적용 | 보유 1개당 이론상 약 260회/일(90초)~2,925회/일(8초), 실제는 reuse/가격 trigger로 제한 |
+| `analyze_target` watching | `2026-05-04` 완화 | Tier1 | `AI_WATCHING_COOLDOWN=90초`, 신규 매수 cutoff 15:00 | 감시 후보 1개당 최대 약 238~240회/일 (`09:03~15:00` 또는 `09:00~15:00`) |
+| `analyze_target` holding/exit profile | `2026-05-04` 완화 | Tier1 | 일반 `45~180초`, critical `20~45초`, 가격변화 trigger 및 fast reuse 적용 | 보유 1개당 이론상 약 130회/일(180초)~1,170회/일(20초), 실제는 reuse/가격 trigger로 제한 |
 | `evaluate_scalping_entry_price` | canary 신규/유지 | Tier2 | 제출 직전 가격 판단 후보별 1회 | AI 가격 canary 도달 후보 수와 동일 |
 | `evaluate_scalping_holding_flow` intraday | `holding_flow_override` 신규축 | Tier2 | 청산 후보 발생 시 최초 1회, HOLD/TRIM이면 30~90초 재검문, `max_defer=90초` | 청산 후보 1건당 최대 3회 (`t=0/30/60`, `t>=90` force exit) |
 | `evaluate_scalping_overnight_decision` | P0 정합화 후 동일 목적 | Tier2 | 15:20 이후 DB 기준 일 1회 gatekeeper 실행 | 오버나이트 판정 대상 SCALPING 보유 수와 동일 |

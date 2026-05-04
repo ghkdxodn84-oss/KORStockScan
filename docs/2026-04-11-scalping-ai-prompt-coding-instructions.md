@@ -71,9 +71,9 @@
   - EOD/장후 심층 후보 선정: Tier3 deep.
   - OpenAI 기본값은 `GPT_FAST_MODEL=gpt-5.4-nano`, `GPT_REPORT_MODEL=gpt-5.4-mini`, `GPT_DEEP_MODEL=gpt-5.4`로 분리한다.
 - 호출 interval 기본값:
-  - WATCHING 재평가: `AI_WATCHING_COOLDOWN=45초`.
-  - HOLDING 일반: `AI_HOLDING_MIN_COOLDOWN=20초`, `AI_HOLDING_MAX_COOLDOWN=90초`.
-  - HOLDING critical: `AI_HOLDING_CRITICAL_MIN_COOLDOWN=8초`, `AI_HOLDING_CRITICAL_COOLDOWN=20초`.
+  - WATCHING 재평가: `AI_WATCHING_COOLDOWN=90초`.
+  - HOLDING 일반: `AI_HOLDING_MIN_COOLDOWN=45초`, `AI_HOLDING_MAX_COOLDOWN=180초`.
+  - HOLDING critical: `AI_HOLDING_CRITICAL_MIN_COOLDOWN=20초`, `AI_HOLDING_CRITICAL_COOLDOWN=45초`.
 - prompt_profile 추적 상태:
   - 코드 경로는 `watching`, `holding`, `exit`, `shared`를 모두 라우팅한다.
   - 실전 호출부는 `watching`과 `holding` 중심이다.

@@ -16,7 +16,7 @@
 6. 현재 보유/청산 owner는 `soft_stop_micro_grace`, `REVERSAL_ADD`, `bad_entry_refined_canary`다. `soft_stop_expert_defense v2`는 종료했고, naive `bad_entry_block`은 observe-only에서 refined canary의 근거로만 남긴다.
 7. `2026-05-04 KST` 장전부터 `holding_flow_override`를 기존 튜닝 관찰축과 별개인 운영 override로 둔다. 적용 대상은 `AI/soft stop/trailing/bad-entry refined` 청산 후보와 오버나이트 `SELL_TODAY` 후보이며, hard stop/protect hard stop/주문·잔고 안전장치는 즉시 실행을 유지한다. 단일 점수구간 컷 대신 최근 tick 30개, 분봉 60개, 최근 flow review history를 넣어 `flow_state/evidence/action` 흐름으로 최종 판단하고, 최초 후보 대비 추가악화 `0.80%p` 또는 최대 보류 `90초` 도달 시 기존 청산을 허용한다.
 8. AI 엔진 개선은 live routing 승격이 아니라 `Gemini/DeepSeek/OpenAI`별 flag-off acceptance, endpoint schema contract, transport provenance로 분리한다. Gemini live enable과 OpenAI live routing은 별도 checklist 없이 임의로 열지 않는다.
-9. `2026-05-02 KST` 기준 AI provider routing은 유지하되, live prompt별 model tier와 호출 interval 기본값은 기대값 우선으로 즉시 보정한다. `watching/holding/shared` hot path는 Tier1, `entry_price/holding_flow/overnight/scalping_exit/gatekeeper report`는 Tier2, EOD/장후 심층 분석은 Tier3를 기본으로 쓰며, OpenAI tier 기본값은 `FAST=gpt-5.4-nano`, `REPORT=gpt-5.4-mini`, `DEEP=gpt-5.4`로 분리한다. 이는 provider live routing 승격이 아니라 기존 endpoint 내부 model tier routing 변경이다.
+9. `2026-05-02 KST` 기준 AI provider routing은 유지하되, live prompt별 model tier와 호출 interval 기본값은 기대값 우선으로 보정한다. `2026-05-04 KST`에는 과다 호출 완화를 위해 `AI_WATCHING_COOLDOWN=90`, `AI_HOLDING_MIN/MAX=45/180`, `AI_HOLDING_CRITICAL_MIN/MAX=20/45`로 재보정한다. `watching/holding/shared` hot path는 Tier1, `entry_price/holding_flow/overnight/scalping_exit/gatekeeper report`는 Tier2, EOD/장후 심층 분석은 Tier3를 기본으로 쓰며, OpenAI tier 기본값은 `FAST=gpt-5.4-nano`, `REPORT=gpt-5.4-mini`, `DEEP=gpt-5.4`로 분리한다. 이는 provider live routing 승격이 아니라 기존 endpoint 내부 model tier routing과 호출 cadence 변경이다.
 
 ## 2. 용어 범례
 

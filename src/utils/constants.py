@@ -379,7 +379,7 @@ class TradingConfig:
     AI_MAX_CONSECUTIVE_FAILURES: int = 5   # 연속 API 실패 시 AI 엔진 일시 중단 임계값
     AI_SCORE_THRESHOLD_KOSDAQ: int = 60    # KOSDAQ_ML AI 점수 매수 보류 임계값 (60점 미만 보류)
     AI_SCORE_THRESHOLD_KOSPI: int = 60     # KOSPI_ML AI 점수 매수 보류 임계값 (60점 미만 보류)
-    AI_WATCHING_COOLDOWN: int = 45  # 신규 진입 감시(WATCHING) 재평가 간격 (초)
+    AI_WATCHING_COOLDOWN: int = 90  # 신규 진입 감시(WATCHING) 재평가 간격 (초)
     AI_MAIN_BUY_RECOVERY_CANARY_ENABLED: bool = False  # same-day 교체: BUY recovery canary 기본 OFF
     AI_MAIN_BUY_RECOVERY_CANARY_MIN_SCORE: int = 65  # 재평가 시작 점수
     AI_MAIN_BUY_RECOVERY_CANARY_MAX_SCORE: int = 79  # 재평가 종료 점수
@@ -397,11 +397,11 @@ class TradingConfig:
     ML_GATEKEEPER_NEUTRAL_COOLDOWN: int = 60 * 30  # 게이트키퍼 중립/애매 응답 재평가 쿨다운
     ML_GATEKEEPER_ERROR_COOLDOWN: int = 60 * 10  # 게이트키퍼 오류 재시도 쿨다운
     # [AI 보유 종목 감시 쿨타임 설정 - 비용 절감형]
-    AI_HOLDING_MIN_COOLDOWN = 20          # 일반 보유 감시 최소 재평가 간격
-    AI_HOLDING_MAX_COOLDOWN = 90          # 일반 횡보 구간 최대 재평가 간격
-    AI_HOLDING_CRITICAL_MIN_COOLDOWN = 8  # 익절/손절 임박 구간 최소 재평가 간격
-    AI_HOLDING_CRITICAL_COOLDOWN = 20     # 익절/손절 임박 구간 최대 재평가 간격
-    AI_WAIT_DROP_COOLDOWN = 300           # 💡 ai score 75점 이하 대기시간 300초
+    AI_HOLDING_MIN_COOLDOWN: int = 45          # 일반 보유 감시 최소 재평가 간격
+    AI_HOLDING_MAX_COOLDOWN: int = 180         # 일반 횡보 구간 최대 재평가 간격
+    AI_HOLDING_CRITICAL_MIN_COOLDOWN: int = 20 # 익절/손절 임박 구간 최소 재평가 간격
+    AI_HOLDING_CRITICAL_COOLDOWN: int = 45     # 익절/손절 임박 구간 최대 재평가 간격
+    AI_WAIT_DROP_COOLDOWN: int = 300           # 💡 ai score 75점 이하 대기시간 300초
 
     # ==========================================
     # 🎯 AI 엔진 제어값 (OpenAI)
@@ -652,6 +652,11 @@ def _build_trading_rules() -> TradingConfig:
     env_wait6579_probe_min_qty = _env_int("KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MIN_QTY")
     env_wait6579_probe_max_qty = _env_int("KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MAX_QTY")
     env_scalping_prompt_split_enabled = _env_bool("KORSTOCKSCAN_SCALPING_PROMPT_SPLIT_ENABLED")
+    env_ai_watching_cooldown = _env_int("KORSTOCKSCAN_AI_WATCHING_COOLDOWN")
+    env_ai_holding_min_cooldown = _env_int("KORSTOCKSCAN_AI_HOLDING_MIN_COOLDOWN")
+    env_ai_holding_max_cooldown = _env_int("KORSTOCKSCAN_AI_HOLDING_MAX_COOLDOWN")
+    env_ai_holding_critical_min_cooldown = _env_int("KORSTOCKSCAN_AI_HOLDING_CRITICAL_MIN_COOLDOWN")
+    env_ai_holding_critical_cooldown = _env_int("KORSTOCKSCAN_AI_HOLDING_CRITICAL_COOLDOWN")
     if (
         env_main_buy_recovery_enabled is not None
         or env_main_buy_recovery_min is not None
@@ -665,6 +670,11 @@ def _build_trading_rules() -> TradingConfig:
         or env_wait6579_probe_min_qty is not None
         or env_wait6579_probe_max_qty is not None
         or env_scalping_prompt_split_enabled is not None
+        or env_ai_watching_cooldown is not None
+        or env_ai_holding_min_cooldown is not None
+        or env_ai_holding_max_cooldown is not None
+        or env_ai_holding_critical_min_cooldown is not None
+        or env_ai_holding_critical_cooldown is not None
     ):
         config = replace(
             config,
@@ -704,6 +714,21 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_PROMPT_SPLIT_ENABLED=env_scalping_prompt_split_enabled
             if env_scalping_prompt_split_enabled is not None
             else config.SCALPING_PROMPT_SPLIT_ENABLED,
+            AI_WATCHING_COOLDOWN=env_ai_watching_cooldown
+            if env_ai_watching_cooldown is not None
+            else config.AI_WATCHING_COOLDOWN,
+            AI_HOLDING_MIN_COOLDOWN=env_ai_holding_min_cooldown
+            if env_ai_holding_min_cooldown is not None
+            else config.AI_HOLDING_MIN_COOLDOWN,
+            AI_HOLDING_MAX_COOLDOWN=env_ai_holding_max_cooldown
+            if env_ai_holding_max_cooldown is not None
+            else config.AI_HOLDING_MAX_COOLDOWN,
+            AI_HOLDING_CRITICAL_MIN_COOLDOWN=env_ai_holding_critical_min_cooldown
+            if env_ai_holding_critical_min_cooldown is not None
+            else config.AI_HOLDING_CRITICAL_MIN_COOLDOWN,
+            AI_HOLDING_CRITICAL_COOLDOWN=env_ai_holding_critical_cooldown
+            if env_ai_holding_critical_cooldown is not None
+            else config.AI_HOLDING_CRITICAL_COOLDOWN,
         )
 
     env_dynamic_strength_enabled = _env_bool("KORSTOCKSCAN_SCALP_DYNAMIC_STRENGTH_RELIEF_ENABLED")
