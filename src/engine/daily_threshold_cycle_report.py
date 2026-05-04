@@ -19,9 +19,11 @@ REPORT_DIR = DATA_DIR / "report"
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
 STAT_ACTION_REPORT_DIR = REPORT_DIR / "statistical_action_weight"
 AI_DECISION_MATRIX_DIR = REPORT_DIR / "holding_exit_decision_matrix"
+CUMULATIVE_THRESHOLD_REPORT_DIR = REPORT_DIR / "threshold_cycle_cumulative"
 THRESHOLD_CYCLE_SCHEMA_VERSION = 1
 THRESHOLD_CYCLE_DIR = DATA_DIR / "threshold_cycle"
 RAW_PIPELINE_FALLBACK_MAX_BYTES = 64 * 1024 * 1024
+CUMULATIVE_BASELINE_START_DATE = "2026-04-21"
 
 
 @dataclass
@@ -157,6 +159,19 @@ def _date_range(target_date: str, days: int) -> list[str]:
     return values
 
 
+def _date_range_between(start_date: str, end_date: str) -> list[str]:
+    start = datetime.strptime(start_date, "%Y-%m-%d").date()
+    end = datetime.strptime(end_date, "%Y-%m-%d").date()
+    if start > end:
+        return []
+    values: list[str] = []
+    current = start
+    while current <= end:
+        values.append(current.isoformat())
+        current += timedelta(days=1)
+    return values
+
+
 def report_path_for_date(target_date: str) -> Path:
     return REPORT_DIR / f"threshold_cycle_{target_date}.json"
 
@@ -180,6 +195,13 @@ def holding_exit_decision_matrix_paths(target_date: str) -> tuple[Path, Path]:
     return (
         AI_DECISION_MATRIX_DIR / f"holding_exit_decision_matrix_{target_date}.json",
         AI_DECISION_MATRIX_DIR / f"holding_exit_decision_matrix_{target_date}.md",
+    )
+
+
+def cumulative_threshold_report_paths(target_date: str) -> tuple[Path, Path]:
+    return (
+        CUMULATIVE_THRESHOLD_REPORT_DIR / f"threshold_cycle_cumulative_{target_date}.json",
+        CUMULATIVE_THRESHOLD_REPORT_DIR / f"threshold_cycle_cumulative_{target_date}.md",
     )
 
 
@@ -405,6 +427,104 @@ def _completed_summary(rows: list[dict]) -> dict:
         "completed_valid": total,
         "loss_count": len(losses),
     }
+
+
+def _row_rec_date(row: dict) -> date | None:
+    value = row.get("rec_date") or row.get("date") or row.get("trade_date")
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if value in (None, "", "-", "None"):
+        return None
+    text = str(value).strip()[:10]
+    try:
+        return datetime.strptime(text, "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def _filter_completed_rows_by_date(rows: list[dict], start_date: str, end_date: str) -> list[dict]:
+    start = datetime.strptime(start_date, "%Y-%m-%d").date()
+    end = datetime.strptime(end_date, "%Y-%m-%d").date()
+    filtered: list[dict] = []
+    missing_date_rows: list[dict] = []
+    for row in rows:
+        rec_date = _row_rec_date(row)
+        if rec_date is None:
+            missing_date_rows.append(row)
+            continue
+        if start <= rec_date <= end:
+            filtered.append(row)
+    if not filtered and missing_date_rows and start <= end:
+        return list(missing_date_rows)
+    return filtered
+
+
+def _valid_profit_rows(rows: list[dict]) -> list[dict]:
+    return [row for row in rows if _safe_float(row.get("profit_rate"), None) is not None]
+
+
+def _is_normal_only_row(row: dict) -> bool:
+    markers = [
+        row.get("strategy"),
+        row.get("entry_type"),
+        row.get("order_type"),
+        row.get("cohort"),
+        row.get("source"),
+    ]
+    joined = " ".join(str(value or "").lower() for value in markers)
+    return "fallback" not in joined and "remote" not in joined and "songstock" not in joined
+
+
+def _is_initial_only_row(row: dict) -> bool:
+    add_count = _safe_int(row.get("add_count"), 0) or 0
+    avg_down_count = _safe_int(row.get("avg_down_count"), 0) or 0
+    pyramid_count = _safe_int(row.get("pyramid_count"), 0) or 0
+    last_add_type = str(row.get("last_add_type") or "").strip().upper()
+    return add_count <= 0 and avg_down_count <= 0 and pyramid_count <= 0 and not last_add_type
+
+
+def _completed_profit_summary(rows: list[dict]) -> dict:
+    valid_rows = _valid_profit_rows(rows)
+    profit_values = [_safe_float(row.get("profit_rate"), None) for row in valid_rows]
+    profit_values = [value for value in profit_values if value is not None]
+    wins = [value for value in profit_values if value > 0]
+    losses = [value for value in profit_values if value < 0]
+    return {
+        "sample": len(profit_values),
+        "win_count": len(wins),
+        "loss_count": len(losses),
+        "avg_profit_rate": round(_avg(profit_values) or 0.0, 4) if profit_values else None,
+        "median_profit_rate": round(_percentile(profit_values, 50, 0.0), 4) if profit_values else None,
+        "downside_p10_profit_rate": round(_percentile(profit_values, 10, 0.0), 4) if profit_values else None,
+        "upside_p90_profit_rate": round(_percentile(profit_values, 90, 0.0), 4) if profit_values else None,
+        "win_rate": round(len(wins) / len(profit_values), 4) if profit_values else None,
+        "loss_rate": round(len(losses) / len(profit_values), 4) if profit_values else None,
+        "stddev_profit_rate": round(_stddev(profit_values) or 0.0, 4) if len(profit_values) >= 2 else None,
+    }
+
+
+def _completed_cohort_summary(rows: list[dict]) -> dict:
+    valid_rows = _valid_profit_rows(rows)
+    cohorts = {
+        "all_completed_valid": valid_rows,
+        "normal_only": [row for row in valid_rows if _is_normal_only_row(row)],
+        "initial_only": [row for row in valid_rows if _is_initial_only_row(row)],
+        "pyramid_activated": [
+            row
+            for row in valid_rows
+            if (_safe_int(row.get("pyramid_count"), 0) or 0) > 0
+            or str(row.get("last_add_type") or "").strip().upper() == "PYRAMID"
+        ],
+        "reversal_add_activated": [
+            row
+            for row in valid_rows
+            if (_safe_int(row.get("avg_down_count"), 0) or 0) > 0
+            or str(row.get("last_add_type") or "").strip().upper() in {"AVG_DOWN", "REVERSAL_ADD"}
+        ],
+    }
+    return {name: _completed_profit_summary(cohort_rows) for name, cohort_rows in cohorts.items()}
 
 
 def _build_mechanical_entry_family(events: list[dict]) -> dict:
@@ -1426,6 +1546,257 @@ def save_holding_exit_decision_matrix(report: dict) -> tuple[Path, Path]:
     return json_path, md_path
 
 
+def _threshold_snapshot_from_families(families: list[dict], *, report_only: bool = False) -> dict:
+    snapshot: dict[str, dict] = {}
+    for family in families:
+        payload = {
+            "stage": family["stage"],
+            "sample": family["sample"],
+            "apply_ready": False if report_only else family["apply_ready"],
+            "sample_ready": family["apply_ready"],
+            "weight_source_ready": family.get("weight_source_ready", family["apply_ready"]),
+            "apply_mode": "report_only_reference" if report_only else family.get("apply_mode"),
+            "current": family["current"],
+            "recommended": family["recommended"],
+        }
+        if report_only:
+            payload["daily_family_apply_mode"] = family.get("apply_mode")
+        snapshot[family["family"]] = payload
+    return snapshot
+
+
+def build_cumulative_threshold_cycle_report(
+    target_date: str,
+    *,
+    start_date: str = CUMULATIVE_BASELINE_START_DATE,
+    rolling_days: tuple[int, ...] = (5, 10, 20),
+    pipeline_loader: Callable[[str], list[dict]] | None = None,
+    completed_rows_loader: Callable[[str, str], list[dict]] | None = None,
+    skip_completed_rows: bool = False,
+) -> dict:
+    target_date = str(target_date).strip()
+    start_date = str(start_date).strip()
+    ctx = ThresholdCycleContext(warnings=[])
+    custom_pipeline_loader = pipeline_loader
+    completed_rows_loader = completed_rows_loader or _default_completed_rows_loader
+
+    window_dates: dict[str, list[str]] = {"cumulative": _date_range_between(start_date, target_date)}
+    start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
+    for days in rolling_days:
+        window_dates[f"rolling_{days}d"] = [
+            value for value in _date_range(target_date, days)
+            if datetime.strptime(value, "%Y-%m-%d").date() >= start_dt
+        ]
+
+    events_by_window: dict[str, list[dict]] = {}
+    pipeline_meta_by_date: dict[str, dict] = {}
+    for label, dates in window_dates.items():
+        rows: list[dict] = []
+        for event_date in dates:
+            try:
+                if custom_pipeline_loader is None:
+                    load_result = _default_pipeline_load_result(event_date)
+                    rows.extend(load_result.rows)
+                    pipeline_meta_by_date.setdefault(event_date, load_result.meta)
+                    for warning in load_result.meta.get("warnings", []):
+                        ctx.warnings.append(f"pipeline event 로드 경고({label}/{event_date}): {warning}")
+                else:
+                    rows.extend(custom_pipeline_loader(event_date))
+            except Exception as exc:
+                ctx.warnings.append(f"pipeline event 로드 실패({label}/{event_date}): {exc}")
+        events_by_window[label] = rows
+
+    completed_rows: list[dict] = []
+    if not skip_completed_rows:
+        try:
+            completed_rows = completed_rows_loader(start_date, target_date)
+        except Exception as exc:
+            ctx.warnings.append(f"completed trade 로드 실패: {exc}")
+    else:
+        ctx.warnings.append("completed trade 로드는 skip-db 옵션으로 생략됨")
+
+    completed_by_window: dict[str, list[dict]] = {}
+    for label, dates in window_dates.items():
+        if not dates:
+            completed_by_window[label] = []
+            continue
+        completed_by_window[label] = _filter_completed_rows_by_date(completed_rows, dates[0], dates[-1])
+
+    family_snapshots: dict[str, dict] = {}
+    family_apply_candidates: dict[str, list[dict]] = {}
+    for label in window_dates:
+        families = _build_family_reports(events_by_window.get(label, []), completed_by_window.get(label, []))
+        family_snapshots[label] = _threshold_snapshot_from_families(families, report_only=True)
+        family_apply_candidates[label] = []
+
+    completed_summary_by_window = {
+        label: _completed_cohort_summary(rows)
+        for label, rows in completed_by_window.items()
+    }
+    event_count_by_window = {label: len(rows) for label, rows in events_by_window.items()}
+    source_flags = {
+        "profit_basis": "COMPLETED + valid profit_rate only",
+        "runtime_change": False,
+        "application_mode": "report_only_cumulative_threshold_input",
+        "live_threshold_mutation": False,
+        "main_only_field_available": False,
+        "full_partial_fill_split_available": False,
+        "full_partial_fill_split_note": "completed trade loader does not expose fill-completion ratio; do not use cumulative PnL to merge full/partial fill cohorts",
+    }
+    return {
+        "date": target_date,
+        "start_date": start_date,
+        "meta": {
+            "schema_version": THRESHOLD_CYCLE_SCHEMA_VERSION,
+            "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "report_path": str(cumulative_threshold_report_paths(target_date)[0]),
+            "pipeline_load": pipeline_meta_by_date,
+        },
+        "windows": window_dates,
+        "summary": {
+            "event_count_by_window": event_count_by_window,
+            "completed_valid_cumulative": completed_summary_by_window["cumulative"]["all_completed_valid"]["sample"],
+            "rolling_windows": list(window_dates.keys()),
+        },
+        "completed_cohorts": completed_summary_by_window,
+        "threshold_snapshot_by_window": family_snapshots,
+        "apply_candidate_list_by_window": family_apply_candidates,
+        "source_flags": source_flags,
+        "operator_decision": "report_only_review",
+        "next_action_policy": [
+            "daily와 cumulative/rolling이 같은 방향을 가리킬 때만 threshold 후보로 올린다.",
+            "누적 평균 단독으로 live threshold mutation 또는 bot restart를 수행하지 않는다.",
+            "full/partial fill split, fallback/source cohort, runtime flag cohort가 누락되면 손익 결론을 방향성으로 격하한다.",
+        ],
+        "warnings": ctx.warnings,
+    }
+
+
+def render_cumulative_threshold_cycle_markdown(report: dict) -> str:
+    lines = [
+        f"# Cumulative Threshold Cycle Report - {report.get('date')}",
+        "",
+        "## 판정",
+        "",
+        f"- 상태: `{report.get('operator_decision')}`",
+        "- runtime_change: `False`",
+        f"- 기준 구간: `{report.get('start_date')}` ~ `{report.get('date')}`",
+        "- 손익 기준: `COMPLETED + valid profit_rate only`",
+        "",
+        "## Window Summary",
+        "",
+        "| window | dates | events | completed | avg_profit | win_rate | loss_rate |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    windows = report.get("windows") if isinstance(report.get("windows"), dict) else {}
+    event_counts = (report.get("summary") or {}).get("event_count_by_window") or {}
+    completed = report.get("completed_cohorts") if isinstance(report.get("completed_cohorts"), dict) else {}
+    for label, dates in windows.items():
+        all_completed = (completed.get(label) or {}).get("all_completed_valid") or {}
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _markdown_value(label),
+                    _markdown_value(len(dates) if isinstance(dates, list) else None),
+                    _markdown_value(event_counts.get(label)),
+                    _markdown_value(all_completed.get("sample")),
+                    _markdown_value(all_completed.get("avg_profit_rate")),
+                    _markdown_value(all_completed.get("win_rate")),
+                    _markdown_value(all_completed.get("loss_rate")),
+                ]
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Cohort Summary",
+            "",
+            "| window | cohort | sample | avg_profit | p10 | p90 | win_rate | loss_rate |",
+            "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for label, cohort_pack in completed.items():
+        if not isinstance(cohort_pack, dict):
+            continue
+        for cohort, summary in cohort_pack.items():
+            if not isinstance(summary, dict):
+                continue
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        _markdown_value(label),
+                        _markdown_value(cohort),
+                        _markdown_value(summary.get("sample")),
+                        _markdown_value(summary.get("avg_profit_rate")),
+                        _markdown_value(summary.get("downside_p10_profit_rate")),
+                        _markdown_value(summary.get("upside_p90_profit_rate")),
+                        _markdown_value(summary.get("win_rate")),
+                        _markdown_value(summary.get("loss_rate")),
+                    ]
+                )
+                + " |"
+            )
+    lines.extend(
+        [
+            "",
+            "## Family Readiness",
+            "",
+            "| window | family | stage | sample | sample_ready | apply_mode |",
+            "| --- | --- | --- | ---: | --- | --- |",
+        ]
+    )
+    snapshots = report.get("threshold_snapshot_by_window") if isinstance(report.get("threshold_snapshot_by_window"), dict) else {}
+    for label, snapshot in snapshots.items():
+        if not isinstance(snapshot, dict):
+            continue
+        for family, payload in snapshot.items():
+            sample = payload.get("sample") if isinstance(payload.get("sample"), dict) else {}
+            sample_value = sample.get("completed_valid") or sample.get("observed") or sample.get("exit_signal") or sample.get("budget_pass")
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        _markdown_value(label),
+                        _markdown_value(family),
+                        _markdown_value(payload.get("stage")),
+                        _markdown_value(sample_value),
+                        _markdown_value(payload.get("sample_ready")),
+                        _markdown_value(payload.get("apply_mode")),
+                    ]
+                )
+                + " |"
+            )
+    lines.extend(
+        [
+            "",
+            "## 사용 금지선",
+            "",
+            "- 이 리포트는 장후 누적/rolling 판정 입력이며 live runtime을 변경하지 않는다.",
+            "- 누적 평균 단독으로 threshold를 자동 적용하지 않는다.",
+            "- full/partial fill과 runtime flag cohort가 분리되지 않은 손익 결론은 hard 승인 근거로 쓰지 않는다.",
+            "",
+            "## 다음 액션",
+            "",
+            "- daily, rolling, cumulative가 같은 방향인지 먼저 비교한다.",
+            "- 불일치하면 당일 장세/데이터 품질/이전 runtime cohort 혼입을 먼저 점검한다.",
+            "- 후보가 유지되면 별도 checklist에서 단일 owner, rollback guard, manifest-only 추천값으로 넘긴다.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def save_cumulative_threshold_cycle_report(report: dict) -> tuple[Path, Path]:
+    json_path, md_path = cumulative_threshold_report_paths(str(report.get("date")))
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    md_path.write_text(render_cumulative_threshold_cycle_markdown(report), encoding="utf-8")
+    return json_path, md_path
+
+
 def build_daily_threshold_cycle_report(
     target_date: str,
     *,
@@ -1532,6 +1903,8 @@ def main(argv: list[str] | None = None) -> int:
     save_threshold_cycle_report(report)
     save_statistical_action_weight_artifact(report)
     save_holding_exit_decision_matrix(report)
+    cumulative_report = build_cumulative_threshold_cycle_report(args.target_date, skip_completed_rows=args.skip_db)
+    save_cumulative_threshold_cycle_report(cumulative_report)
     if args.print_stdout:
         print(json.dumps(report, ensure_ascii=False, indent=2))
     return 0

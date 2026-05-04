@@ -12,7 +12,7 @@
 - `statistical_action_weight`는 report-only/decision-support 축이며 직접 runtime threshold나 주문 행동을 바꾸지 않는다.
 - 체결품질 분석은 full/partial fill을 합치지 않는다.
 - orderbook/microstructure 필드가 누락되면 추정값으로 손익 결론을 만들지 않는다.
-- OFI/QI는 `entry-only` P2 내부 feature로 유지한다. `OFI standalone hard gate`, `watching/holding/exit` 확장, symbol-level runtime threshold는 별도 workorder 없이는 금지한다.
+- OFI/QI는 판단축이 아니라 입력데이터 품질개선축으로 관리한다. 현재 live 배선은 `entry-only` P2 내부 feature로 유지하되, `watching/holding/exit`에는 report-only context enrichment 설계 없이 live gate로 바로 연결하지 않는다.
 
 ## 장전 체크리스트 (08:50~09:00)
 
@@ -32,9 +32,11 @@
 
 - [ ] `[OFIQExpansionLadder0508] OFI/QI P2 내부 feature 확대적용 ladder 및 stale 방지 owner 확정` (`Due: 2026-05-08`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:15`, `Track: ScalpingLogic`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [2026-05-03-ofi-audit-response-result-report.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-05-03-ofi-audit-response-result-report.md), [README.md](/home/ubuntu/KORStockScan/data/report/README.md), [orderbook_stability_observer.py](/home/ubuntu/KORStockScan/src/trading/entry/orderbook_stability_observer.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [sniper_performance_tuning_report.py](/home/ubuntu/KORStockScan/src/engine/sniper_performance_tuning_report.py)
-  - 판정 기준: OFI/QI 후속을 `P2 prompt contract 명문화`, `performance_tuning Markdown OFI/QI 섹션`, `bucket calibration ON 기준`, `symbol anomaly watch`, `prompt drift/stale guard` 5단계 ladder로 잠근다. 각 단계별 owner, 금지 범위, 필요한 로그 필드, sample floor, rollback owner를 표로 남긴다.
+  - 판정 기준: OFI/QI 후속을 `P2 prompt contract 명문화`, `performance_tuning Markdown OFI/QI 섹션`, `bucket calibration ON 기준`, `symbol anomaly watch`, `prompt drift/stale guard` 5단계 ladder로 잠근다. 각 단계별 owner, 금지 범위, 필요한 로그 필드, sample floor, rollback owner를 표로 남긴다. 별도로 `holding/exit context enrichment`는 live 판단 변경이 아니라 입력 품질 보강 후보로 분리해 필요한 필드와 attribution owner만 정의한다.
   - prompt 기준: `entry_price_v1` prompt에서 OFI/QI의 사용 범위를 `submitted 직전 주문가/USE_DEFENSIVE/IMPROVE_LIMIT/SKIP 판단 보조`로 명시하고, `neutral/insufficient`이면 OFI/QI 단독 SKIP 금지를 유지한다. prompt 문자열 개선은 AIEngineFlagOffBacklog와 충돌하지 않도록 P2 entry_price contract 전용 workorder로만 연다.
   - report 기준: `performance_tuning_YYYY-MM-DD.md` 구현 후보에 OFI/QI 섹션을 포함한다. 최소 필드는 `ofi_orderbook_micro_states`, `ofi_orderbook_micro_threshold_sources`, `ofi_orderbook_micro_buckets`, `ofi_orderbook_micro_warnings`, `symbol_anomalies`, `entry_ai_price_skip_policy_warning/basis`다.
+  - holding/exit 입력 품질 기준: 매도/보유 쪽 OFI/QI는 `exit_context.orderbook_micro`, `snapshot_age_ms`, `micro_state`, `ofi/qi threshold source`, `post_exit_mfe/mae`, `exit_rule` join이 report-only로 닫히기 전에는 live exit gate로 쓰지 않는다. 이 단계는 새 매도 canary가 아니라 입력 context 품질 보강이며, 이후 성과 귀속이 확인될 때만 별도 guarded canary 여부를 판단한다.
+  - 민감도 기준: `bearish_supported SKIP`과 `neutral/insufficient warning SKIP`을 별도 cohort로 분리한다. `skip_without_bearish_ofi`가 반복되면 OFI/QI threshold 완화가 아니라 `SKIP -> USE_DEFENSIVE/P1 fallback` demotion guard 후보로 보고, missed upside와 adverse fill 회피 효과를 같이 비교한다.
   - calibration 기준: `SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_BUCKET_CALIBRATION_ENABLED`는 기본 OFF다. ON 후보는 `ThresholdOpsTransition0506` 이후에도 별도 workorder, manifest id/version, sample floor, fallback 급증 guard, restart 절차가 닫혀야 한다.
   - stale 방지: 2영업일 연속 OFI/QI 로그 표본이 0이거나, `snapshot_age_ms`/observer health/fallback reason이 report에 누락되거나, SKIP warning 분포가 Markdown에 나타나지 않으면 `stale_context`로 보고 다음 checklist에 보강 작업을 자동 생성한다.
   - 다음 액션: ladder가 잠기면 `performance_tuning Markdown 구현`, `entry_price_v1 prompt contract 보강`, `bucket calibration ON/OFF workorder` 중 readiness가 높은 1개만 다음 단일 작업항목으로 분리한다.

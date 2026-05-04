@@ -4,6 +4,8 @@
 
 이 디렉토리는 운영/감리용 산출물을 저장한다. 기본 원칙은 JSON/JSONL을 canonical data로 두고, 사람이 장후 판정에 바로 읽어야 하는 항목만 Markdown 리포트로 별도 생성한다.
 
+report 산출물이 자동 threshold 적용, bot restart, post-apply attribution으로 이어지는 전체 추적성은 [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)를 기준으로 확인한다.
+
 ## Bucket Runtime Calibration ON 기준
 
 `SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_BUCKET_CALIBRATION_ENABLED`는 현재 기본값 `False`다. 즉, OFI/QI는 P2 내부 live 입력 feature로 계속 사용되지만 bucket별 threshold는 아직 runtime에 적용하지 않는다.
@@ -52,7 +54,8 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 | 산출물 | 경로 패턴 | 생성 주체 | 현재 Markdown |
 |---|---|---|---|
 | Daily Report | `data/report/report_YYYY-MM-DD.json` | `src.engine.daily_report_service` | 없음 |
-| Threshold Cycle Report | `data/report/threshold_cycle_YYYY-MM-DD.json` | `src.engine.daily_threshold_cycle_report` | 없음. 단, 파생 Markdown 2종 생성 |
+| Threshold Cycle Report | `data/report/threshold_cycle_YYYY-MM-DD.json` | `src.engine.daily_threshold_cycle_report` | 없음. 단, 파생 Markdown 3종 생성 |
+| Cumulative Threshold Cycle Report | `data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_YYYY-MM-DD.json` | `src.engine.daily_threshold_cycle_report` | `data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_YYYY-MM-DD.md` |
 | Threshold Compact Events | `data/threshold_cycle/date=YYYY-MM-DD/family=*/part-*.jsonl`, `data/threshold_cycle/threshold_events_YYYY-MM-DD.jsonl` | `src.engine.backfill_threshold_cycle_events` | 없음 |
 | Pipeline Events | `data/pipeline_events/pipeline_events_YYYY-MM-DD.jsonl` | runtime pipeline event writer | 없음 |
 | Gatekeeper Snapshots | `data/gatekeeper/gatekeeper_snapshots_YYYY-MM-DD.jsonl` | gatekeeper snapshot writer | 없음 |
@@ -86,7 +89,20 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 
 ## 현재 파일 기준 확인 요약
 
-- Markdown 정기 산출물: server comparison, statistical action weight, holding/exit decision matrix.
+- Markdown 정기 산출물: server comparison, statistical action weight, holding/exit decision matrix, cumulative threshold cycle.
 - JSON snapshot 정기 산출물: monitor snapshots 7종, daily report, threshold cycle report.
 - Markdown 누락 최우선 후보: `threshold_cycle`, `performance_tuning`, `trade_review`.
 - OFI bucket runtime calibration은 현재 OFF이며, 2026-05-06 이후 별도 승인 없이는 ON하지 않는다.
+
+## 누적/rolling threshold cycle report
+
+`threshold_cycle_cumulative`는 daily report의 당일 판정을 누적/rolling 표본과 대조하기 위한 report-only 산출물이다. 기본 누적 시작점은 `2026-04-21` fallback 폐기 이후이며, rolling window는 최근 `5/10/20` calendar day다.
+
+운영 해석 원칙:
+
+- `COMPLETED + valid profit_rate`만 손익 표본으로 사용한다.
+- `all_completed_valid`, `normal_only`, `initial_only`, `pyramid_activated`, `reversal_add_activated`를 분리한다.
+- full/partial fill split이 없는 누적 손익은 hard 승인 근거로 쓰지 않는다.
+- daily, rolling, cumulative가 같은 방향을 가리킬 때만 다음 checklist의 threshold 후보로 넘긴다.
+- 이 산출물은 runtime change, bot restart, live threshold auto-mutation을 수행하지 않는다.
+- 자동 threshold 적용과 적용 후 version attribution은 `report-based-automation-traceability.md`의 `R5/R6` gate가 별도 checklist owner로 닫힌 뒤에만 구현 완료로 본다.

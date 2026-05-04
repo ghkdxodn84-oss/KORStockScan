@@ -389,3 +389,63 @@ def test_holding_exit_decision_matrix_artifact_contains_prompt_hints(tmp_path, m
     assert "prompt_hint" in payload["entries"][0]
     assert "Holding/Exit Decision Matrix" in markdown
     assert "Prompt Hints" in markdown
+
+
+def test_cumulative_threshold_cycle_report_splits_windows_and_cohorts():
+    pipeline_rows = {
+        "2026-04-29": [{"stage": "budget_pass", "fields": {"signal_score": "72"}}],
+        "2026-04-30": [
+            {"stage": "bad_entry_block_observed", "fields": {"held_sec": "70", "profit_rate": "-0.8"}},
+            {"stage": "exit_signal", "fields": {"exit_rule": "scalp_trailing_take_profit", "profit_rate": "0.6", "peak_profit": "1.0", "current_ai_score": "62"}},
+        ],
+    }
+    completed_rows = [
+        {"rec_date": "2026-04-28", "profit_rate": 0.4, "strategy": "SCALPING", "buy_price": 9000},
+        {"rec_date": "2026-04-29", "profit_rate": -0.6, "strategy": "fallback_single", "buy_price": 9000},
+        {"rec_date": "2026-04-30", "profit_rate": 1.2, "strategy": "SCALPING", "pyramid_count": 1, "last_add_type": "PYRAMID"},
+        {"rec_date": "2026-04-30", "profit_rate": -0.9, "strategy": "SCALPING", "avg_down_count": 1, "last_add_type": "REVERSAL_ADD"},
+        {"rec_date": "2026-04-30", "profit_rate": None, "strategy": "SCALPING"},
+    ]
+
+    report = report_mod.build_cumulative_threshold_cycle_report(
+        "2026-04-30",
+        start_date="2026-04-28",
+        rolling_days=(2,),
+        pipeline_loader=lambda target_date: pipeline_rows.get(target_date, []),
+        completed_rows_loader=lambda start_date, end_date: completed_rows,
+    )
+
+    assert report["operator_decision"] == "report_only_review"
+    assert report["source_flags"]["runtime_change"] is False
+    assert report["summary"]["completed_valid_cumulative"] == 4
+    assert report["completed_cohorts"]["cumulative"]["normal_only"]["sample"] == 3
+    assert report["completed_cohorts"]["cumulative"]["pyramid_activated"]["sample"] == 1
+    assert report["completed_cohorts"]["cumulative"]["reversal_add_activated"]["sample"] == 1
+    assert report["completed_cohorts"]["rolling_2d"]["all_completed_valid"]["sample"] == 3
+    assert report["summary"]["event_count_by_window"]["cumulative"] == 3
+    assert "scalp_trailing_take_profit" in report["threshold_snapshot_by_window"]["rolling_2d"]
+    assert report["apply_candidate_list_by_window"]["cumulative"] == []
+    assert report["threshold_snapshot_by_window"]["cumulative"]["bad_entry_block"]["apply_mode"] == "report_only_reference"
+
+
+def test_cumulative_threshold_cycle_report_artifacts_render_markdown(tmp_path, monkeypatch):
+    monkeypatch.setattr(report_mod, "CUMULATIVE_THRESHOLD_REPORT_DIR", tmp_path / "threshold_cycle_cumulative")
+    report = report_mod.build_cumulative_threshold_cycle_report(
+        "2026-04-30",
+        start_date="2026-04-30",
+        rolling_days=(1,),
+        pipeline_loader=lambda target_date: [{"stage": "budget_pass", "fields": {"signal_score": "72"}}],
+        completed_rows_loader=lambda start_date, end_date: [
+            {"rec_date": "2026-04-30", "profit_rate": 0.5, "strategy": "SCALPING", "buy_price": 9000},
+        ],
+    )
+
+    json_path, md_path = report_mod.save_cumulative_threshold_cycle_report(report)
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    markdown = md_path.read_text(encoding="utf-8")
+
+    assert payload["source_flags"]["application_mode"] == "report_only_cumulative_threshold_input"
+    assert payload["source_flags"]["live_threshold_mutation"] is False
+    assert "Cumulative Threshold Cycle Report" in markdown
+    assert "Cohort Summary" in markdown
+    assert "runtime_change: `False`" in markdown
