@@ -21,6 +21,24 @@ SIGNAL_QUALITY_QUOTE_MIN_BUY_PRESSURE = 65.0
 SIGNAL_QUALITY_QUOTE_MAX_WS_AGE_MS = 1200
 SIGNAL_QUALITY_QUOTE_MAX_WS_JITTER_MS = 500
 SIGNAL_QUALITY_QUOTE_MAX_SPREAD_RATIO = 0.0085
+GATEKEEPER_DECISION_STAGES = {
+    "blocked_gatekeeper_reject",
+    "market_regime_pass",
+    "blocked_gatekeeper_error",
+}
+ENTRY_ARMED_STAGES = {"entry_armed", "entry_armed_resume"}
+REUSE_REASON_LABELS = {
+    "sig_changed": "signature_changed",
+    "age_expired": "reuse_window_expired",
+    "ws_stale": "ws_stale",
+    "price_move": "price_move",
+    "near_ai_exit": "near_ai_exit",
+    "near_safe_profit": "near_safe_profit",
+    "near_low_score": "near_low_score",
+    "score_boundary": "score_boundary",
+    "missing_action": "missing_action",
+    "missing_allow_flag": "missing_allow_flag",
+}
 
 
 def _parse_time(value: str | None) -> time | None:
@@ -289,6 +307,34 @@ def _avg(values: Iterable[float]) -> float | None:
     return round(sum(items) / len(items), 6)
 
 
+def _percentile(values: list[float], percentile: int) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return round(ordered[0], 2)
+    rank = (len(ordered) - 1) * (percentile / 100.0)
+    lower = int(rank)
+    upper = min(lower + 1, len(ordered) - 1)
+    weight = rank - lower
+    return round(ordered[lower] * (1.0 - weight) + ordered[upper] * weight, 2)
+
+
+def _friendly_reuse_reason(reason_code: str) -> str:
+    code = str(reason_code or "").strip()
+    return REUSE_REASON_LABELS.get(code, code or "-")
+
+
+def _count_sig_delta_fields(counter: Counter[str], raw_value: object) -> None:
+    raw = str(raw_value or "").strip()
+    if not raw or raw == "-":
+        return
+    for token in raw.split(","):
+        field = token.split(":", 1)[0].strip()
+        if field:
+            counter[field] += 1
+
+
 def _orderbook_stability_summary(
     window_rows: list[dict[str, Any]],
     holding_rows: list[dict[str, Any]],
@@ -407,6 +453,138 @@ def _latency_entry_price_guard_summary(
 def _fallback_regression_count(rows: Iterable[dict[str, Any]]) -> int:
     tokens = ("fallback_scout", "fallback_main", "fallback_single", "allow_fallback", "split-entry")
     return sum(1 for row in rows if any(token in _text_blob(row) for token in tokens))
+
+
+def build_legacy_gatekeeper_summary(
+    events: list[dict[str, Any]],
+    *,
+    since: time | None,
+    until: time | None,
+    label: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    window_rows = [row for row in events if _pipeline(row) == ENTRY_PIPELINE and _in_window(row, since, until)]
+    holding_rows = [row for row in events if _pipeline(row) == HOLDING_PIPELINE and _in_window(row, since, until)]
+    gatekeeper_decisions = [row for row in window_rows if _stage(row) in GATEKEEPER_DECISION_STAGES]
+    gatekeeper_fast_reuse_events = [row for row in window_rows if _stage(row) == "gatekeeper_fast_reuse"]
+    gatekeeper_bypass_events = [row for row in window_rows if _stage(row) == "gatekeeper_fast_reuse_bypass"]
+    budget_pass_events = [row for row in window_rows if _stage(row) == "budget_pass"]
+    submitted_events = [row for row in window_rows if _stage(row) == "order_bundle_submitted"]
+    latency_block_events = [row for row in window_rows if _stage(row) == "latency_block"]
+    latency_pass_events = [row for row in window_rows if _stage(row) == "latency_pass"]
+    ai_confirmed_events = [row for row in window_rows if _stage(row) == "ai_confirmed"]
+    entry_armed_events = [row for row in window_rows if _stage(row) in ENTRY_ARMED_STAGES]
+
+    gatekeeper_eval_ms: list[float] = []
+    gatekeeper_model_call_ms: list[float] = []
+    gatekeeper_total_internal_ms: list[float] = []
+    gatekeeper_action_ages: list[float] = []
+    gatekeeper_allow_ages: list[float] = []
+    gatekeeper_cache_modes: Counter[str] = Counter()
+    gatekeeper_reuse_blockers: Counter[str] = Counter()
+    gatekeeper_sig_deltas: Counter[str] = Counter()
+    latency_reason_counts: Counter[str] = Counter()
+    latency_danger_reason_counts: Counter[str] = Counter()
+    quote_fresh_latency_blocks = 0
+    quote_fresh_latency_passes = 0
+
+    for row in gatekeeper_decisions:
+        gatekeeper_cache_modes[str(_field(row, "gatekeeper_cache") or "miss")] += 1
+        for source, container in (
+            (_field(row, "gatekeeper_eval_ms"), gatekeeper_eval_ms),
+            (_field(row, "gatekeeper_model_call_ms"), gatekeeper_model_call_ms),
+            (_field(row, "gatekeeper_total_internal_ms"), gatekeeper_total_internal_ms),
+        ):
+            parsed = _safe_float(source)
+            if parsed is not None:
+                container.append(parsed)
+
+    for row in gatekeeper_bypass_events:
+        for code in _csv_counter(_field(row, "reason_codes")).keys():
+            gatekeeper_reuse_blockers[_friendly_reuse_reason(code)] += 1
+        _count_sig_delta_fields(gatekeeper_sig_deltas, _field(row, "sig_delta"))
+        parsed_action_age = _safe_float(_field(row, "action_age_sec"))
+        if parsed_action_age is not None:
+            gatekeeper_action_ages.append(parsed_action_age)
+        parsed_allow_age = _safe_float(_field(row, "allow_entry_age_sec"))
+        if parsed_allow_age is not None:
+            gatekeeper_allow_ages.append(parsed_allow_age)
+
+    for row in latency_block_events:
+        reason = str(_field(row, "reason") or "-")
+        latency_reason_counts[reason] += 1
+        latency_danger_reason_counts.update(_csv_counter(_field(row, "latency_danger_reasons", "danger_reasons")))
+        if str(_field(row, "quote_stale") or "").strip().lower() in {"false", "0", "no"}:
+            quote_fresh_latency_blocks += 1
+
+    for row in latency_pass_events:
+        if str(_field(row, "quote_stale") or "").strip().lower() in {"false", "0", "no"}:
+            quote_fresh_latency_passes += 1
+
+    full_fill_events, partial_fill_events = _fill_counts(holding_rows)
+    gatekeeper_fast_reuse_ratio = _percent_point(
+        _ratio(gatekeeper_cache_modes.get("fast_reuse", 0), len(gatekeeper_decisions))
+    )
+    metrics = {
+        "ai_confirmed_events": len(ai_confirmed_events),
+        "entry_armed_events": len(entry_armed_events),
+        "budget_pass_events": len(budget_pass_events),
+        "order_bundle_submitted_events": len(submitted_events),
+        "budget_pass_to_submitted_rate": _percent_point(_ratio(len(submitted_events), len(budget_pass_events))),
+        "latency_block_events": len(latency_block_events),
+        "latency_pass_events": len(latency_pass_events),
+        "latency_state_danger_events": int(latency_reason_counts.get("latency_state_danger", 0)),
+        "quote_fresh_latency_blocks": quote_fresh_latency_blocks,
+        "quote_fresh_latency_passes": quote_fresh_latency_passes,
+        "quote_fresh_latency_pass_rate": _percent_point(
+            _ratio(quote_fresh_latency_passes, quote_fresh_latency_passes + quote_fresh_latency_blocks)
+        ),
+        "gatekeeper_decisions": len(gatekeeper_decisions),
+        "gatekeeper_fast_reuse_stage_events": len(gatekeeper_fast_reuse_events),
+        "gatekeeper_fast_reuse_ratio": gatekeeper_fast_reuse_ratio,
+        "gatekeeper_eval_ms_p95": _percentile(gatekeeper_eval_ms, 95),
+        "gatekeeper_model_call_ms_p95": _percentile(gatekeeper_model_call_ms, 95),
+        "gatekeeper_total_internal_ms_p95": _percentile(gatekeeper_total_internal_ms, 95),
+        "gatekeeper_bypass_evaluation_samples": len(gatekeeper_bypass_events),
+        "gatekeeper_action_age_p95": _percentile(gatekeeper_action_ages, 95),
+        "gatekeeper_allow_entry_age_p95": _percentile(gatekeeper_allow_ages, 95),
+        "full_fill_events": full_fill_events,
+        "partial_fill_events": partial_fill_events,
+    }
+    smoke_status = (
+        "observed"
+        if metrics["gatekeeper_decisions"] > 0
+        or metrics["gatekeeper_fast_reuse_stage_events"] > 0
+        or metrics["gatekeeper_bypass_evaluation_samples"] > 0
+        else "missing"
+    )
+    return {
+        "schema_version": 2,
+        "diagnostic_section": "legacy_gatekeeper_fast_reuse",
+        "runtime_policy": "standby_diagnostic_report_only",
+        "label": label,
+        "window": {"since": since.isoformat() if since else None, "until": until.isoformat() if until else None},
+        "bundle_metadata": metadata or {},
+        "metrics": metrics,
+        "breakdowns": {
+            "latency_reason_breakdown": [{"label": key, "count": value} for key, value in latency_reason_counts.most_common()],
+            "latency_danger_reason_breakdown": [
+                {"label": key, "count": value} for key, value in latency_danger_reason_counts.most_common()
+            ],
+            "gatekeeper_reuse_blockers": [
+                {"label": key, "count": value} for key, value in gatekeeper_reuse_blockers.most_common()
+            ],
+            "gatekeeper_sig_deltas": [{"label": key, "count": value} for key, value in gatekeeper_sig_deltas.most_common()],
+        },
+        "judgment": {
+            "smoke_status": smoke_status,
+            "directional_ready": bool(metrics["budget_pass_events"] >= 30 or metrics["gatekeeper_decisions"] >= 10),
+            "why": (
+                "legacy gatekeeper_fast_reuse/entry latency compatibility summary. "
+                "Use as diagnostic evidence only; do not promote live entry logic from this section alone."
+            ),
+        },
+    }
 
 
 def _split_canary_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
@@ -800,9 +978,55 @@ def _render_combined_md(summary: dict[str, Any]) -> str:
             "## 근거",
             f"- entry submitted/fill: `{summary['entry']['order_bundle_submitted_events']}` / `{summary['entry']['full_fill_events'] + summary['entry']['partial_fill_events']}`",
             f"- soft_stop grace/completed: `{summary['soft_stop']['soft_stop_micro_grace_events']}` / `{summary['soft_stop']['completed_valid_trades']}`",
+            f"- legacy gatekeeper smoke_status: `{summary['legacy_gatekeeper']['judgment']['smoke_status']}`",
             "",
             "## 다음 액션",
-            "- entry와 holding/exit는 stage-disjoint 축이므로 합산 판정하지 않고 각 summary 기준으로 닫는다.",
+            "- 이 bundle은 standby diagnostic/report-only 입력이다. live threshold/order/exit 판단을 직접 변경하지 않는다.",
+        ]
+    )
+
+
+def _render_legacy_gatekeeper_md(summary: dict[str, Any]) -> str:
+    metrics = summary.get("metrics") or {}
+    breakdowns = summary.get("breakdowns") or {}
+
+    def _top_lines(rows: list[dict[str, Any]], *, limit: int = 5) -> list[str]:
+        lines = [f"- {row.get('label')}: {row.get('count')}" for row in rows[:limit]]
+        return lines or ["- -"]
+
+    return "\n".join(
+        [
+            f"# Legacy Gatekeeper Fast Reuse Summary ({summary['label']})",
+            "",
+            "## 판정",
+            "- runtime_policy: `standby_diagnostic_report_only`",
+            f"- smoke_status: `{summary['judgment']['smoke_status']}`",
+            f"- directional_ready: `{summary['judgment']['directional_ready']}`",
+            "",
+            "## 근거",
+            f"- budget_pass_events: `{metrics.get('budget_pass_events', 0)}`",
+            f"- order_bundle_submitted_events: `{metrics.get('order_bundle_submitted_events', 0)}`",
+            f"- budget_pass_to_submitted_rate: `{metrics.get('budget_pass_to_submitted_rate')}`%",
+            f"- latency_block_events: `{metrics.get('latency_block_events', 0)}`",
+            f"- latency_state_danger_events: `{metrics.get('latency_state_danger_events', 0)}`",
+            f"- quote_fresh_latency_pass_rate: `{metrics.get('quote_fresh_latency_pass_rate')}`%",
+            f"- gatekeeper_decisions: `{metrics.get('gatekeeper_decisions', 0)}`",
+            f"- gatekeeper_fast_reuse_stage_events: `{metrics.get('gatekeeper_fast_reuse_stage_events', 0)}`",
+            f"- gatekeeper_fast_reuse_ratio: `{metrics.get('gatekeeper_fast_reuse_ratio')}`%",
+            f"- gatekeeper_eval_ms_p95: `{metrics.get('gatekeeper_eval_ms_p95')}`ms",
+            f"- full/partial fill: `{metrics.get('full_fill_events', 0)}` / `{metrics.get('partial_fill_events', 0)}`",
+            "",
+            "## Latency Reasons",
+            *_top_lines(breakdowns.get("latency_reason_breakdown") or []),
+            "",
+            "## Danger Reasons",
+            *_top_lines(breakdowns.get("latency_danger_reason_breakdown") or []),
+            "",
+            "## Reuse Blockers",
+            *_top_lines(breakdowns.get("gatekeeper_reuse_blockers") or []),
+            "",
+            "## 다음 액션",
+            "- legacy 지표는 제출병목 보조 진단으로만 사용하고, submitted/full/partial 회복 없이 live 후보로 승격하지 않는다.",
         ]
     )
 
@@ -849,14 +1073,29 @@ def run_analysis(
         label=label,
         metadata=metadata,
     )
+    legacy_gatekeeper = build_legacy_gatekeeper_summary(
+        events,
+        since=since_time,
+        until=until_time,
+        label=label,
+        metadata=metadata,
+    )
     combined = {
-        "schema_version": 1,
+        "schema_version": 2,
         "label": label,
         "bundle_dir": str(bundle_dir),
         "target_date": manifest.get("target_date"),
         "window": {"since": since_time.isoformat() if since_time else None, "until": until_time.isoformat() if until_time else None},
+        "runtime_policy": "standby_diagnostic_report_only",
+        "diagnostic_sections": [
+            "entry_quote_fresh_composite",
+            "soft_stop_micro_grace",
+            "legacy_gatekeeper_fast_reuse",
+            "entry_latency_offline",
+        ],
         "entry": entry,
         "soft_stop": soft_stop,
+        "legacy_gatekeeper": legacy_gatekeeper,
     }
 
     results_dir = output_dir or (bundle_dir / "results")
@@ -864,6 +1103,16 @@ def run_analysis(
     (results_dir / f"entry_quote_fresh_composite_summary_{label}.md").write_text(_render_entry_md(entry), encoding="utf-8")
     _write_json(results_dir / f"soft_stop_micro_grace_summary_{label}.json", soft_stop)
     (results_dir / f"soft_stop_micro_grace_summary_{label}.md").write_text(_render_soft_stop_md(soft_stop), encoding="utf-8")
+    _write_json(results_dir / f"gatekeeper_fast_reuse_summary_{label}.json", legacy_gatekeeper)
+    (results_dir / f"gatekeeper_fast_reuse_summary_{label}.md").write_text(
+        _render_legacy_gatekeeper_md(legacy_gatekeeper),
+        encoding="utf-8",
+    )
+    _write_json(results_dir / f"entry_latency_offline_summary_{label}.json", legacy_gatekeeper)
+    (results_dir / f"entry_latency_offline_summary_{label}.md").write_text(
+        _render_legacy_gatekeeper_md(legacy_gatekeeper),
+        encoding="utf-8",
+    )
     _write_json(results_dir / f"live_canary_combined_summary_{label}.json", combined)
     (results_dir / f"live_canary_combined_summary_{label}.md").write_text(_render_combined_md(combined), encoding="utf-8")
     return combined

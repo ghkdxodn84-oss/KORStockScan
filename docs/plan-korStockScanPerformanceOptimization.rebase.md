@@ -95,7 +95,8 @@
 
 1. 장중 판정 시각에 fresh 로그가 작업환경에 아직 없으면 판정을 빈칸으로 남기지 않는다. 같은 시각 기준 lightweight/offline bundle을 생성하고, 산출물로 same-slot 판정을 닫는다.
 2. offline/live canary bundle은 장중 과부하 방지용 판정 입력이다. heavy snapshot/report builder를 반복 호출하지 않고, hard pass/fail 전제 충족 여부와 direction-only 사유를 확인하는 입력으로만 사용한다.
-3. `NaN cast` 계열 오류는 손익 축이 아니라 런타임 안정화 축으로 분리한다. 판정은 `재발 건수`, `루프 중단 여부`, `BUY_ORDERED->HOLDING/청산 상태전이 실패`, `미진입/미청산 기회비용` 기준으로 남기고, 메인 코드베이스 기준의 최소 안전 캐스팅/업스트림 source 추적 계획을 우선한다.
+3. `offline_live_canary_bundle`은 standby diagnostic/report-only 표준 경로다. retired `offline_gatekeeper_fast_reuse_bundle` 전용 codebase의 legacy `gatekeeper_fast_reuse`/`entry_latency_offline` summary compatibility는 이 경로에서 생성하며, live threshold/order/exit 판단을 직접 변경하지 않는다.
+4. `NaN cast` 계열 오류는 손익 축이 아니라 런타임 안정화 축으로 분리한다. 판정은 `재발 건수`, `루프 중단 여부`, `BUY_ORDERED->HOLDING/청산 상태전이 실패`, `미진입/미청산 기회비용` 기준으로 남기고, 메인 코드베이스 기준의 최소 안전 캐스팅/업스트림 source 추적 계획을 우선한다.
 
 ## 4. 작업 규칙
 

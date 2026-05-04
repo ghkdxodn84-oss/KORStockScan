@@ -1,95 +1,54 @@
-# Offline Entry Latency Bundle
+# Offline Gatekeeper Fast Reuse Bundle (Deprecated)
 
-`gatekeeper_fast_reuse` 보조 진단과 `latency_state_danger -> other_danger relief` 주병목 판정을 서버 과부하 없이 로컬 PC에서 다시 확인하기 위한 오프라인 번들 도구다.
+이 디렉토리는 `2026-04-27` gatekeeper fast reuse/entry latency 진단 증적 링크 보존용이다.
 
-## 목적
+## 현재 상태
 
-- `10:00 KST` 스모크는 raw `pipeline_events`만으로 재확인한다.
-- 오전 반나절 방향성 판정도 server-side heavy snapshot 재생성 대신, 서버에서 잘라낸 raw bundle을 로컬에서 다시 집계한다.
-- `13:00 KST` 장중 pivot 판정도 같은 번들 경로로 처리한다. 이때 핵심 KPI는 `submitted/full/partial`, `latency_block`, `latency_state_danger`, `latency_danger_reason_breakdown`이다.
-- 결과는 JSON/Markdown 파일로 남겨 다시 공유할 수 있다.
+- 상태: `retired/deprecated`
+- active export/analyzer 경로: 사용하지 않음
+- 표준 대체 경로: `analysis/offline_live_canary_bundle/`
+- runtime 정책: `standby_diagnostic_report_only`
 
-## 서버 측 번들 생성
+`gatekeeper_fast_reuse` 전용 offline bundle/codebase는 `2026-04-27` 장후 체크리스트에서 삭제 대상으로 닫혔다. core runtime의 `gatekeeper_fast_reuse` baseline 로직과 회귀 테스트는 별개이며, 이 retired bundle의 제거 대상이 아니다.
 
-서버 repo root에서 실행한다.
+## Migration
+
+서버 export는 아래 표준 명령을 사용한다.
 
 ```bash
-PYTHONPATH=. .venv/bin/python analysis/offline_gatekeeper_fast_reuse_bundle/export_server_bundle.py \
+PYTHONPATH=. .venv/bin/python analysis/offline_live_canary_bundle/export_server_bundle.py \
   --target-date 2026-04-27 \
   --slot-label smoke_1000 \
   --evidence-cutoff 10:00:00
 ```
 
-오전 반나절 방향성 번들 예시:
-
-```bash
-PYTHONPATH=. .venv/bin/python analysis/offline_gatekeeper_fast_reuse_bundle/export_server_bundle.py \
-  --target-date 2026-04-27 \
-  --slot-label morning_1120 \
-  --evidence-cutoff 11:20:00
-```
-
-기본 출력 경로:
-
-- `tmp/offline_gatekeeper_fast_reuse_exports/<YYYY-MM-DD>/<slot_label>/`
-
-`13:00` pivot 번들 예시:
-
-```bash
-PYTHONPATH=. .venv/bin/python analysis/offline_gatekeeper_fast_reuse_bundle/export_server_bundle.py \
-  --target-date 2026-04-27 \
-  --slot-label latency_1300 \
-  --evidence-cutoff 13:00:00
-```
-
-## 로컬 PC 실행
-
-전제:
-
-- 로컬 repo root: `C:\KORStockScanV2`
-- 로컬 venv: `C:\KORStockScanV2\.venv`
-- 이 디렉토리를 로컬 repo의 `analysis\offline_gatekeeper_fast_reuse_bundle\` 아래에 둔다.
-
-번들 디렉토리를 서버에서 내려받은 뒤 로컬에서 실행:
+로컬 분석은 아래 표준 명령을 사용한다.
 
 ```bat
-analysis\offline_gatekeeper_fast_reuse_bundle\run_local_bundle_analysis.bat --bundle-dir "C:\KORStockScanV2\downloads\smoke_1000\offline_gatekeeper_fast_reuse_exports\2026-04-27\smoke_1000"
-```
-
-필요하면 since/until을 직접 덮어쓸 수 있다.
-
-```bat
-analysis\offline_gatekeeper_fast_reuse_bundle\run_local_bundle_analysis.bat ^
-  --bundle-dir "C:\KORStockScanV2\downloads\morning_1120\offline_gatekeeper_fast_reuse_exports\2026-04-27\morning_1120" ^
+analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat ^
+  --bundle-dir "C:\KORStockScanV2\downloads\smoke_1000\offline_live_canary_exports\2026-04-27\smoke_1000" ^
   --since 09:00:00 ^
-  --until 11:20:00 ^
-  --label morning_1120
+  --until 10:00:00 ^
+  --label smoke_1000
 ```
 
-## 산출물
+## Compatibility
 
-기본 결과 경로:
+아래 legacy entrypoint는 한 릴리즈 동안 compatibility wrapper로 남긴다.
 
-- `<bundle-dir>\results\gatekeeper_fast_reuse_summary_<label>.json`
-- `<bundle-dir>\results\gatekeeper_fast_reuse_summary_<label>.md`
-- `<bundle-dir>\results\entry_latency_offline_summary_<label>.json`
-- `<bundle-dir>\results\entry_latency_offline_summary_<label>.md`
+- `analysis/offline_gatekeeper_fast_reuse_bundle/export_server_bundle.py`
+- `analysis/offline_gatekeeper_fast_reuse_bundle/run_local_bundle_analysis.py`
+- `analysis/offline_gatekeeper_fast_reuse_bundle/run_local_bundle_analysis.bat`
 
-핵심 출력:
+wrapper도 내부적으로 `offline_live_canary_bundle` 표준 export/analyzer를 호출한다.
 
-- `budget_pass_events`
-- `order_bundle_submitted_events`
-- `budget_pass_to_submitted_rate`
-- `latency_block_events`
-- `latency_state_danger_events`
-- `latency_reason_breakdown`
-- `latency_danger_reason_breakdown`
-- `quote_fresh_latency_pass_rate`
-- `gatekeeper_decisions`
-- `gatekeeper_fast_reuse_stage_events`
-- `gatekeeper_fast_reuse_ratio`
-- `gatekeeper_eval_ms_p95`
-- `gatekeeper_reuse_blockers`
-- `gatekeeper_sig_deltas`
-- `full_fill_events`
-- `partial_fill_events`
+## Legacy Outputs
+
+표준 analyzer는 compatibility 산출물을 계속 생성한다.
+
+- `gatekeeper_fast_reuse_summary_<label>.json`
+- `gatekeeper_fast_reuse_summary_<label>.md`
+- `entry_latency_offline_summary_<label>.json`
+- `entry_latency_offline_summary_<label>.md`
+
+이 산출물은 제출병목 보조 진단이다. `submitted/full/partial` 회복 없이 `gatekeeper_fast_reuse_ratio`나 latency p95만으로 live entry 후보를 승격하지 않는다.

@@ -1,6 +1,8 @@
 # Offline Live Canary Bundle
 
-`offline_live_canary_bundle`은 장중 Codex 작업환경에 fresh 로그가 없을 때 사용자 로컬 PC에서 같은 서버 export 묶음을 분석하기 위한 lightweight 번들이다. 기존 `offline_gatekeeper_fast_reuse_bundle`은 호환용으로 유지하고, 이 번들은 `latency_quote_fresh_composite`와 `soft_stop_micro_grace`를 함께 판정한다.
+`offline_live_canary_bundle`은 장중 Codex 작업환경에 fresh 로그가 없을 때 사용자 로컬 PC에서 같은 서버 export 묶음을 분석하기 위한 lightweight standby diagnostic/report-only 번들이다. live threshold, 주문, 청산 판단을 직접 변경하지 않는다.
+
+기존 `offline_gatekeeper_fast_reuse_bundle` 전용 codebase는 retired/deprecated 상태이며, legacy `gatekeeper_fast_reuse`/`entry_latency_offline` summary compatibility는 이 bundle의 선택적 진단 섹션으로 통합한다.
 
 ## 서버 Export
 
@@ -31,6 +33,13 @@ tmp/offline_live_canary_exports/2026-04-28/h1000/
 - `data/gatekeeper/gatekeeper_snapshots_YYYY-MM-DD.jsonl.gz` if exists
 
 없는 파일은 실패가 아니라 `bundle_manifest.json.missing_files`에 기록한다.
+
+`bundle_manifest.json`에는 고정 canary명 `axes` 대신 `diagnostic_sections`를 기록한다.
+
+- `entry_quote_fresh_composite`
+- `soft_stop_micro_grace`
+- `legacy_gatekeeper_fast_reuse`
+- `entry_latency_offline`
 
 ## 로컬 PC 실행
 
@@ -97,12 +106,18 @@ analysis\offline_live_canary_bundle\run_local_canary_bundle_analysis.bat ^
 - `entry_quote_fresh_composite_summary_<label>.md`
 - `soft_stop_micro_grace_summary_<label>.json`
 - `soft_stop_micro_grace_summary_<label>.md`
+- `gatekeeper_fast_reuse_summary_<label>.json`
+- `gatekeeper_fast_reuse_summary_<label>.md`
+- `entry_latency_offline_summary_<label>.json`
+- `entry_latency_offline_summary_<label>.md`
 - `live_canary_combined_summary_<label>.json`
 - `live_canary_combined_summary_<label>.md`
 
 `entry_quote_fresh_composite_summary_<label>`에는 observe-only `orderbook_stability` 섹션도 포함된다. 이 섹션은 `unstable_quote_observed_count/share`, `unstable_reason_breakdown`, `unstable_vs_submitted`, `unstable_vs_fill`, `unstable_vs_latency_danger`를 제공하지만 live gate 판정에는 쓰지 않는다.
 
 `entry_quote_fresh_composite_summary_<label>`에는 `latency_entry_price_guard` 섹션도 포함된다. 이 섹션은 `latency_state=DANGER`가 기존 `latency_quote_fresh_composite` canary로 `ALLOW_NORMAL` override된 주문의 `latency_danger_override_defensive` cohort를 분리하고, `submitted`, `full_fill`, `partial_fill`, `realized_slippage`, `COMPLETED + valid profit_rate`를 집계한다. `latency_override_defensive_ticks=3`은 v1 임시값이며 정식 정책 고정값이 아니다.
+
+`gatekeeper_fast_reuse_summary_<label>`와 `entry_latency_offline_summary_<label>`는 retired gatekeeper 전용 bundle의 compatibility 산출물이다. `gatekeeper_fast_reuse_ratio`, `gatekeeper_eval_ms_p95`, `latency_state_danger`, `submitted/full/partial`를 같은 창에서 보지만 live 승격 근거가 아니라 보조 진단이다.
 
 ## 시간대별 기본 실행
 
@@ -133,6 +148,7 @@ PYTHONPATH=. .venv/bin/python analysis/offline_live_canary_bundle/export_server_
 ## 판정 원칙
 
 - `latency_quote_fresh_composite`는 `submitted_orders >= 20`, baseline `>= N_min`, `ShadowDiff0428` 해소 전에는 hard pass/fail이 아니라 direction-only로만 본다.
+- `legacy_gatekeeper_fast_reuse`와 `entry_latency_offline`은 retired diagnostic compatibility 섹션이다. `submitted/full/partial` 회복 없이 `gatekeeper_fast_reuse_ratio` 또는 latency p95만으로 entry live 후보를 승격하지 않는다.
 - `latency_entry_price_guard`는 신규 entry canary가 아니라 기존 active entry canary의 BUY 체결품질 보호 가드다. v1은 실주문 3틱 하향과 `counterfactual_order_price_1tick` 로그를 함께 남기며, 부분 live A/B와 fallback/scout/split-entry는 별도 승인 전까지 금지한다.
 - `latency_signal_quality_quote_composite`는 예비 검증축이다. analyzer는 `signal>=90`, `latest_strength>=110`, `buy_pressure_10t>=65`, `ws_age<=1200ms`, `ws_jitter<=500ms`, `spread<=0.0085`, `quote_stale=False` 후보 수를 `signal_quality_quote_composite_candidate_events`로 산출하지만, 현재 live 판정에는 합산하지 않는다.
 - `orderbook_stability`는 observe-only다. `unstable_quote_observed=True`라도 현재 진입병목 해소 전에는 주문 차단, scout-only 전환, position/frequency cap을 적용하지 않는다.

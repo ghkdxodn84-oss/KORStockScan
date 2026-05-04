@@ -233,7 +233,13 @@ def export_bundle(
         "filtered_files": filtered_files,
         "copied_files": copied_files,
         "missing_files": missing_files,
-        "axes": ["latency_quote_fresh_composite", "soft_stop_micro_grace"],
+        "diagnostic_sections": [
+            "entry_quote_fresh_composite",
+            "soft_stop_micro_grace",
+            "legacy_gatekeeper_fast_reuse",
+            "entry_latency_offline",
+        ],
+        "runtime_policy": "standby_diagnostic_report_only",
         "local_command_template": (
             "analysis\\offline_live_canary_bundle\\run_local_canary_bundle_analysis.bat "
             f"--bundle-dir \"<download_root>\\offline_live_canary_exports\\{target_date}\\{slot_label}\" "

@@ -202,9 +202,9 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTH
 
 ## 분석 도구
 
-- `analysis/offline_live_canary_bundle/`: 장중 fresh 로그 접근이 어려울 때 lightweight bundle을 export하고 로컬 analyzer로 same-slot 판정을 닫는 도구.
-- `analysis/offline_gatekeeper_fast_reuse_bundle/`: gatekeeper fast reuse와 latency 관련 offline 검증.
-- `analysis/gemini_scalping_pattern_lab/`, `analysis/claude_scalping_pattern_lab/`: 스캘핑 패턴/EV 분석 실험실.
+- `analysis/offline_live_canary_bundle/`: 장중 fresh 로그 접근이 어려울 때 lightweight bundle을 export하고 로컬 analyzer로 same-slot 판정을 닫는 standby diagnostic/report-only 도구. legacy gatekeeper/entry latency summary compatibility도 이 경로에서 생성한다.
+- `analysis/offline_gatekeeper_fast_reuse_bundle/`: retired/deprecated compatibility wrapper와 과거 증적 링크 보존용. 신규 export/analyzer 표준 경로가 아니다.
+- `analysis/gemini_scalping_pattern_lab/`, `analysis/claude_scalping_pattern_lab/`: 장후 postclose monitoring report-only 스캘핑 패턴/EV 분석 실험실.
 - `src/engine/server_report_comparison.py`: 원격 서버 report 비교. Plan Rebase 의사결정에서는 remote 비교값을 기본 입력에서 제외합니다.
 - `src/engine/build_tuning_monitoring_parquet.py`, `src/engine/tuning_duckdb_repository.py`: 튜닝 관찰 데이터를 Parquet/DuckDB로 다루는 경로.
 
