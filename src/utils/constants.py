@@ -1088,6 +1088,7 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_ENABLE_PYRAMID=env_scalping_enable_pyramid
             if env_scalping_enable_pyramid is not None
             else config.SCALPING_ENABLE_PYRAMID,
+            SCALPING_MAX_AVG_DOWN_COUNT=env_scalping_max_avg_down_count
             if env_scalping_max_avg_down_count is not None
             else config.SCALPING_MAX_AVG_DOWN_COUNT,
             SCALPING_MAX_PYRAMID_COUNT=env_scalping_max_pyramid_count
