@@ -22,6 +22,7 @@ DEFAULT_MICRO_LAMBDA = 0.3
 DEFAULT_MICRO_WINDOW_SEC = 60.0
 DEFAULT_MICRO_MAX_SAMPLES = 300
 DEFAULT_MICRO_Z_MIN_SAMPLES = 20
+DEFAULT_WIDE_MICRO_WINDOWS_SEC = (180, 300, 600)
 DEFAULT_OFI_BULL_THRESHOLD = 1.2
 DEFAULT_OFI_BEAR_THRESHOLD = -1.0
 DEFAULT_QI_BULL_THRESHOLD = 0.55
@@ -76,6 +77,7 @@ class _SymbolState:
     quotes: deque[dict[str, Any]] = field(default_factory=deque)
     trades: deque[dict[str, Any]] = field(default_factory=deque)
     micro_samples: deque[dict[str, Any]] = field(default_factory=deque)
+    wide_micro_samples: deque[dict[str, Any]] = field(default_factory=deque)
     pending_reversions: deque[_PendingReversion] = field(default_factory=deque)
     flicker_count: int = 0
     last_bid: int = 0
@@ -105,6 +107,7 @@ class OrderbookStabilityObserver:
         micro_window_sec: float = DEFAULT_MICRO_WINDOW_SEC,
         micro_max_samples: int = DEFAULT_MICRO_MAX_SAMPLES,
         micro_z_min_samples: int = DEFAULT_MICRO_Z_MIN_SAMPLES,
+        wide_micro_windows_sec: tuple[int, ...] | None = None,
         micro_lambda: float = DEFAULT_MICRO_LAMBDA,
         bucket_calibration_enabled: bool | None = None,
         threshold_manifest_path: str | Path | None = None,
@@ -114,6 +117,11 @@ class OrderbookStabilityObserver:
         self.micro_window_sec = float(micro_window_sec)
         self.micro_max_samples = int(micro_max_samples)
         self.micro_z_min_samples = int(micro_z_min_samples)
+        self.wide_micro_windows_sec = tuple(
+            int(window)
+            for window in (wide_micro_windows_sec or DEFAULT_WIDE_MICRO_WINDOWS_SEC)
+            if int(window) > 0
+        )
         self.micro_lambda = max(0.0, min(1.0, float(micro_lambda)))
         self.bucket_calibration_enabled = (
             _env_bool("KORSTOCKSCAN_SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_BUCKET_CALIBRATION_ENABLED", False)
@@ -274,6 +282,11 @@ class OrderbookStabilityObserver:
             state.micro_samples.popleft()
         while len(state.micro_samples) > self.micro_max_samples:
             state.micro_samples.popleft()
+        max_wide_window = max(self.wide_micro_windows_sec or (0,))
+        if max_wide_window > 0:
+            wide_cutoff = now - float(max_wide_window)
+            while state.wide_micro_samples and float(state.wide_micro_samples[0].get("ts", 0.0)) < wide_cutoff:
+                state.wide_micro_samples.popleft()
 
     def _mark_reversions(self, state: _SymbolState, now: float) -> None:
         for item in state.pending_reversions:
@@ -352,6 +365,15 @@ class OrderbookStabilityObserver:
         state.last_ofi_norm = float(ofi_norm)
         state.last_ofi_z = self._ofi_z(state)
         state.last_qi = qi
+        state.wide_micro_samples.append(
+            {
+                "ts": now,
+                "ofi_norm": float(ofi_norm),
+                "ofi_z": state.last_ofi_z,
+                "qi": qi,
+                "qi_ewma": state.qi_ewma,
+            }
+        )
         state.last_bid_qty = bid_qty
         state.last_ask_qty = ask_qty
         state.last_bid_depth = bid_depth
@@ -496,6 +518,93 @@ class OrderbookStabilityObserver:
         thresholds["ofi_threshold_source"] = "bucket"
         return thresholds
 
+    @staticmethod
+    def _avg(values: list[float]) -> float | None:
+        if not values:
+            return None
+        return round(sum(values) / len(values), 6)
+
+    def _wide_micro_window_summary(
+        self,
+        state: _SymbolState,
+        *,
+        now: float,
+        threshold_meta: dict[str, Any],
+    ) -> dict[str, Any]:
+        summaries: dict[str, Any] = {}
+        windows: dict[str, Any] = {}
+        for window_sec in self.wide_micro_windows_sec:
+            label = f"{int(window_sec)}s"
+            samples = [
+                sample
+                for sample in state.wide_micro_samples
+                if float(sample.get("ts", 0.0)) >= now - float(window_sec)
+            ]
+            ready_samples = [
+                sample
+                for sample in samples
+                if sample.get("ofi_z") is not None and sample.get("qi_ewma") is not None
+            ]
+            state_counts = {"bullish": 0, "bearish": 0, "neutral": 0}
+            ofi_values: list[float] = []
+            qi_values: list[float] = []
+            for sample in ready_samples:
+                ofi_z = float(sample.get("ofi_z") or 0.0)
+                qi_ewma = float(sample.get("qi_ewma") or 0.0)
+                ofi_values.append(ofi_z)
+                qi_values.append(qi_ewma)
+                if (
+                    ofi_z >= float(threshold_meta["ofi_bull_threshold"])
+                    and qi_ewma >= float(threshold_meta["qi_bull_threshold"])
+                ):
+                    state_counts["bullish"] += 1
+                elif (
+                    ofi_z <= float(threshold_meta["ofi_bear_threshold"])
+                    and qi_ewma < float(threshold_meta["qi_bear_threshold"])
+                ):
+                    state_counts["bearish"] += 1
+                else:
+                    state_counts["neutral"] += 1
+
+            ready_count = len(ready_samples)
+            bullish_ratio = round(state_counts["bullish"] / ready_count, 6) if ready_count else 0.0
+            bearish_ratio = round(state_counts["bearish"] / ready_count, 6) if ready_count else 0.0
+            if ready_count < self.micro_z_min_samples:
+                dominant_state = "insufficient"
+            elif bullish_ratio >= 0.60 and state_counts["bullish"] >= max(3, self.micro_z_min_samples // 2):
+                dominant_state = "persistent_bullish"
+            elif bearish_ratio >= 0.60 and state_counts["bearish"] >= max(3, self.micro_z_min_samples // 2):
+                dominant_state = "persistent_bearish"
+            elif state_counts["bullish"] > 0 and state_counts["bearish"] > 0:
+                dominant_state = "mixed"
+            else:
+                dominant_state = "neutral"
+
+            prefix = f"wide_{int(window_sec)}s"
+            window_summary = {
+                "window_sec": int(window_sec),
+                "sample_count": len(samples),
+                "ready_sample_count": ready_count,
+                "bullish_count": state_counts["bullish"],
+                "bearish_count": state_counts["bearish"],
+                "neutral_count": state_counts["neutral"],
+                "bullish_ratio": bullish_ratio,
+                "bearish_ratio": bearish_ratio,
+                "avg_ofi_z": self._avg(ofi_values),
+                "avg_qi_ewma": self._avg(qi_values),
+                "dominant_state": dominant_state,
+            }
+            windows[label] = window_summary
+            summaries[f"{prefix}_state"] = dominant_state
+            summaries[f"{prefix}_sample_count"] = len(samples)
+            summaries[f"{prefix}_ready_sample_count"] = ready_count
+            summaries[f"{prefix}_bullish_ratio"] = bullish_ratio
+            summaries[f"{prefix}_bearish_ratio"] = bearish_ratio
+            summaries[f"{prefix}_avg_ofi_z"] = window_summary["avg_ofi_z"]
+            summaries[f"{prefix}_avg_qi_ewma"] = window_summary["avg_qi_ewma"]
+        summaries["wide_windows"] = windows
+        return summaries
+
     def _micro_snapshot(self, state: _SymbolState, *, now: float) -> dict[str, Any]:
         sample_count = len(state.micro_samples)
         reason = ""
@@ -541,6 +650,7 @@ class OrderbookStabilityObserver:
             calibration_warning = "insufficient_symbol_samples"
         elif threshold_meta["ofi_threshold_source"] == "fallback":
             calibration_warning = str(threshold_meta["ofi_threshold_fallback_reason"] or "threshold_fallback")
+        wide_summary = self._wide_micro_window_summary(state, now=now, threshold_meta=threshold_meta)
 
         return {
             "captured_at_ms": int(round(now * 1000)),
@@ -576,6 +686,7 @@ class OrderbookStabilityObserver:
             "ofi_bucket_bullish_rate": None,
             "ofi_symbol_bucket_deviation": None,
             "ofi_calibration_warning": calibration_warning,
+            **wide_summary,
         }
 
 

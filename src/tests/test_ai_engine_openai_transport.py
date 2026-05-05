@@ -11,6 +11,7 @@ from src.engine.ai_engine_openai import (
     OpenAITransportResult,
     OpenAIWSRequestIdMismatchError,
 )
+from src.engine.ai_engine import SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
 
 
 def _build_engine():
@@ -178,7 +179,16 @@ def test_openai_holding_flow_uses_flow_schema_and_normalizes_payload(monkeypatch
             {"close": 10000, "high": 10040, "low": 9950, "volume": 1200},
         ],
         {"profit_rate": -0.3, "peak_profit": 0.4, "held_sec": 75, "current_ai_score": 31, "worsen_pct": 0.8},
-        flow_history=[{"time": "10:00:00", "action": "HOLD", "flow_state": "흡수", "profit_rate": "+0.10", "exit_rule": "soft"}],
+        flow_history=[
+            {
+                "time": "10:00:00",
+                "action": "HOLD",
+                "flow_state": "흡수",
+                "profit_rate": "+0.10",
+                "exit_rule": "soft",
+                "reason": "매수 흡수 유지",
+            }
+        ],
         decision_kind="intraday_exit",
     )
 
@@ -187,7 +197,10 @@ def test_openai_holding_flow_uses_flow_schema_and_normalizes_payload(monkeypatch
     assert result["next_review_sec"] == 44
     assert captured["kwargs"]["schema_name"] == "holding_exit_flow_v1"
     assert captured["kwargs"]["endpoint_name"] == "holding_flow"
+    assert "직전 action을 뒤집으려면" in captured["prompt"]
+    assert "시스템 guard" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
     assert "단일 score cutoff로 자르지 말고" in captured["user_input"]
+    assert "reason=매수 흡수 유지" in captured["user_input"]
 
 
 def test_openai_deterministic_config_is_limited_to_json_path(monkeypatch):

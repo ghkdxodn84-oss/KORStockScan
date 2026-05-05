@@ -136,6 +136,42 @@ def test_orderbook_micro_becomes_ready_after_min_samples_and_prunes_window():
     assert pruned_micro["ready"] is False
 
 
+def test_orderbook_micro_wide_windows_retain_report_only_flow_context():
+    observer = OrderbookStabilityObserver(
+        window_sec=10,
+        micro_window_sec=2,
+        micro_z_min_samples=3,
+        wide_micro_windows_sec=(3, 5, 10),
+    )
+    for offset in range(8):
+        observer.record_quote(
+            "123456",
+            best_bid=10_000,
+            best_ask=10_010,
+            best_bid_qty=100 + offset * 30,
+            best_ask_qty=100,
+            bid_depth_l=1000 + offset * 30,
+            ask_depth_l=1000,
+            ts=100.0 + offset,
+        )
+
+    micro = observer.snapshot("123456", now=107.0)["orderbook_micro"]
+
+    assert micro["sample_quote_count"] == 3
+    assert micro["wide_3s_sample_count"] == 4
+    assert micro["wide_5s_sample_count"] == 6
+    assert micro["wide_10s_sample_count"] == 8
+    assert micro["wide_10s_ready_sample_count"] >= micro["wide_3s_ready_sample_count"]
+    assert micro["wide_10s_state"] in {
+        "insufficient",
+        "persistent_bullish",
+        "persistent_bearish",
+        "mixed",
+        "neutral",
+    }
+    assert micro["wide_windows"]["10s"]["window_sec"] == 10
+
+
 def test_orderbook_micro_observer_health_fields_with_quote_and_trade():
     observer = OrderbookStabilityObserver(window_sec=10)
     observer.record_quote(

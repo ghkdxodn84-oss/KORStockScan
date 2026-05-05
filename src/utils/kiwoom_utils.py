@@ -351,6 +351,87 @@ def get_account_execution_snapshot_kt00008(token):
     return snapshot
 
 
+def get_orderable_by_margin_kt00011(token, code, unit_price=None, is_nxt=None):
+    """
+    [kt00011] 증거금율별주문가능수량조회요청
+    - 종목별 증거금율(stk_profa_rt), 계좌증거금율(profa_rt), 적용증거금율(aplc_rt)
+    - 증거금율별 주문가능금액/수량
+    """
+    # kt00011 is an account TR and expects the raw 6-digit stock code, not the SOR _AL variant.
+    req_code = normalize_stock_code(code)
+    url = get_api_url("/api/dostk/acnt")
+
+    payload = {"stk_cd": str(req_code)}
+    if unit_price not in (None, "", 0, "0"):
+        payload["uv"] = str(int(float(unit_price)))
+
+    results = fetch_kiwoom_api_continuous(
+        url=url,
+        token=token,
+        api_id="kt00011",
+        payload=payload,
+        use_continuous=False,
+    )
+    if not results:
+        return {}
+
+    data = results[0] or {}
+    rt_code = int(data.get("return_code", data.get("rt_cd", 0)) or 0)
+    if rt_code != 0:
+        return {
+            "error": str(data.get("return_msg") or data.get("err_msg") or "kt00011 조회 실패"),
+            "return_code": rt_code,
+            "raw": data,
+        }
+
+    def to_i(v):
+        if v in (None, ""):
+            return 0
+        try:
+            clean = str(v).replace(",", "").replace("+", "").replace("%", "").strip()
+            return int(float(clean))
+        except (ValueError, TypeError):
+            return 0
+
+    def to_pct(v):
+        if v in (None, ""):
+            return 0
+        try:
+            clean = str(v).replace(",", "").replace("+", "").replace("%", "").strip()
+            return int(round(float(clean)))
+        except (ValueError, TypeError):
+            return 0
+
+    tier_rates = [20, 30, 40, 50, 60, 100]
+    tiers = {}
+    for rate in tier_rates:
+        prefix = f"profa_{rate}"
+        tiers[rate] = {
+            "orderable_amount": to_i(data.get(f"{prefix}ord_alow_amt")),
+            "orderable_qty": to_i(data.get(f"{prefix}ord_alowq")),
+            "prev_reuse_amount": to_i(data.get(f"{prefix}pred_reu_amt")),
+            "today_reuse_amount": to_i(data.get(f"{prefix}tdy_reu_amt")),
+        }
+
+    return {
+        "error": "",
+        "stock_margin_rate": to_pct(data.get("stk_profa_rt")),
+        "account_margin_rate": to_pct(data.get("profa_rt")),
+        "applied_margin_rate": to_pct(data.get("aplc_rt")),
+        "deposit": to_i(data.get("entr")),
+        "substitute_amount": to_i(data.get("repl_amt")),
+        "unpaid_amount": to_i(data.get("uncla")),
+        "orderable_substitute": to_i(data.get("ord_pos_repl")),
+        "orderable_cash": to_i(data.get("ord_alowa")),
+        "cash_only_orderable_amount": to_i(data.get("min_ord_alow_amt")),
+        "cash_only_orderable_qty": to_i(data.get("min_ord_alowq")),
+        "cash_only_prev_reuse_amount": to_i(data.get("min_pred_reu_amt")),
+        "cash_only_today_reuse_amount": to_i(data.get("min_tdy_reu_amt")),
+        "tiers": tiers,
+        "raw": data,
+    }
+
+
 def _to_int_safe(value):
     if value in (None, ""):
         return 0

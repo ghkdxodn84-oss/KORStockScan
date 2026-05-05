@@ -1,85 +1,85 @@
 {
-  "bundle_as_of": "2026-05-03T22:20:14Z",
+  "bundle_as_of": "2026-05-05T22:20:14Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7230.12,
-    "prev_value": 7209.01,
-    "change": 21.11,
-    "change_pct": 0.29,
-    "as_of": "2026-05-01T20:00:00Z",
-    "source": "The Street / Washington Post"
+    "value": 7259.22,
+    "prev_value": 7200.75,
+    "change": 58.47,
+    "change_pct": 0.81,
+    "as_of": "2026-05-05T20:00:00Z",
+    "source": "The Washington Post"
   },
   "nasdaq": {
-    "name": "NASDAQ Composite",
-    "value": 25114.44,
-    "prev_value": 24892.31,
-    "change": 222.13,
-    "change_pct": 0.89,
-    "as_of": "2026-05-01T20:00:00Z",
-    "source": "Morningstar / AP News"
+    "name": "NASDAQ",
+    "value": 25326.13,
+    "prev_value": 25067.81,
+    "change": 258.32,
+    "change_pct": 1.03,
+    "as_of": "2026-05-05T20:00:00Z",
+    "source": "The Washington Post"
   },
   "vix": {
     "name": "VIX",
-    "value": 16.99,
-    "prev_value": 16.89,
-    "change": 0.1,
-    "change_pct": 0.59,
-    "as_of": "2026-05-01T20:00:00Z",
-    "source": "YCharts / StreetStats"
+    "value": 17.44,
+    "prev_value": 18.29,
+    "change": -0.85,
+    "change_pct": -4.65,
+    "as_of": "2026-05-05T19:12:00Z",
+    "source": "Cboe Global Markets"
   },
   "us10y": {
     "name": "US 10-Year Treasury Yield",
-    "value": 4.39,
-    "prev_value": 4.4,
-    "change": -0.01,
-    "change_pct": -0.23,
-    "as_of": "2026-05-01T20:00:00Z",
-    "source": "AhaSignals"
+    "value": 4.42,
+    "prev_value": 4.44,
+    "change": -0.02,
+    "change_pct": -0.45,
+    "as_of": "2026-05-05T20:00:00Z",
+    "source": "Trading Economics"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 108.17,
-    "prev_value": 110.39,
-    "change": -2.22,
-    "change_pct": -2.02,
-    "as_of": "2026-05-01T21:00:00Z",
+    "value": 110.13,
+    "prev_value": 114.43,
+    "change": -4.3,
+    "change_pct": -3.76,
+    "as_of": "2026-05-05T20:00:00Z",
     "source": "Trading Economics"
   },
   "headlines": [
     {
-      "title": "Middle East War to Spark Biggest Energy Price Surge in Four Years: World Bank",
-      "source": "Maaal",
-      "published_at": "2026-05-03T12:00:00Z",
-      "url": "https://www.maaal.com"
+      "title": "S&P 500, Nasdaq Tap More Records as Oil Prices Cool",
+      "source": "Schaeffer's Investment Research",
+      "published_at": "2026-05-05T20:27:00Z",
+      "url": "https://www.schaeffersresearch.com/"
     },
     {
-      "title": "Trump fast-tracks $8.6B arms deal to Middle East amid Iran tensions",
-      "source": "Financial Times / Crypto Briefing",
-      "published_at": "2026-05-02T12:00:00Z",
-      "url": "https://cryptobriefing.com"
+      "title": "Oil pulls back after hitting a 2026 high on day one of Trump's plan to unblock Hormuz",
+      "source": "CNN",
+      "published_at": "2026-05-05T09:45:00Z",
+      "url": "https://www.cnn.com/"
     },
     {
-      "title": "Oil posts second weekly gain as Hormuz closure persists",
-      "source": "MUFG Research",
-      "published_at": "2026-05-01T15:00:00Z",
-      "url": "https://mufgresearch.com"
-    },
-    {
-      "title": "S&P 500, Nasdaq end higher, notch weekly gains after earnings-heavy week",
+      "title": "Chips ahoy: Semiconductors boost Nasdaq, S&P 500 to fresh all-time closing highs",
       "source": "Reuters",
-      "published_at": "2026-05-01T20:30:00Z",
-      "url": "https://www.reuters.com"
+      "published_at": "2026-05-05T20:13:00Z",
+      "url": "https://www.reuters.com/"
     },
     {
-      "title": "Gold supported by weaker dollar despite war-driven inflation risks",
-      "source": "MUFG Research",
-      "published_at": "2026-05-01T15:00:00Z",
-      "url": "https://mufgresearch.com"
+      "title": "US 10-Year Treasury Yield Falls From July-Highs",
+      "source": "TradingView",
+      "published_at": "2026-05-05T15:17:00Z",
+      "url": "https://www.tradingview.com/"
+    },
+    {
+      "title": "Stock Market Today: S&P 500 edges up on Iran war developments",
+      "source": "TheStreet",
+      "published_at": "2026-05-05T15:22:00Z",
+      "url": "https://www.thestreet.com/"
     }
   ],
   "notes": [
-    "AllvaluesreflectthemarketcloseonFriday, May1, 2026[1.2].",
-    "US indexes (S&P 500, NASDAQ) recorded fresh all-time highs driven by robust earnings from major tech companies.",
-    "Energy markets continue to experience high volatility and supply constraints due to the prolonged closure of the Strait of Hormuz amid the Middle East conflict."
+    "미국 증시는 중동(호르무즈 해협) 지정학적 긴장이 완화되며 유가가 급락하자 반등하여 사상 최고치를 경신했습니다.",
+    "기술주 중심의 나스닥이 강세를 이끌었으며, 견고한 기업 실적이 투자 심리를 뒷받침했습니다.",
+    "안전자산 선호도 하락으로 국채 10년물 금리는 소폭 하락했고, VIX 지수 역시 하락 안정세를 보였습니다."
   ]
 }

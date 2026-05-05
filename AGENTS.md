@@ -2,9 +2,10 @@ KORStockScan 작업 기본 규칙:
 
 ## 1. 우선 참조
 
-- 작업 시작 전 `docs/plan-korStockScanPerformanceOptimization.rebase.md` §1~§6과 당일 `docs/YYYY-MM-DD-stage2-todo-checklist.md` 상단 요약(`오늘 목적`, `오늘 강제 규칙`)을 먼저 읽는다.
+- 작업 시작 전 `docs/plan-korStockScanPerformanceOptimization.rebase.md` §1~§8과 당일 `docs/YYYY-MM-DD-stage2-todo-checklist.md` 상단 요약(`오늘 목적`, `오늘 강제 규칙`)을 먼저 읽는다.
 - 튜닝 원칙, 판정축, 일정, rollback guard는 `Plan Rebase` 문서를 기준으로 삼고, 실행 작업항목은 날짜별 checklist가 소유한다.
 - 현재 active/open 상태는 `Plan Rebase` §7~§8을 기준으로 읽되, 과거 checklist의 `[x]` 완료 항목은 현재 OPEN owner로 보지 않는다. 완료 항목은 증적/근거 링크이고, 현재 owner는 같은 행에 명시된 다음 checklist 또는 현재 runtime owner다.
+- `docs/plan-korStockScanPerformanceOptimization.prompt.md`는 세션 진입용 경량 포인터다. 일반 작업마다 필수로 읽지 않고, 사용자가 명시적으로 요구했거나 Plan Rebase 위치, Source of Truth 문서 맵, 현재 실행표가 불명확할 때만 확인한다.
 
 ## 1.1 현재 상태 기준 (`2026-05-04 KST`)
 

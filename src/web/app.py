@@ -35,6 +35,11 @@ from src.engine.daily_report_service import (
     list_available_report_dates,
     load_or_build_daily_report,
 )
+from src.web.investor_margin_routes import investor_margin_bp
+from src.web.ipo_intraday_routes import ipo_intraday_bp
+
+app.register_blueprint(investor_margin_bp)
+app.register_blueprint(ipo_intraday_bp)
 
 _DEFAULT_DASHBOARD_LOOKBACK_MINUTES = 120
 _TRUTHY_QUERY_VALUES = {"1", "true", "yes", "y"}
@@ -445,6 +450,8 @@ def dashboard_home():
         "strategy-performance": "전략 성과 분석",
         "gatekeeper-replay": "Gatekeeper 리플레이",
         "performance-tuning": "성능 튜닝 모니터",
+        "investor-margin": "수급·미수 분석",
+        "ipo-intraday": "IPO 1~2일차",
     }
 
     tab_map = {
@@ -455,6 +462,8 @@ def dashboard_home():
         "strategy-performance": f"/strategy-performance?date={target_date}",
         "gatekeeper-replay": f"/gatekeeper-replay?date={target_date}",
         "performance-tuning": f"/performance-tuning?date={target_date}" + (f"&since={resolved_since}" if resolved_since else ""),
+        "investor-margin": "/investor-margin",
+        "ipo-intraday": "/ipo-intraday",
     }
     active_src = tab_map.get(default_tab, tab_map["daily-report"])
 
@@ -806,7 +815,7 @@ def dashboard_home():
           <div class="hero-top">
             <div class="hero-copy">
               <h2>운영 화면을 한 셸에서 읽는 통합 대시보드</h2>
-              <p>일일 전략 리포트, 진입 게이트 차단, 실제 매매 복기, post-sell 피드백, 전략 성과 분석, Gatekeeper 리플레이, 성능 튜닝 모니터를 같은 관제 흐름에서 넘겨보도록 정리했습니다.</p>
+              <p>일일 전략 리포트, 진입 게이트 차단, 실제 매매 복기, post-sell 피드백, 전략 성과 분석, Gatekeeper 리플레이, 성능 튜닝 모니터, 수급·미수 분석을 같은 관제 흐름에서 넘겨보도록 정리했습니다.</p>
               <div class="hero-status">
                 <span class="hero-status-dot"></span>
                 <span>현재 보고 있는 탭: {{ active_tab_label }}</span>
@@ -857,6 +866,12 @@ def dashboard_home():
           <a class="tab {% if active_tab == 'performance-tuning' %}active{% endif %}" href="/dashboard?tab=performance-tuning&date={{ target_date }}{% if resolved_since %}&since={{ resolved_since }}{% endif %}">
             <span class="tab-label">성능 튜닝 모니터<small>최적화 조정 포인트</small></span>
           </a>
+          <a class="tab {% if active_tab == 'investor-margin' %}active{% endif %}" href="/dashboard?tab=investor-margin&date={{ target_date }}">
+            <span class="tab-label">수급·미수 분석<small>상관관계 + 증거금 계산</small></span>
+          </a>
+          <a class="tab {% if active_tab == 'ipo-intraday' %}active{% endif %}" href="/dashboard?tab=ipo-intraday&date={{ target_date }}">
+            <span class="tab-label">IPO 1~2일차<small>가격·거래량 구간 바차트</small></span>
+          </a>
         </div>
 
         <div class="telegram-cta">
@@ -895,7 +910,7 @@ def dashboard_home():
                 </div>
                 <div class="rail-kpi-item">
                   <div class="rail-kpi-label">탭 개수</div>
-                  <div class="rail-kpi-value">7개</div>
+                  <div class="rail-kpi-value">9개</div>
                 </div>
                 <div class="rail-kpi-item">
                   <div class="rail-kpi-label">조회 범위</div>
@@ -917,6 +932,9 @@ def dashboard_home():
                 <li>`/api/strategy-performance?date=YYYY-MM-DD`</li>
                 <li>`/api/gatekeeper-replay?date=YYYY-MM-DD`</li>
                 <li>`/api/performance-tuning?date=YYYY-MM-DD&since=HH:MM:SS`</li>
+                <li>`/api/investor-margin?mode=flow&stock_query=종목명`</li>
+                <li>`/api/investor-margin?mode=margin&stock_query=종목명&quantity=10`</li>
+                <li>`/ipo-intraday?code=000000&listing_date=YYYY-MM-DD`</li>
               </ul>
             </div>
             <div class="rail-card">

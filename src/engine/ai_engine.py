@@ -262,6 +262,8 @@ SCALPING_HOLDING_FLOW_SYSTEM_PROMPT = """
 3. EXIT는 가격/수급/호가 흐름이 함께 무너지는 경우에만 준다.
 4. HOLD/TRIM은 전량청산 보류 의미다. TRIM은 v1에서 실주문이 아니라 리스크 축소 선호를 표시하는 판단이다.
 5. reason에는 왜 단일 순간값이 아니라 흐름상 해당 action인지 1줄로 적는다.
+6. 최근 flow review의 직전 action을 뒤집으려면 가격/수급/호가/분봉/손익 중 최소 2개 이상에서 새롭고 명확한 변화 근거가 있어야 한다.
+7. 단, hard stop, protect hard stop, 주문/잔고 safety, 후보 이후 추가악화, stale/parse/context 실패처럼 시스템 guard가 개입한 경우에는 직전 action보다 guard를 우선한다.
 
 분석 결과는 반드시 아래 JSON 형식으로만 출력:
 {
@@ -2280,7 +2282,7 @@ class GeminiSniperEngine:
             rows.append(
                 f"- {item.get('time', '-')}: action={item.get('action', '-')}, "
                 f"state={item.get('flow_state', '-')}, pnl={item.get('profit_rate', '-')}, "
-                f"rule={item.get('exit_rule', '-')}"
+                f"rule={item.get('exit_rule', '-')}, reason={item.get('reason', '-')}"
             )
         return "\n".join(rows) if rows else "이전 flow review 없음"
 

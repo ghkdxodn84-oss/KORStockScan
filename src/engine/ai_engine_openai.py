@@ -2450,7 +2450,7 @@ class GPTSniperEngine:
             rows.append(
                 f"- {item.get('time', '-')}: action={item.get('action', '-')}, "
                 f"state={item.get('flow_state', '-')}, pnl={item.get('profit_rate', '-')}, "
-                f"rule={item.get('exit_rule', '-')}"
+                f"rule={item.get('exit_rule', '-')}, reason={item.get('reason', '-')}"
             )
         return "\n".join(rows) if rows else "이전 flow review 없음"
 

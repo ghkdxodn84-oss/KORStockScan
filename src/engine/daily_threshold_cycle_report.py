@@ -420,6 +420,41 @@ def _stage_count(events: list[dict], stage: str) -> int:
     return sum(1 for event in events if str(event.get("stage") or "") == stage)
 
 
+def _events_for_stage(events: list[dict], stage: str) -> list[dict]:
+    return [event for event in events if str(event.get("stage") or "") == stage]
+
+
+def _event_fields(event: dict) -> dict:
+    fields = event.get("fields") or {}
+    return fields if isinstance(fields, dict) else {}
+
+
+def _field_counter(events: list[dict], field_name: str, *, default: str = "-") -> dict:
+    counter = Counter(str(_event_fields(event).get(field_name) or default) for event in events)
+    return dict(counter.most_common(10))
+
+
+def _record_ids(events: list[dict]) -> set[Any]:
+    return {event.get("record_id") for event in events if event.get("record_id") not in (None, "", "-")}
+
+
+def _record_id_stage_count(events: list[dict], stage: str, record_ids: set[Any]) -> int:
+    if not record_ids:
+        return 0
+    return sum(1 for event in events if str(event.get("stage") or "") == stage and event.get("record_id") in record_ids)
+
+
+def _record_id_stage_field_counter(events: list[dict], stage: str, record_ids: set[Any], field_name: str) -> dict:
+    if not record_ids:
+        return {}
+    counter = Counter(
+        str(_event_fields(event).get(field_name) or "-")
+        for event in events
+        if str(event.get("stage") or "") == stage and event.get("record_id") in record_ids
+    )
+    return dict(counter.most_common(10))
+
+
 def _completed_summary(rows: list[dict]) -> dict:
     total = len(rows)
     losses = [row for row in rows if (_safe_float(row.get("profit_rate"), 0.0) or 0.0) < 0.0]
@@ -591,6 +626,75 @@ def _build_pre_submit_guard_family(events: list[dict]) -> dict:
         "notes": [
             "실제 guard_block 표본이 0이면 분포 anchor만 사용한다.",
             "일일 변경폭은 +-10bps cap으로 본다.",
+        ],
+    }
+
+
+def _build_entry_ofi_ai_smoothing_family(events: list[dict]) -> dict:
+    raw_skip = _events_for_stage(events, "entry_ai_price_canary_skip_order")
+    demoted = _events_for_stage(events, "entry_ai_price_ofi_skip_demoted")
+    followups = _events_for_stage(events, "entry_ai_price_canary_skip_followup")
+    demoted_ids = _record_ids(demoted)
+    snapshot_age_values = [
+        value
+        for value in (
+            _safe_float(_event_fields(event).get("orderbook_micro_snapshot_age_ms"), None)
+            for event in raw_skip + demoted
+        )
+        if value is not None
+    ]
+    followup_mfe = [
+        value
+        for value in (_safe_float(_event_fields(event).get("mfe_bps"), None) for event in followups)
+        if value is not None
+    ]
+    followup_mae = [
+        value
+        for value in (_safe_float(_event_fields(event).get("mae_bps"), None) for event in followups)
+        if value is not None
+    ]
+    sample_ready = (len(raw_skip) + len(demoted)) >= 20 and len(demoted) >= 5
+    current = {
+        "entry_skip_demotion_confidence_upper": int(
+            getattr(TRADING_RULES, "SCALPING_ENTRY_AI_PRICE_OFI_SKIP_DEMOTION_MAX_CONFIDENCE", 90) or 90
+        ),
+        "ofi_stale_threshold_ms": int(getattr(TRADING_RULES, "OFI_AI_SMOOTHING_STALE_THRESHOLD_MS", 700) or 700),
+        "ofi_persistence_required": int(getattr(TRADING_RULES, "OFI_AI_SMOOTHING_PERSISTENCE_REQUIRED", 2) or 2),
+        "bucket_calibration_enabled": bool(
+            getattr(TRADING_RULES, "SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_BUCKET_CALIBRATION_ENABLED", False)
+        ),
+    }
+    recommended = dict(current)
+    return {
+        "family": "entry_ofi_ai_smoothing",
+        "stage": "entry",
+        "sample": {
+            "raw_skip": len(raw_skip),
+            "demoted": len(demoted),
+            "demoted_submitted": _record_id_stage_count(events, "order_bundle_submitted", demoted_ids),
+            "demoted_fill": _record_id_stage_count(events, "position_rebased_after_fill", demoted_ids),
+            "demoted_fill_quality": _record_id_stage_field_counter(
+                events, "position_rebased_after_fill", demoted_ids, "fill_quality"
+            ),
+            "demoted_completed": _record_id_stage_count(events, "sell_completed", demoted_ids),
+            "skip_followup": len(followups),
+            "skip_followup_avg_mfe_bps": round(_avg(followup_mfe) or 0.0, 4) if followup_mfe else None,
+            "skip_followup_avg_mae_bps": round(_avg(followup_mae) or 0.0, 4) if followup_mae else None,
+            "snapshot_age_p90_ms": round(_percentile(snapshot_age_values, 90, 0.0), 3)
+            if snapshot_age_values
+            else None,
+            "micro_state": _field_counter(raw_skip + demoted, "orderbook_micro_state"),
+            "ofi_regime": _field_counter(demoted, "entry_ai_price_ofi_regime"),
+        },
+        "apply_ready": sample_ready,
+        "current": current,
+        "recommended": recommended,
+        "apply_mode": "manifest_only" if sample_ready else "observe_only",
+        "notes": [
+            "P2 raw SKIP 중 confidence 80~89와 stale/unhealthy/insufficient 제외 표본만 본다.",
+            "추천값은 daily + rolling 방향 일치와 family sample floor가 맞을 때만 manifest 후보로 산출한다.",
+            "ThresholdOpsTransition0506 전에는 report/manifest가 runtime env/code를 자동 변경하지 않는다.",
+            "SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_BUCKET_CALIBRATION_ENABLED 기본 OFF는 유지한다.",
         ],
     }
 
@@ -999,6 +1103,75 @@ def _build_protect_trailing_smoothing_family(events: list[dict]) -> dict:
     }
 
 
+def _build_holding_flow_ofi_smoothing_family(events: list[dict]) -> dict:
+    applied = _events_for_stage(events, "holding_flow_ofi_smoothing_applied")
+    force_exit = _events_for_stage(events, "holding_flow_override_force_exit")
+    debounced = [
+        event for event in applied if str(_event_fields(event).get("smoothing_action") or "") == "DEBOUNCE_EXIT"
+    ]
+    confirmed = [
+        event for event in applied if str(_event_fields(event).get("smoothing_action") or "") == "CONFIRM_EXIT"
+    ]
+    applied_ids = _record_ids(applied)
+    worsen_values = [
+        value
+        for value in (
+            _safe_float(_event_fields(event).get("worsen_from_candidate"), None)
+            for event in applied
+        )
+        if value is not None
+    ]
+    completed_profit_values = [
+        value
+        for value in (
+            _safe_float(_event_fields(event).get("profit_rate"), None)
+            for event in events
+            if str(event.get("stage") or "") == "sell_completed" and event.get("record_id") in applied_ids
+        )
+        if value is not None
+    ]
+    sample_ready = len(applied) >= 20 and len(debounced) >= 5 and len(confirmed) >= 5
+    current = {
+        "ofi_stale_threshold_ms": int(getattr(TRADING_RULES, "OFI_AI_SMOOTHING_STALE_THRESHOLD_MS", 700) or 700),
+        "ofi_persistence_required": int(getattr(TRADING_RULES, "OFI_AI_SMOOTHING_PERSISTENCE_REQUIRED", 2) or 2),
+        "holding_bearish_confirm_worsen_pct": float(
+            getattr(TRADING_RULES, "HOLDING_FLOW_OFI_BEARISH_CONFIRM_WORSEN_PCT", 0.30) or 0.30
+        ),
+        "max_defer_sec": int(getattr(TRADING_RULES, "HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC", 90) or 90),
+        "worsen_floor_pct": float(getattr(TRADING_RULES, "HOLDING_FLOW_OVERRIDE_WORSEN_PCT", 0.80) or 0.80),
+    }
+    recommended = dict(current)
+    return {
+        "family": "holding_flow_ofi_smoothing",
+        "stage": "holding_exit",
+        "sample": {
+            "applied": len(applied),
+            "exit_debounce": len(debounced),
+            "bearish_confirm": len(confirmed),
+            "force_exit_priority": len(force_exit),
+            "force_exit_reason": _field_counter(force_exit, "force_reason"),
+            "avg_worsen_from_candidate": round(_avg(worsen_values) or 0.0, 4) if worsen_values else None,
+            "smoothing_action": _field_counter(applied, "smoothing_action"),
+            "ofi_regime": _field_counter(applied, "holding_flow_ofi_regime"),
+            "micro_state": _field_counter(applied, "orderbook_micro_state"),
+            "completed_valid": len(completed_profit_values),
+            "completed_avg_profit_rate": round(_avg(completed_profit_values) or 0.0, 4)
+            if completed_profit_values
+            else None,
+        },
+        "apply_ready": sample_ready,
+        "current": current,
+        "recommended": recommended,
+        "apply_mode": "manifest_only" if sample_ready else "observe_only",
+        "notes": [
+            "hard/protect/order safety, max_defer_sec, worsen_floor는 OFI보다 우선한다.",
+            "GOOD_EXIT/MISSED_UPSIDE 판정은 sell_completed + valid profit_rate 연결 표본으로만 사후 확인한다.",
+            "추천값은 daily + rolling 방향 일치와 family sample floor가 맞을 때만 manifest 후보로 산출한다.",
+            "ThresholdOpsTransition0506 전에는 runtime threshold mutation을 열지 않는다.",
+        ],
+    }
+
+
 def _action_label_for_completed_row(row: dict) -> str:
     last_add_type = str(row.get("last_add_type") or "").strip().upper()
     avg_down_count = _safe_int(row.get("avg_down_count"), 0) or 0
@@ -1203,19 +1376,41 @@ def _build_family_reports(events: list[dict], completed_rows: list[dict] | None 
     return [
         _build_mechanical_entry_family(events),
         _build_pre_submit_guard_family(events),
+        _build_entry_ofi_ai_smoothing_family(events),
         _build_bad_entry_family(events),
         _build_reversal_add_family(events),
         _build_soft_stop_family(events),
         _build_scalp_trailing_take_profit_family(events),
         _build_protect_trailing_smoothing_family(events),
+        _build_holding_flow_ofi_smoothing_family(events),
         _build_statistical_action_weight_family(events, completed_rows),
     ]
 
 
 def _build_apply_candidate_list(families: list[dict]) -> list[dict]:
     candidates: list[dict] = []
-    entry_candidates = [family for family in families if family["stage"] == "entry" and family["apply_ready"]]
-    holding_candidates = [family for family in families if family["stage"] == "holding_exit" and family["apply_ready"]]
+    manifest_candidates = [
+        family for family in families if family["apply_ready"] and family.get("apply_mode") == "manifest_only"
+    ]
+    for family in manifest_candidates:
+        candidates.append(
+            {
+                "family": family["family"],
+                "stage": family["stage"],
+                "apply_mode": family["apply_mode"],
+                "owner_rule": "manifest_only_no_runtime_mutation",
+            }
+        )
+    entry_candidates = [
+        family
+        for family in families
+        if family["stage"] == "entry" and family["apply_ready"] and family.get("apply_mode") != "manifest_only"
+    ]
+    holding_candidates = [
+        family
+        for family in families
+        if family["stage"] == "holding_exit" and family["apply_ready"] and family.get("apply_mode") != "manifest_only"
+    ]
     for group in (entry_candidates[:1], holding_candidates[:1]):
         for family in group:
             candidates.append(

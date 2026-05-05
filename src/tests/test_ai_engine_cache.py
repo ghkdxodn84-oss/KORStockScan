@@ -8,6 +8,7 @@ from src.engine import ai_engine_openai as ai_engine_openai_module
 from src.engine.ai_engine import (
     GeminiSniperEngine,
     SCALPING_BUY_RECOVERY_CANARY_PROMPT,
+    SCALPING_HOLDING_FLOW_SYSTEM_PROMPT,
     SCALPING_HOLDING_SYSTEM_PROMPT,
     SCALPING_SYSTEM_PROMPT,
     SCALPING_SYSTEM_PROMPT_75_CANARY,
@@ -59,6 +60,33 @@ def _build_provider_engine(engine_cls):
     engine.model_tier3_deep = "tier3-model"
     engine.current_model_name = engine.model_tier1_fast
     return engine
+
+
+def test_holding_flow_prompt_includes_consistency_rule_and_history_reason():
+    engine = _build_engine()
+
+    context = engine._format_scalping_holding_flow_context(
+        "테스트",
+        "005930",
+        {"curr": 10000, "v_pw": 120, "buy_ratio": 55},
+        [{"price": 10000, "volume": 10, "side": "BUY"}],
+        [{"close": 10000, "high": 10020, "low": 9980, "volume": 1200}],
+        {"profit_rate": 0.2, "peak_profit": 0.5, "held_sec": 80, "current_ai_score": 50},
+        flow_history=[
+            {
+                "time": "10:01:02",
+                "action": "HOLD",
+                "flow_state": "흡수",
+                "profit_rate": "+0.20",
+                "exit_rule": "soft_stop",
+                "reason": "매수 흡수 유지",
+            }
+        ],
+    )
+
+    assert "직전 action을 뒤집으려면" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+    assert "시스템 guard" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
+    assert "reason=매수 흡수 유지" in context
 
 
 PROVIDER_ENGINES = [

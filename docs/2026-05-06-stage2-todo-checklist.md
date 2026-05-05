@@ -27,19 +27,31 @@
 - 다축 동시 변경 금지, 승인 전 `main` 실주문 변경 금지 규칙을 유지한다.
 - 휴장일 이월 항목은 원래 Due가 아니라 실제 KRX 운영일 Due를 기준으로 Project/Calendar에 등록한다.
 
-## 장전 체크리스트 (08:50~09:00)
+## 장전 체크리스트 (08:45~09:00)
 
-- [ ] `[BadEntryRefinedRollback0506-Preopen] refined bad_entry canary OFF 로드 및 재승격 금지 확인` (`Due: 2026-05-06`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: ScalpingLogic`)
+- [ ] `[OFIAISmoothingOverride0506-Preopen] OFI AI smoothing 운영 override 로드 및 threshold family manifest_only 확인` (`Due: 2026-05-06`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: ScalpingLogic`)
+  - Source: [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py), [ofi_ai_smoothing.py](/home/ubuntu/KORStockScan/src/engine/ofi_ai_smoothing.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [threshold_cycle_registry.py](/home/ubuntu/KORStockScan/src/utils/threshold_cycle_registry.py), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - 판정 기준: `SCALPING_ENTRY_AI_PRICE_OFI_SKIP_DEMOTION_ENABLED=True`, `SCALPING_ENTRY_AI_PRICE_OFI_SKIP_DEMOTION_MAX_CONFIDENCE=90`, `OFI_AI_SMOOTHING_STALE_THRESHOLD_MS=700`, `OFI_AI_SMOOTHING_PERSISTENCE_REQUIRED=2`, `HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED=True`, `HOLDING_FLOW_OFI_BEARISH_CONFIRM_WORSEN_PCT=0.30`이 런타임에 로드되는지 확인한다. `entry_ai_price_ofi_skip_demoted`, `holding_flow_ofi_smoothing_applied`는 threshold registry에 적재되고, family apply mode는 `manifest_only`여야 한다.
+  - 운영 규칙: entry는 P2 raw `SKIP` confidence `80~89` 중 OFI stale/unhealthy/insufficient가 아니고 `micro_state in {neutral,bullish}`인 경우만 P1 `USE_DEFENSIVE` 경로로 demotion한다. confidence `>=90`, `stable_bearish`, stale/unhealthy/insufficient는 기존 SKIP 유지다. holding은 `holding_flow_override` 내부에서만 `EXIT + stable_bullish` debounce와 `HOLD/TRIM + stable_bearish + worsen>=0.30%p` confirm을 허용한다. hard/protect/order safety, max defer, worsen floor가 항상 우선한다.
+  - 다음 액션: env override 오염이나 registry 누락이 있으면 장중 적용을 막고 `SCALPING_ENTRY_AI_PRICE_OFI_SKIP_DEMOTION_ENABLED=False` 또는 `HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED=False`로 즉시 rollback한다. threshold-cycle 산출물은 `ThresholdOpsTransition0506` 전까지 runtime mutation에 연결하지 않는다.
+
+- [x] `[BadEntryRefinedRollback0506-Preopen] refined bad_entry canary OFF 로드 및 재승격 금지 확인` (`Due: 2026-05-06`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: ScalpingLogic`)
   - Source: [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py), [2026-05-04-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-04-stage2-todo-checklist.md)
   - 판정 기준: `SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=False`가 런타임에 로드되고, env `KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=true` 오염이 없으며, `bad_entry_refined_candidate`는 관찰/리포트 입력으로만 남고 `bad_entry_refined_exit` 실청산은 발생하지 않아야 한다.
   - why: 5/4 장후 `BadEntryRefinedCanary0504-Postclose`에서 canary-applied cohort가 `holding_flow_override` 유예와 장마감 `sell_order_failed` 반복에 섞여 원인귀속과 rollback guard를 통과하지 못했다.
   - 다음 액션: 재개하려면 기존 축 keep이 아니라 `adverse fill detector` 또는 `MAE/MFE quantile stop` 중 하나를 새 단일축 canary/workorder로 다시 열고, 같은 날 `holding_flow_override` semantics 변경과 합산하지 않는다.
+  - 실행 메모 (`2026-05-06 KST`): `PYTHONPATH=. .venv/bin/python` import 기준 `SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=False`, `SCALP_BAD_ENTRY_REFINED_OBSERVE_ENABLED=True`로 로드된다. shell env 확인 결과 `KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=true` 오염은 없었다. [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)는 canary OFF 상태에서 `bad_entry_refined_candidate` report-only 로그만 남기고 `should_exit=False`이면 `bad_entry_refined_exit` 실청산으로 내려가지 않는다.
+  - 판정: 완료. refined bad-entry는 재승격 금지 유지이며, 후속은 기존 canary keep/retry가 아니라 report-only counterfactual enrichment 또는 새 단일축 workorder로만 연다.
+  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_scale_in.py -k 'bad_entry_refined'` -> `3 passed, 123 deselected`.
 
-- [ ] `[OvernightFlowTrimSemantics0506-Preopen] 오버나이트 flow TRIM=SELL_TODAY 유지 로드 확인` (`Due: 2026-05-06`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: ScalpingLogic`)
+- [x] `[OvernightFlowTrimSemantics0506-Preopen] 오버나이트 flow TRIM=SELL_TODAY 유지 로드 확인` (`Due: 2026-05-06`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: ScalpingLogic`)
   - Source: [sniper_overnight_gatekeeper.py](/home/ubuntu/KORStockScan/src/engine/sniper_overnight_gatekeeper.py), [2026-05-04-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-04-stage2-todo-checklist.md)
   - 판정 기준: 오버나이트 `SELL_TODAY` 재검문에서 flow `HOLD`만 `HOLD_OVERNIGHT`로 승격하고, flow `TRIM`은 `overnight_flow_override_exit_confirmed(force_reason=flow_trim_unsupported)`로 원래 `SELL_TODAY`를 유지하는지 확인한다.
   - why: 5/4 `쏠리드(050890)`처럼 `TRIM/소강/음수 profit`을 전량 보유로 바꾸면 리스크 축소 라벨이 정반대로 해석된다. 부분청산 구현이 없는 v1에서는 `TRIM`을 HOLD로 승격하지 않는다.
   - 다음 액션: 부분청산을 실제로 구현하려면 `TRIM` 실주문 수량, 주문 가능 시간, 잔고/영수증 attribution, rollback guard를 별도 작업항목으로 분리한다.
+  - 실행 메모 (`2026-05-06 KST`): [sniper_overnight_gatekeeper.py](/home/ubuntu/KORStockScan/src/engine/sniper_overnight_gatekeeper.py)는 `SELL_TODAY` 재검문 후 `flow_action in {"EXIT", "TRIM"}`이면 원래 decision을 반환한다. `TRIM`은 `overnight_flow_override_exit_confirmed`와 `force_reason=flow_trim_unsupported`로 기록되고, `HOLD`만 `HOLD_OVERNIGHT`로 승격된다.
+  - 판정: 완료. 부분청산 구현 전까지 오버나이트 flow `TRIM`은 HOLD 승격이 아니라 원래 `SELL_TODAY` 유지 semantics로 고정한다.
+  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_holding_flow_override.py -k 'overnight_flow'` -> `1 passed, 9 deselected`.
 
 ## 장중 체크리스트 (09:00~15:20)
 
@@ -98,7 +110,8 @@
   - 판정 기준: KOSDAQ 되밀림 폭 `1.0%`와 KOSPI `TRAILING_START_PCT 즉시익절`을 유지/통합/분리 중 하나로 닫고, `TRAILING_DRAWDOWN_PCT`, `TRAILING_START_PCT`, 전략별 적용 범위를 문서 기준으로 명문화한다.
   - why: 코드 주석 TODO로만 남겨두면 실전 trailing 정책이 리뷰 결과와 분리되어 누락될 수 있다.
   - 5/4 anchor 보강: [2026-05-04 checklist](./2026-05-04-stage2-todo-checklist.md) `KAIWideWindowExit0504-Postclose`의 `한국항공우주(047810)` `ID 4932`는 peak `+1.45%`, trailing 체결 `+0.78%`, post-sell 20분 `close_vs_buy=+1.850%`로 스캘핑 익절 후에도 1일 이상 또는 최소 intraday wide-window 후보였는지 검토할 anchor다. 반대로 `ID 4976`은 더 높은 가격 재진입 후 `-1.16%`라, 종목 단위 swing 전환이 아니라 winner 상태 전환 조건으로만 설계한다.
-  - 다음 액션: 정책이 잠기면 주석 TODO를 제거하고 테스트/체크리스트/기준문서에 동일 용어로 반영한다. `would_extend_window`, `winner_wide_window_candidate`, `reentry_after_winner_exit`는 report-only field 후보로만 두고 live 청산 변경은 별도 단일축 canary 전까지 열지 않는다.
+  - OFI wide-window 보조축: `orderbook_micro` 기본 `ofi_z`는 60초 micro window라 스윙 전환 단독 판단에는 짧다. `3분/5분/10분` wide OFI persistence/ratio/avg 값을 `winner_wide_window_candidate`의 report-only 미시구조 보조 증거로만 사용하고, live 청산 변경이나 swing 승격 gate로 직접 쓰지 않는다.
+  - 다음 액션: 정책이 잠기면 주석 TODO를 제거하고 테스트/체크리스트/기준문서에 동일 용어로 반영한다. `would_extend_window`, `winner_wide_window_candidate`, `reentry_after_winner_exit`, `wide_ofi_persistent_bullish/bearish`는 report-only field 후보로만 두고 live 청산 변경은 별도 단일축 canary 전까지 열지 않는다.
 
 - [ ] `[CodeDebt0506] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 18:30~18:45`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
@@ -233,6 +246,7 @@
   - Source: [2026-04-30-data-driven-threshold-inventory.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-30-data-driven-threshold-inventory.md), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [backfill_threshold_cycle_events.py](/home/ubuntu/KORStockScan/src/engine/backfill_threshold_cycle_events.py), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
   - 판정 기준: 최종 안정화 후 운영전환 acceptance가 `매일 자동 실행`, `다음 장전 승인 threshold 자동 적용 + 봇 기동`, `장후 threshold version별 실적분석 제출`, `실적 결과 기반 다음 threshold weight 미세조정` 4개를 모두 포함하는지 확인한다.
   - 현재 자동화 상태: `2026-05-01`에 4월 가용 raw partition bootstrap을 완료했고, `07:35 PREOPEN apply manifest`, `16:10 POSTCLOSE collector/report` cron을 설치했다. 단 live threshold runtime mutation은 acceptance 전까지 `manifest_only`다.
+  - OFI smoothing integration: `entry_ofi_ai_smoothing`, `holding_flow_ofi_smoothing` family가 daily report와 apply plan에서 `manifest_only` 후보로만 생성되는지 확인한다. 후보 threshold는 `entry_skip_demotion_confidence_upper=90`, `ofi_stale_threshold_ms=700`, `ofi_persistence_required=2`, `holding_bearish_confirm_worsen_pct=0.30`으로 시작하고, daily + rolling 방향이 일치하고 sample floor를 만족하기 전에는 추천값을 산출하지 않는다. 산출돼도 `ThresholdOpsTransition0506` 전에는 env/code/runtime mutation을 열지 않는다.
   - `2026-05-04` 누적 리포트 해석 반영: [threshold_cycle_cumulative_2026-05-04.md](/home/ubuntu/KORStockScan/data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_2026-05-04.md)는 cumulative normal 평균 `-0.4709`, rolling_10d `-0.4911`, rolling_5d `-0.6657`로 최근 5일 손익이 더 악화됐다. `initial_only`는 cumulative `139건/-0.5692`, rolling_5d `90건/-0.7559`로 주된 음수 EV 축이며, broad threshold 완화가 아니라 진입 품질/초기 청산 민감도/체결 품질 분해 대상이다. `pyramid_activated`는 cumulative `19건/+0.2458`, rolling_10d `17건/+0.3235`로 기대값 후보지만 rolling_5d `13건/-0.0592`라 안정적 승인 근거는 아니다. `reversal_add_activated`는 표본 1건으로 결론 금지다. 이 해석은 `PyramidDynamicQty0506`, `ReversalAddDynamicQty0506`, `TrailingProtectSensitivity0506`, `StatActionWeight0506`의 입력으로만 쓰고, 5/6에도 live mutation은 열지 않는다.
   - why: threshold cycle이 수동 리포트에 머물면 데이터 기반 완화값이 실전 기대값 개선으로 연결되지 않는다. 반대로 장중 실시간 자동변경으로 가면 원인귀속과 rollback guard가 깨지므로, 자동화는 일일 배치/다음 장전 적용 단위로만 닫아야 한다.
   - 다음 액션: acceptance가 잠기면 workflow/cron 설계 항목을 분리한다. 장중 compact collector, 장후 report+weight 산정, 장전 apply+bot start, 장후 performance attribution report를 각각 재실행 가능한 wrapper로 정의한다.

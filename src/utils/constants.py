@@ -177,10 +177,18 @@ class TradingConfig:
     SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED: bool = True  # submitted 직전 Tier2 AI 가격결정 canary
     SCALPING_ENTRY_AI_PRICE_MIN_CONFIDENCE: int = 60
     SCALPING_ENTRY_AI_PRICE_SKIP_MIN_CONFIDENCE: int = 80
+    SCALPING_ENTRY_AI_PRICE_OFI_SKIP_DEMOTION_ENABLED: bool = True  # P2 저신뢰 SKIP을 OFI 완충으로 P1 방어가 demotion
+    SCALPING_ENTRY_AI_PRICE_OFI_SKIP_DEMOTION_MAX_CONFIDENCE: int = 90  # confidence >= 90 SKIP은 유지
     SCALPING_ENTRY_AI_PRICE_TICK_LIMIT: int = 20
     SCALPING_ENTRY_AI_PRICE_CANDLE_LIMIT: int = 20
     SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_ENABLED: bool = True  # P2 entry price OFI/QI feature input
     SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_BUCKET_CALIBRATION_ENABLED: bool = False  # 명시 manifest 기반 bucket threshold, 기본 OFF
+    OFI_AI_SMOOTHING_STALE_THRESHOLD_MS: int = 700
+    OFI_AI_SMOOTHING_RAW_WEIGHT: float = 0.30
+    OFI_AI_SMOOTHING_BULLISH_THRESHOLD: float = 0.45
+    OFI_AI_SMOOTHING_BEARISH_THRESHOLD: float = -0.45
+    OFI_AI_SMOOTHING_RELEASE_THRESHOLD: float = 0.15
+    OFI_AI_SMOOTHING_PERSISTENCE_REQUIRED: int = 2
     SCALPING_ENTRY_TIMEOUT_SEC: int = 90  # 스캘핑 일반 매수 미체결 취소 대기
     SCALPING_BREAKOUT_ENTRY_TIMEOUT_SEC: int = 120  # 돌파형 스캘핑 미체결 취소 대기
     SCALPING_PULLBACK_ENTRY_TIMEOUT_SEC: int = 600  # 눌림/예약형 스캘핑 미체결 취소 대기
@@ -477,6 +485,8 @@ class TradingConfig:
     HOLDING_FLOW_OVERRIDE_ENABLED: bool = True  # 운영 override: 단일 보유/청산 점수 대신 흐름 판단으로 최종 청산
     HOLDING_FLOW_OVERRIDE_WORSEN_PCT: float = 0.80  # 최초 후보 대비 추가 악화 허용폭(%p)
     HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC: int = 90  # flow HOLD/TRIM 보류 최대 시간
+    HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED: bool = True  # holding_flow_override 내부 OFI 완충 postprocessor
+    HOLDING_FLOW_OFI_BEARISH_CONFIRM_WORSEN_PCT: float = 0.30  # flow HOLD/TRIM 중 bearish 확정 최소 추가악화(%p)
     HOLDING_FLOW_REVIEW_MIN_INTERVAL_SEC: int = 30
     HOLDING_FLOW_REVIEW_MAX_INTERVAL_SEC: int = 90
     HOLDING_FLOW_REVIEW_PRICE_TRIGGER_PCT: float = 0.35
@@ -778,6 +788,12 @@ def _build_trading_rules() -> TradingConfig:
     env_entry_ai_price_enabled = _env_bool("KORSTOCKSCAN_SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED")
     env_entry_ai_price_min_confidence = _env_int("KORSTOCKSCAN_SCALPING_ENTRY_AI_PRICE_MIN_CONFIDENCE")
     env_entry_ai_price_skip_min_confidence = _env_int("KORSTOCKSCAN_SCALPING_ENTRY_AI_PRICE_SKIP_MIN_CONFIDENCE")
+    env_entry_ai_price_ofi_skip_demotion_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALPING_ENTRY_AI_PRICE_OFI_SKIP_DEMOTION_ENABLED"
+    )
+    env_entry_ai_price_ofi_skip_demotion_max_confidence = _env_int(
+        "KORSTOCKSCAN_SCALPING_ENTRY_AI_PRICE_OFI_SKIP_DEMOTION_MAX_CONFIDENCE"
+    )
     env_entry_ai_price_tick_limit = _env_int("KORSTOCKSCAN_SCALPING_ENTRY_AI_PRICE_TICK_LIMIT")
     env_entry_ai_price_candle_limit = _env_int("KORSTOCKSCAN_SCALPING_ENTRY_AI_PRICE_CANDLE_LIMIT")
     env_entry_price_orderbook_micro_enabled = _env_bool(
@@ -786,6 +802,12 @@ def _build_trading_rules() -> TradingConfig:
     env_entry_price_orderbook_micro_bucket_enabled = _env_bool(
         "KORSTOCKSCAN_SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_BUCKET_CALIBRATION_ENABLED"
     )
+    env_ofi_ai_smoothing_stale_threshold_ms = _env_int("KORSTOCKSCAN_OFI_AI_SMOOTHING_STALE_THRESHOLD_MS")
+    env_ofi_ai_smoothing_raw_weight = _env_float("KORSTOCKSCAN_OFI_AI_SMOOTHING_RAW_WEIGHT")
+    env_ofi_ai_smoothing_bullish_threshold = _env_float("KORSTOCKSCAN_OFI_AI_SMOOTHING_BULLISH_THRESHOLD")
+    env_ofi_ai_smoothing_bearish_threshold = _env_float("KORSTOCKSCAN_OFI_AI_SMOOTHING_BEARISH_THRESHOLD")
+    env_ofi_ai_smoothing_release_threshold = _env_float("KORSTOCKSCAN_OFI_AI_SMOOTHING_RELEASE_THRESHOLD")
+    env_ofi_ai_smoothing_persistence_required = _env_int("KORSTOCKSCAN_OFI_AI_SMOOTHING_PERSISTENCE_REQUIRED")
     env_scalping_entry_timeout = _env_int("KORSTOCKSCAN_SCALPING_ENTRY_TIMEOUT_SEC")
     env_scalping_breakout_entry_timeout = _env_int("KORSTOCKSCAN_SCALPING_BREAKOUT_ENTRY_TIMEOUT_SEC")
     env_scalping_pullback_entry_timeout = _env_int("KORSTOCKSCAN_SCALPING_PULLBACK_ENTRY_TIMEOUT_SEC")
@@ -827,10 +849,18 @@ def _build_trading_rules() -> TradingConfig:
         or env_entry_ai_price_enabled is not None
         or env_entry_ai_price_min_confidence is not None
         or env_entry_ai_price_skip_min_confidence is not None
+        or env_entry_ai_price_ofi_skip_demotion_enabled is not None
+        or env_entry_ai_price_ofi_skip_demotion_max_confidence is not None
         or env_entry_ai_price_tick_limit is not None
         or env_entry_ai_price_candle_limit is not None
         or env_entry_price_orderbook_micro_enabled is not None
         or env_entry_price_orderbook_micro_bucket_enabled is not None
+        or env_ofi_ai_smoothing_stale_threshold_ms is not None
+        or env_ofi_ai_smoothing_raw_weight is not None
+        or env_ofi_ai_smoothing_bullish_threshold is not None
+        or env_ofi_ai_smoothing_bearish_threshold is not None
+        or env_ofi_ai_smoothing_release_threshold is not None
+        or env_ofi_ai_smoothing_persistence_required is not None
         or env_scalping_entry_timeout is not None
         or env_scalping_breakout_entry_timeout is not None
         or env_scalping_pullback_entry_timeout is not None
@@ -908,6 +938,12 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_ENTRY_AI_PRICE_SKIP_MIN_CONFIDENCE=env_entry_ai_price_skip_min_confidence
             if env_entry_ai_price_skip_min_confidence is not None
             else config.SCALPING_ENTRY_AI_PRICE_SKIP_MIN_CONFIDENCE,
+            SCALPING_ENTRY_AI_PRICE_OFI_SKIP_DEMOTION_ENABLED=env_entry_ai_price_ofi_skip_demotion_enabled
+            if env_entry_ai_price_ofi_skip_demotion_enabled is not None
+            else config.SCALPING_ENTRY_AI_PRICE_OFI_SKIP_DEMOTION_ENABLED,
+            SCALPING_ENTRY_AI_PRICE_OFI_SKIP_DEMOTION_MAX_CONFIDENCE=env_entry_ai_price_ofi_skip_demotion_max_confidence
+            if env_entry_ai_price_ofi_skip_demotion_max_confidence is not None
+            else config.SCALPING_ENTRY_AI_PRICE_OFI_SKIP_DEMOTION_MAX_CONFIDENCE,
             SCALPING_ENTRY_AI_PRICE_TICK_LIMIT=env_entry_ai_price_tick_limit
             if env_entry_ai_price_tick_limit is not None
             else config.SCALPING_ENTRY_AI_PRICE_TICK_LIMIT,
@@ -920,6 +956,24 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_BUCKET_CALIBRATION_ENABLED=env_entry_price_orderbook_micro_bucket_enabled
             if env_entry_price_orderbook_micro_bucket_enabled is not None
             else config.SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_BUCKET_CALIBRATION_ENABLED,
+            OFI_AI_SMOOTHING_STALE_THRESHOLD_MS=env_ofi_ai_smoothing_stale_threshold_ms
+            if env_ofi_ai_smoothing_stale_threshold_ms is not None
+            else config.OFI_AI_SMOOTHING_STALE_THRESHOLD_MS,
+            OFI_AI_SMOOTHING_RAW_WEIGHT=env_ofi_ai_smoothing_raw_weight
+            if env_ofi_ai_smoothing_raw_weight is not None
+            else config.OFI_AI_SMOOTHING_RAW_WEIGHT,
+            OFI_AI_SMOOTHING_BULLISH_THRESHOLD=env_ofi_ai_smoothing_bullish_threshold
+            if env_ofi_ai_smoothing_bullish_threshold is not None
+            else config.OFI_AI_SMOOTHING_BULLISH_THRESHOLD,
+            OFI_AI_SMOOTHING_BEARISH_THRESHOLD=env_ofi_ai_smoothing_bearish_threshold
+            if env_ofi_ai_smoothing_bearish_threshold is not None
+            else config.OFI_AI_SMOOTHING_BEARISH_THRESHOLD,
+            OFI_AI_SMOOTHING_RELEASE_THRESHOLD=env_ofi_ai_smoothing_release_threshold
+            if env_ofi_ai_smoothing_release_threshold is not None
+            else config.OFI_AI_SMOOTHING_RELEASE_THRESHOLD,
+            OFI_AI_SMOOTHING_PERSISTENCE_REQUIRED=env_ofi_ai_smoothing_persistence_required
+            if env_ofi_ai_smoothing_persistence_required is not None
+            else config.OFI_AI_SMOOTHING_PERSISTENCE_REQUIRED,
             SCALPING_ENTRY_TIMEOUT_SEC=env_scalping_entry_timeout
             if env_scalping_entry_timeout is not None
             else config.SCALPING_ENTRY_TIMEOUT_SEC,
@@ -1034,7 +1088,6 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_ENABLE_PYRAMID=env_scalping_enable_pyramid
             if env_scalping_enable_pyramid is not None
             else config.SCALPING_ENABLE_PYRAMID,
-            SCALPING_MAX_AVG_DOWN_COUNT=env_scalping_max_avg_down_count
             if env_scalping_max_avg_down_count is not None
             else config.SCALPING_MAX_AVG_DOWN_COUNT,
             SCALPING_MAX_PYRAMID_COUNT=env_scalping_max_pyramid_count
@@ -1124,6 +1177,10 @@ def _build_trading_rules() -> TradingConfig:
     env_holding_flow_override_enabled = _env_bool("KORSTOCKSCAN_HOLDING_FLOW_OVERRIDE_ENABLED")
     env_holding_flow_worsen = _env_float("KORSTOCKSCAN_HOLDING_FLOW_OVERRIDE_WORSEN_PCT")
     env_holding_flow_max_defer = _env_int("KORSTOCKSCAN_HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC")
+    env_holding_flow_ofi_smoothing_enabled = _env_bool("KORSTOCKSCAN_HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED")
+    env_holding_flow_ofi_bearish_confirm_worsen = _env_float(
+        "KORSTOCKSCAN_HOLDING_FLOW_OFI_BEARISH_CONFIRM_WORSEN_PCT"
+    )
     env_holding_flow_min_interval = _env_int("KORSTOCKSCAN_HOLDING_FLOW_REVIEW_MIN_INTERVAL_SEC")
     env_holding_flow_max_interval = _env_int("KORSTOCKSCAN_HOLDING_FLOW_REVIEW_MAX_INTERVAL_SEC")
     env_holding_flow_price_trigger = _env_float("KORSTOCKSCAN_HOLDING_FLOW_REVIEW_PRICE_TRIGGER_PCT")
@@ -1134,6 +1191,8 @@ def _build_trading_rules() -> TradingConfig:
         env_holding_flow_override_enabled is not None
         or env_holding_flow_worsen is not None
         or env_holding_flow_max_defer is not None
+        or env_holding_flow_ofi_smoothing_enabled is not None
+        or env_holding_flow_ofi_bearish_confirm_worsen is not None
         or env_holding_flow_min_interval is not None
         or env_holding_flow_max_interval is not None
         or env_holding_flow_price_trigger is not None
@@ -1152,6 +1211,12 @@ def _build_trading_rules() -> TradingConfig:
             HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC=env_holding_flow_max_defer
             if env_holding_flow_max_defer is not None
             else config.HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC,
+            HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED=env_holding_flow_ofi_smoothing_enabled
+            if env_holding_flow_ofi_smoothing_enabled is not None
+            else config.HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED,
+            HOLDING_FLOW_OFI_BEARISH_CONFIRM_WORSEN_PCT=env_holding_flow_ofi_bearish_confirm_worsen
+            if env_holding_flow_ofi_bearish_confirm_worsen is not None
+            else config.HOLDING_FLOW_OFI_BEARISH_CONFIRM_WORSEN_PCT,
             HOLDING_FLOW_REVIEW_MIN_INTERVAL_SEC=env_holding_flow_min_interval
             if env_holding_flow_min_interval is not None
             else config.HOLDING_FLOW_REVIEW_MIN_INTERVAL_SEC,

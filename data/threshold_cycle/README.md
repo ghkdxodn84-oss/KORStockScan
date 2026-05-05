@@ -67,6 +67,19 @@ report 기반 자동화의 전체 추적성은 [report-based-automation-traceabi
 
 런타임 override 키는 각각 `KORSTOCKSCAN_` prefix를 붙인 동일 이름이다. 단, 현재 apply mode는 `manifest_only`이므로 threshold-cycle은 장후 추천값과 다음 장전 apply plan만 생성하고, 봇 runtime 값을 자동 변경하지 않는다. live 반영은 별도 workorder, sample floor, rollback guard, env/code 반영, restart 절차가 닫힌 경우에만 허용한다.
 
+## OFI AI smoothing threshold family
+
+`entry_ofi_ai_smoothing` family는 `entry_ai_price_ofi_skip_demoted` stage를 중심으로 P2 raw `SKIP` demotion 표본을 수집한다. `holding_flow_ofi_smoothing` family는 `holding_flow_ofi_smoothing_applied`와 `holding_flow_override_force_exit` stage를 수집해 flow 내부 OFI debounce/confirm 및 force-exit 우선권을 분리한다.
+
+관리 대상 후보값:
+
+- `SCALPING_ENTRY_AI_PRICE_OFI_SKIP_DEMOTION_MAX_CONFIDENCE`
+- `OFI_AI_SMOOTHING_STALE_THRESHOLD_MS`
+- `OFI_AI_SMOOTHING_PERSISTENCE_REQUIRED`
+- `HOLDING_FLOW_OFI_BEARISH_CONFIRM_WORSEN_PCT`
+
+두 family 모두 현재 apply mode는 `manifest_only`다. daily + rolling 방향이 일치하고 family별 sample floor를 만족해도 `ThresholdOpsTransition0506` 전에는 threshold-cycle 산출물이 env/code/runtime 값을 자동 변경하지 않는다. `SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_BUCKET_CALIBRATION_ENABLED`는 기존대로 기본 OFF이며, ON 전환은 별도 workorder, manifest id/version, sample floor, fallback 급증 guard가 필요하다.
+
 ## 운영 판정 기준
 
 1. `threshold_events`와 family partition은 canonical raw/compact data다. 사람이 읽는 판정은 `data/report/README.md`의 Markdown 생성 기준을 따른다.

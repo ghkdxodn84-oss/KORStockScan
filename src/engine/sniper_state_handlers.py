@@ -54,6 +54,17 @@ from src.engine.sniper_position_tags import (
     normalize_strategy,
 )
 from src.engine.ai_engine import SCALPING_BUY_RECOVERY_CANARY_PROMPT
+from src.engine.ofi_ai_smoothing import (
+    NEUTRAL as OFI_NEUTRAL,
+    STABLE_BEARISH as OFI_STABLE_BEARISH,
+    STABLE_BULLISH as OFI_STABLE_BULLISH,
+    OfiSmoothingConfig,
+    OfiSmoothingState,
+    entry_skip_demotion_allowed,
+    evaluate_ofi_smoothing,
+    ofi_smoothing_log_fields,
+)
+from src.trading.entry.orderbook_stability_observer import ORDERBOOK_STABILITY_OBSERVER
 from src.trading.order.tick_utils import clamp_price_to_tick
 
 
@@ -2121,7 +2132,105 @@ def _build_orderbook_micro_log_fields(micro):
     ):
         value = micro.get(key)
         fields[f"orderbook_micro_{key}"] = "-" if value is None else value
+    for key, value in micro.items():
+        if not str(key).startswith("wide_") or key == "wide_windows":
+            continue
+        fields[f"orderbook_micro_{key}"] = "-" if value is None else value
     return fields
+
+
+def _ofi_ai_smoothing_config() -> OfiSmoothingConfig:
+    return OfiSmoothingConfig(
+        raw_weight=_rule_float("OFI_AI_SMOOTHING_RAW_WEIGHT", 0.30),
+        bullish_threshold=_rule_float("OFI_AI_SMOOTHING_BULLISH_THRESHOLD", 0.45),
+        bearish_threshold=_rule_float("OFI_AI_SMOOTHING_BEARISH_THRESHOLD", -0.45),
+        release_threshold=_rule_float("OFI_AI_SMOOTHING_RELEASE_THRESHOLD", 0.15),
+        persistence_required=max(1, _rule_int("OFI_AI_SMOOTHING_PERSISTENCE_REQUIRED", 2)),
+        stale_threshold_ms=max(1, _rule_int("OFI_AI_SMOOTHING_STALE_THRESHOLD_MS", 700)),
+    )
+
+
+def _load_holding_flow_ofi_state(stock: dict) -> OfiSmoothingState:
+    return OfiSmoothingState(
+        micro_score_raw=_safe_float(stock.get("holding_flow_ofi_micro_score_raw"), None),
+        micro_score_smooth=_safe_float(stock.get("holding_flow_ofi_micro_score_smooth"), 0.0),
+        regime=str(stock.get("holding_flow_ofi_regime") or OFI_NEUTRAL),
+        bullish_count=_safe_int(stock.get("holding_flow_ofi_bullish_count"), 0),
+        bearish_count=_safe_int(stock.get("holding_flow_ofi_bearish_count"), 0),
+        snapshot_age_ms=_safe_float(stock.get("holding_flow_ofi_snapshot_age_ms"), None),
+        reason=str(stock.get("holding_flow_ofi_reason") or "ready"),
+    )
+
+
+def _store_holding_flow_ofi_state(stock: dict, state: OfiSmoothingState) -> None:
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "holding_flow_ofi_micro_score_raw": state.micro_score_raw,
+            "holding_flow_ofi_micro_score_smooth": state.micro_score_smooth,
+            "holding_flow_ofi_regime": state.regime,
+            "holding_flow_ofi_bullish_count": state.bullish_count,
+            "holding_flow_ofi_bearish_count": state.bearish_count,
+            "holding_flow_ofi_snapshot_age_ms": state.snapshot_age_ms,
+            "holding_flow_ofi_reason": state.reason,
+        },
+    )
+
+
+def _evaluate_entry_skip_ofi_smoothing(orderbook_micro: dict | None) -> OfiSmoothingState:
+    return evaluate_ofi_smoothing(orderbook_micro, config=_ofi_ai_smoothing_config())
+
+
+def _should_demote_entry_ai_price_skip(confidence: int, orderbook_micro: dict | None) -> tuple[bool, OfiSmoothingState]:
+    state = _evaluate_entry_skip_ofi_smoothing(orderbook_micro)
+    if not _rule_bool("SCALPING_ENTRY_AI_PRICE_OFI_SKIP_DEMOTION_ENABLED", True):
+        return False, state
+    max_confidence = _rule_int("SCALPING_ENTRY_AI_PRICE_OFI_SKIP_DEMOTION_MAX_CONFIDENCE", 90)
+    if int(confidence or 0) >= max_confidence:
+        return False, state
+    return entry_skip_demotion_allowed(orderbook_micro, state), state
+
+
+def _build_live_orderbook_micro_context(code: str, *, curr_price: int) -> dict | None:
+    try:
+        snapshot = ORDERBOOK_STABILITY_OBSERVER.snapshot(code)
+    except Exception:
+        return None
+    if not isinstance(snapshot, dict):
+        return None
+    micro = snapshot.get("orderbook_micro")
+    if not isinstance(micro, dict):
+        return None
+    context = dict(micro)
+    best_bid = _coerce_int_value(snapshot.get("best_bid"))
+    best_ask = _coerce_int_value(snapshot.get("best_ask"))
+    tick_size = 1
+    try:
+        tick_size = int(kiwoom_utils.get_tick_size(_coerce_int_value(curr_price) or best_bid) or 1)
+    except Exception:
+        tick_size = 1
+    if best_ask > 0 and best_bid > 0 and tick_size > 0:
+        context["spread_ticks"] = max(0, int(round((best_ask - best_bid) / tick_size)))
+    else:
+        context.setdefault("spread_ticks", 0)
+    context.setdefault("captured_at_ms", snapshot.get("captured_at_ms"))
+    context.setdefault("snapshot_age_ms", snapshot.get("snapshot_age_ms"))
+    context.setdefault("observer_healthy", snapshot.get("observer_healthy"))
+    context.setdefault("observer_missing_reason", snapshot.get("observer_missing_reason"))
+    context.setdefault("observer_last_quote_age_ms", snapshot.get("observer_last_quote_age_ms"))
+    context.setdefault("observer_last_trade_age_ms", snapshot.get("observer_last_trade_age_ms"))
+    return context
+
+
+def _evaluate_holding_flow_ofi_state(stock: dict, code: str, *, curr_price: int) -> tuple[dict | None, OfiSmoothingState]:
+    micro = _build_live_orderbook_micro_context(code, curr_price=curr_price)
+    state = evaluate_ofi_smoothing(
+        micro,
+        previous=_load_holding_flow_ofi_state(stock),
+        config=_ofi_ai_smoothing_config(),
+    )
+    _store_holding_flow_ofi_state(stock, state)
+    return micro, state
 
 
 def _build_entry_ai_price_skip_policy_fields(orderbook_micro):
@@ -2315,6 +2424,32 @@ def _apply_entry_ai_price_canary(
         latency_gate["ai_entry_price_canary_reason"] = reason
         orderbook_micro = price_ctx.get("orderbook_micro") if isinstance(price_ctx, dict) else {}
         skip_policy_fields = _build_entry_ai_price_skip_policy_fields(orderbook_micro)
+        demote_skip, ofi_state = _should_demote_entry_ai_price_skip(confidence, orderbook_micro)
+        ofi_log_fields = ofi_smoothing_log_fields(ofi_state, prefix="entry_ai_price_ofi")
+        if demote_skip:
+            latency_gate["ai_entry_price_canary_raw_action"] = "SKIP"
+            latency_gate["ai_entry_price_canary_action"] = "USE_DEFENSIVE"
+            latency_gate["ai_entry_price_canary_final_action"] = "USE_DEFENSIVE"
+            latency_gate["ai_entry_price_canary_confidence"] = confidence
+            latency_gate["ai_entry_price_canary_reason"] = reason
+            latency_gate["ai_entry_price_ofi_skip_demoted"] = True
+            latency_gate["price_resolution_reason"] = "ai_tier2_skip_demoted_to_p1"
+            latency_gate["ai_entry_price_canary_applied"] = True
+            _log_entry_pipeline(
+                stock,
+                code,
+                "entry_ai_price_ofi_skip_demoted",
+                action="SKIP",
+                raw_action="SKIP",
+                final_action="USE_DEFENSIVE",
+                confidence=confidence,
+                reason=reason[:160],
+                demotion_path="P1_USE_DEFENSIVE",
+                **skip_policy_fields,
+                **ofi_log_fields,
+                **micro_log_fields,
+            )
+            return planned_orders, True
         _mutate_stock_state(
             stock,
             set_fields={
@@ -2334,7 +2469,12 @@ def _apply_entry_ai_price_canary(
         )
         _log_entry_pipeline(
             stock, code, "entry_ai_price_canary_skip_order",
-            action=action, confidence=confidence, reason=reason[:160], **skip_policy_fields, **micro_log_fields,
+            action=action,
+            confidence=confidence,
+            reason=reason[:160],
+            **skip_policy_fields,
+            **ofi_log_fields,
+            **micro_log_fields,
         )
         return [], True
 
@@ -2750,6 +2890,40 @@ def _evaluate_holding_flow_override(
         and review_elapsed_sec < max_review_sec
         and (review_elapsed_sec < min_review_sec or profit_move_since_review < price_trigger_pct)
     ):
+        if _rule_bool("HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED", True):
+            orderbook_micro, ofi_state = _evaluate_holding_flow_ofi_state(stock, code, curr_price=curr_price)
+            bearish_confirm_worsen_pct = max(
+                0.0,
+                _rule_float("HOLDING_FLOW_OFI_BEARISH_CONFIRM_WORSEN_PCT", 0.30),
+            )
+            if ofi_state.regime == OFI_STABLE_BEARISH and worsen_from_candidate + 1e-9 >= bearish_confirm_worsen_pct:
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "holding_flow_ofi_smoothing_applied",
+                    smoothing_action="CONFIRM_EXIT",
+                    exit_rule=exit_rule,
+                    raw_flow_action=last_review_action,
+                    final_flow_action="EXIT",
+                    source="review_interval_reuse",
+                    profit_rate=f"{profit_rate:+.2f}",
+                    candidate_profit=f"{candidate_profit:+.2f}",
+                    worsen_from_candidate=f"{worsen_from_candidate:.2f}",
+                    bearish_confirm_worsen_pct=f"{bearish_confirm_worsen_pct:.2f}",
+                    **ofi_smoothing_log_fields(ofi_state, prefix="holding_flow_ofi"),
+                    **_build_orderbook_micro_log_fields(orderbook_micro),
+                )
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "holding_flow_override_exit_confirmed",
+                    exit_rule=exit_rule,
+                    flow_state=stock.get("holding_flow_override_last_flow_state", "-"),
+                    flow_score=_safe_int(stock.get("holding_flow_override_last_score"), 0),
+                    profit_rate=f"{profit_rate:+.2f}",
+                    confirm_reason="ofi_stable_bearish_interval",
+                )
+                return True
         _log_holding_pipeline(
             stock,
             code,
@@ -2905,6 +3079,103 @@ def _evaluate_holding_flow_override(
             profit_rate=f"{profit_rate:+.2f}",
         )
         return True
+    orderbook_micro = None
+    ofi_state = None
+    if _rule_bool("HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED", True):
+        orderbook_micro, ofi_state = _evaluate_holding_flow_ofi_state(stock, code, curr_price=curr_price)
+        ofi_log_fields = ofi_smoothing_log_fields(ofi_state, prefix="holding_flow_ofi")
+        micro_log_fields = _build_orderbook_micro_log_fields(orderbook_micro)
+        bearish_confirm_worsen_pct = max(
+            0.0,
+            _rule_float("HOLDING_FLOW_OFI_BEARISH_CONFIRM_WORSEN_PCT", 0.30),
+        )
+        if flow_action == "EXIT" and ofi_state.regime == OFI_STABLE_BULLISH:
+            _log_holding_pipeline(
+                stock,
+                code,
+                "holding_flow_ofi_smoothing_applied",
+                smoothing_action="DEBOUNCE_EXIT",
+                exit_rule=exit_rule,
+                raw_flow_action="EXIT",
+                final_flow_action="HOLD",
+                source="holding_flow_review",
+                profit_rate=f"{profit_rate:+.2f}",
+                candidate_profit=f"{candidate_profit:+.2f}",
+                worsen_from_candidate=f"{worsen_from_candidate:.2f}",
+                max_defer_sec=max_defer_sec,
+                worsen_pct=f"{worsen_pct:.2f}",
+                **ofi_log_fields,
+                **micro_log_fields,
+            )
+            _log_holding_pipeline(
+                stock,
+                code,
+                "holding_flow_override_defer_exit",
+                exit_rule=exit_rule,
+                original_sell_reason_type=sell_reason_type,
+                flow_action="EXIT",
+                flow_state=flow_result.get("flow_state", "-"),
+                flow_score=_safe_int(flow_result.get("score"), 0),
+                flow_reason=flow_result.get("reason", "-"),
+                flow_evidence=_flow_evidence_text(flow_result),
+                profit_rate=f"{profit_rate:+.2f}",
+                candidate_profit=f"{candidate_profit:+.2f}",
+                worsen_pct=f"{worsen_pct:.2f}",
+                elapsed_sec=elapsed_sec,
+                defer_reason="ofi_stable_bullish_debounce",
+            )
+            _emit_stat_action_decision_snapshot(
+                stock=stock,
+                code=code,
+                strategy=strategy,
+                ws_data=ws_data,
+                chosen_action="hold_wait",
+                eligible_actions=["hold_wait", "exit_now"],
+                rejected_actions=["exit_now:ofi_stable_bullish_debounce"],
+                profit_rate=profit_rate,
+                peak_profit=peak_profit,
+                current_ai_score=current_ai_score,
+                held_sec=held_sec,
+                curr_price=curr_price,
+                buy_price=buy_price,
+                exit_rule=exit_rule or "-",
+                sell_reason_type=sell_reason_type or "-",
+                reason=f"holding_flow_ofi_smoothing:{flow_result.get('reason', '-')}",
+                force=True,
+            )
+            return False
+        if (
+            flow_action in {"HOLD", "TRIM"}
+            and ofi_state.regime == OFI_STABLE_BEARISH
+            and worsen_from_candidate + 1e-9 >= bearish_confirm_worsen_pct
+        ):
+            _log_holding_pipeline(
+                stock,
+                code,
+                "holding_flow_ofi_smoothing_applied",
+                smoothing_action="CONFIRM_EXIT",
+                exit_rule=exit_rule,
+                raw_flow_action=flow_action,
+                final_flow_action="EXIT",
+                source="holding_flow_review",
+                profit_rate=f"{profit_rate:+.2f}",
+                candidate_profit=f"{candidate_profit:+.2f}",
+                worsen_from_candidate=f"{worsen_from_candidate:.2f}",
+                bearish_confirm_worsen_pct=f"{bearish_confirm_worsen_pct:.2f}",
+                **ofi_log_fields,
+                **micro_log_fields,
+            )
+            _log_holding_pipeline(
+                stock,
+                code,
+                "holding_flow_override_exit_confirmed",
+                exit_rule=exit_rule,
+                flow_state=flow_result.get("flow_state", "-"),
+                flow_score=_safe_int(flow_result.get("score"), 0),
+                profit_rate=f"{profit_rate:+.2f}",
+                confirm_reason="ofi_stable_bearish",
+            )
+            return True
     if flow_action == "EXIT":
         _log_holding_pipeline(
             stock,

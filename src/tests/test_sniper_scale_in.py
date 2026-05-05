@@ -2047,6 +2047,79 @@ def test_entry_ai_price_skip_logs_non_bearish_policy_warning(monkeypatch):
     assert skip_log["entry_ai_price_skip_policy_basis"] == "neutral"
 
 
+def test_entry_ai_price_low_confidence_skip_demotes_to_p1_when_ofi_not_bearish(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED=True,
+            SCALPING_ENTRY_AI_PRICE_MIN_CONFIDENCE=60,
+            SCALPING_ENTRY_AI_PRICE_SKIP_MIN_CONFIDENCE=80,
+            SCALPING_ENTRY_AI_PRICE_OFI_SKIP_DEMOTION_ENABLED=True,
+            SCALPING_ENTRY_AI_PRICE_OFI_SKIP_DEMOTION_MAX_CONFIDENCE=90,
+            SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_ENABLED=True,
+        ),
+    )
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [{"price": 10020}])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [{"close": 10020}])
+    logs = []
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+
+    class DummyAI:
+        def evaluate_scalping_entry_price(self, *args, **kwargs):
+            return {
+                "action": "SKIP",
+                "order_price": 0,
+                "confidence": 85,
+                "reason": "저신뢰 skip",
+                "max_wait_sec": 90,
+                "ai_parse_ok": True,
+                "ai_parse_fail": False,
+            }
+
+    planned_orders = [{"tag": "normal", "qty": 1, "price": 9990, "tif": "DAY", "order_type": "LIMIT"}]
+    latency_gate = {
+        "target_buy_price": 9980,
+        "latency_guarded_order_price": 9990,
+        "normal_defensive_order_price": 9990,
+        "order_price": 9990,
+        "latency_state": "SAFE",
+        "orderbook_stability": {
+            "orderbook_micro": {
+                "ready": True,
+                "observer_healthy": True,
+                "snapshot_age_ms": 100,
+                "micro_state": "neutral",
+                "sample_quote_count": 24,
+                "ofi_z": 0.1,
+                "qi_ewma": 0.51,
+            }
+        },
+    }
+
+    adjusted, touched = state_handlers._apply_entry_ai_price_canary(
+        stock={"name": "TEST", "strategy": "SCALPING", "position_tag": "SCANNER", "prob": 0.8},
+        code="123456",
+        strategy="SCALPING",
+        ws_data={"curr": 10020},
+        ai_engine=DummyAI(),
+        latency_gate=latency_gate,
+        planned_orders=planned_orders,
+        curr_price=10020,
+        best_bid=10020,
+        best_ask=10030,
+    )
+
+    assert touched is True
+    assert adjusted == planned_orders
+    assert latency_gate["ai_entry_price_canary_raw_action"] == "SKIP"
+    assert latency_gate["ai_entry_price_canary_final_action"] == "USE_DEFENSIVE"
+    assert latency_gate["price_resolution_reason"] == "ai_tier2_skip_demoted_to_p1"
+    assert any(stage == "entry_ai_price_ofi_skip_demoted" for stage, _ in logs)
+    assert not any(stage == "entry_ai_price_canary_skip_order" for stage, _ in logs)
+
+
 def test_entry_ai_price_skip_followup_logs_mfe_mae(monkeypatch):
     logs = []
     monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))

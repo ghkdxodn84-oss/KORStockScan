@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from src.engine import ai_engine as ai_engine_module
 from src.engine import ai_engine_deepseek as ai_engine_deepseek_module
-from src.engine.ai_engine import GeminiSniperEngine, GEMINI_RESPONSE_SCHEMA_REGISTRY
+from src.engine.ai_engine import GeminiSniperEngine, GEMINI_RESPONSE_SCHEMA_REGISTRY, SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
 from src.engine.ai_engine_deepseek import DeepSeekSniperEngine
 
 
@@ -210,7 +210,9 @@ def test_deepseek_holding_flow_normalizes_payload_and_caps_review_window(monkeyp
     engine = _build_deepseek_call_engine()
 
     def _fake_call(prompt, user_input, **kwargs):
+        assert "직전 action을 뒤집으려면" in prompt
         assert "단일 score cutoff로 자르지 말고" in user_input
+        assert "reason=매수 흡수 유지" in user_input
         return {
             "action": "HOLD",
             "score": "23",
@@ -234,10 +236,20 @@ def test_deepseek_holding_flow_normalizes_payload_and_caps_review_window(monkeyp
             {"close": 10000, "high": 10040, "low": 9950, "volume": 1200},
         ],
         {"profit_rate": -0.3, "peak_profit": 0.4, "held_sec": 75, "current_ai_score": 31, "worsen_pct": 0.8},
-        flow_history=[{"time": "10:00:00", "action": "HOLD", "flow_state": "흡수", "profit_rate": "+0.10", "exit_rule": "soft"}],
+        flow_history=[
+            {
+                "time": "10:00:00",
+                "action": "HOLD",
+                "flow_state": "흡수",
+                "profit_rate": "+0.10",
+                "exit_rule": "soft",
+                "reason": "매수 흡수 유지",
+            }
+        ],
         decision_kind="intraday_exit",
     )
 
+    assert "시스템 guard" in SCALPING_HOLDING_FLOW_SYSTEM_PROMPT
     assert result["action"] == "HOLD"
     assert result["score"] == 23
     assert result["evidence"] == ["틱 매수 우위"]

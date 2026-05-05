@@ -227,6 +227,99 @@ def test_statistical_action_weight_report_buckets_completed_rows():
     assert family["recommended"]["data_completeness"]["volume_known"] == 5
 
 
+def test_ofi_ai_smoothing_families_generate_manifest_only_candidates():
+    pipeline_rows = []
+    for record_id in range(1, 7):
+        pipeline_rows.append(
+            {
+                "stage": "entry_ai_price_ofi_skip_demoted",
+                "record_id": record_id,
+                "fields": {
+                    "orderbook_micro_state": "neutral",
+                    "entry_ai_price_ofi_regime": "neutral",
+                    "orderbook_micro_snapshot_age_ms": "120",
+                },
+            }
+        )
+        pipeline_rows.append({"stage": "order_bundle_submitted", "record_id": record_id, "fields": {}})
+        pipeline_rows.append({"stage": "sell_completed", "record_id": record_id, "fields": {"profit_rate": "0.20"}})
+    pipeline_rows.extend(
+        {
+            "stage": "entry_ai_price_canary_skip_order",
+            "fields": {
+                "orderbook_micro_state": "bearish",
+                "orderbook_micro_snapshot_age_ms": "130",
+            },
+        }
+        for _ in range(15)
+    )
+    pipeline_rows.extend(
+        {
+            "stage": "entry_ai_price_canary_skip_followup",
+            "fields": {"mfe_bps": "20", "mae_bps": "-10"},
+        }
+        for _ in range(3)
+    )
+    for record_id in range(101, 107):
+        pipeline_rows.append(
+            {
+                "stage": "holding_flow_ofi_smoothing_applied",
+                "record_id": record_id,
+                "fields": {
+                    "smoothing_action": "DEBOUNCE_EXIT",
+                    "holding_flow_ofi_regime": "stable_bullish",
+                    "orderbook_micro_state": "bullish",
+                    "worsen_from_candidate": "0.10",
+                },
+            }
+        )
+        pipeline_rows.append({"stage": "sell_completed", "record_id": record_id, "fields": {"profit_rate": "0.30"}})
+    for record_id in range(201, 216):
+        pipeline_rows.append(
+            {
+                "stage": "holding_flow_ofi_smoothing_applied",
+                "record_id": record_id,
+                "fields": {
+                    "smoothing_action": "CONFIRM_EXIT",
+                    "holding_flow_ofi_regime": "stable_bearish",
+                    "orderbook_micro_state": "bearish",
+                    "worsen_from_candidate": "0.34",
+                },
+            }
+        )
+    pipeline_rows.append({"stage": "holding_flow_override_force_exit", "fields": {"force_reason": "worsen_floor"}})
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-04-30",
+        pipeline_loader=lambda target_date: pipeline_rows,
+        completed_rows_loader=lambda start_date, end_date: [],
+        skip_completed_rows=True,
+    )
+
+    entry_family = report["threshold_snapshot"]["entry_ofi_ai_smoothing"]
+    assert entry_family["apply_ready"] is True
+    assert entry_family["apply_mode"] == "manifest_only"
+    assert entry_family["sample"]["demoted"] == 6
+    assert entry_family["sample"]["demoted_submitted"] == 6
+    assert entry_family["sample"]["demoted_completed"] == 6
+    assert entry_family["recommended"]["entry_skip_demotion_confidence_upper"] == 90
+
+    holding_family = report["threshold_snapshot"]["holding_flow_ofi_smoothing"]
+    assert holding_family["apply_ready"] is True
+    assert holding_family["apply_mode"] == "manifest_only"
+    assert holding_family["sample"]["exit_debounce"] == 6
+    assert holding_family["sample"]["bearish_confirm"] == 15
+    assert holding_family["sample"]["force_exit_priority"] == 1
+    assert holding_family["recommended"]["holding_bearish_confirm_worsen_pct"] == 0.3
+
+    manifest_families = {
+        item["family"]
+        for item in report["apply_candidate_list"]
+        if item["owner_rule"] == "manifest_only_no_runtime_mutation"
+    }
+    assert {"entry_ofi_ai_smoothing", "holding_flow_ofi_smoothing"} <= manifest_families
+
+
 def test_build_daily_threshold_cycle_report_keeps_unready_family_observe_only():
     report = report_mod.build_daily_threshold_cycle_report(
         "2026-04-30",

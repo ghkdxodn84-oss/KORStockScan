@@ -121,6 +121,99 @@ def test_bad_entry_candidate_with_flow_exit_allows_sell(monkeypatch):
     assert any(stage == "holding_flow_override_exit_confirmed" for stage, _ in logs)
 
 
+def test_flow_exit_is_debounced_by_stable_bullish_ofi(monkeypatch):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    monkeypatch.setattr(
+        handlers,
+        "_evaluate_holding_flow_ofi_state",
+        lambda stock, code, *, curr_price: (
+            {"ready": True, "micro_state": "bullish", "observer_healthy": True, "snapshot_age_ms": 100},
+            handlers.OfiSmoothingState(regime=handlers.OFI_STABLE_BULLISH, micro_score_smooth=0.62),
+        ),
+    )
+    ai = DummyFlowAI("EXIT")
+
+    proceed = handlers._evaluate_holding_flow_override(
+        stock=_stock(),
+        code="005930",
+        strategy="SCALPING",
+        ws_data=_ws(),
+        ai_engine=ai,
+        exit_rule="scalp_soft_stop_pct",
+        sell_reason_type="LOSS",
+        reason="soft stop",
+        profit_rate=-1.10,
+        peak_profit=0.00,
+        drawdown=1.10,
+        current_ai_score=25,
+        held_sec=80,
+        curr_price=10000,
+        buy_price=10110,
+        now_ts=1000.0,
+    )
+
+    assert proceed is False
+    assert any(
+        stage == "holding_flow_ofi_smoothing_applied" and fields.get("smoothing_action") == "DEBOUNCE_EXIT"
+        for stage, fields in logs
+    )
+    assert any(
+        stage == "stat_action_decision_snapshot"
+        and kwargs.get("rejected_actions") == ["exit_now:ofi_stable_bullish_debounce"]
+        for stage, kwargs in logs
+    )
+
+
+def test_flow_hold_is_confirmed_exit_by_stable_bearish_ofi_after_worsen(monkeypatch):
+    logs = []
+    _patch_holding_context(monkeypatch, logs)
+    monkeypatch.setattr(
+        handlers,
+        "_evaluate_holding_flow_ofi_state",
+        lambda stock, code, *, curr_price: (
+            {"ready": True, "micro_state": "bearish", "observer_healthy": True, "snapshot_age_ms": 100},
+            handlers.OfiSmoothingState(regime=handlers.OFI_STABLE_BEARISH, micro_score_smooth=-0.62),
+        ),
+    )
+    ai = DummyFlowAI("HOLD")
+    stock = {
+        **_stock(),
+        "holding_flow_override_candidate_key": "scalp_ai_momentum_decay:MOMENTUM_DECAY",
+        "holding_flow_override_started_at": 990.0,
+        "holding_flow_override_candidate_profit": 0.00,
+    }
+
+    proceed = handlers._evaluate_holding_flow_override(
+        stock=stock,
+        code="005930",
+        strategy="SCALPING",
+        ws_data=_ws(),
+        ai_engine=ai,
+        exit_rule="scalp_ai_momentum_decay",
+        sell_reason_type="MOMENTUM_DECAY",
+        reason="momentum decay",
+        profit_rate=-0.31,
+        peak_profit=0.30,
+        drawdown=0.61,
+        current_ai_score=25,
+        held_sec=120,
+        curr_price=9969,
+        buy_price=10000,
+        now_ts=1000.0,
+    )
+
+    assert proceed is True
+    assert any(
+        stage == "holding_flow_ofi_smoothing_applied" and fields.get("smoothing_action") == "CONFIRM_EXIT"
+        for stage, fields in logs
+    )
+    assert any(
+        stage == "holding_flow_override_exit_confirmed" and fields.get("confirm_reason") == "ofi_stable_bearish"
+        for stage, fields in logs
+    )
+
+
 def test_low_score_flow_hold_is_not_cut_by_score_band(monkeypatch):
     logs = []
     _patch_holding_context(monkeypatch, logs)
