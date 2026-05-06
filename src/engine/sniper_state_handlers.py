@@ -8,7 +8,7 @@ from uuid import uuid4
 
 import numpy as np
 
-from src.database.models import RecommendationHistory
+from src.database.models import HoldingAddHistory, RecommendationHistory
 from src.engine import kiwoom_orders
 from src.utils import kiwoom_utils
 from src.utils.logger import log_error, log_info
@@ -254,6 +254,70 @@ def _coerce_optional_timestamp(value):
     return 0.0
 
 
+def _lookup_latest_add_executed_timestamp(stock):
+    if not DB or not stock.get('id'):
+        return 0.0
+    try:
+        with DB.get_session() as session:
+            row = (
+                session.query(HoldingAddHistory.event_time)
+                .filter(
+                    HoldingAddHistory.recommendation_id == int(stock.get('id')),
+                    HoldingAddHistory.event_type == 'EXECUTED',
+                )
+                .order_by(HoldingAddHistory.event_time.desc(), HoldingAddHistory.id.desc())
+                .first()
+            )
+    except Exception as exc:
+        log_error(
+            f"[ADD_HISTORY] latest EXECUTED lookup failed "
+            f"(id={stock.get('id')}, code={stock.get('code', '-')}): {exc}"
+        )
+        return 0.0
+    if not row:
+        return 0.0
+    return _coerce_optional_timestamp(row[0])
+
+
+def _resolve_last_add_timestamp(stock, *, now_ts=None):
+    """Return the effective last scale-in fill timestamp.
+
+    Runtime ``last_add_time`` and DB-backed ``last_add_at`` should normally
+    match.  If one is accidentally refreshed later, prefer the older positive
+    timestamp so post-add cooldown/grace cannot be extended indefinitely.
+    """
+    candidates = []
+    try:
+        last_add_time = float(stock.get('last_add_time', 0) or 0)
+    except (TypeError, ValueError):
+        last_add_time = 0.0
+    if last_add_time > 0:
+        candidates.append(last_add_time)
+    if stock.get('last_add_at'):
+        last_add_at = _coerce_optional_timestamp(stock.get('last_add_at'))
+        if last_add_at > 0:
+            candidates.append(last_add_at)
+    oldest = min(candidates) if candidates else 0.0
+
+    # If runtime state says an add exists but the available timestamp is very
+    # recent, verify against persisted fill history.  This catches restart/sync
+    # paths that accidentally refresh in-memory last_add_time/last_add_at and
+    # would otherwise keep post-add grace active indefinitely.
+    has_add_history = (
+        str(stock.get('last_add_type') or '').strip()
+        or _safe_int(stock.get('add_count'), 0) > 0
+        or _safe_int(stock.get('pyramid_count'), 0) > 0
+        or _safe_int(stock.get('avg_down_count'), 0) > 0
+    )
+    current_ts = float(now_ts if now_ts is not None else time.time())
+    suspicious_recent = oldest <= 0 or (current_ts - oldest) < 600
+    if has_add_history and suspicious_recent:
+        history_ts = _lookup_latest_add_executed_timestamp(stock)
+        if history_ts > 0:
+            candidates.append(history_ts)
+    return min(candidates) if candidates else 0.0
+
+
 def _pyramid_post_add_trailing_grace(stock, now_ts):
     if str(stock.get('last_add_type') or '').upper() != 'PYRAMID':
         return False, 0, 0
@@ -261,9 +325,7 @@ def _pyramid_post_add_trailing_grace(stock, now_ts):
     if grace_sec <= 0:
         return False, 0, 0
 
-    last_add = float(stock.get('last_add_time', 0) or 0)
-    if last_add <= 0 and stock.get('last_add_at'):
-        last_add = _coerce_optional_timestamp(stock.get('last_add_at'))
+    last_add = _resolve_last_add_timestamp(stock, now_ts=now_ts)
     if last_add <= 0:
         return False, 0, grace_sec
 
@@ -7362,9 +7424,7 @@ def can_consider_scale_in(
 
     # 최근 추가매수 직후 쿨다운
     cooldown_sec = _rule_int('SCALE_IN_COOLDOWN_SEC', 180)
-    last_add = float(stock.get('last_add_time', 0) or 0)
-    if not last_add and stock.get('last_add_at'):
-        last_add = _coerce_optional_timestamp(stock.get('last_add_at'))
+    last_add = _resolve_last_add_timestamp(stock)
     if last_add > 0 and (time.time() - last_add) < cooldown_sec:
         return {"allowed": False, "reason": "scale_in_cooldown"}
 

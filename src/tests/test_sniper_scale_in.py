@@ -1072,6 +1072,56 @@ def test_protect_trailing_uses_smoothing_not_single_tick(monkeypatch):
     assert any(stage == "protect_trailing_smooth_hold" for stage, _ in calls["stages"])
 
 
+def test_pyramid_post_add_grace_prefers_older_db_timestamp_when_runtime_time_is_refreshed():
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALP_PYRAMID_POST_ADD_TRAILING_GRACE_SEC=180,
+    )
+    now_ts = 1_000_000.0
+    stock = {
+        "last_add_type": "PYRAMID",
+        "last_add_time": now_ts,
+        "last_add_at": datetime.fromtimestamp(now_ts - 3600),
+    }
+
+    active, elapsed_sec, grace_sec = state_handlers._pyramid_post_add_trailing_grace(stock, now_ts)
+
+    assert active is False
+    assert elapsed_sec == 3600
+    assert grace_sec == 180
+
+
+def test_pyramid_post_add_grace_uses_history_when_runtime_timestamps_are_refreshed(monkeypatch):
+    from src.utils.constants import TRADING_RULES as CONFIG
+
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALP_PYRAMID_POST_ADD_TRAILING_GRACE_SEC=180,
+    )
+    now_ts = 1_000_000.0
+    monkeypatch.setattr(
+        state_handlers,
+        "_lookup_latest_add_executed_timestamp",
+        lambda stock: now_ts - 3600,
+    )
+    stock = {
+        "id": 1,
+        "last_add_type": "PYRAMID",
+        "add_count": 2,
+        "pyramid_count": 2,
+        "last_add_time": now_ts,
+        "last_add_at": datetime.fromtimestamp(now_ts),
+    }
+
+    active, elapsed_sec, grace_sec = state_handlers._pyramid_post_add_trailing_grace(stock, now_ts)
+
+    assert active is False
+    assert elapsed_sec == 3600
+    assert grace_sec == 180
+
+
 def test_protect_trailing_confirms_sustained_smoothed_break(monkeypatch):
     from src.utils.constants import TRADING_RULES as CONFIG
 
