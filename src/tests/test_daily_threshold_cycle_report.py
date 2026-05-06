@@ -320,6 +320,71 @@ def test_ofi_ai_smoothing_families_generate_manifest_only_candidates():
     assert {"entry_ofi_ai_smoothing", "holding_flow_ofi_smoothing"} <= manifest_families
 
 
+def test_scale_in_price_guard_family_generates_manifest_only_candidate():
+    pipeline_rows = []
+    for record_id in range(1, 13):
+        pipeline_rows.append(
+            {
+                "stage": "scale_in_price_resolved",
+                "record_id": record_id,
+                "fields": {
+                    "add_type": "PYRAMID",
+                    "spread_bps": "42.5",
+                    "micro_vwap_bps": "18.0",
+                    "resolved_vs_curr_bps": "-12.0",
+                    "effective_qty": "1",
+                    "qty_reason": "pyramid_momentum_confirmed",
+                },
+            }
+        )
+        pipeline_rows.append({"stage": "scale_in_executed", "record_id": record_id, "fields": {"add_type": "PYRAMID"}})
+    for record_id in range(101, 111):
+        pipeline_rows.append(
+            {
+                "stage": "scale_in_price_guard_block",
+                "record_id": record_id,
+                "fields": {
+                    "add_type": "PYRAMID",
+                    "reason": "spread_too_wide",
+                    "spread_bps": "91.0",
+                    "micro_vwap_bps": "70.0",
+                },
+            }
+        )
+    for record_id in range(1, 4):
+        pipeline_rows.append(
+            {
+                "stage": "scale_in_price_p2_observe",
+                "record_id": record_id,
+                "fields": {"add_type": "PYRAMID", "action": "SKIP"},
+            }
+        )
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-06",
+        pipeline_loader=lambda target_date: pipeline_rows,
+        completed_rows_loader=lambda start_date, end_date: [],
+        skip_completed_rows=True,
+    )
+
+    family = report["threshold_snapshot"]["scale_in_price_guard"]
+    assert family["apply_ready"] is True
+    assert family["apply_mode"] == "manifest_only"
+    assert family["sample"]["resolved"] == 12
+    assert family["sample"]["guard_block"] == 10
+    assert family["sample"]["p2_observe"] == 3
+    assert family["sample"]["block_reason"]["spread_too_wide"] == 10
+    assert family["current"]["max_spread_bps"] == 80.0
+    assert family["current"]["effective_qty_cap"] == 1
+
+    manifest_families = {
+        item["family"]
+        for item in report["apply_candidate_list"]
+        if item["owner_rule"] == "manifest_only_no_runtime_mutation"
+    }
+    assert "scale_in_price_guard" in manifest_families
+
+
 def test_build_daily_threshold_cycle_report_keeps_unready_family_observe_only():
     report = report_mod.build_daily_threshold_cycle_report(
         "2026-04-30",

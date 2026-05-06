@@ -1172,6 +1172,106 @@ def _build_holding_flow_ofi_smoothing_family(events: list[dict]) -> dict:
     }
 
 
+def _build_scale_in_price_guard_family(events: list[dict]) -> dict:
+    resolved = _events_for_stage(events, "scale_in_price_resolved")
+    blocked = _events_for_stage(events, "scale_in_price_guard_block")
+    p2_observe = _events_for_stage(events, "scale_in_price_p2_observe")
+    resolved_ids = _record_ids(resolved)
+
+    guard_events = resolved + blocked
+    spread_values = [
+        value
+        for value in (_safe_float(_event_fields(event).get("spread_bps"), None) for event in guard_events)
+        if value is not None
+    ]
+    micro_vwap_values = [
+        value
+        for value in (
+            _safe_float(_event_fields(event).get("micro_vwap_bps"), None)
+            for event in guard_events
+        )
+        if value is not None
+    ]
+    curr_distance_values = [
+        value
+        for value in (
+            _safe_float(
+                _event_fields(event).get("resolved_vs_curr_bps")
+                or _event_fields(event).get("resolved_price_vs_curr_bps"),
+                None,
+            )
+            for event in resolved
+        )
+        if value is not None
+    ]
+    effective_qty_values = [
+        value
+        for value in (
+            _safe_float(_event_fields(event).get("effective_qty"), None)
+            for event in resolved
+        )
+        if value is not None
+    ]
+    sample_ready = len(guard_events) >= 20 and (len(blocked) >= 5 or len(resolved) >= 5)
+    current = {
+        "max_spread_bps": float(getattr(TRADING_RULES, "SCALPING_SCALE_IN_MAX_SPREAD_BPS", 80.0) or 80.0),
+        "pyramid_max_micro_vwap_bps": float(
+            getattr(TRADING_RULES, "SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS", 60.0) or 60.0
+        ),
+        "pyramid_min_ai_score": int(getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_AI_SCORE", 70) or 70),
+        "pyramid_min_buy_pressure": float(
+            getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_BUY_PRESSURE", 60.0) or 60.0
+        ),
+        "pyramid_min_tick_accel": float(
+            getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_TICK_ACCEL", 0.5) or 0.5
+        ),
+        "effective_qty_cap": int(getattr(TRADING_RULES, "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP", 1) or 1),
+    }
+    recommended = dict(current)
+    if spread_values:
+        recommended["max_spread_bps_observed_p90"] = round(_percentile(spread_values, 90, current["max_spread_bps"]), 2)
+    if micro_vwap_values:
+        recommended["micro_vwap_bps_observed_p90"] = round(
+            _percentile(micro_vwap_values, 90, current["pyramid_max_micro_vwap_bps"]),
+            2,
+        )
+    return {
+        "family": "scale_in_price_guard",
+        "stage": "holding_exit",
+        "sample": {
+            "resolved": len(resolved),
+            "guard_block": len(blocked),
+            "p2_observe": len(p2_observe),
+            "resolved_executed": _record_id_stage_count(events, "scale_in_executed", resolved_ids),
+            "resolved_completed": _record_id_stage_count(events, "sell_completed", resolved_ids),
+            "add_type": _field_counter(guard_events + p2_observe, "add_type"),
+            "block_reason": _field_counter(blocked, "reason"),
+            "qty_reason": _field_counter(resolved, "qty_reason"),
+            "p2_action": _field_counter(p2_observe, "action"),
+            "spread_bps_p90": round(_percentile(spread_values, 90, 0.0), 3) if spread_values else None,
+            "micro_vwap_bps_p90": round(_percentile(micro_vwap_values, 90, 0.0), 3)
+            if micro_vwap_values
+            else None,
+            "resolved_vs_curr_bps_avg": round(_avg(curr_distance_values) or 0.0, 4)
+            if curr_distance_values
+            else None,
+            "effective_qty_avg": round(_avg(effective_qty_values) or 0.0, 4)
+            if effective_qty_values
+            else None,
+        },
+        "apply_ready": sample_ready,
+        "current": current,
+        "recommended": recommended,
+        "apply_mode": "manifest_only" if sample_ready else "observe_only",
+        "notes": [
+            "REVERSAL_ADD/PYRAMID 주문 직전 가격·수량 safety threshold 표본이다.",
+            "P1 resolver와 dynamic qty는 이미 live replacement지만 threshold-cycle은 추천값/분포를 report-only로만 남긴다.",
+            "P2 scale_in_price_v1은 observe-only이며 action이 SKIP이어도 live 주문가/주문 여부를 바꾸지 않는다.",
+            "ThresholdOpsTransition0506 전에는 runtime threshold mutation을 열지 않는다.",
+        ],
+    }
+
+
 def _action_label_for_completed_row(row: dict) -> str:
     last_add_type = str(row.get("last_add_type") or "").strip().upper()
     avg_down_count = _safe_int(row.get("avg_down_count"), 0) or 0
@@ -1383,6 +1483,7 @@ def _build_family_reports(events: list[dict], completed_rows: list[dict] | None 
         _build_scalp_trailing_take_profit_family(events),
         _build_protect_trailing_smoothing_family(events),
         _build_holding_flow_ofi_smoothing_family(events),
+        _build_scale_in_price_guard_family(events),
         _build_statistical_action_weight_family(events, completed_rows),
     ]
 

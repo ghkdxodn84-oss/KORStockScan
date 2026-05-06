@@ -2686,7 +2686,19 @@ def _build_ai_ops_log_fields(
         "ai_prompt_version": str(payload.get("ai_prompt_version", "-") or "-"),
         "ai_result_source": str(payload.get("ai_result_source", "-") or "-"),
         "ai_model": str(payload.get("ai_model", "-") or "-"),
+        "ai_model_tier": str(payload.get("ai_model_tier", "-") or "-"),
+        "cache_mode": str(payload.get("cache_mode", "-") or "-"),
     }
+    for field_name in (
+        "cache_profile",
+        "cache_strategy",
+        "cache_key_status",
+        "holding_cache_ttl_sec",
+        "holding_cache_bucket_signature",
+        "holding_cache_bucket_changed_fields",
+    ):
+        if field_name in payload:
+            out[field_name] = str(payload.get(field_name, "-") or "-")
     if payload.get("scalp_feature_packet_version"):
         out["scalp_feature_packet_version"] = str(payload.get("scalp_feature_packet_version"))
     for field_name in (
@@ -3069,7 +3081,7 @@ def _evaluate_holding_flow_override(
         held_sec=held_sec,
         elapsed_sec=elapsed_sec,
         worsen_from_candidate=f"{worsen_from_candidate:.2f}",
-        ai_parse_fail=parse_failed,
+        **_build_ai_ops_log_fields(flow_result),
     )
     if parse_failed:
         _log_holding_pipeline(
@@ -6095,6 +6107,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                         review_cd_sec=dynamic_max_cd,
                         review_ms=int((time.perf_counter() - holding_ai_review_started) * 1000),
                         ai_cache="hit" if ai_cache_hit else "miss",
+                        holding_review_trigger_reason="fast_reuse_bypass",
                         **_build_ai_ops_log_fields(
                             ai_decision,
                             ai_score_raw=raw_ai_score,

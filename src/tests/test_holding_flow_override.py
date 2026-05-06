@@ -21,6 +21,13 @@ class DummyFlowAI:
             "reason": f"flow {self.action}",
             "next_review_sec": 45,
             "ai_parse_fail": False,
+            "ai_parse_ok": True,
+            "ai_response_ms": 1234,
+            "ai_prompt_type": "holding_exit_flow",
+            "ai_result_source": "live",
+            "ai_model": "tier2-model",
+            "ai_model_tier": "tier2",
+            "cache_mode": "miss",
         }
 
 
@@ -89,6 +96,11 @@ def test_soft_stop_candidate_with_flow_hold_defers_sell(monkeypatch):
 
     assert proceed is False
     assert len(ai.calls) == 1
+    review = next(fields for stage, fields in logs if stage == "holding_flow_override_review")
+    assert review["ai_model"] == "tier2-model"
+    assert review["ai_model_tier"] == "tier2"
+    assert review["ai_prompt_type"] == "holding_exit_flow"
+    assert review["ai_response_ms"] == 1234
     assert any(stage == "holding_flow_override_defer_exit" for stage, _ in logs)
 
 

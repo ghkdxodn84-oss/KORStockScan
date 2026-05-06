@@ -24,6 +24,7 @@ def _build_engine():
     engine.cache_lock = threading.RLock()
     engine._analysis_cache = {}
     engine._gatekeeper_cache = {}
+    engine._analysis_cache_last_signatures = {}
     engine.analysis_cache_ttl = 30.0
     engine.holding_analysis_cache_ttl = 60.0
     engine.gatekeeper_cache_ttl = 30.0
@@ -46,6 +47,7 @@ def _build_provider_engine(engine_cls):
     engine.cache_lock = threading.RLock()
     engine._analysis_cache = {}
     engine._gatekeeper_cache = {}
+    engine._analysis_cache_last_signatures = {}
     engine.analysis_cache_ttl = 30.0
     engine.holding_analysis_cache_ttl = 60.0
     engine.gatekeeper_cache_ttl = 30.0
@@ -119,6 +121,59 @@ def test_analyze_target_uses_short_ttl_cache(monkeypatch):
     assert first["cache_hit"] is False
     assert second["cache_hit"] is True
     assert second["action"] == first["action"]
+    assert first["cache_key_status"] == "miss_first_seen"
+    assert second["cache_key_status"] == "hit"
+    assert first["ai_model_tier"] == "tier1"
+
+
+def test_holding_cache_provenance_reports_changed_bucket(monkeypatch):
+    engine = _build_engine()
+    call_count = {"value": 0}
+
+    monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "packet")
+
+    def _fake_call(*args, **kwargs):
+        call_count["value"] += 1
+        return {"action": "HOLD", "score": 70, "reason": "hold"}
+
+    monkeypatch.setattr(engine, "_call_gemini_safe", _fake_call)
+
+    ws_data = {
+        "curr": 10000,
+        "fluctuation": 1.0,
+        "v_pw": 120,
+        "buy_ratio": 55,
+        "orderbook": {"asks": [{"price": 10010, "volume": 100}], "bids": [{"price": 10000, "volume": 100}]},
+    }
+    recent_ticks = [{"time": "10:00:00", "price": 10000, "volume": 100, "dir": "BUY"}]
+    recent_candles = [{"체결시간": "10:00:00", "현재가": 10000, "고가": 10020, "저가": 9980, "거래량": 1000}]
+
+    first = engine.analyze_target(
+        "테스트",
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        strategy="SCALPING",
+        cache_profile="holding",
+        prompt_profile="holding",
+    )
+    changed = dict(ws_data)
+    changed["curr"] = 10150
+    second = engine.analyze_target(
+        "테스트",
+        changed,
+        recent_ticks,
+        recent_candles,
+        strategy="SCALPING",
+        cache_profile="holding",
+        prompt_profile="holding",
+    )
+
+    assert call_count["value"] == 2
+    assert first["cache_profile"] == "holding"
+    assert first["holding_cache_ttl_sec"] == "60.0"
+    assert second["cache_key_status"] == "miss_changed_bucket"
+    assert "ws_data.curr" in second["holding_cache_bucket_changed_fields"]
 
 
 def test_analyze_target_cache_ignores_transient_market_timestamps(monkeypatch):

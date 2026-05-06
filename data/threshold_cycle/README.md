@@ -80,6 +80,29 @@ report 기반 자동화의 전체 추적성은 [report-based-automation-traceabi
 
 두 family 모두 현재 apply mode는 `manifest_only`다. daily + rolling 방향이 일치하고 family별 sample floor를 만족해도 `ThresholdOpsTransition0506` 전에는 threshold-cycle 산출물이 env/code/runtime 값을 자동 변경하지 않는다. `SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_BUCKET_CALIBRATION_ENABLED`는 기존대로 기본 OFF이며, ON 전환은 별도 workorder, manifest id/version, sample floor, fallback 급증 guard가 필요하다.
 
+## Scale-in price guard threshold family
+
+`scale_in_price_guard` family는 REVERSAL_ADD/PYRAMID 주문 직전 scale-in P1 resolver와 dynamic qty safety 표본을 수집한다.
+
+수집 stage:
+
+- `scale_in_price_resolved`
+- `scale_in_price_guard_block`
+- `scale_in_price_p2_observe`
+
+관리 대상 후보값:
+
+- `SCALPING_SCALE_IN_MAX_SPREAD_BPS`
+- `SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS`
+- `SCALPING_PYRAMID_MIN_AI_SCORE`
+- `SCALPING_PYRAMID_MIN_BUY_PRESSURE`
+- `SCALPING_PYRAMID_MIN_TICK_ACCEL`
+- `SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP`
+
+이 family는 resolved/block/P2 observe 건수, add_type, block_reason, qty_reason, P2 observe action, spread/micro-VWAP 분포, resolved-vs-curr, effective_qty를 장후 report 입력으로 남긴다. P2 `scale_in_price_v1`은 observe-only이며, threshold-cycle이 `SKIP`/`USE_DEFENSIVE`/`IMPROVE_LIMIT` 결과를 live 주문가나 주문 여부에 반영하지 않는다.
+
+현재 apply mode는 `manifest_only`다. sample floor를 만족해도 `ThresholdOpsTransition0506` 전에는 threshold-cycle 산출물이 env/code/runtime 값을 자동 변경하지 않는다.
+
 ## 운영 판정 기준
 
 1. `threshold_events`와 family partition은 canonical raw/compact data다. 사람이 읽는 판정은 `data/report/README.md`의 Markdown 생성 기준을 따른다.

@@ -629,6 +629,7 @@ class GeminiSniperEngine:
         self.gatekeeper_cache_ttl = getattr(TRADING_RULES, 'AI_GATEKEEPER_RESULT_CACHE_TTL_SEC', 12.0)
         self._analysis_cache = {}
         self._gatekeeper_cache = {}
+        self._analysis_cache_last_signatures = {}
         print(
             f"🧠 [AI 엔진] {len(self.api_keys)}개 키 로테이션 가동! "
             f"(T1: {self.model_tier1_fast} / T2: {self.model_tier2_balanced} / T3: {self.model_tier3_deep})"
@@ -686,6 +687,16 @@ class GeminiSniperEngine:
         normalized = self._normalize_for_cache(payload)
         raw = json.dumps(normalized, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
         return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+    def _model_tier_label(self, model_name):
+        model_name = str(model_name or "")
+        if model_name == str(self._get_tier1_model()):
+            return "tier1"
+        if model_name == str(self._get_tier2_model()):
+            return "tier2"
+        if model_name == str(self._get_tier3_model()):
+            return "tier3"
+        return "custom" if model_name else "-"
 
     def _cache_get(self, cache_name, key):
         cache = getattr(self, cache_name, None)
@@ -886,19 +897,39 @@ class GeminiSniperEngine:
         program_net_qty,
         cache_profile,
     ):
-        if cache_profile == "holding":
-            return self._build_cache_digest(
-                {
-                    "cache_profile": "holding",
-                    "target_name": target_name,
-                    "strategy": strategy,
-                    "ws_data": self._compact_holding_ws_for_cache(ws_data),
-                    "recent_ticks": self._compact_holding_ticks_for_cache(recent_ticks),
-                    "recent_candles": self._compact_holding_candles_for_cache(recent_candles),
-                    "program_net_qty": self._bucket_int_for_cache(program_net_qty, 1_000),
-                }
+        return self._build_cache_digest(
+            self._build_analysis_cache_signature_payload(
+                target_name=target_name,
+                strategy=strategy,
+                ws_data=ws_data,
+                recent_ticks=recent_ticks,
+                recent_candles=recent_candles,
+                program_net_qty=program_net_qty,
+                cache_profile=cache_profile,
             )
-        return self._build_cache_digest({
+        )
+
+    def _build_analysis_cache_signature_payload(
+        self,
+        target_name,
+        strategy,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+        program_net_qty,
+        cache_profile,
+    ):
+        if cache_profile == "holding":
+            return {
+                "cache_profile": "holding",
+                "target_name": target_name,
+                "strategy": strategy,
+                "ws_data": self._compact_holding_ws_for_cache(ws_data),
+                "recent_ticks": self._compact_holding_ticks_for_cache(recent_ticks),
+                "recent_candles": self._compact_holding_candles_for_cache(recent_candles),
+                "program_net_qty": self._bucket_int_for_cache(program_net_qty, 1_000),
+            }
+        return {
             "cache_profile": str(cache_profile or "default"),
             "target_name": target_name,
             "strategy": strategy,
@@ -906,7 +937,82 @@ class GeminiSniperEngine:
             "recent_ticks": recent_ticks,
             "recent_candles": recent_candles,
             "program_net_qty": program_net_qty,
-        })
+        }
+
+    def _flatten_cache_payload(self, payload, prefix=""):
+        out = {}
+        if isinstance(payload, dict):
+            for key, value in payload.items():
+                child_prefix = f"{prefix}.{key}" if prefix else str(key)
+                out.update(self._flatten_cache_payload(value, child_prefix))
+            return out
+        if isinstance(payload, list):
+            for idx, value in enumerate(payload):
+                child_prefix = f"{prefix}[{idx}]"
+                out.update(self._flatten_cache_payload(value, child_prefix))
+            return out
+        out[prefix] = payload
+        return out
+
+    def _analysis_cache_provenance(self, *, scope_key, cache_key, signature_payload, cache_hit):
+        normalized = self._normalize_for_cache(signature_payload)
+        previous = self._analysis_cache_last_signatures.get(scope_key)
+        previous_key = str((previous or {}).get("cache_key") or "")
+        previous_payload = (previous or {}).get("payload")
+        if cache_hit:
+            status = "hit"
+            changed_fields = []
+        elif not previous:
+            status = "miss_first_seen"
+            changed_fields = ["first_seen"]
+        elif previous_key == cache_key:
+            status = "miss_expired_or_evicted"
+            changed_fields = []
+        else:
+            status = "miss_changed_bucket"
+            current_flat = self._flatten_cache_payload(normalized)
+            previous_flat = self._flatten_cache_payload(previous_payload or {})
+            changed_fields = sorted(
+                key
+                for key in set(current_flat) | set(previous_flat)
+                if current_flat.get(key) != previous_flat.get(key)
+            )[:12]
+
+        self._analysis_cache_last_signatures[scope_key] = {
+            "cache_key": cache_key,
+            "payload": normalized,
+        }
+        return {
+            "cache_key_status": status,
+            "holding_cache_bucket_signature": cache_key[:12],
+            "holding_cache_bucket_changed_fields": "|".join(changed_fields) if changed_fields else "-",
+        }
+
+    def _analysis_cache_log_fields(
+        self,
+        *,
+        cache_profile,
+        cache_strategy,
+        scope_key,
+        cache_key,
+        signature_payload,
+        cache_hit,
+    ):
+        provenance = self._analysis_cache_provenance(
+            scope_key=scope_key,
+            cache_key=cache_key,
+            signature_payload=signature_payload,
+            cache_hit=cache_hit,
+        )
+        ttl_sec = self._resolve_analysis_cache_ttl(cache_profile)
+        provenance.update(
+            {
+                "cache_profile": str(cache_profile or "default"),
+                "cache_strategy": str(cache_strategy or "-"),
+                "holding_cache_ttl_sec": f"{float(ttl_sec or 0.0):.1f}",
+            }
+        )
+        return provenance
 
     def _resolve_analysis_cache_ttl(self, cache_profile):
         if cache_profile == "holding":
@@ -1777,7 +1883,7 @@ class GeminiSniperEngine:
             prompt, prompt_type, prompt_version, normalized_profile = self._resolve_scalping_prompt(prompt_profile)
             if normalized_profile != "shared":
                 cache_strategy = f"{strategy}:{normalized_profile}"
-        cache_key = self._build_analysis_cache_key_with_profile(
+        cache_signature_payload = self._build_analysis_cache_signature_payload(
             target_name=target_name,
             strategy=cache_strategy,
             ws_data=ws_data,
@@ -1786,8 +1892,26 @@ class GeminiSniperEngine:
             program_net_qty=program_net_qty,
             cache_profile=cache_profile,
         )
+        cache_key = self._build_cache_digest(cache_signature_payload)
+        cache_scope_key = self._build_cache_digest(
+            {
+                "target_name": target_name,
+                "strategy": cache_strategy,
+                "cache_profile": cache_profile,
+            }
+        )
         cached_result = self._cache_get("_analysis_cache", cache_key)
         if cached_result is not None:
+            cached_result.update(
+                self._analysis_cache_log_fields(
+                    cache_profile=cache_profile,
+                    cache_strategy=cache_strategy,
+                    scope_key=cache_scope_key,
+                    cache_key=cache_key,
+                    signature_payload=cache_signature_payload,
+                    cache_hit=True,
+                )
+            )
             return self._annotate_analysis_result(
                 cached_result,
                 prompt_type=prompt_type,
@@ -1802,8 +1926,19 @@ class GeminiSniperEngine:
             )
 
         if not self.lock.acquire(blocking=False):
+            result = {"action": "WAIT", "score": 50, "reason": "AI 경합 (다른 종목 분석 중)"}
+            result.update(
+                self._analysis_cache_log_fields(
+                    cache_profile=cache_profile,
+                    cache_strategy=cache_strategy,
+                    scope_key=cache_scope_key,
+                    cache_key=cache_key,
+                    signature_payload=cache_signature_payload,
+                    cache_hit=False,
+                )
+            )
             return self._annotate_analysis_result(
-                {"action": "WAIT", "score": 50, "reason": "AI 경합 (다른 종목 분석 중)"},
+                result,
                 prompt_type=prompt_type,
                 prompt_version=prompt_version,
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),
@@ -1818,6 +1953,16 @@ class GeminiSniperEngine:
         try:
             cached_result = self._cache_get("_analysis_cache", cache_key)
             if cached_result is not None:
+                cached_result.update(
+                    self._analysis_cache_log_fields(
+                        cache_profile=cache_profile,
+                        cache_strategy=cache_strategy,
+                        scope_key=cache_scope_key,
+                        cache_key=cache_key,
+                        signature_payload=cache_signature_payload,
+                        cache_hit=True,
+                    )
+                )
                 return self._annotate_analysis_result(
                     cached_result,
                     prompt_type=prompt_type,
@@ -1833,8 +1978,19 @@ class GeminiSniperEngine:
 
             # AI 엔진이 비활성화되었을 경우 즉시 DROP 반환
             if self.ai_disabled:
+                result = {"action": "DROP", "score": 0, "reason": "AI 엔진 일시 중단 (연속 실패)"}
+                result.update(
+                    self._analysis_cache_log_fields(
+                        cache_profile=cache_profile,
+                        cache_strategy=cache_strategy,
+                        scope_key=cache_scope_key,
+                        cache_key=cache_key,
+                        signature_payload=cache_signature_payload,
+                        cache_hit=False,
+                    )
+                )
                 return self._annotate_analysis_result(
-                    {"action": "DROP", "score": 0, "reason": "AI 엔진 일시 중단 (연속 실패)"},
+                    result,
                     prompt_type=prompt_type,
                     prompt_version=prompt_version,
                     response_ms=int((time.perf_counter() - analysis_started) * 1000),
@@ -1847,8 +2003,19 @@ class GeminiSniperEngine:
                 )
 
             if time.time() - self.last_call_time < self.min_interval:
+                result = {"action": "WAIT", "score": 50, "reason": "AI 쿨타임"}
+                result.update(
+                    self._analysis_cache_log_fields(
+                        cache_profile=cache_profile,
+                        cache_strategy=cache_strategy,
+                        scope_key=cache_scope_key,
+                        cache_key=cache_key,
+                        signature_payload=cache_signature_payload,
+                        cache_hit=False,
+                    )
+                )
                 return self._annotate_analysis_result(
-                    {"action": "WAIT", "score": 50, "reason": "AI 쿨타임"},
+                    result,
                     prompt_type=prompt_type,
                     prompt_version=prompt_version,
                     response_ms=int((time.perf_counter() - analysis_started) * 1000),
@@ -1892,6 +2059,18 @@ class GeminiSniperEngine:
                 result = self._normalize_scalping_action_schema(result, prompt_type=prompt_type)
                 result.update(feature_audit_fields)
                 result["ai_model"] = target_model
+                result["ai_model_tier"] = self._model_tier_label(target_model)
+
+            result.update(
+                self._analysis_cache_log_fields(
+                    cache_profile=cache_profile,
+                    cache_strategy=cache_strategy,
+                    scope_key=cache_scope_key,
+                    cache_key=cache_key,
+                    signature_payload=cache_signature_payload,
+                    cache_hit=False,
+                )
+            )
 
             self._mark_successful_ai_call()
             self._cache_set(
@@ -2451,6 +2630,7 @@ class GeminiSniperEngine:
             )
             normalized = self._normalize_holding_flow_result(result, decision_kind=decision_kind)
             normalized["ai_model"] = self._get_tier2_model()
+            normalized["ai_model_tier"] = self._model_tier_label(self._get_tier2_model())
             self._mark_successful_ai_call(update_last_call_time=False)
             return self._annotate_analysis_result(
                 normalized,
