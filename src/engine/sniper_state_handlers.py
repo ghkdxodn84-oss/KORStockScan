@@ -27,10 +27,12 @@ from src.engine.sniper_condition_handlers_big_bite import (
     confirm_big_bite_follow_through,
 )
 from src.engine.sniper_scale_in import (
+    describe_dynamic_scale_in_qty,
     describe_scale_in_qty,
     evaluate_scalping_pyramid,
     evaluate_swing_pyramid,
     evaluate_scalping_reversal_add,
+    resolve_scale_in_order_price,
     resolve_holding_elapsed_sec,
 )
 from src.engine.sniper_scale_in_utils import record_add_history_event
@@ -7614,9 +7616,27 @@ def _evaluate_scale_in_signal(
 
         pyramid = evaluate_scalping_pyramid(stock, profit_rate, peak_profit, is_new_high)
         if pyramid.get("should_add"):
+            pyramid.update(
+                {
+                    "profit_rate": profit_rate,
+                    "peak_profit": peak_profit,
+                    "current_ai_score": current_ai_score,
+                    "is_new_high": is_new_high,
+                }
+            )
             return pyramid
         reversal = evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_sec)
-        return reversal if reversal.get("should_add") else None
+        if reversal.get("should_add"):
+            reversal.update(
+                {
+                    "profit_rate": profit_rate,
+                    "peak_profit": peak_profit,
+                    "current_ai_score": current_ai_score,
+                    "held_sec": held_sec,
+                }
+            )
+            return reversal
+        return None
     elif raw_strategy in ('KOSPI_ML', 'KOSDAQ_ML'):
         _ = market_regime
         pyramid = evaluate_swing_pyramid(stock, profit_rate, peak_profit)
@@ -7659,40 +7679,123 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         log_info(f"[ADD_BLOCKED] {stock.get('name')}({code}) reason=invalid_price")
         return None
 
-    deposit = kiwoom_orders.get_deposit(KIWOOM_TOKEN)
-    qty_details = describe_scale_in_qty(
+    raw_strategy = (stock.get('strategy') or 'KOSPI_ML').upper()
+    strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
+    price_resolution = resolve_scale_in_order_price(
         stock=stock,
+        ws_data=ws_data,
+        action=action,
+        strategy=strategy,
         curr_price=curr_price,
+    )
+    resolved_price = int(price_resolution.get("order_price", 0) or 0)
+    if not price_resolution.get("allowed", False):
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scale_in_price_guard_block",
+            add_type=add_type,
+            reason=price_resolution.get("reason"),
+            curr_price=curr_price,
+            resolved_price=resolved_price,
+            best_bid=price_resolution.get("best_bid"),
+            best_ask=price_resolution.get("best_ask"),
+            spread_bps="-" if price_resolution.get("spread_bps") is None else f"{price_resolution.get('spread_bps'):.2f}",
+            max_spread_bps=f"{float(price_resolution.get('max_spread_bps') or 0):.2f}",
+            curr_vs_micro_vwap_bp=f"{float(price_resolution.get('curr_vs_micro_vwap_bp') or 0):.2f}",
+            max_micro_vwap_bps=f"{float(price_resolution.get('max_micro_vwap_bps') or 0):.2f}",
+            price_source=price_resolution.get("price_source"),
+        )
+        log_info(
+            f"[ADD_BLOCKED] {stock.get('name')}({code}) reason=scale_in_price_guard "
+            f"{price_resolution.get('reason')} curr_price={curr_price} resolved_price={resolved_price}"
+        )
+        return None
+
+    deposit = kiwoom_orders.get_deposit(KIWOOM_TOKEN)
+    qty_price = resolved_price if strategy == "SCALPING" else curr_price
+    qty_details = describe_dynamic_scale_in_qty(
+        stock=stock,
+        resolved_price=qty_price,
         deposit=deposit,
         add_type=add_type,
         strategy=stock.get('strategy', ''),
         add_reason=action.get('reason'),
+        price_resolution=price_resolution,
+        action=action,
     )
     qty = int(qty_details.get("qty", 0) or 0)
     template_qty = int(qty_details.get("template_qty", 0) or 0)
     cap_qty = int(qty_details.get("cap_qty", 0) or 0)
     floor_applied = bool(qty_details.get("floor_applied", False))
+    would_qty = int(qty_details.get("would_qty", template_qty) or 0)
+    effective_qty = int(qty_details.get("effective_qty", qty) or 0)
+    qty_reason = qty_details.get("qty_reason", "")
     if qty <= 0:
+        _log_holding_pipeline(
+            stock,
+            code,
+            "scale_in_qty_block",
+            add_type=add_type,
+            reason=qty_reason,
+            curr_price=curr_price,
+            resolved_price=resolved_price,
+            template_qty=template_qty,
+            would_qty=would_qty,
+            effective_qty=effective_qty,
+            cap_qty=cap_qty,
+            floor_applied=floor_applied,
+        )
         log_info(
             f"[ADD_BLOCKED] {stock.get('name')}({code}) "
             f"reason=zero_qty deposit={deposit} curr_price={curr_price} "
             f"buy_qty={stock.get('buy_qty', 0)} add_type={add_type} "
-            f"template_qty={template_qty} cap_qty={cap_qty} floor_applied={floor_applied}"
+            f"template_qty={template_qty} would_qty={would_qty} effective_qty={effective_qty} "
+            f"cap_qty={cap_qty} floor_applied={floor_applied} qty_reason={qty_reason}"
         )
         log_info(
             f"⚠️ [추가매수보류] {stock.get('name')}: 추가매수 수량 0주 "
-            f"(주문가능금액 {deposit:,}원, 현재가 {curr_price:,}원)"
+            f"(주문가능금액 {deposit:,}원, resolver가격 {qty_price:,}원)"
         )
         return None
 
-    raw_strategy = (stock.get('strategy') or 'KOSPI_ML').upper()
-    strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
     if strategy == 'SCALPING':
         order_type_code = "00"
-        final_price = curr_price
+        final_price = resolved_price
     else:
         order_type_code = "6"
         final_price = 0
+
+    _log_holding_pipeline(
+        stock,
+        code,
+        "scale_in_price_resolved",
+        add_type=add_type,
+        reason=price_resolution.get("reason"),
+        curr_price=curr_price,
+        resolved_price=resolved_price,
+        price_source=price_resolution.get("price_source"),
+        best_bid=price_resolution.get("best_bid"),
+        best_ask=price_resolution.get("best_ask"),
+        spread_bps="-" if price_resolution.get("spread_bps") is None else f"{price_resolution.get('spread_bps'):.2f}",
+        curr_vs_micro_vwap_bp=f"{float(price_resolution.get('curr_vs_micro_vwap_bp') or 0):.2f}",
+        would_qty=would_qty,
+        effective_qty=effective_qty,
+        qty_reason=qty_reason,
+    )
+    _log_holding_pipeline(
+        stock,
+        code,
+        "scale_in_price_p2_observe",
+        schema_name="scale_in_price_v1",
+        observe_only=True,
+        live_runtime_effect=False,
+        action=action.get("p2_observe_action", "USE_DEFENSIVE"),
+        curr_price=curr_price,
+        resolved_price=resolved_price,
+        price_source=price_resolution.get("price_source"),
+        add_type=add_type,
+    )
 
     if is_buy_side_paused():
         log_info(
@@ -7741,7 +7844,9 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 "[ADD_ORDER_SENT] "
                 f"{stock.get('name')}({code}) "
                 f"type={add_type} qty={qty} ord_no={ord_no} "
-                f"template_qty={template_qty} cap_qty={cap_qty} floor_applied={floor_applied}"
+                f"template_qty={template_qty} would_qty={would_qty} effective_qty={effective_qty} "
+                f"cap_qty={cap_qty} floor_applied={floor_applied} "
+                f"request_price={final_price if strategy == 'SCALPING' else '-'} qty_reason={qty_reason}"
             )
             record_add_history_event(
                 DB,
@@ -7753,7 +7858,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 event_type='ORDER_SENT',
                 order_no=ord_no,
                 request_qty=qty,
-                request_price=curr_price if strategy == 'SCALPING' else None,
+                request_price=resolved_price if strategy == 'SCALPING' else None,
                 prev_buy_price=stock.get('buy_price'),
                 prev_buy_qty=stock.get('buy_qty', 0),
                 add_count_after=stock.get('add_count', 0),

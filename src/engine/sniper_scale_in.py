@@ -3,6 +3,7 @@ import math
 from datetime import datetime, time as dt_time
 
 from src.utils.constants import TRADING_RULES
+from src.utils import kiwoom_utils
 
 _DEFAULT_SCALE_IN_RATIO = 0.50
 _DEFAULT_SWING_PYRAMID_RATIO = 0.30
@@ -59,6 +60,41 @@ def _safe_int(value, default=0):
         return int(_safe_float(value, default))
     except Exception:
         return default
+
+
+def _best_levels_from_ws(ws_data):
+    ws_data = ws_data or {}
+    best_bid = _safe_int(ws_data.get("best_bid") or ws_data.get("bid") or ws_data.get("bid_price"), 0)
+    best_ask = _safe_int(ws_data.get("best_ask") or ws_data.get("ask") or ws_data.get("ask_price"), 0)
+    orderbook = ws_data.get("orderbook") or {}
+    bids = orderbook.get("bids") or []
+    asks = orderbook.get("asks") or []
+    if best_bid <= 0 and bids:
+        bid_prices = [_safe_int(level.get("price") if isinstance(level, dict) else level, 0) for level in bids]
+        best_bid = max([price for price in bid_prices if price > 0], default=0)
+    if best_ask <= 0 and asks:
+        ask_prices = [_safe_int(level.get("price") if isinstance(level, dict) else level, 0) for level in asks]
+        best_ask = min([price for price in ask_prices if price > 0], default=0)
+    return best_bid, best_ask
+
+
+def _spread_bps(best_bid, best_ask):
+    if best_bid <= 0 or best_ask <= 0 or best_ask < best_bid:
+        return None
+    mid = (best_bid + best_ask) / 2.0
+    if mid <= 0:
+        return None
+    return ((best_ask - best_bid) / mid) * 10000.0
+
+
+def _ticks_down(price, ticks=1):
+    if price <= 0:
+        return 0
+    try:
+        return int(kiwoom_utils.get_price_ticks_down(int(price), max(1, int(ticks))))
+    except Exception:
+        tick = max(1, int(kiwoom_utils.get_tick_size(int(price)) or 1))
+        return max(0, int(price) - (tick * max(1, int(ticks))))
 
 
 def _resolve_buy_time_as_datetime(raw_buy_time, now_dt):
@@ -339,6 +375,115 @@ def evaluate_scalping_reversal_add(stock, profit_rate, current_ai_score, held_se
     return result
 
 
+def resolve_scale_in_order_price(stock, ws_data, action, *, strategy=None, curr_price=None):
+    """
+    SCALPING 추가매수 주문 직전 P1 가격 resolver.
+    신규 BUY resolver와 분리해 AVG_DOWN/PYRAMID가 현재가 그대로 추격 제출되는 경로를 차단한다.
+    """
+    ws_data = ws_data or {}
+    action = action or {}
+    raw_strategy = (strategy or stock.get("strategy") or "").upper()
+    normalized_strategy = "SCALPING" if raw_strategy in {"SCALPING", "SCALP"} else raw_strategy
+    add_type = (action.get("add_type") or "").upper()
+    curr_price = _safe_int(curr_price if curr_price is not None else ws_data.get("curr"), 0)
+
+    result = {
+        "allowed": False,
+        "order_price": 0,
+        "reason": "",
+        "price_source": "",
+        "curr_price": curr_price,
+        "best_bid": 0,
+        "best_ask": 0,
+        "spread_bps": None,
+        "max_spread_bps": float(getattr(TRADING_RULES, "SCALPING_SCALE_IN_MAX_SPREAD_BPS", 80.0) or 80.0),
+        "defensive_ticks": 1,
+        "defensive_price": 0,
+        "curr_vs_micro_vwap_bp": _safe_float(
+            (stock.get("last_reversal_features") or {}).get("curr_vs_micro_vwap_bp"),
+            0.0,
+        ),
+        "max_micro_vwap_bps": float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS", 60.0) or 60.0),
+        "resolver_enabled": bool(getattr(TRADING_RULES, "SCALPING_SCALE_IN_PRICE_RESOLVER_ENABLED", True)),
+    }
+
+    if normalized_strategy != "SCALPING":
+        result.update({"allowed": True, "order_price": 0, "reason": "non_scalping_market", "price_source": "market"})
+        return result
+
+    if add_type not in {"AVG_DOWN", "PYRAMID"}:
+        result["reason"] = "invalid_add_type"
+        return result
+    if curr_price <= 0:
+        result["reason"] = "invalid_curr_price"
+        return result
+
+    best_bid, best_ask = _best_levels_from_ws(ws_data)
+    spread_bps = _spread_bps(best_bid, best_ask)
+    defensive_price = _ticks_down(curr_price, result["defensive_ticks"])
+    result.update({
+        "best_bid": best_bid,
+        "best_ask": best_ask,
+        "spread_bps": spread_bps,
+        "defensive_price": defensive_price,
+    })
+
+    if not result["resolver_enabled"]:
+        result.update({"allowed": True, "order_price": curr_price, "reason": "resolver_disabled_legacy_curr", "price_source": "curr"})
+        return result
+
+    if best_bid <= 0 and best_ask <= 0:
+        result["reason"] = "invalid_quote"
+        return result
+    if spread_bps is None:
+        result["reason"] = "invalid_spread"
+        return result
+
+    max_spread_bps = result["max_spread_bps"]
+    if bool(getattr(TRADING_RULES, "SCALPING_PYRAMID_PRICE_GUARD_ENABLED", True)):
+        max_spread_bps = min(
+            max_spread_bps,
+            float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MAX_SPREAD_BPS", max_spread_bps) or max_spread_bps),
+        )
+        result["max_spread_bps"] = max_spread_bps
+    if spread_bps > max_spread_bps:
+        result["reason"] = f"spread_bps>{max_spread_bps:.1f}"
+        return result
+
+    micro_vwap_bp = result["curr_vs_micro_vwap_bp"]
+    if add_type == "PYRAMID" and micro_vwap_bp > result["max_micro_vwap_bps"]:
+        result["reason"] = f"micro_vwap_bp>{result['max_micro_vwap_bps']:.1f}"
+        return result
+    if add_type == "AVG_DOWN":
+        min_micro_vwap = float(getattr(TRADING_RULES, "REVERSAL_ADD_VWAP_BP_MIN", -5.0) or -5.0)
+        result["min_micro_vwap_bps"] = min_micro_vwap
+        if micro_vwap_bp < min_micro_vwap:
+            result["reason"] = f"micro_vwap_bp<{min_micro_vwap:.1f}"
+            return result
+
+    if best_bid > 0 and best_bid < curr_price:
+        order_price = best_bid
+        source = "best_bid"
+    elif defensive_price > 0 and defensive_price < curr_price:
+        order_price = defensive_price
+        source = "defensive_ticks"
+    elif best_bid > 0:
+        order_price = min(best_bid, defensive_price or best_bid)
+        source = "best_bid_defensive_clamp"
+    else:
+        order_price = defensive_price
+        source = "defensive_ticks"
+
+    if order_price <= 0 or order_price >= curr_price:
+        result["reason"] = "resolved_price_invalid"
+        result["order_price"] = int(order_price or 0)
+        result["price_source"] = source
+        return result
+
+    result.update({"allowed": True, "order_price": int(order_price), "reason": "scale_in_price_resolved", "price_source": source})
+    return result
+
+
 def calc_scale_in_qty(stock, curr_price, deposit, add_type, strategy, add_reason=None):
     """
     추가매수 수량 계산 (1차 보수적 템플릿).
@@ -456,3 +601,119 @@ def describe_scale_in_qty(stock, curr_price, deposit, add_type, strategy, add_re
         "remaining_budget": remaining_budget,
         "floor_applied": floor_applied,
     }
+
+
+def describe_dynamic_scale_in_qty(
+    stock,
+    resolved_price,
+    deposit,
+    add_type,
+    strategy,
+    *,
+    add_reason=None,
+    price_resolution=None,
+    action=None,
+):
+    """SCALPING 추가매수 live 수량을 0/1로 결정한다."""
+    legacy = describe_scale_in_qty(
+        stock=stock,
+        curr_price=resolved_price,
+        deposit=deposit,
+        add_type=add_type,
+        strategy=strategy,
+        add_reason=add_reason,
+    )
+    details = dict(legacy)
+    details.update(
+        {
+            "would_qty": int(legacy.get("qty", 0) or 0),
+            "effective_qty": int(legacy.get("qty", 0) or 0),
+            "qty_reason": "legacy_template",
+            "dynamic_enabled": bool(getattr(TRADING_RULES, "SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED", True)),
+            "effective_qty_cap": int(getattr(TRADING_RULES, "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP", 1) or 1),
+        }
+    )
+
+    raw_strategy = (strategy or "").upper()
+    normalized_strategy = "SCALPING" if raw_strategy in {"SCALPING", "SCALP"} else raw_strategy
+    add_type = (add_type or "").upper()
+    if normalized_strategy != "SCALPING" or not details["dynamic_enabled"]:
+        return details
+
+    cap_qty = int(details.get("cap_qty", 0) or 0)
+    effective_cap = max(0, min(details["effective_qty_cap"], 1))
+    if resolved_price <= 0 or deposit <= 0:
+        details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "invalid_price_or_deposit"})
+        return details
+    if cap_qty <= 0:
+        details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "position_cap_or_budget"})
+        return details
+    if not (price_resolution or {}).get("allowed", False):
+        details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "price_resolution_blocked"})
+        return details
+
+    action = action or {}
+    feat = stock.get("last_reversal_features") or {}
+    current_ai_score = _safe_float(
+        action.get("current_ai_score", stock.get("current_ai_score", (stock.get("rt_ai_prob") or 0) * 100)),
+        0.0,
+    )
+    buy_pressure = _safe_float(feat.get("buy_pressure_10t"), 0.0)
+    tick_accel = _safe_float(feat.get("tick_acceleration_ratio"), 0.0)
+    large_sell = bool(feat.get("large_sell_print_detected", True))
+    profit_rate = _safe_float(action.get("profit_rate"), 0.0)
+    peak_profit = _safe_float(action.get("peak_profit"), profit_rate)
+    drawdown_from_peak = max(0.0, peak_profit - profit_rate)
+
+    if add_type == "PYRAMID":
+        min_ai = float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_AI_SCORE", 70) or 70)
+        min_buy_pressure = float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_BUY_PRESSURE", 60.0) or 60.0)
+        min_tick_accel = float(getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_TICK_ACCEL", 0.5) or 0.5)
+        checks = {
+            "ai_score_ok": current_ai_score >= min_ai,
+            "buy_pressure_ok": buy_pressure >= min_buy_pressure,
+            "tick_accel_ok": tick_accel >= min_tick_accel,
+            "peak_hold_ok": drawdown_from_peak <= 0.3,
+            "large_sell_clear": not large_sell,
+        }
+        details.update(
+            {
+                "current_ai_score": round(current_ai_score, 4),
+                "min_ai_score": min_ai,
+                "buy_pressure_10t": round(buy_pressure, 4),
+                "min_buy_pressure": min_buy_pressure,
+                "tick_acceleration_ratio": round(tick_accel, 4),
+                "min_tick_accel": min_tick_accel,
+                "drawdown_from_peak": round(drawdown_from_peak, 4),
+                "large_sell_print_detected": large_sell,
+                **checks,
+            }
+        )
+        if not all(checks.values()):
+            failed = [name for name, ok in checks.items() if not ok]
+            details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "pyramid_evidence_insufficient:" + ",".join(failed)})
+            return details
+        would_qty = max(1, int(legacy.get("template_qty", 0) or legacy.get("qty", 0) or 0))
+    elif add_type == "AVG_DOWN":
+        if add_reason != "reversal_add_ok":
+            details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "reversal_probe_missing"})
+            return details
+        hard_stop_price = _safe_float(stock.get("hard_stop_price"), 0.0)
+        if hard_stop_price > 0 and resolved_price <= hard_stop_price:
+            details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "protection_distance_invalid"})
+            return details
+        would_qty = max(1, int(legacy.get("template_qty", 0) or legacy.get("qty", 0) or 0))
+    else:
+        details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "invalid_add_type"})
+        return details
+
+    effective_qty = max(0, min(would_qty, cap_qty, effective_cap))
+    details.update(
+        {
+            "would_qty": would_qty,
+            "effective_qty": effective_qty,
+            "qty": effective_qty,
+            "qty_reason": "dynamic_0_1_allowed" if effective_qty > 0 else "effective_qty_cap_zero",
+        }
+    )
+    return details

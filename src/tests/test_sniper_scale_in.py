@@ -492,6 +492,244 @@ def test_execute_scale_in_order_failure_no_pending(monkeypatch):
     assert stock.get("pending_add_type") is None
 
 
+def test_execute_scalping_pyramid_blocks_wide_spread_price_guard(monkeypatch):
+    state_handlers.KIWOOM_TOKEN = "test"
+    state_handlers.TRADING_RULES = replace(
+        CONFIG,
+        SCALPING_PYRAMID_PRICE_GUARD_ENABLED=True,
+        SCALPING_PYRAMID_MAX_SPREAD_BPS=80.0,
+        SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS=60.0,
+    )
+
+    sent_orders = []
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append(args) or {"return_code": "0", "ord_no": "A1"},
+    )
+
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "buy_qty": 1,
+        "last_reversal_features": {"curr_vs_micro_vwap_bp": 10.0},
+    }
+    action = {"add_type": "PYRAMID", "reason": "scalping_pyramid_ok"}
+    ws_data = {"curr": 300_500, "best_bid": 299_000, "best_ask": 301_500}
+
+    state_handlers.execute_scale_in_order(
+        stock=stock,
+        code="123456",
+        ws_data=ws_data,
+        action=action,
+        admin_id=1,
+    )
+
+    assert sent_orders == []
+    assert stock.get("pending_add_order") is None
+
+
+def test_execute_scalping_pyramid_sends_resolved_best_bid_one_share(monkeypatch):
+    rules = replace(CONFIG, MAX_POSITION_PCT=1.0)
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    state_handlers.KIWOOM_TOKEN = "test"
+
+    sent_orders = []
+    history = []
+    logs = []
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 10_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append(args) or {"return_code": "0", "ord_no": "P1"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "record_add_history_event",
+        lambda *args, **kwargs: history.append(kwargs) or True,
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "buy_qty": 10,
+        "last_reversal_features": {
+            "buy_pressure_10t": 75.0,
+            "tick_acceleration_ratio": 0.8,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 10.0,
+        },
+    }
+    action = {
+        "add_type": "PYRAMID",
+        "reason": "scalping_pyramid_ok",
+        "current_ai_score": 75,
+        "profit_rate": 2.0,
+        "peak_profit": 2.1,
+    }
+    ws_data = {"curr": 10_000, "best_bid": 9_990, "best_ask": 10_000}
+
+    state_handlers.execute_scale_in_order(
+        stock=stock,
+        code="123456",
+        ws_data=ws_data,
+        action=action,
+        admin_id=1,
+    )
+
+    assert sent_orders == [("123456", 1, 9_990, "00")]
+    assert history[0]["request_price"] == 9_990
+    assert any(stage == "scale_in_price_resolved" for stage, _ in logs)
+    assert any(stage == "scale_in_price_p2_observe" for stage, _ in logs)
+
+
+def test_execute_scalping_reversal_add_uses_resolved_price_not_curr(monkeypatch):
+    rules = replace(CONFIG, MAX_POSITION_PCT=1.0)
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    state_handlers.KIWOOM_TOKEN = "test"
+
+    sent_orders = []
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 10_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append(args) or {"return_code": "0", "ord_no": "R1"},
+    )
+
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "buy_qty": 3,
+        "hard_stop_price": 9_000,
+        "last_reversal_features": {"curr_vs_micro_vwap_bp": 0.0},
+    }
+    action = {"add_type": "AVG_DOWN", "reason": "reversal_add_ok"}
+    ws_data = {"curr": 10_000, "best_bid": 9_980, "best_ask": 10_000}
+
+    state_handlers.execute_scale_in_order(
+        stock=stock,
+        code="123456",
+        ws_data=ws_data,
+        action=action,
+        admin_id=1,
+    )
+
+    assert sent_orders == [("123456", 1, 9_980, "00")]
+
+
+def test_dynamic_scale_in_qty_blocks_weak_pyramid_evidence(monkeypatch):
+    rules = replace(CONFIG, MAX_POSITION_PCT=1.0)
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    state_handlers.KIWOOM_TOKEN = "test"
+
+    sent_orders = []
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 10_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append(args) or {"return_code": "0", "ord_no": "P2"},
+    )
+
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "buy_qty": 10,
+        "last_reversal_features": {
+            "buy_pressure_10t": 50.0,
+            "tick_acceleration_ratio": 0.0,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 10.0,
+        },
+    }
+    action = {
+        "add_type": "PYRAMID",
+        "reason": "scalping_pyramid_ok",
+        "current_ai_score": 75,
+        "profit_rate": 2.0,
+        "peak_profit": 2.1,
+    }
+
+    state_handlers.execute_scale_in_order(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10_000, "best_bid": 9_990, "best_ask": 10_000},
+        action=action,
+        admin_id=1,
+    )
+
+    assert sent_orders == []
+    assert stock.get("pending_add_order") is None
+
+
+def test_p2_observe_skip_does_not_change_live_order(monkeypatch):
+    rules = replace(CONFIG, MAX_POSITION_PCT=1.0)
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    state_handlers.KIWOOM_TOKEN = "test"
+
+    sent_orders = []
+    logs = []
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 10_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append(args) or {"return_code": "0", "ord_no": "P3"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "strategy": "SCALPING",
+        "buy_qty": 10,
+        "last_reversal_features": {
+            "buy_pressure_10t": 70.0,
+            "tick_acceleration_ratio": 0.7,
+            "large_sell_print_detected": False,
+            "curr_vs_micro_vwap_bp": 5.0,
+        },
+    }
+    action = {
+        "add_type": "PYRAMID",
+        "reason": "scalping_pyramid_ok",
+        "current_ai_score": 72,
+        "profit_rate": 1.8,
+        "peak_profit": 1.8,
+        "p2_observe_action": "SKIP",
+    }
+
+    state_handlers.execute_scale_in_order(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10_000, "best_bid": 9_990, "best_ask": 10_000},
+        action=action,
+        admin_id=1,
+    )
+
+    assert sent_orders == [("123456", 1, 9_990, "00")]
+    p2_logs = [fields for stage, fields in logs if stage == "scale_in_price_p2_observe"]
+    assert p2_logs
+    assert p2_logs[0]["live_runtime_effect"] is False
+    assert p2_logs[0]["action"] == "SKIP"
+
+
 def test_calc_scale_in_qty_scalping_reversal_add_uses_configured_ratio():
     from src.utils.constants import TRADING_RULES as CONFIG
 

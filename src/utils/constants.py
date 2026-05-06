@@ -51,6 +51,16 @@ class TradingConfig:
     SCALE_IN_CANCEL_COOLDOWN_SEC: int = 120  # 미체결 추가매수 취소 후 재접수 쿨다운
     ADD_JUDGMENT_LOCK_SEC: int = 20  # 추가매수 판단 락(스팸 판단 방지)
     SCALP_PYRAMID_POST_ADD_TRAILING_GRACE_SEC: int = 180  # 불타기 체결 직후 trailing 조기청산 억제
+    SCALPING_SCALE_IN_PRICE_RESOLVER_ENABLED: bool = True  # 추가매수 주문 직전 P1 지정가 resolver
+    SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED: bool = True  # 추가매수 live 수량 0/1 동적 결정
+    SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP: int = 1  # 추가매수 수량 hard cap(현재 1주 유지)
+    SCALPING_SCALE_IN_MAX_SPREAD_BPS: float = 80.0  # 추가매수 resolver 스프레드 상한(bp)
+    SCALPING_PYRAMID_PRICE_GUARD_ENABLED: bool = True  # 불타기 추격 지정가 안전장치
+    SCALPING_PYRAMID_MAX_SPREAD_BPS: float = 80.0  # 호환 alias: scale-in spread guard
+    SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS: float = 60.0  # micro-VWAP 대비 과열 추격 상한(bp)
+    SCALPING_PYRAMID_MIN_AI_SCORE: int = 70  # PYRAMID 1주 허용 AI 최소점수
+    SCALPING_PYRAMID_MIN_BUY_PRESSURE: float = 60.0  # PYRAMID 1주 허용 매수압 최소값
+    SCALPING_PYRAMID_MIN_TICK_ACCEL: float = 0.5  # PYRAMID 1주 허용 틱 가속 최소값
     STAT_ACTION_DECISION_SNAPSHOT_ENABLED: bool = True  # 행동가중치용 HOLDING decision snapshot observe-only
     STAT_ACTION_DECISION_SNAPSHOT_MIN_INTERVAL_SEC: int = 30  # IO guard: 종목별 snapshot 최소 간격
 
@@ -1046,6 +1056,9 @@ def _build_trading_rules() -> TradingConfig:
         )
 
     env_scalping_enable_pyramid = _env_bool("KORSTOCKSCAN_SCALPING_ENABLE_PYRAMID")
+    env_invest_ratio_scalping_min = _env_float("KORSTOCKSCAN_INVEST_RATIO_SCALPING_MIN")
+    env_invest_ratio_scalping_max = _env_float("KORSTOCKSCAN_INVEST_RATIO_SCALPING_MAX")
+    env_scalping_max_buy_budget = _env_int("KORSTOCKSCAN_SCALPING_MAX_BUY_BUDGET_KRW")
     env_scalping_max_avg_down_count = _env_int("KORSTOCKSCAN_SCALPING_MAX_AVG_DOWN_COUNT")
     env_scalping_max_pyramid_count = _env_int("KORSTOCKSCAN_SCALPING_MAX_PYRAMID_COUNT")
     env_swing_enable_pyramid = _env_bool("KORSTOCKSCAN_SWING_ENABLE_PYRAMID")
@@ -1059,6 +1072,20 @@ def _build_trading_rules() -> TradingConfig:
     env_scalping_initial_entry_max_qty = _env_int(
         "KORSTOCKSCAN_SCALPING_INITIAL_ENTRY_MAX_QTY"
     )
+    env_scale_in_price_resolver_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALPING_SCALE_IN_PRICE_RESOLVER_ENABLED"
+    )
+    env_scale_in_dynamic_qty_enabled = _env_bool(
+        "KORSTOCKSCAN_SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED"
+    )
+    env_scale_in_effective_qty_cap = _env_int("KORSTOCKSCAN_SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP")
+    env_scale_in_max_spread_bps = _env_float("KORSTOCKSCAN_SCALPING_SCALE_IN_MAX_SPREAD_BPS")
+    env_pyramid_price_guard_enabled = _env_bool("KORSTOCKSCAN_SCALPING_PYRAMID_PRICE_GUARD_ENABLED")
+    env_pyramid_max_spread_bps = _env_float("KORSTOCKSCAN_SCALPING_PYRAMID_MAX_SPREAD_BPS")
+    env_pyramid_max_micro_vwap_bps = _env_float("KORSTOCKSCAN_SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS")
+    env_pyramid_min_ai_score = _env_int("KORSTOCKSCAN_SCALPING_PYRAMID_MIN_AI_SCORE")
+    env_pyramid_min_buy_pressure = _env_float("KORSTOCKSCAN_SCALPING_PYRAMID_MIN_BUY_PRESSURE")
+    env_pyramid_min_tick_accel = _env_float("KORSTOCKSCAN_SCALPING_PYRAMID_MIN_TICK_ACCEL")
     env_scalping_pyramid_zero_qty_stage1_enabled = _env_bool(
         "KORSTOCKSCAN_SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED"
     )
@@ -1070,6 +1097,9 @@ def _build_trading_rules() -> TradingConfig:
     )
     if (
         env_scalping_enable_pyramid is not None
+        or env_invest_ratio_scalping_min is not None
+        or env_invest_ratio_scalping_max is not None
+        or env_scalping_max_buy_budget is not None
         or env_scalping_max_avg_down_count is not None
         or env_scalping_max_pyramid_count is not None
         or env_swing_enable_pyramid is not None
@@ -1079,6 +1109,16 @@ def _build_trading_rules() -> TradingConfig:
         or env_stat_action_snapshot_min_interval is not None
         or env_scalping_initial_entry_qty_cap_enabled is not None
         or env_scalping_initial_entry_max_qty is not None
+        or env_scale_in_price_resolver_enabled is not None
+        or env_scale_in_dynamic_qty_enabled is not None
+        or env_scale_in_effective_qty_cap is not None
+        or env_scale_in_max_spread_bps is not None
+        or env_pyramid_price_guard_enabled is not None
+        or env_pyramid_max_spread_bps is not None
+        or env_pyramid_max_micro_vwap_bps is not None
+        or env_pyramid_min_ai_score is not None
+        or env_pyramid_min_buy_pressure is not None
+        or env_pyramid_min_tick_accel is not None
         or env_scalping_pyramid_zero_qty_stage1_enabled is not None
         or env_same_symbol_loss_reentry_cooldown_enabled is not None
         or env_same_symbol_loss_reentry_cooldown_sec is not None
@@ -1088,6 +1128,15 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_ENABLE_PYRAMID=env_scalping_enable_pyramid
             if env_scalping_enable_pyramid is not None
             else config.SCALPING_ENABLE_PYRAMID,
+            INVEST_RATIO_SCALPING_MIN=env_invest_ratio_scalping_min
+            if env_invest_ratio_scalping_min is not None
+            else config.INVEST_RATIO_SCALPING_MIN,
+            INVEST_RATIO_SCALPING_MAX=env_invest_ratio_scalping_max
+            if env_invest_ratio_scalping_max is not None
+            else config.INVEST_RATIO_SCALPING_MAX,
+            SCALPING_MAX_BUY_BUDGET_KRW=env_scalping_max_buy_budget
+            if env_scalping_max_buy_budget is not None
+            else config.SCALPING_MAX_BUY_BUDGET_KRW,
             SCALPING_MAX_AVG_DOWN_COUNT=env_scalping_max_avg_down_count
             if env_scalping_max_avg_down_count is not None
             else config.SCALPING_MAX_AVG_DOWN_COUNT,
@@ -1115,6 +1164,36 @@ def _build_trading_rules() -> TradingConfig:
             SCALPING_INITIAL_ENTRY_MAX_QTY=env_scalping_initial_entry_max_qty
             if env_scalping_initial_entry_max_qty is not None
             else config.SCALPING_INITIAL_ENTRY_MAX_QTY,
+            SCALPING_SCALE_IN_PRICE_RESOLVER_ENABLED=env_scale_in_price_resolver_enabled
+            if env_scale_in_price_resolver_enabled is not None
+            else config.SCALPING_SCALE_IN_PRICE_RESOLVER_ENABLED,
+            SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED=env_scale_in_dynamic_qty_enabled
+            if env_scale_in_dynamic_qty_enabled is not None
+            else config.SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED,
+            SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP=env_scale_in_effective_qty_cap
+            if env_scale_in_effective_qty_cap is not None
+            else config.SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP,
+            SCALPING_SCALE_IN_MAX_SPREAD_BPS=env_scale_in_max_spread_bps
+            if env_scale_in_max_spread_bps is not None
+            else config.SCALPING_SCALE_IN_MAX_SPREAD_BPS,
+            SCALPING_PYRAMID_PRICE_GUARD_ENABLED=env_pyramid_price_guard_enabled
+            if env_pyramid_price_guard_enabled is not None
+            else config.SCALPING_PYRAMID_PRICE_GUARD_ENABLED,
+            SCALPING_PYRAMID_MAX_SPREAD_BPS=env_pyramid_max_spread_bps
+            if env_pyramid_max_spread_bps is not None
+            else config.SCALPING_PYRAMID_MAX_SPREAD_BPS,
+            SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS=env_pyramid_max_micro_vwap_bps
+            if env_pyramid_max_micro_vwap_bps is not None
+            else config.SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS,
+            SCALPING_PYRAMID_MIN_AI_SCORE=env_pyramid_min_ai_score
+            if env_pyramid_min_ai_score is not None
+            else config.SCALPING_PYRAMID_MIN_AI_SCORE,
+            SCALPING_PYRAMID_MIN_BUY_PRESSURE=env_pyramid_min_buy_pressure
+            if env_pyramid_min_buy_pressure is not None
+            else config.SCALPING_PYRAMID_MIN_BUY_PRESSURE,
+            SCALPING_PYRAMID_MIN_TICK_ACCEL=env_pyramid_min_tick_accel
+            if env_pyramid_min_tick_accel is not None
+            else config.SCALPING_PYRAMID_MIN_TICK_ACCEL,
             SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED=env_scalping_pyramid_zero_qty_stage1_enabled
             if env_scalping_pyramid_zero_qty_stage1_enabled is not None
             else config.SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED,
