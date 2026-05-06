@@ -582,3 +582,55 @@
 | `DF-HOLDING-009` | recovery probability는 shadow-only | `DF-HOLDING-003` | 회복확률 점수는 refined bad-entry의 confirmation/제외조건에 보조 입력으로만 쓴다는 의미 |
 | `DF-HOLDING-010` | MAE/MFE quantile은 shadow-only | `DF-HOLDING-011` | 고정 손절폭 보정 가능성을 확인한 뒤, 별도 수량 변경축인 partial de-risk 후보로 연결한다는 의미 |
 | `DF-HOLDING-003` | `bad_entry_block` outcome으로 refined rule을 확정 | `DF-HOLDING-001` | v2 OFF 이후 다음 보유/청산 live owner를 `bad_entry_refined_canary`로 되돌려 5/4 장전 로드 확인만 남긴다는 현재 흐름 |
+
+## 운영자 메모: Sentinel 이상치 수신 시 할 일
+
+이 섹션은 개인 운영 메모다. 실행 판정의 Source는 날짜별 checklist, Plan Rebase, report 산출물에 둔다.
+
+### 1. 먼저 하지 말 것
+
+- Sentinel 이상치 알림만 보고 score threshold, spread cap, fallback, 청산 threshold, AI cache TTL, bot restart를 바로 바꾸지 않는다.
+- Telegram 문구의 `이상치`를 곧바로 `전략 실패` 또는 `튜닝 미완료`로 해석하지 않는다.
+- `submitted 급감`, `HOLD 유예 악화`, `soft stop rebound`, `AI MISS` 같은 단일 현상을 손익 결론으로 바로 연결하지 않는다.
+
+### 2. 즉시 확인 순서
+
+1. Sentinel Markdown/JSON report를 열어 `primary`, `secondary`, 전환율, baseline 대비 차이를 본다.
+2. 같은 시각대 pipeline event가 멈췄는지 확인한다. event stream/WS/token/broker 문제가 의심되면 전략 튜닝이 아니라 `incident/playbook`으로 분리한다.
+3. 이상치를 아래 4개 중 하나로 라우팅한다.
+   - `incident/playbook`: WS/token/event stream/broker/order path 장애
+   - `threshold-family 후보`: 반복성, sample floor, daily/rolling/cumulative 방향성, rollback owner가 있는 전략 병목
+   - `instrumentation gap`: 판단에 필요한 필드나 로그가 없음
+   - `normal drift`: 장세/표본 변동으로 조치 없음
+4. threshold 후보로 보이면 장중 live 변경이 아니라 `R3_manifest_only` 후보로만 연결한다.
+5. 판단이 애매하면 신규 로그/리포트 보강 항목으로 넘기고, live mutation은 보류한다.
+
+### 3. 알림별 기본 해석
+
+| Sentinel 판정 | 운영자 1차 행동 | threshold-cycle 연결 |
+| --- | --- | --- |
+| `UPSTREAM_AI_THRESHOLD` | score 50, 65~74, WAIT 65~79, blocked_ai_score 분포를 본다 | missed/avoided outcome 복원 가능할 때만 후보 |
+| `LATENCY_DROUGHT` | `budget_pass -> latency_pass -> submitted` 전환과 quote freshness를 본다 | 반복되면 latency/quote family 후보 |
+| `PRICE_GUARD_DROUGHT` | P1/P2/pre-submit/scale-in guard block reason과 bps 분포를 본다 | 분포와 fill/slippage가 충분할 때만 후보 |
+| `RUNTIME_OPS` | WS/token/event stream/broker 상태를 먼저 본다 | threshold-cycle이 아니라 incident/playbook |
+| `HOLD_DEFER_DANGER` | flow defer 후 추가악화, max defer, hard/protect safety 우선순위를 본다 | 반복되면 holding_flow family 후보 |
+| `AI_HOLDING_OPS` | cache MISS, Tier provenance, response latency, parse fail을 본다 | 먼저 logging/cache instrumentation 후보 |
+| `SOFT_STOP_WHIPSAW` | 반등률, soft stop 후 MFE, never-green 여부를 분리한다 | soft stop/MAE-MFE 후보 가능 |
+| `TRAILING_EARLY_EXIT` | trailing 후 missed upside와 protect/hard stop 제외 여부를 본다 | winner wide-window/trailing family 후보 가능 |
+| `SELL_EXECUTION_DROUGHT` | exit_signal 대비 sell_order_sent/sell_completed와 receipt truth를 본다 | 보통 runtime/receipt issue 우선 |
+
+### 4. threshold-cycle로 넘기는 최소 조건
+
+- 동일 classification이 반복된다.
+- 표본 수가 sample floor를 넘는다.
+- `COMPLETED + valid profit_rate`와 체결품질을 분리해 볼 수 있다.
+- full fill과 partial fill을 섞지 않는다.
+- daily/rolling/cumulative 방향이 같은 쪽을 가리킨다.
+- rollback owner, rollback command, 적용 cohort가 문서에 있다.
+- 적용은 장중 runtime mutation이 아니라 다음 장전 `manifest_only` 후보에서 시작한다.
+
+### 5. 운영자 다음 액션 문장 템플릿
+
+- 판정: `이번 이상치는 {classification}이며 {incident/threshold 후보/instrumentation gap/normal drift}로 본다.`
+- 근거: `{전환율}, {baseline 대비}, {top blocker}, {관련 report path}` 기준이다.
+- 다음 액션: `{R3 manifest 후보 생성/incident playbook 승인 요청/logging workorder 추가/no action}`으로 처리한다.

@@ -209,6 +209,7 @@ def _reset_outputs(target_date: str) -> None:
 def backfill_threshold_cycle_events(
     target_date: str,
     *,
+    source_path: str | Path | None = None,
     mode: str = "bootstrap",
     resume: bool = True,
     overwrite: bool = False,
@@ -218,7 +219,7 @@ def backfill_threshold_cycle_events(
     max_chunk_read_mb: float = DEFAULT_MAX_CHUNK_READ_MB,
     min_mem_available_mb: float = DEFAULT_MIN_MEM_AVAILABLE_MB,
 ) -> dict[str, Any]:
-    source = raw_pipeline_path(target_date)
+    source = Path(source_path).expanduser().resolve() if source_path else raw_pipeline_path(target_date)
     checkpoint_file = checkpoint_path(target_date)
     if overwrite:
         _reset_outputs(target_date)
@@ -357,6 +358,7 @@ def main(argv: list[str] | None = None) -> int:
     single_or_range.add_argument("--from-date", dest="from_date", help="Start date for range bootstrap (YYYY-MM-DD)")
     parser.add_argument("--to-date", dest="to_date", help="End date for range bootstrap (YYYY-MM-DD)")
     parser.add_argument("--mode", choices=["bootstrap", "incremental"], default="bootstrap")
+    parser.add_argument("--source-path", dest="source_path", help="Immutable pipeline_events jsonl snapshot to read instead of the live date file")
     parser.add_argument("--resume", action=argparse.BooleanOptionalAction, default=True)
     parser.add_argument("--overwrite", action="store_true", help="Replace existing compact output/checkpoint")
     parser.add_argument("--max-input-lines-per-chunk", type=int, default=DEFAULT_MAX_INPUT_LINES_PER_CHUNK)
@@ -367,6 +369,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     options = {
+        "source_path": args.source_path,
         "mode": args.mode,
         "resume": args.resume,
         "overwrite": args.overwrite,

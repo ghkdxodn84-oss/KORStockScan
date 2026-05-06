@@ -4,6 +4,13 @@
 while true; do
     echo "🚀 KORStockScan 스나이퍼 엔진을 시작합니다..."
 
+    # 2026-05-06 intraday cash withdrawal override:
+    # orderable cash is expected to be about 3,000,000 KRW today.
+    # Keep the 1-share initial entry cap; only re-anchor scalping budget math.
+    export KORSTOCKSCAN_INVEST_RATIO_SCALPING_MIN=1.0
+    export KORSTOCKSCAN_INVEST_RATIO_SCALPING_MAX=1.0
+    export KORSTOCKSCAN_SCALPING_MAX_BUY_BUDGET_KRW=3000000
+
     # 봇 실행 (경로나 파일명은 환경에 맞게 수정)
     python bot_main.py
 

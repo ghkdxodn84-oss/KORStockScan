@@ -335,6 +335,48 @@ def test_add_count_increment_once_on_partial_fills(monkeypatch):
     assert target_stock["avg_down_count"] == 1
 
 
+def test_reversal_add_post_eval_starts_on_execution_receipt(monkeypatch):
+    receipts.ACTIVE_TARGETS = []
+    receipts.highest_prices = {}
+    receipts._get_fast_state = lambda code: None
+
+    class DummyThread:
+        def __init__(self, target=None, args=(), daemon=None):
+            self._target = target
+            self._args = args
+        def start(self):
+            if self._target:
+                self._target(*self._args)
+
+    monkeypatch.setattr(receipts, "_update_db_for_add", lambda *args, **kwargs: None)
+    monkeypatch.setattr(receipts.threading, "Thread", DummyThread)
+
+    target_stock = {
+        "id": 1,
+        "code": "123456",
+        "name": "TEST",
+        "status": "HOLDING",
+        "buy_price": 10000,
+        "buy_qty": 1,
+        "pending_add_order": True,
+        "pending_add_type": "AVG_DOWN",
+        "pending_add_reason": "reversal_add_ok",
+        "pending_add_qty": 1,
+        "pending_add_ord_no": "123",
+        "add_count": 0,
+        "avg_down_count": 0,
+        "reversal_add_state": "ADD_ARMED",
+    }
+    receipts.ACTIVE_TARGETS.append(target_stock)
+
+    receipts.handle_real_execution(
+        {"code": "123456", "type": "BUY", "order_no": "123", "price": 9500, "qty": 1}
+    )
+
+    assert target_stock["reversal_add_state"] == "POST_ADD_EVAL"
+    assert target_stock["reversal_add_executed_at"] > 0
+
+
 def test_add_execution_rebases_highest_price_after_pyramid(monkeypatch):
     receipts.ACTIVE_TARGETS = []
     receipts.highest_prices = {"123456": 18000}

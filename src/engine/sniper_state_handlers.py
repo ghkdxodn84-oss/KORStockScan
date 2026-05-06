@@ -7231,13 +7231,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 admin_id=admin_id,
             )
             if add_result and scale_in_action.get("reason") == "reversal_add_ok":
-                _mutate_stock_state(
-                    stock,
-                    set_fields={
-                        'reversal_add_state': 'POST_ADD_EVAL',
-                        'reversal_add_executed_at': now_ts,
-                    },
-                )
+                _mutate_stock_state(stock, set_fields={'reversal_add_state': 'ADD_ARMED'})
             elif (not add_result) and scale_in_action.get("reason") == "reversal_add_ok":
                 _mutate_stock_state(stock, set_fields={'reversal_add_state': 'REVERSAL_CANDIDATE'})
                 _log_holding_pipeline(
@@ -7900,6 +7894,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             set_fields = {
                 'pending_add_order': True,
                 'pending_add_type': add_type,
+                'pending_add_reason': action.get('reason'),
                 'pending_add_qty': qty,
                 'pending_add_ord_no': ord_no,
                 'pending_add_requested_at': now_ts,

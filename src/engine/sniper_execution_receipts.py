@@ -86,6 +86,7 @@ _ADD_RECEIPT_SNAPSHOT_KEYS = (
 _PENDING_ADD_META_KEYS = (
     "pending_add_order",
     "pending_add_type",
+    "pending_add_reason",
     "pending_add_qty",
     "pending_add_ord_no",
     "pending_add_requested_at",
@@ -984,6 +985,12 @@ def _handle_add_buy_execution(
     target_stock['last_add_type'] = add_type
     target_stock['last_add_at'] = now
     target_stock['last_add_time'] = time.time()
+    if (
+        add_type == 'AVG_DOWN'
+        and str(target_stock.get('pending_add_reason') or '').strip() == 'reversal_add_ok'
+    ):
+        target_stock['reversal_add_state'] = 'POST_ADD_EVAL'
+        target_stock['reversal_add_executed_at'] = now.timestamp()
     if not target_stock.get('holding_started_at'):
         target_stock['holding_started_at'] = now
     if isinstance(highest_prices, dict):
@@ -1067,6 +1074,8 @@ def _handle_add_buy_execution(
         new_avg_price=f"{float(new_avg or 0):.2f}",
         new_buy_qty=int(new_qty or 0),
         add_count=int(target_stock.get('add_count', 0) or 0),
+        reversal_add_state=target_stock.get('reversal_add_state', '-'),
+        reversal_add_executed_at=target_stock.get('reversal_add_executed_at', '-'),
     )
 
 

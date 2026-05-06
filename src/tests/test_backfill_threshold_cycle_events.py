@@ -165,6 +165,43 @@ def test_backfill_threshold_cycle_events_stops_on_source_mtime_mismatch(tmp_path
     assert summary["status"] == "stopped_source_changed"
 
 
+def test_backfill_threshold_cycle_events_can_read_immutable_source_snapshot(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
+    monkeypatch.setattr(
+        mod,
+        "_sample_metrics",
+        lambda: {
+            "cpu": {"iowait_pct": 0.0},
+            "io": {"disk_read_mb_delta": 0.0},
+            "memory": {"mem_available_mb": 2048.0},
+        },
+    )
+    raw_dir = tmp_path / "pipeline_events"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    live_path = raw_dir / "pipeline_events_2026-04-30.jsonl"
+    live_path.write_text(
+        json.dumps({"event_type": "pipeline_event", "stage": "budget_pass", "fields": {"idx": "live"}}),
+        encoding="utf-8",
+    )
+    snapshot_path = tmp_path / "snapshot.jsonl"
+    snapshot_path.write_text(
+        json.dumps({"event_type": "pipeline_event", "stage": "sell_completed", "fields": {"idx": "snapshot"}}),
+        encoding="utf-8",
+    )
+
+    summary = mod.backfill_threshold_cycle_events("2026-04-30", source_path=snapshot_path, overwrite=True)
+
+    assert summary["completed"] is True
+    checkpoint = json.loads((tmp_path / "threshold_cycle" / "checkpoints" / "2026-04-30.json").read_text(encoding="utf-8"))
+    assert checkpoint["source_path"] == str(snapshot_path.resolve())
+    action_weight_path = (
+        tmp_path / "threshold_cycle" / "date=2026-04-30" / "family=statistical_action_weight" / "part-000001.jsonl"
+    )
+    row = json.loads(action_weight_path.read_text(encoding="utf-8").strip())
+    assert row["stage"] == "sell_completed"
+
+
 def test_backfill_threshold_cycle_events_pauses_on_system_metric_guard(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")

@@ -15,6 +15,7 @@ START_JITTER_SEC="${MONITOR_SNAPSHOT_START_JITTER_SEC:-0}"
 SKIP_SERVER_COMPARISON="${MONITOR_SNAPSHOT_SKIP_SERVER_COMPARISON:-0}"
 NOTIFY_ADMIN="${MONITOR_SNAPSHOT_NOTIFY_ADMIN:-0}"
 ASYNC_MODE="${MONITOR_SNAPSHOT_ASYNC:-1}"
+ASYNC_WAIT_SEC="${MONITOR_SNAPSHOT_ASYNC_WAIT_SEC:-0}"
 WORKER_MODE="${MONITOR_SNAPSHOT_WORKER:-0}"
 KEEP_OUTPUT_FILE="${MONITOR_SNAPSHOT_KEEP_OUTPUT_FILE:-0}"
 LOCK_WAIT_SEC="${MONITOR_SNAPSHOT_LOCK_WAIT_SEC:-}"
@@ -97,6 +98,7 @@ COOLDOWN_SEC="$(validate_int "$COOLDOWN_SEC" 0)"
 START_JITTER_SEC="$(validate_int "$START_JITTER_SEC" 0)"
 MAX_RETRIES="$(validate_int "$MAX_RETRIES" 3)"
 RETRY_DELAY_SEC="$(validate_int "$RETRY_DELAY_SEC" 5)"
+ASYNC_WAIT_SEC="$(validate_int "$ASYNC_WAIT_SEC" 0)"
 IONICE_CLASS="$(validate_int "$IONICE_CLASS" 2)"
 IONICE_LEVEL="$(validate_int "$IONICE_LEVEL" 6)"
 NICE_LEVEL="$(validate_int "$NICE_LEVEL" 10)"
@@ -241,7 +243,6 @@ PY
   "$VENV_PY" - "$output_file" "$TARGET_DATE" "$PROFILE" "$exit_code" "$finished_at" <<'PY'
 import json
 import sys
-from datetime import datetime
 
 path, target_date, profile, exit_code, finished_at = sys.argv[1:6]
 payload = {
@@ -258,7 +259,33 @@ payload = {
     "error": f"snapshot command exited with code={exit_code}",
     "snapshots": {},
 }
-  with open(path, "a", encoding="utf-8") as handle:
+with open(path, "a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+PY
+}
+
+append_skip_payload() {
+  local output_file="$1"
+  local reason="$2"
+  local finished_at
+  finished_at="$(date '+%Y-%m-%d %H:%M:%S')"
+  "$VENV_PY" - "$output_file" "$TARGET_DATE" "$PROFILE" "$reason" "$finished_at" <<'PY'
+import json
+import sys
+
+path, target_date, profile, reason, finished_at = sys.argv[1:6]
+payload = {
+    "target_date": target_date,
+    "status": "skipped",
+    "skipped": True,
+    "reason": reason,
+    "profile": profile,
+    "started_at": finished_at,
+    "finished_at": finished_at,
+    "duration_sec": 0.0,
+    "snapshots": {},
+}
+with open(path, "a", encoding="utf-8") as handle:
     handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
 PY
 }
@@ -299,6 +326,62 @@ print_standard_async_response() {
     echo "[HINT] 완료 알림이 들어오기 전까지 동일 작업은 중복 실행하지 마세요."
   fi
   write_completion_artifact "$status" "${output_file:-}" "${worker_pid:-}"
+}
+
+wait_for_async_completion() {
+  local worker_pid="$1"
+  local output_file="$2"
+  local waited=0
+  local sleep_sec=2
+  local artifact_status=""
+
+  if [[ "$ASYNC_WAIT_SEC" -le 0 ]]; then
+    return 0
+  fi
+
+  echo "[INFO] waiting for monitor snapshot async completion pid=${worker_pid} timeout_sec=${ASYNC_WAIT_SEC}"
+  while kill -0 "$worker_pid" >/dev/null 2>&1; do
+    if [[ "$waited" -ge "$ASYNC_WAIT_SEC" ]]; then
+      write_completion_artifact "failed" "$output_file" "$worker_pid"
+      echo "[ERROR] monitor snapshot async worker timed out after ${ASYNC_WAIT_SEC}s pid=${worker_pid}"
+      return 124
+    fi
+    sleep "$sleep_sec"
+    waited=$((waited + sleep_sec))
+  done
+
+  if ! wait "$worker_pid"; then
+    local worker_status=$?
+    write_completion_artifact "" "$output_file" "$worker_pid"
+    echo "[ERROR] monitor snapshot async worker failed status=${worker_status} pid=${worker_pid}"
+    return "$worker_status"
+  fi
+
+  write_completion_artifact "" "$output_file" "$worker_pid"
+  artifact_status="$("$VENV_PY" - "$COMPLETION_ARTIFACT_FILE" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+except Exception:
+    print("unknown")
+else:
+    print(str(payload.get("status") or "unknown").lower())
+PY
+)"
+  case "$artifact_status" in
+    success|skipped)
+      echo "[INFO] monitor snapshot async completed status=${artifact_status} pid=${worker_pid}"
+      return 0
+      ;;
+    *)
+      echo "[ERROR] monitor snapshot async completed with non-success status=${artifact_status} pid=${worker_pid}"
+      return 1
+      ;;
+  esac
 }
 
 write_completion_artifact() {
@@ -344,54 +427,64 @@ run_snapshot_once() {
   local jitter_wait=0
   local attempt_output
   local overall_status=0
+  local snapshot_skipped=0
 
   : > "$output_file"
 
   for attempt in $(seq 1 "$MAX_RETRIES"); do
     SNAPSHOT_STATUS=0
+    snapshot_skipped=0
     attempt_output="${output_file}.attempt_${attempt}"
     : > "$attempt_output"
 
     {
       if check_recent_success; then
-        return 0
+        append_skip_payload "$attempt_output" "cooldown_active"
+        snapshot_skipped=1
       fi
 
-      flock -w "$LOCK_WAIT_SEC" 9 || {
-        echo "[SKIP] run_snapshot already running after wait=${LOCK_WAIT_SEC}s (lock: $LOCK_FILE)"
-        return 0
-      }
+      if [[ "$snapshot_skipped" -ne 1 ]]; then
+        flock -w "$LOCK_WAIT_SEC" 9 || {
+          echo "[SKIP] run_snapshot already running after wait=${LOCK_WAIT_SEC}s (lock: $LOCK_FILE)"
+          append_skip_payload "$attempt_output" "lock_busy"
+          snapshot_skipped=1
+        }
+      fi
 
-      if [[ "$IN_PREOPEN" -eq 1 && "$BOT_RUNNING" -eq 1 && "$ALLOW_PREOPEN_WITH_BOT" != "1" ]]; then
+      if [[ "$snapshot_skipped" -ne 1 && "$IN_PREOPEN" -eq 1 && "$BOT_RUNNING" -eq 1 && "$ALLOW_PREOPEN_WITH_BOT" != "1" ]]; then
         echo "[SKIP] PREOPEN full build blocked while bot_main is running (08:00~09:00 KST)."
         echo "[HINT] set ALLOW_PREOPEN_FULL_BUILD_WITH_BOT=1 to override for emergency."
-        return 0
+        append_skip_payload "$attempt_output" "preopen_blocked"
+        snapshot_skipped=1
       fi
 
-      if [[ "$PROFILE" == "full" && "$BOT_RUNNING" -eq 1 && -f "$MANIFEST_PATH" && "$ALLOW_EXISTING_FULL_BUILD_WITH_BOT" != "1" ]]; then
+      if [[ "$snapshot_skipped" -ne 1 && "$PROFILE" == "full" && "$BOT_RUNNING" -eq 1 && -f "$MANIFEST_PATH" && "$ALLOW_EXISTING_FULL_BUILD_WITH_BOT" != "1" ]]; then
         echo "[SKIP] existing full snapshot manifest detected while bot_main is running."
         echo "[HINT] manifest=$MANIFEST_PATH"
         echo "[HINT] set ALLOW_EXISTING_FULL_BUILD_WITH_BOT=1 to force duplicate full rebuild."
-        return 0
+        append_skip_payload "$attempt_output" "existing_manifest"
+        snapshot_skipped=1
       fi
 
-      if [[ "$START_JITTER_SEC" -gt 0 ]]; then
+      if [[ "$snapshot_skipped" -ne 1 && "$START_JITTER_SEC" -gt 0 ]]; then
         jitter_wait=$((RANDOM % (START_JITTER_SEC + 1)))
         echo "[INFO] run_snapshot_once jitter wait=${jitter_wait}s (max=${START_JITTER_SEC}s) attempt=${attempt}/${MAX_RETRIES}"
         sleep "$jitter_wait"
       fi
 
-      SNAPSHOT_CMD=()
-      build_throttled_command SNAPSHOT_CMD
-      echo "[INFO] run_snapshot_once start attempt=${attempt}/${MAX_RETRIES} date=$TARGET_DATE preopen=$IN_PREOPEN bot_running=$BOT_RUNNING profile=$PROFILE io_delay_sec=$IO_DELAY_SEC skip_server_comparison=$SKIP_SERVER_COMPARISON notify_admin=$NOTIFY_ADMIN lock_wait_sec=$LOCK_WAIT_SEC cooldown_sec=$COOLDOWN_SEC force=$FORCE_SNAPSHOT"
+      if [[ "$snapshot_skipped" -ne 1 ]]; then
+        SNAPSHOT_CMD=()
+        build_throttled_command SNAPSHOT_CMD
+        echo "[INFO] run_snapshot_once start attempt=${attempt}/${MAX_RETRIES} date=$TARGET_DATE preopen=$IN_PREOPEN bot_running=$BOT_RUNNING profile=$PROFILE io_delay_sec=$IO_DELAY_SEC skip_server_comparison=$SKIP_SERVER_COMPARISON notify_admin=$NOTIFY_ADMIN lock_wait_sec=$LOCK_WAIT_SEC cooldown_sec=$COOLDOWN_SEC force=$FORCE_SNAPSHOT"
 
-      set +e
-      timeout "$TIMEOUT_SEC" "${SNAPSHOT_CMD[@]}" > "$attempt_output" 2>&1
-      SNAPSHOT_STATUS=$?
-      set -e
+        set +e
+        timeout "$TIMEOUT_SEC" "${SNAPSHOT_CMD[@]}" > "$attempt_output" 2>&1
+        SNAPSHOT_STATUS=$?
+        set -e
 
-      if [[ "$SNAPSHOT_STATUS" -ne 0 ]]; then
-        append_failure_payload "$attempt_output" "$SNAPSHOT_STATUS"
+        if [[ "$SNAPSHOT_STATUS" -ne 0 ]]; then
+          append_failure_payload "$attempt_output" "$SNAPSHOT_STATUS"
+        fi
       fi
     } 9>"$LOCK_FILE" >> "$LOG_FILE" 2>&1
 
@@ -439,7 +532,7 @@ run_snapshot_once() {
         --result-file "$output_file" \
         --log-file "$LOG_FILE" || true
     fi
-    if [[ "$SNAPSHOT_STATUS" -eq 0 ]]; then
+    if [[ "$SNAPSHOT_STATUS" -eq 0 && "$snapshot_skipped" -ne 1 ]]; then
       touch "$COOLDOWN_STATE_FILE"
     fi
     if [[ "$KEEP_OUTPUT_FILE" != "1" ]]; then
@@ -500,6 +593,7 @@ if [[ "$ASYNC_MODE" == "1" ]]; then
   fi
 
   print_standard_async_response "dispatched" "$JOB_PID" "$RUN_OUTPUT_FILE"
+  wait_for_async_completion "$JOB_PID" "$RUN_OUTPUT_FILE"
   exit 0
 fi
 

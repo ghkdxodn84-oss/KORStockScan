@@ -26,6 +26,7 @@ report 기반 자동화의 전체 추적성은 [report-based-automation-traceabi
 | 경로 | 의미 |
 |---|---|
 | `threshold_events_YYYY-MM-DD.jsonl` | runtime compact event stream |
+| `snapshots/pipeline_events_YYYY-MM-DD_*.jsonl` | POSTCLOSE collector가 live append 중인 raw 파일 대신 읽는 immutable source snapshot |
 | `date=YYYY-MM-DD/family=*/part-*.jsonl` | family별 report 입력 partition |
 | `checkpoints/YYYY-MM-DD.json` | incremental backfill resume/checkpoint |
 | `apply_plans/threshold_apply_YYYY-MM-DD.json` | 장전 apply plan artifact |
@@ -108,9 +109,10 @@ report 기반 자동화의 전체 추적성은 [report-based-automation-traceabi
 1. `threshold_events`와 family partition은 canonical raw/compact data다. 사람이 읽는 판정은 `data/report/README.md`의 Markdown 생성 기준을 따른다.
 2. `threshold_cycle_YYYY-MM-DD.json`은 top-level threshold 후보와 rollback guard를 담지만 현재 top-level Markdown은 없다. 운영자가 매일 직접 판정해야 하는 항목이면 `data/report/README.md`의 누락 후보로 승격하고 날짜별 checklist에 Markdown 생성 작업계획을 만든다.
 3. `statistical_action_weight`, `holding_exit_decision_matrix`, `threshold_cycle_cumulative`는 report-only/decision-support artifact다. 자체 결과만으로 runtime 주문/청산 threshold를 변경하지 않는다.
-4. IO guard 또는 availability guard로 backfill이 중단되면 같은 날 무리하게 full rebuild를 반복하지 않고 checkpoint, raw file size, paused reason을 report/checklist에 남긴다.
-5. PREOPEN에는 전일 POSTCLOSE에서 생성된 report/apply plan 존재 여부와 `manifest_only` 상태만 확인한다. 같은 날 성과를 장전 통과조건으로 쓰지 않는다.
-6. 자동 threshold 적용, bot restart, threshold version별 post-apply attribution은 `report-based-automation-traceability.md`의 `R5/R6` gate가 닫히기 전까지 구현 완료로 보지 않는다.
+4. POSTCLOSE collector는 기본적으로 live append 중인 `pipeline_events_YYYY-MM-DD.jsonl`을 직접 읽지 않고 immutable snapshot을 만든 뒤 backfill한다. `stopped_source_changed`가 발생하면 snapshot source로 재실행하고, report는 `checkpoint_completed=true`일 때만 완주 산출물로 본다.
+5. IO guard 또는 availability guard로 backfill이 중단되면 같은 snapshot/checkpoint에서 chunk size를 낮춰 resume한다. 같은 날 무리한 raw full rebuild를 반복하지 않고 checkpoint, raw file size, paused reason을 report/checklist에 남긴다.
+6. PREOPEN에는 전일 POSTCLOSE에서 생성된 report/apply plan 존재 여부와 `manifest_only` 상태만 확인한다. 같은 날 성과를 장전 통과조건으로 쓰지 않는다.
+7. 자동 threshold 적용, bot restart, threshold version별 post-apply attribution은 `report-based-automation-traceability.md`의 `R5/R6` gate가 닫히기 전까지 구현 완료로 보지 않는다.
 
 ## 금지 사항
 
