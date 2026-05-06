@@ -20,7 +20,17 @@
 
 ## 장전 체크리스트 (08:50~09:00)
 
-- 없음
+- [ ] `[Wait6579RecoveryProbePreopen0507] score65_74 recovery probe 로드 확인 및 live enable/hold 판정` (`Due: 2026-05-07`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: ScalpingLogic`)
+  - Source: [2026-05-06-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-06-stage2-todo-checklist.md), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py), [wait6579_ev_cohort_2026-05-06.json](/home/ubuntu/KORStockScan/data/report/monitor_snapshots/wait6579_ev_cohort_2026-05-06.json)
+  - 판정 기준: `AI_SCORE65_74_RECOVERY_PROBE_ENABLED=False` 기본값과 env override 미설정 상태를 먼저 확인한다. live enable은 별도 사용자 승인 또는 명시된 preopen 판정 없이는 금지한다.
+  - live enable 조건: 1주/5만원 cap, score65~74, fallback score 50 제외, latency DANGER 제외, buy_pressure/tick_accel/micro_vwap gate, `score65_74_recovery_probe` 및 `wait6579_probe_canary_applied` 로그가 모두 유지되어야 한다.
+  - rollback guard: `submitted/full/partial`, `COMPLETED + valid profit_rate`, soft_stop tail, missed/avoided counterfactual을 장중 Sentinel/장후 threshold-cycle과 분리해 본다. broad score threshold 완화, fallback 재개, spread cap 완화는 이 항목에서 금지한다.
+
+- [ ] `[SoftStopWhipsawConfirmationPreopen0507] soft_stop whipsaw confirmation 로드 확인 및 live enable/hold 판정` (`Due: 2026-05-07`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: ScalpingLogic`)
+  - Source: [2026-05-06-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-06-stage2-todo-checklist.md), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [holding_exit_observation_2026-05-06.json](/home/ubuntu/KORStockScan/data/report/monitor_snapshots/holding_exit_observation_2026-05-06.json)
+  - 판정 기준: `SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED=False` 기본값과 env override 미설정 상태를 먼저 확인한다. live enable은 별도 사용자 승인 또는 명시된 preopen 판정 없이는 금지한다.
+  - live enable 조건: hard/protect stop 우선, emergency stop 우선, base grace 종료 후 1회 confirmation cap, `rebound_above_sell/buy`, `flow_state`, `additional_worsen`, expired stage 로그가 유지되어야 한다.
+  - rollback guard: sell receipt/completed, same-symbol reentry loss, GOOD_EXIT/MISSED_UPSIDE, soft stop tail 악화 여부를 본다. 자동 청산 변경, hard/protect stop 완화, holding_flow override mutation은 이 항목에서 금지한다.
 
 ## 장중 체크리스트 (09:00~15:20)
 

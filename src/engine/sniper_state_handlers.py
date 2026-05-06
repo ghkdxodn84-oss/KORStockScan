@@ -1621,6 +1621,66 @@ def _apply_wait6579_probe_canary(
     return updated_orders, original_total, scaled_total, applied
 
 
+def _build_soft_stop_whipsaw_confirmation_decision(
+    stock,
+    *,
+    now_ts: float,
+    profit_rate: float,
+    dynamic_stop_pct: float,
+    emergency_pct: float,
+    grace_elapsed_sec: int,
+    grace_sec: int,
+    curr_price: int,
+    buy_price: float,
+) -> dict:
+    enabled = _rule_bool("SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED", False)
+    confirm_sec = max(0, _rule_int("SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC", 0))
+    buffer_pct = max(0.0, _rule_float("SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_BUFFER_PCT", 0.0))
+    max_worsen_pct = max(0.0, _rule_float("SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_MAX_WORSEN_PCT", 0.0))
+    used = bool((stock or {}).get("soft_stop_whipsaw_confirmation_used"))
+    started_at = _safe_float((stock or {}).get("soft_stop_whipsaw_confirmation_started_at"), 0.0)
+    touch_price = _safe_int((stock or {}).get("soft_stop_whipsaw_confirmation_touch_price"), 0)
+    if touch_price <= 0:
+        touch_price = max(0, int(curr_price or 0))
+    elapsed_sec = max(0, int(now_ts - started_at)) if started_at > 0 else 0
+    additional_worsen = max(0.0, float(dynamic_stop_pct or 0.0) - float(profit_rate or 0.0))
+    rebound_above_sell = int(curr_price or 0) >= touch_price if touch_price > 0 else False
+    rebound_above_buy = (
+        int(curr_price or 0) >= int(float(buy_price or 0.0))
+        if float(buy_price or 0.0) > 0
+        else False
+    )
+    active = (
+        enabled
+        and confirm_sec > 0
+        and grace_sec >= 0
+        and grace_elapsed_sec >= grace_sec
+        and not used
+        and float(profit_rate or 0.0) > float(emergency_pct or 0.0)
+        and float(profit_rate or 0.0) >= (float(dynamic_stop_pct or 0.0) - buffer_pct)
+        and additional_worsen <= max_worsen_pct
+    )
+    expired = False
+    if active and started_at > 0 and elapsed_sec >= confirm_sec:
+        active = False
+        expired = True
+    return {
+        "enabled": enabled,
+        "should_confirm": active,
+        "confirm_sec": confirm_sec,
+        "buffer_pct": buffer_pct,
+        "max_worsen_pct": max_worsen_pct,
+        "started_at": started_at,
+        "elapsed_sec": elapsed_sec,
+        "touch_price": touch_price,
+        "additional_worsen": additional_worsen,
+        "rebound_above_sell": rebound_above_sell,
+        "rebound_above_buy": rebound_above_buy,
+        "used": used,
+        "expired": expired,
+    }
+
+
 def _emit_scalp_hard_time_stop_shadow(
     *,
     stock: dict,
@@ -3417,6 +3477,56 @@ def _should_run_main_buy_recovery_canary(
     return True
 
 
+def _should_run_score65_74_recovery_probe(
+    ai_decision,
+    ai_score,
+    ws_data,
+    recent_ticks,
+    recent_candles,
+    ai_engine,
+    *,
+    feature_probe=None,
+):
+    if not _rule_bool("AI_SCORE65_74_RECOVERY_PROBE_ENABLED", False):
+        return False
+    if bool((ai_decision or {}).get("ai_fallback_score_50", False)):
+        return False
+    if str((ai_decision or {}).get("action", "WAIT") or "WAIT").upper() == "BUY":
+        return False
+
+    try:
+        score = float(ai_score or 0.0)
+    except Exception:
+        return False
+    min_score = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE", 65)
+    max_score = _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE", 74)
+    if score < min_score or score > max_score:
+        return False
+
+    latency_state = str((ws_data or {}).get("latency_state", "") or "").strip().upper()
+    if latency_state == "DANGER":
+        return False
+
+    probe = feature_probe or _extract_buy_recovery_probe_features(
+        ai_engine,
+        ws_data,
+        recent_ticks,
+        recent_candles,
+    )
+    if not isinstance(probe, dict):
+        return False
+
+    if bool(probe.get("large_sell_print", False)):
+        return False
+    if float(probe.get("buy_pressure", 0.0) or 0.0) < _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE", 65.0):
+        return False
+    if float(probe.get("tick_accel", 0.0) or 0.0) < _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL", 1.20):
+        return False
+    if float(probe.get("micro_vwap_bp", 0.0) or 0.0) < _rule_float("AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP", 0.0):
+        return False
+    return True
+
+
 def _should_apply_ai_score_50_buy_hold_override(ai_score, ai_decision=None) -> bool:
     if not _rule_bool("AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED", True):
         return False
@@ -3893,6 +4003,46 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                     ai_decision=ai_decision,
                                     ws_data=ws_data,
                                     feature_probe=feature_probe,
+                                )
+                            if _should_run_score65_74_recovery_probe(
+                                ai_decision,
+                                ai_score,
+                                ws_data,
+                                recent_ticks,
+                                recent_candles,
+                                ai_engine,
+                                feature_probe=feature_probe,
+                            ):
+                                action = "BUY"
+                                reason = (
+                                    f"{reason} | score65_74_recovery_probe:{float(ai_score or 0.0):.0f}"
+                                    if reason
+                                    else f"score65_74_recovery_probe:{float(ai_score or 0.0):.0f}"
+                                )
+                                ai_decision = dict(ai_decision or {})
+                                ai_decision["action"] = action
+                                ai_decision["score"] = ai_score
+                                ai_decision["reason"] = reason
+                                _mutate_stock_state(
+                                    stock,
+                                    set_fields={
+                                        'wait6579_probe_canary_armed': True,
+                                        'wait6579_probe_canary_source': "score65_74_recovery_probe",
+                                        'wait6579_probe_canary_score': f"{float(ai_score):.1f}",
+                                    },
+                                )
+                                _log_entry_pipeline(
+                                    stock,
+                                    code,
+                                    "score65_74_recovery_probe",
+                                    applied=True,
+                                    ai_score=f"{float(ai_score or 0.0):.1f}",
+                                    buy_pressure=f"{float(feature_probe.get('buy_pressure', 0.0) or 0.0):.2f}",
+                                    tick_accel=f"{float(feature_probe.get('tick_accel', 0.0) or 0.0):.3f}",
+                                    micro_vwap_bp=f"{float(feature_probe.get('micro_vwap_bp', 0.0) or 0.0):.2f}",
+                                    latency_state=str((ws_data or {}).get("latency_state", "") or "").strip().upper() or "-",
+                                    qty_cap=1,
+                                    budget_cap_krw=int(_rule("AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 50_000) or 50_000),
                                 )
                             _submit_watching_shared_prompt_shadow(
                                 stock_name=stock['name'],
@@ -4565,7 +4715,11 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     requested_qty = int(real_buy_qty or 0)
     planned_orders = latency_gate.get('orders') or []
     wait6579_probe_applied = False
-    if strategy == 'SCALPING' and bool(_rule("AI_WAIT6579_PROBE_CANARY_ENABLED", True)) and bool(stock.get('wait6579_probe_canary_armed')):
+    wait6579_cap_enabled = (
+        bool(_rule("AI_WAIT6579_PROBE_CANARY_ENABLED", False))
+        or bool(_rule("AI_SCORE65_74_RECOVERY_PROBE_ENABLED", False))
+    )
+    if strategy == 'SCALPING' and wait6579_cap_enabled and bool(stock.get('wait6579_probe_canary_armed')):
         probe_max_budget = int(_rule("AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 50_000) or 50_000)
         probe_min_qty = int(_rule("AI_WAIT6579_PROBE_CANARY_MIN_QTY", 1) or 1)
         probe_max_qty = int(_rule("AI_WAIT6579_PROBE_CANARY_MAX_QTY", 1) or 1)
@@ -6565,6 +6719,67 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     exit_rule_candidate="scalp_soft_stop_pct",
                 )
             soft_stop_within_grace = soft_stop_within_grace or soft_stop_expert_within_grace
+            whipsaw_decision = _build_soft_stop_whipsaw_confirmation_decision(
+                stock,
+                now_ts=now_ts,
+                profit_rate=profit_rate,
+                dynamic_stop_pct=dynamic_stop_pct,
+                emergency_pct=soft_stop_emergency_pct,
+                grace_elapsed_sec=soft_stop_grace_elapsed_sec,
+                grace_sec=soft_stop_grace_sec,
+                curr_price=curr_p,
+                buy_price=buy_p,
+            )
+            if whipsaw_decision.get("should_confirm") and not soft_stop_within_grace:
+                if _safe_float(whipsaw_decision.get("started_at"), 0.0) <= 0:
+                    _mutate_stock_state(
+                        stock,
+                        set_fields={
+                            "soft_stop_whipsaw_confirmation_started_at": now_ts,
+                            "soft_stop_whipsaw_confirmation_touch_price": int(curr_p or 0),
+                            "soft_stop_micro_grace_extension_used": True,
+                        },
+                    )
+                    whipsaw_decision = dict(whipsaw_decision)
+                    whipsaw_decision["started_at"] = now_ts
+                    whipsaw_decision["touch_price"] = int(curr_p or 0)
+                soft_stop_within_grace = True
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "soft_stop_whipsaw_confirmation",
+                    profit_rate=f"{profit_rate:+.2f}",
+                    soft_stop_pct=f"{dynamic_stop_pct:+.2f}",
+                    emergency_pct=f"{soft_stop_emergency_pct:+.2f}",
+                    elapsed_sec=soft_stop_grace_elapsed_sec,
+                    confirmation_elapsed_sec=int(whipsaw_decision.get("elapsed_sec", 0) or 0),
+                    confirmation_sec=int(whipsaw_decision.get("confirm_sec", 0) or 0),
+                    buffer_pct=f"{float(whipsaw_decision.get('buffer_pct', 0.0) or 0.0):.2f}",
+                    max_worsen_pct=f"{float(whipsaw_decision.get('max_worsen_pct', 0.0) or 0.0):.2f}",
+                    additional_worsen=f"{float(whipsaw_decision.get('additional_worsen', 0.0) or 0.0):.2f}",
+                    rebound_above_sell=bool(whipsaw_decision.get("rebound_above_sell")),
+                    rebound_above_buy=bool(whipsaw_decision.get("rebound_above_buy")),
+                    flow_state=stock.get("holding_flow_override_state", "-"),
+                    exit_rule_candidate="scalp_soft_stop_pct",
+                )
+            elif whipsaw_decision.get("expired"):
+                _mutate_stock_state(
+                    stock,
+                    set_fields={"soft_stop_whipsaw_confirmation_used": True},
+                )
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "soft_stop_whipsaw_confirmation_expired",
+                    profit_rate=f"{profit_rate:+.2f}",
+                    soft_stop_pct=f"{dynamic_stop_pct:+.2f}",
+                    confirmation_elapsed_sec=int(whipsaw_decision.get("elapsed_sec", 0) or 0),
+                    confirmation_sec=int(whipsaw_decision.get("confirm_sec", 0) or 0),
+                    additional_worsen=f"{float(whipsaw_decision.get('additional_worsen', 0.0) or 0.0):.2f}",
+                    rebound_above_sell=bool(whipsaw_decision.get("rebound_above_sell")),
+                    rebound_above_buy=bool(whipsaw_decision.get("rebound_above_buy")),
+                    exit_rule_candidate="scalp_soft_stop_pct",
+                )
             if soft_stop_within_grace:
                 _log_holding_pipeline(
                     stock,

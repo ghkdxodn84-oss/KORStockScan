@@ -3,11 +3,13 @@ from dataclasses import replace
 from src.engine.sniper_state_handlers import (
     _apply_initial_entry_qty_cap,
     _apply_wait6579_probe_canary,
+    _build_soft_stop_whipsaw_confirmation_decision,
     _build_ai_overlap_log_fields,
     _build_ai_ops_log_fields,
     _build_gatekeeper_fast_signature,
     _build_holding_ai_fast_signature,
     _should_apply_ai_score_50_buy_hold_override,
+    _should_run_score65_74_recovery_probe,
     _should_run_main_buy_recovery_canary,
     _resolve_gatekeeper_fast_reuse_sec,
     _resolve_holding_ai_fast_reuse_sec,
@@ -342,6 +344,54 @@ def test_should_run_main_buy_recovery_canary_rejects_large_sell_or_danger(monkey
     )
 
 
+def test_should_run_score65_74_recovery_probe_uses_dedicated_default_off_flag(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE=65,
+        AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE=74,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65.0,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL=1.2,
+        AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP=0.0,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+
+    feature_probe = {
+        "buy_pressure": 70.0,
+        "tick_accel": 1.35,
+        "micro_vwap_bp": 3.0,
+        "large_sell_print": False,
+    }
+
+    assert _should_run_score65_74_recovery_probe(
+        {"action": "WAIT"},
+        72,
+        {"latency_state": "OK"},
+        [],
+        [],
+        None,
+        feature_probe=feature_probe,
+    ) is True
+    assert _should_run_score65_74_recovery_probe(
+        {"action": "WAIT"},
+        75,
+        {"latency_state": "OK"},
+        [],
+        [],
+        None,
+        feature_probe=feature_probe,
+    ) is False
+    assert _should_run_score65_74_recovery_probe(
+        {"action": "WAIT"},
+        72,
+        {"latency_state": "DANGER"},
+        [],
+        [],
+        None,
+        feature_probe=feature_probe,
+    ) is False
+
+
 def test_ai_score_50_buy_hold_override_blocks_neutral_and_fallback(monkeypatch):
     rules = replace(TRADING_RULES, AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED=True)
     monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
@@ -375,6 +425,58 @@ def test_apply_wait6579_probe_canary_caps_qty_and_budget():
     assert scaled == 1
     assert applied is True
     assert adjusted[0]["qty"] == 1
+
+
+def test_soft_stop_whipsaw_confirmation_respects_emergency_and_one_time_cap(monkeypatch):
+    rules = replace(
+        TRADING_RULES,
+        SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED=True,
+        SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC=60,
+        SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_BUFFER_PCT=0.20,
+        SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_MAX_WORSEN_PCT=0.30,
+    )
+    monkeypatch.setattr("src.engine.sniper_state_handlers.TRADING_RULES", rules)
+
+    decision = _build_soft_stop_whipsaw_confirmation_decision(
+        {},
+        now_ts=1000.0,
+        profit_rate=-1.55,
+        dynamic_stop_pct=-1.50,
+        emergency_pct=-2.0,
+        grace_elapsed_sec=20,
+        grace_sec=20,
+        curr_price=9850,
+        buy_price=10000,
+    )
+    assert decision["should_confirm"] is True
+    assert decision["rebound_above_sell"] is True
+    assert decision["rebound_above_buy"] is False
+
+    emergency = _build_soft_stop_whipsaw_confirmation_decision(
+        {},
+        now_ts=1000.0,
+        profit_rate=-2.10,
+        dynamic_stop_pct=-1.50,
+        emergency_pct=-2.0,
+        grace_elapsed_sec=20,
+        grace_sec=20,
+        curr_price=9790,
+        buy_price=10000,
+    )
+    assert emergency["should_confirm"] is False
+
+    used = _build_soft_stop_whipsaw_confirmation_decision(
+        {"soft_stop_whipsaw_confirmation_used": True},
+        now_ts=1000.0,
+        profit_rate=-1.55,
+        dynamic_stop_pct=-1.50,
+        emergency_pct=-2.0,
+        grace_elapsed_sec=20,
+        grace_sec=20,
+        curr_price=9850,
+        buy_price=10000,
+    )
+    assert used["should_confirm"] is False
 
 
 def test_apply_initial_entry_qty_cap_limits_total_qty_without_reordering():

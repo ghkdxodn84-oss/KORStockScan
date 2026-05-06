@@ -151,6 +151,10 @@ class TradingConfig:
     SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_ENABLED: bool = False  # 예비 파라미터: threshold 근처 1회 추가 확인유예
     SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_SEC: int = 10  # 추가 확인유예 최대 초
     SCALP_SOFT_STOP_MICRO_GRACE_EXTEND_BUFFER_PCT: float = 0.20  # soft stop 기준선 아래 추가 유예 허용폭
+    SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED: bool = False  # soft_stop whipsaw 확인 canary 기본 OFF
+    SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC: int = 60  # soft_stop grace 종료 후 최대 확인 시간
+    SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_BUFFER_PCT: float = 0.20  # soft stop 기준선 아래 허용 악화폭
+    SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_MAX_WORSEN_PCT: float = 0.30  # 확인 중 추가 악화 허용폭
     SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED: bool = False  # 2026-04-30 same-day v2 수집 종료: 다음 승인 전 기본 OFF
     SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT: str = ""  # env override로만 재개
     SCALP_SOFT_STOP_ABSORPTION_EXTENSION_SEC: int = 20  # orderbook absorption 확인유예(초)
@@ -418,6 +422,12 @@ class TradingConfig:
     AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW: int = 50_000  # probe 최대 예산
     AI_WAIT6579_PROBE_CANARY_MIN_QTY: int = 1  # probe 최소 수량
     AI_WAIT6579_PROBE_CANARY_MAX_QTY: int = 1  # probe 최대 수량
+    AI_SCORE65_74_RECOVERY_PROBE_ENABLED: bool = False  # 2026-05-06: score65~74 전용 신규 canary 기본 OFF
+    AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE: int = 65
+    AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE: int = 74
+    AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE: float = 65.0
+    AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL: float = 1.20
+    AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP: float = 0.0
     SCALPING_PROMPT_SPLIT_ENABLED: bool = True  # WATCHING/HOLDING 프롬프트 분리 on/off 롤백 토글
     ML_GATEKEEPER_PULLBACK_WAIT_COOLDOWN: int = 60 * 20  # 게이트키퍼 '눌림 대기' 재평가 쿨다운
     ML_GATEKEEPER_REJECT_COOLDOWN: int = 60 * 60 * 2  # 게이트키퍼 '전량 회피' 계열 쿨다운
@@ -680,6 +690,12 @@ def _build_trading_rules() -> TradingConfig:
     env_wait6579_probe_max_budget = _env_int("KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW")
     env_wait6579_probe_min_qty = _env_int("KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MIN_QTY")
     env_wait6579_probe_max_qty = _env_int("KORSTOCKSCAN_WAIT6579_PROBE_CANARY_MAX_QTY")
+    env_score6574_probe_enabled = _env_bool("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED")
+    env_score6574_probe_min = _env_int("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_SCORE")
+    env_score6574_probe_max = _env_int("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MAX_SCORE")
+    env_score6574_probe_min_pressure = _env_float("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE")
+    env_score6574_probe_min_accel = _env_float("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL")
+    env_score6574_probe_min_vwap_bp = _env_float("KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP")
     env_scalping_prompt_split_enabled = _env_bool("KORSTOCKSCAN_SCALPING_PROMPT_SPLIT_ENABLED")
     env_ai_watching_cooldown = _env_int("KORSTOCKSCAN_AI_WATCHING_COOLDOWN")
     env_ai_holding_min_cooldown = _env_int("KORSTOCKSCAN_AI_HOLDING_MIN_COOLDOWN")
@@ -699,6 +715,12 @@ def _build_trading_rules() -> TradingConfig:
         or env_wait6579_probe_max_budget is not None
         or env_wait6579_probe_min_qty is not None
         or env_wait6579_probe_max_qty is not None
+        or env_score6574_probe_enabled is not None
+        or env_score6574_probe_min is not None
+        or env_score6574_probe_max is not None
+        or env_score6574_probe_min_pressure is not None
+        or env_score6574_probe_min_accel is not None
+        or env_score6574_probe_min_vwap_bp is not None
         or env_scalping_prompt_split_enabled is not None
         or env_ai_watching_cooldown is not None
         or env_ai_holding_min_cooldown is not None
@@ -742,6 +764,24 @@ def _build_trading_rules() -> TradingConfig:
             AI_WAIT6579_PROBE_CANARY_MAX_QTY=env_wait6579_probe_max_qty
             if env_wait6579_probe_max_qty is not None
             else config.AI_WAIT6579_PROBE_CANARY_MAX_QTY,
+            AI_SCORE65_74_RECOVERY_PROBE_ENABLED=env_score6574_probe_enabled
+            if env_score6574_probe_enabled is not None
+            else config.AI_SCORE65_74_RECOVERY_PROBE_ENABLED,
+            AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE=env_score6574_probe_min
+            if env_score6574_probe_min is not None
+            else config.AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE,
+            AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE=env_score6574_probe_max
+            if env_score6574_probe_max is not None
+            else config.AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE,
+            AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=env_score6574_probe_min_pressure
+            if env_score6574_probe_min_pressure is not None
+            else config.AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE,
+            AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL=env_score6574_probe_min_accel
+            if env_score6574_probe_min_accel is not None
+            else config.AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL,
+            AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP=env_score6574_probe_min_vwap_bp
+            if env_score6574_probe_min_vwap_bp is not None
+            else config.AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP,
             SCALPING_PROMPT_SPLIT_ENABLED=env_scalping_prompt_split_enabled
             if env_scalping_prompt_split_enabled is not None
             else config.SCALPING_PROMPT_SPLIT_ENABLED,
@@ -834,6 +874,10 @@ def _build_trading_rules() -> TradingConfig:
     env_bad_entry_refined_recovery_max = _env_float("KORSTOCKSCAN_SCALP_BAD_ENTRY_REFINED_RECOVERY_PROB_MAX")
     env_soft_stop_expert_enabled = _env_bool("KORSTOCKSCAN_SCALP_SOFT_STOP_EXPERT_DEFENSE_ENABLED")
     env_soft_stop_expert_activate_at = _env_str("KORSTOCKSCAN_SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT")
+    env_soft_stop_whipsaw_enabled = _env_bool("KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED")
+    env_soft_stop_whipsaw_sec = _env_int("KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC")
+    env_soft_stop_whipsaw_buffer = _env_float("KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_BUFFER_PCT")
+    env_soft_stop_whipsaw_worsen = _env_float("KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_MAX_WORSEN_PCT")
     env_protect_trailing_smooth_enabled = _env_bool("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_ENABLED")
     env_protect_trailing_smooth_window = _env_int("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_WINDOW_SEC")
     env_protect_trailing_smooth_min_span = _env_int("KORSTOCKSCAN_SCALP_PROTECT_TRAILING_SMOOTH_MIN_SPAN_SEC")
@@ -887,6 +931,10 @@ def _build_trading_rules() -> TradingConfig:
         or env_bad_entry_refined_recovery_max is not None
         or env_soft_stop_expert_enabled is not None
         or env_soft_stop_expert_activate_at is not None
+        or env_soft_stop_whipsaw_enabled is not None
+        or env_soft_stop_whipsaw_sec is not None
+        or env_soft_stop_whipsaw_buffer is not None
+        or env_soft_stop_whipsaw_worsen is not None
         or env_protect_trailing_smooth_enabled is not None
         or env_protect_trailing_smooth_window is not None
         or env_protect_trailing_smooth_min_span is not None
@@ -1032,6 +1080,18 @@ def _build_trading_rules() -> TradingConfig:
             SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT=env_soft_stop_expert_activate_at
             if env_soft_stop_expert_activate_at is not None
             else config.SCALP_SOFT_STOP_EXPERT_DEFENSE_ACTIVATE_AT,
+            SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED=env_soft_stop_whipsaw_enabled
+            if env_soft_stop_whipsaw_enabled is not None
+            else config.SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED,
+            SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC=env_soft_stop_whipsaw_sec
+            if env_soft_stop_whipsaw_sec is not None
+            else config.SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC,
+            SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_BUFFER_PCT=env_soft_stop_whipsaw_buffer
+            if env_soft_stop_whipsaw_buffer is not None
+            else config.SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_BUFFER_PCT,
+            SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_MAX_WORSEN_PCT=env_soft_stop_whipsaw_worsen
+            if env_soft_stop_whipsaw_worsen is not None
+            else config.SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_MAX_WORSEN_PCT,
             SCALP_PROTECT_TRAILING_SMOOTH_ENABLED=env_protect_trailing_smooth_enabled
             if env_protect_trailing_smooth_enabled is not None
             else config.SCALP_PROTECT_TRAILING_SMOOTH_ENABLED,
