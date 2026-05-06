@@ -6,11 +6,12 @@ import argparse
 import json
 import os
 import sys
+import time
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
-from urllib import request
+from urllib import error, request
 from zoneinfo import ZoneInfo
 
 from src.engine.sync_docs_backlog_to_project import (
@@ -22,6 +23,7 @@ from src.utils.market_day import get_krx_trading_day_status
 
 
 GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
+RETRYABLE_GRAPHQL_HTTP_STATUS = {502, 503, 504}
 
 
 @dataclass(frozen=True)
@@ -54,6 +56,28 @@ def _env(name: str, default: str | None = None) -> str:
 def _env_bool(name: str, default: bool) -> bool:
     raw = str(os.getenv(name, "true" if default else "false")).strip().lower()
     return raw in {"1", "true", "yes", "y", "on"}
+
+
+def _env_int(name: str, default: int, *, minimum: int = 0) -> int:
+    raw = str(os.getenv(name, "")).strip()
+    if not raw:
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        return default
+    return max(minimum, value)
+
+
+def _env_float(name: str, default: float, *, minimum: float = 0.0) -> float:
+    raw = str(os.getenv(name, "")).strip()
+    if not raw:
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return max(minimum, value)
 
 
 def _local_today_iso() -> str:
@@ -187,8 +211,36 @@ def _graphql_request(token: str, query: str, variables: dict[str, Any]) -> dict[
         },
         method="POST",
     )
-    with request.urlopen(req, timeout=30) as resp:
-        body = resp.read().decode("utf-8")
+    max_attempts = _env_int("CODEX_WORKORDER_GRAPHQL_MAX_ATTEMPTS", 4, minimum=1)
+    timeout_sec = _env_int("CODEX_WORKORDER_GRAPHQL_TIMEOUT_SEC", 45, minimum=5)
+    retry_base_delay_sec = _env_float("CODEX_WORKORDER_GRAPHQL_RETRY_DELAY_SEC", 2.0, minimum=0.0)
+    body = ""
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with request.urlopen(req, timeout=timeout_sec) as resp:
+                body = resp.read().decode("utf-8")
+            break
+        except error.HTTPError as exc:
+            retryable = exc.code in RETRYABLE_GRAPHQL_HTTP_STATUS
+            if not retryable or attempt >= max_attempts:
+                raise
+            delay = retry_base_delay_sec * attempt
+            print(
+                f"[CODEX_DAILY_WORKORDER_RETRY] github graphql HTTP {exc.code}; "
+                f"attempt={attempt}/{max_attempts}; retry_in={delay:.1f}s",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
+        except (error.URLError, TimeoutError) as exc:
+            if attempt >= max_attempts:
+                raise
+            delay = retry_base_delay_sec * attempt
+            print(
+                f"[CODEX_DAILY_WORKORDER_RETRY] github graphql transport error: {exc}; "
+                f"attempt={attempt}/{max_attempts}; retry_in={delay:.1f}s",
+                file=sys.stderr,
+            )
+            time.sleep(delay)
     parsed = json.loads(body)
     errors = parsed.get("errors") or []
     fatal_errors: list[dict[str, Any]] = []

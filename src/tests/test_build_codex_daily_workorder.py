@@ -1,6 +1,9 @@
+from urllib.error import HTTPError, URLError
+
 from src.engine.build_codex_daily_workorder import (
     ProjectTask,
     _filter_stale_same_day_managed_tasks,
+    _graphql_request,
     _parse_project_item,
     _matches_slot,
     _resolve_slot_filters_for_target_date,
@@ -242,3 +245,61 @@ def test_filter_stale_same_day_managed_tasks_uses_docs_as_source_of_truth(monkey
         "2026-04-27",
     )
     assert [task.item_id for task in filtered] == ["1", "3"]
+
+
+def test_graphql_request_retries_retryable_http_error(monkeypatch):
+    calls = {"count": 0}
+
+    class DummyResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"data":{"user":{"projectV2":{"title":"ok"}}}}'
+
+    def fake_urlopen(req, timeout):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise HTTPError(req.full_url, 504, "Gateway Timeout", hdrs=None, fp=None)
+        return DummyResponse()
+
+    monkeypatch.setattr("src.engine.build_codex_daily_workorder.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("src.engine.build_codex_daily_workorder.time.sleep", lambda delay: None)
+    monkeypatch.setenv("CODEX_WORKORDER_GRAPHQL_RETRY_DELAY_SEC", "0")
+
+    data = _graphql_request("token", "query { viewer { login } }", {})
+
+    assert calls["count"] == 2
+    assert data["user"]["projectV2"]["title"] == "ok"
+
+
+def test_graphql_request_retries_transport_error(monkeypatch):
+    calls = {"count": 0}
+
+    class DummyResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self):
+            return b'{"data":{"organization":{"projectV2":{"title":"ok"}}}}'
+
+    def fake_urlopen(req, timeout):
+        calls["count"] += 1
+        if calls["count"] == 1:
+            raise URLError("timed out")
+        return DummyResponse()
+
+    monkeypatch.setattr("src.engine.build_codex_daily_workorder.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("src.engine.build_codex_daily_workorder.time.sleep", lambda delay: None)
+    monkeypatch.setenv("CODEX_WORKORDER_GRAPHQL_RETRY_DELAY_SEC", "0")
+
+    data = _graphql_request("token", "query { viewer { login } }", {})
+
+    assert calls["count"] == 2
+    assert data["organization"]["projectV2"]["title"] == "ok"
