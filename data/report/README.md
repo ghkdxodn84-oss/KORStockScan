@@ -4,7 +4,7 @@
 
 이 디렉토리는 운영/감리용 산출물을 저장한다. 기본 원칙은 JSON/JSONL을 canonical data로 두고, 사람이 장후 판정에 바로 읽어야 하는 항목만 Markdown 리포트로 별도 생성한다.
 
-report 산출물이 자동 threshold 적용, bot restart, post-apply attribution으로 이어지는 전체 추적성은 [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)를 기준으로 확인한다.
+report 산출물이 threshold calibration, 자동 threshold 적용, bot restart, post-apply attribution으로 이어지는 전체 추적성은 [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)를 기준으로 확인한다. calibration은 새 관찰축을 만들지 않고 이 디렉토리의 기존 BUY, 보유/청산, decision-support 리포트를 source bundle로 읽는다.
 
 ## Bucket Runtime Calibration ON 기준
 
@@ -56,6 +56,7 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 |---|---|---|---|
 | Daily Report | `data/report/report_YYYY-MM-DD.json` | `src.engine.daily_report_service` | 없음 |
 | Threshold Cycle Report | `data/report/threshold_cycle_YYYY-MM-DD.json` | `src.engine.daily_threshold_cycle_report` | 없음. 단, 파생 Markdown 3종 생성 |
+| Threshold Cycle Calibration | `data/report/threshold_cycle_calibration/threshold_cycle_calibration_YYYY-MM-DD_{intraday,postclose}.json` | `src.engine.daily_threshold_cycle_report` | 없음. 장중/장후 2회 자동 calibration artifact |
 | Cumulative Threshold Cycle Report | `data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_YYYY-MM-DD.json` | `src.engine.daily_threshold_cycle_report` | `data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_YYYY-MM-DD.md` |
 | Preclose Sell Target | `data/report/preclose_sell_target/preclose_sell_target_YYYY-MM-DD.json` | `src.scanners.preclose_sell_target_report` | `data/report/preclose_sell_target/preclose_sell_target_YYYY-MM-DD.md` |
 | Threshold Compact Events | `data/threshold_cycle/date=YYYY-MM-DD/family=*/part-*.jsonl`, `data/threshold_cycle/threshold_events_YYYY-MM-DD.jsonl` | `src.engine.backfill_threshold_cycle_events` | 없음 |
@@ -108,6 +109,43 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 - daily, rolling, cumulative가 같은 방향을 가리킬 때만 다음 checklist의 threshold 후보로 넘긴다.
 - 이 산출물은 runtime change, bot restart, live threshold auto-mutation을 수행하지 않는다.
 - 자동 threshold 적용과 적용 후 version attribution은 `report-based-automation-traceability.md`의 `R5/R6` gate가 별도 checklist owner로 닫힌 뒤에만 구현 완료로 본다.
+
+## Efficient Trade-Off Calibration Source Bundle
+
+calibration의 source는 `threshold_cycle` compact event만이 아니다. 아래 기존 report를 함께 읽어 `calibration_source_bundle`에 요약한다.
+
+- `data/report/buy_funnel_sentinel/buy_funnel_sentinel_YYYY-MM-DD.json`
+- `data/report/sentinel_followup_YYYY-MM-DD.md`
+- `data/report/monitor_snapshots/wait6579_ev_cohort_YYYY-MM-DD.json`
+- `data/report/monitor_snapshots/missed_entry_counterfactual_YYYY-MM-DD.json`
+- `data/report/monitor_snapshots/performance_tuning_YYYY-MM-DD.json`
+- `data/report/monitor_snapshots/holding_exit_observation_YYYY-MM-DD.json`
+- `data/report/monitor_snapshots/post_sell_feedback_YYYY-MM-DD.json`
+- `data/report/monitor_snapshots/trade_review_YYYY-MM-DD.json`
+- `data/report/holding_exit_sentinel/holding_exit_sentinel_YYYY-MM-DD.json`
+- `data/report/holding_exit_decision_matrix/holding_exit_decision_matrix_YYYY-MM-DD.json`
+- `data/report/statistical_action_weight/statistical_action_weight_YYYY-MM-DD.json`
+
+운영 원칙:
+
+- calibration은 매일 `intraday`, `postclose` 2회 시행한다.
+- `intraday`는 `threshold_cycle_calibration_YYYY-MM-DD_intraday.json`만 생성하고 runtime threshold를 바꾸지 않는다.
+- `postclose`는 canonical `threshold_cycle_YYYY-MM-DD.json`과 `threshold_cycle_calibration_YYYY-MM-DD_postclose.json`을 함께 생성한다.
+- 새 관찰축을 늘리지 않는다. 기존 report의 soft-stop tail, defer cost, trailing outcome, safety/provenance 요약을 calibration 입력으로 재사용한다.
+- BUY 병목은 partial sample `0`을 live 전면 차단으로 쓰지 않고, score65~74 EV/close_10m 우위와 submitted drought를 `score65_74_recovery_probe` 후보로 연결한다.
+- ADM/SAW는 all `no_clear_edge`이면 `hold_no_edge`로 두고, non-`no_clear_edge` + `candidate_weight_source` bucket만 advisory canary 후보로 연결한다.
+- bad-entry는 naive hard block 재개가 아니라 `bad_entry_refined_candidate`의 soft-stop tail/defer cost 감소 후보만 calibration한다.
+- `preclose_sell_target`은 tuning/calibration source가 아니다. operator preclose review와 Telegram/cron acceptance 산출물로만 유지한다.
+
+## Statistical Action Weight 적용 범위
+
+`statistical_action_weight`는 장후 action weight source이며 직접 runtime에 적용하지 않는다.
+
+- 입력: completed trade, compact `exit_signal/sell_completed/scale_in_executed/stat_action_decision_snapshot`, 가격대/거래량/시간대 bucket.
+- 산출: `exit_only`, `avg_down_wait`, `pyramid_wait`의 bucket별 confidence-adjusted score, `policy_hint`, `eligible_but_not_chosen` proxy.
+- 1차 소비자: `holding_exit_decision_matrix` report-only matrix. bucket별 `recommended_bias`와 `prompt_hint`를 만든다.
+- 금지선: `statistical_action_weight` 단독으로 runtime threshold, 주문/청산 행동, AI 응답을 변경하지 않는다.
+- live/advisory 전환: 별도 checklist에서 sample floor, baseline/candidate/excluded cohort, safety guard, feature flag, cache/provenance가 닫힌 뒤에만 가능하다.
 
 ## Preclose Sell Target 재개 기준
 

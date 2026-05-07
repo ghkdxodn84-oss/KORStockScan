@@ -1376,6 +1376,19 @@ def _emit_bad_entry_refined_candidate(
         stock,
         code,
         "bad_entry_refined_candidate",
+        decision_source="BAD_ENTRY_REFINED_CANARY",
+        threshold_family="bad_entry_refined_canary",
+        threshold_version=str(
+            _rule("SCALP_BAD_ENTRY_REFINED_THRESHOLD_VERSION", "runtime_default") or "runtime_default"
+        ),
+        threshold_calibration_state=str(
+            _rule("SCALP_BAD_ENTRY_REFINED_CALIBRATION_STATE", "runtime_default") or "runtime_default"
+        ),
+        threshold_applied_value=(
+            f"enabled={bool(decision.get('enabled'))}|min_hold={decision.get('min_hold_sec', '-')}|"
+            f"min_loss={decision.get('min_loss_pct', 0.0):+.2f}|"
+            f"recovery_max={decision.get('recovery_prob_max', 0.0):.3f}"
+        ),
         canary_enabled=bool(decision.get("enabled")),
         should_exit=bool(decision.get("should_exit")),
         would_exit=bool(decision.get("would_exit")),
@@ -1701,6 +1714,14 @@ def _build_soft_stop_whipsaw_confirmation_decision(
         if float(buy_price or 0.0) > 0
         else False
     )
+    threshold_version = str(
+        _rule("SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_THRESHOLD_VERSION", "runtime_default")
+        or "runtime_default"
+    )
+    calibration_state = str(
+        _rule("SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_CALIBRATION_STATE", "runtime_default")
+        or "runtime_default"
+    )
     active = (
         enabled
         and confirm_sec > 0
@@ -1729,6 +1750,13 @@ def _build_soft_stop_whipsaw_confirmation_decision(
         "rebound_above_buy": rebound_above_buy,
         "used": used,
         "expired": expired,
+        "threshold_family": "soft_stop_whipsaw_confirmation",
+        "threshold_version": threshold_version,
+        "threshold_calibration_state": calibration_state,
+        "threshold_applied_value": (
+            f"enabled={enabled}|confirm_sec={confirm_sec}|buffer_pct={buffer_pct:.2f}|"
+            f"max_worsen_pct={max_worsen_pct:.2f}"
+        ),
     }
 
 
@@ -4109,6 +4137,21 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                     code,
                                     "score65_74_recovery_probe",
                                     applied=True,
+                                    decision_source="BUY_SCORE65_74_RECOVERY_PROBE",
+                                    threshold_family="score65_74_recovery_probe",
+                                    threshold_version=str(
+                                        _rule("AI_SCORE65_74_RECOVERY_PROBE_THRESHOLD_VERSION", "runtime_default")
+                                        or "runtime_default"
+                                    ),
+                                    threshold_calibration_state=str(
+                                        _rule("AI_SCORE65_74_RECOVERY_PROBE_CALIBRATION_STATE", "runtime_default")
+                                        or "runtime_default"
+                                    ),
+                                    threshold_applied_value=(
+                                        f"enabled=True|score={int(_rule('AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE', 65) or 65)}-"
+                                        f"{int(_rule('AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE', 74) or 74)}|"
+                                        f"budget={int(_rule('AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW', 50_000) or 50_000)}|qty=1"
+                                    ),
                                     ai_score=f"{float(ai_score or 0.0):.1f}",
                                     buy_pressure=f"{float(feature_probe.get('buy_pressure', 0.0) or 0.0):.2f}",
                                     tick_accel=f"{float(feature_probe.get('tick_accel', 0.0) or 0.0):.3f}",
@@ -6623,6 +6666,19 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 stock,
                 code,
                 "bad_entry_refined_exit",
+                decision_source="BAD_ENTRY_REFINED_CANARY",
+                threshold_family="bad_entry_refined_canary",
+                threshold_version=str(
+                    _rule("SCALP_BAD_ENTRY_REFINED_THRESHOLD_VERSION", "runtime_default") or "runtime_default"
+                ),
+                threshold_calibration_state=str(
+                    _rule("SCALP_BAD_ENTRY_REFINED_CALIBRATION_STATE", "runtime_default") or "runtime_default"
+                ),
+                threshold_applied_value=(
+                    f"enabled=True|min_hold={bad_entry_refined_decision.get('min_hold_sec', '-')}|"
+                    f"min_loss={bad_entry_refined_decision.get('min_loss_pct', 0.0):+.2f}|"
+                    f"recovery_max={bad_entry_refined_decision.get('recovery_prob_max', 0.0):.3f}"
+                ),
                 exit_rule=exit_rule,
                 classifier="never_green_ai_fade_refined",
                 profit_rate=f"{profit_rate:+.2f}",
@@ -6832,6 +6888,12 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     additional_worsen=f"{float(whipsaw_decision.get('additional_worsen', 0.0) or 0.0):.2f}",
                     rebound_above_sell=bool(whipsaw_decision.get("rebound_above_sell")),
                     rebound_above_buy=bool(whipsaw_decision.get("rebound_above_buy")),
+                    threshold_family=whipsaw_decision.get("threshold_family", "soft_stop_whipsaw_confirmation"),
+                    threshold_version=whipsaw_decision.get("threshold_version", "runtime_default"),
+                    threshold_calibration_state=whipsaw_decision.get(
+                        "threshold_calibration_state", "runtime_default"
+                    ),
+                    threshold_applied_value=whipsaw_decision.get("threshold_applied_value", "-"),
                     flow_state=stock.get("holding_flow_override_state", "-"),
                     exit_rule_candidate="scalp_soft_stop_pct",
                 )
@@ -6851,6 +6913,12 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     additional_worsen=f"{float(whipsaw_decision.get('additional_worsen', 0.0) or 0.0):.2f}",
                     rebound_above_sell=bool(whipsaw_decision.get("rebound_above_sell")),
                     rebound_above_buy=bool(whipsaw_decision.get("rebound_above_buy")),
+                    threshold_family=whipsaw_decision.get("threshold_family", "soft_stop_whipsaw_confirmation"),
+                    threshold_version=whipsaw_decision.get("threshold_version", "runtime_default"),
+                    threshold_calibration_state=whipsaw_decision.get(
+                        "threshold_calibration_state", "runtime_default"
+                    ),
+                    threshold_applied_value=whipsaw_decision.get("threshold_applied_value", "-"),
                     exit_rule_candidate="scalp_soft_stop_pct",
                 )
             if soft_stop_within_grace:

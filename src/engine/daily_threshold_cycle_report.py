@@ -20,11 +20,177 @@ REPORT_DIR.mkdir(parents=True, exist_ok=True)
 STAT_ACTION_REPORT_DIR = REPORT_DIR / "statistical_action_weight"
 AI_DECISION_MATRIX_DIR = REPORT_DIR / "holding_exit_decision_matrix"
 CUMULATIVE_THRESHOLD_REPORT_DIR = REPORT_DIR / "threshold_cycle_cumulative"
+THRESHOLD_CALIBRATION_REPORT_DIR = REPORT_DIR / "threshold_cycle_calibration"
 POST_SELL_DIR = DATA_DIR / "post_sell"
-THRESHOLD_CYCLE_SCHEMA_VERSION = 1
+THRESHOLD_CYCLE_SCHEMA_VERSION = 2
 THRESHOLD_CYCLE_DIR = DATA_DIR / "threshold_cycle"
 RAW_PIPELINE_FALLBACK_MAX_BYTES = 64 * 1024 * 1024
 CUMULATIVE_BASELINE_START_DATE = "2026-04-21"
+
+CALIBRATION_SAFETY_GUARDS = [
+    "hard/protect/emergency stop delay >= 1",
+    "order failure or receipt/provenance damage",
+    "same-stage owner conflict",
+    "severe loss guard breach",
+]
+CALIBRATION_FAMILY_METADATA = {
+    "soft_stop_whipsaw_confirmation": {
+        "priority": 1,
+        "source_family": "soft_stop_whipsaw_confirmation",
+        "target_env_keys": [
+            "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED",
+            "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC",
+            "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_BUFFER_PCT",
+            "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_MAX_WORSEN_PCT",
+        ],
+        "primary_key": "confirm_sec",
+        "bounds": {
+            "confirm_sec": {"min": 20, "max": 120, "max_step_per_day": 20},
+            "buffer_pct": {"min": 0.05, "max": 0.50, "max_step_per_day": 0.05},
+            "max_worsen_pct": {"min": 0.10, "max": 0.60, "max_step_per_day": 0.05},
+        },
+        "sample_floor": 10,
+        "sample_window": "daily",
+        "allowed_runtime_apply": True,
+    },
+    "holding_flow_ofi_smoothing": {
+        "priority": 2,
+        "source_family": "holding_flow_ofi_smoothing",
+        "target_env_keys": [
+            "OFI_AI_SMOOTHING_STALE_THRESHOLD_MS",
+            "OFI_AI_SMOOTHING_PERSISTENCE_REQUIRED",
+            "HOLDING_FLOW_OFI_BEARISH_CONFIRM_WORSEN_PCT",
+            "HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC",
+            "HOLDING_FLOW_OVERRIDE_WORSEN_PCT",
+        ],
+        "primary_key": "max_defer_sec",
+        "bounds": {
+            "max_defer_sec": {"min": 30, "max": 120, "max_step_per_day": 15},
+            "worsen_floor_pct": {"min": 0.40, "max": 1.20, "max_step_per_day": 0.10},
+        },
+        "sample_floor": 20,
+        "sample_window": "daily",
+        "allowed_runtime_apply": True,
+    },
+    "protect_trailing_smoothing": {
+        "priority": 3,
+        "source_family": "protect_trailing_smoothing",
+        "target_env_keys": [
+            "SCALP_PROTECT_TRAILING_SMOOTH_WINDOW_SEC",
+            "SCALP_PROTECT_TRAILING_SMOOTH_MIN_SPAN_SEC",
+            "SCALP_PROTECT_TRAILING_SMOOTH_MIN_SAMPLES",
+            "SCALP_PROTECT_TRAILING_SMOOTH_BELOW_RATIO",
+            "SCALP_PROTECT_TRAILING_SMOOTH_BUFFER_PCT",
+            "SCALP_PROTECT_TRAILING_EMERGENCY_PCT",
+        ],
+        "primary_key": "window_sec",
+        "bounds": {
+            "window_sec": {"min": 10, "max": 45, "max_step_per_day": 10},
+            "below_ratio": {"min": 0.50, "max": 0.90, "max_step_per_day": 0.05},
+            "buffer_pct": {"min": 0.50, "max": 1.50, "max_step_per_day": 0.10},
+        },
+        "sample_floor": 20,
+        "sample_window": "daily",
+        "allowed_runtime_apply": True,
+    },
+    "trailing_continuation": {
+        "priority": 4,
+        "source_family": "scalp_trailing_take_profit",
+        "target_env_keys": [
+            "SCALP_TRAILING_WEAK_DRAW_DOWN_PCT",
+            "SCALP_TRAILING_STRONG_DRAW_DOWN_PCT",
+            "SCALP_TRAILING_STRONG_AI_SCORE",
+        ],
+        "primary_key": "weak_limit",
+        "bounds": {
+            "weak_limit": {"min": 0.40, "max": 0.80, "max_step_per_day": 0.05},
+            "strong_limit": {"min": 0.80, "max": 1.50, "max_step_per_day": 0.05},
+        },
+        "sample_floor": 20,
+        "sample_window": "daily",
+        "allowed_runtime_apply": False,
+    },
+    "score65_74_recovery_probe": {
+        "priority": 10,
+        "source_family": "score65_74_recovery_probe",
+        "target_env_keys": [
+            "AI_SCORE65_74_RECOVERY_PROBE_ENABLED",
+            "AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE",
+            "AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE",
+            "AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE",
+            "AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL",
+            "AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP",
+            "AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW",
+            "AI_WAIT6579_PROBE_CANARY_MAX_QTY",
+        ],
+        "primary_key": "enabled",
+        "bounds": {
+            "min_buy_pressure": {"min": 55.0, "max": 75.0, "max_step_per_day": 5.0},
+            "min_tick_accel": {"min": 0.8, "max": 1.5, "max_step_per_day": 0.1},
+            "min_micro_vwap_bp": {"min": -10.0, "max": 20.0, "max_step_per_day": 5.0},
+            "max_budget_krw": {"min": 10_000, "max": 50_000, "max_step_per_day": 10_000},
+        },
+        "sample_floor": 20,
+        "sample_window": "daily",
+        "allowed_runtime_apply": True,
+    },
+    "bad_entry_refined_canary": {
+        "priority": 20,
+        "source_family": "bad_entry_refined_canary",
+        "target_env_keys": [
+            "SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED",
+            "SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC",
+            "SCALP_BAD_ENTRY_REFINED_MIN_LOSS_PCT",
+            "SCALP_BAD_ENTRY_REFINED_MAX_PEAK_PROFIT_PCT",
+            "SCALP_BAD_ENTRY_REFINED_AI_SCORE_LIMIT",
+            "SCALP_BAD_ENTRY_REFINED_RECOVERY_PROB_MAX",
+        ],
+        "primary_key": "enabled",
+        "bounds": {
+            "min_hold_sec": {"min": 60, "max": 300, "max_step_per_day": 30},
+            "min_loss_pct": {"min": -1.50, "max": -0.50, "max_step_per_day": 0.10},
+            "max_peak_profit_pct": {"min": 0.00, "max": 0.30, "max_step_per_day": 0.05},
+            "recovery_prob_max": {"min": 0.15, "max": 0.45, "max_step_per_day": 0.05},
+        },
+        "sample_floor": 10,
+        "sample_window": "daily",
+        "allowed_runtime_apply": True,
+    },
+    "holding_exit_decision_matrix_advisory": {
+        "priority": 30,
+        "source_family": "holding_exit_decision_matrix_advisory",
+        "target_env_keys": ["HOLDING_EXIT_MATRIX_ADVISORY_ENABLED"],
+        "primary_key": "enabled",
+        "bounds": {},
+        "sample_floor": 1,
+        "sample_window": "daily",
+        "allowed_runtime_apply": True,
+    },
+    "scale_in_price_guard": {
+        "priority": 40,
+        "source_family": "scale_in_price_guard",
+        "target_env_keys": [
+            "SCALPING_SCALE_IN_MAX_SPREAD_BPS",
+            "SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS",
+            "SCALPING_PYRAMID_MIN_AI_SCORE",
+            "SCALPING_PYRAMID_MIN_BUY_PRESSURE",
+            "SCALPING_PYRAMID_MIN_TICK_ACCEL",
+            "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP",
+        ],
+        "primary_key": "pyramid_max_micro_vwap_bps",
+        "bounds": {
+            "max_spread_bps": {"min": 40.0, "max": 100.0, "max_step_per_day": 5.0},
+            "pyramid_max_micro_vwap_bps": {"min": 30.0, "max": 80.0, "max_step_per_day": 5.0},
+            "pyramid_min_ai_score": {"min": 65, "max": 80, "max_step_per_day": 2},
+            "pyramid_min_buy_pressure": {"min": 55.0, "max": 75.0, "max_step_per_day": 2.5},
+            "pyramid_min_tick_accel": {"min": 0.3, "max": 1.0, "max_step_per_day": 0.1},
+            "effective_qty_cap": {"min": 1, "max": 1, "max_step_per_day": 0},
+        },
+        "sample_floor": 20,
+        "sample_window": "daily",
+        "allowed_runtime_apply": False,
+    },
+}
 
 
 @dataclass
@@ -185,6 +351,33 @@ def save_threshold_cycle_report(report: dict) -> Path:
     return path
 
 
+def calibration_report_path_for_date(target_date: str, run_phase: str) -> Path:
+    phase = str(run_phase or "postclose").strip() or "postclose"
+    return THRESHOLD_CALIBRATION_REPORT_DIR / f"threshold_cycle_calibration_{target_date}_{phase}.json"
+
+
+def save_threshold_calibration_report(report: dict, *, run_phase: str | None = None) -> Path:
+    target_date = str(report.get("date") or date.today().isoformat())
+    phase = str(run_phase or (report.get("meta") or {}).get("calibration_run_phase") or "postclose")
+    path = calibration_report_path_for_date(target_date, phase)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "date": target_date,
+        "run_phase": phase,
+        "generated_at": (report.get("meta") or {}).get("generated_at"),
+        "source_report": str(report_path_for_date(target_date)),
+        "runtime_change": False,
+        "calibration_source_bundle": report.get("calibration_source_bundle") or {},
+        "calibration_candidates": report.get("calibration_candidates") or [],
+        "post_apply_attribution": report.get("post_apply_attribution") or {},
+        "safety_guard_pack": report.get("safety_guard_pack") or [],
+        "calibration_trigger_pack": report.get("calibration_trigger_pack") or [],
+        "warnings": report.get("warnings") or [],
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    return path
+
+
 def statistical_action_report_paths(target_date: str) -> tuple[Path, Path]:
     return (
         STAT_ACTION_REPORT_DIR / f"statistical_action_weight_{target_date}.json",
@@ -321,6 +514,272 @@ def _load_partitioned_pipeline_events(target_date: str) -> PipelineLoadResult | 
             "warnings": [],
         },
     )
+
+
+def _read_json_dict(path: Path) -> dict:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _calibration_report_source_paths(target_date: str) -> dict[str, Path]:
+    return {
+        "buy_funnel_sentinel": REPORT_DIR / "buy_funnel_sentinel" / f"buy_funnel_sentinel_{target_date}.json",
+        "sentinel_followup": REPORT_DIR / f"sentinel_followup_{target_date}.md",
+        "wait6579_ev_cohort": REPORT_DIR / "monitor_snapshots" / f"wait6579_ev_cohort_{target_date}.json",
+        "missed_entry_counterfactual": (
+            REPORT_DIR / "monitor_snapshots" / f"missed_entry_counterfactual_{target_date}.json"
+        ),
+        "performance_tuning": REPORT_DIR / "monitor_snapshots" / f"performance_tuning_{target_date}.json",
+        "holding_exit_observation": REPORT_DIR / "monitor_snapshots" / f"holding_exit_observation_{target_date}.json",
+        "post_sell_feedback": REPORT_DIR / "monitor_snapshots" / f"post_sell_feedback_{target_date}.json",
+        "trade_review": REPORT_DIR / "monitor_snapshots" / f"trade_review_{target_date}.json",
+        "holding_exit_sentinel": REPORT_DIR / "holding_exit_sentinel" / f"holding_exit_sentinel_{target_date}.json",
+        "holding_exit_decision_matrix": (
+            REPORT_DIR / "holding_exit_decision_matrix" / f"holding_exit_decision_matrix_{target_date}.json"
+        ),
+        "statistical_action_weight": (
+            REPORT_DIR / "statistical_action_weight" / f"statistical_action_weight_{target_date}.json"
+        ),
+    }
+
+
+def _holding_exit_report_source_paths(target_date: str) -> dict[str, Path]:
+    paths = _calibration_report_source_paths(target_date)
+    return {
+        name: path
+        for name, path in paths.items()
+        if name
+        in {
+            "holding_exit_observation",
+            "post_sell_feedback",
+            "trade_review",
+            "holding_exit_sentinel",
+            "holding_exit_decision_matrix",
+            "statistical_action_weight",
+        }
+    }
+
+
+def _summarize_calibration_report_sources(target_date: str) -> dict:
+    sources: dict[str, dict] = {}
+    warnings: list[str] = []
+    source_paths = _calibration_report_source_paths(target_date)
+    for name, path in source_paths.items():
+        payload = _read_json_dict(path)
+        exists = path.exists()
+        if exists and not payload and path.suffix == ".json":
+            warnings.append(f"{name} 로드 실패 또는 빈 JSON: {path}")
+        sources[name] = {
+            "path": str(path),
+            "exists": exists,
+            "loaded": bool(payload),
+            "top_keys": list(payload.keys())[:20] if payload else [],
+        }
+
+    buy_funnel_sentinel = _read_json_dict(source_paths["buy_funnel_sentinel"])
+    wait6579_ev = _read_json_dict(source_paths["wait6579_ev_cohort"])
+    missed_entry = _read_json_dict(source_paths["missed_entry_counterfactual"])
+    performance_tuning = _read_json_dict(source_paths["performance_tuning"])
+    holding_exit_observation = _read_json_dict(source_paths["holding_exit_observation"])
+    post_sell_feedback = _read_json_dict(source_paths["post_sell_feedback"])
+    trade_review = _read_json_dict(source_paths["trade_review"])
+    holding_exit_sentinel = _read_json_dict(source_paths["holding_exit_sentinel"])
+    decision_matrix = _read_json_dict(source_paths["holding_exit_decision_matrix"])
+    stat_action = _read_json_dict(source_paths["statistical_action_weight"])
+
+    buy_current = buy_funnel_sentinel.get("current") if isinstance(buy_funnel_sentinel, dict) else {}
+    buy_current = buy_current if isinstance(buy_current, dict) else {}
+    buy_session = buy_current.get("session") if isinstance(buy_current.get("session"), dict) else {}
+    buy_stage_events = buy_session.get("stage_events") if isinstance(buy_session.get("stage_events"), dict) else {}
+    buy_ratios = buy_session.get("ratios") if isinstance(buy_session.get("ratios"), dict) else {}
+    buy_classification = buy_funnel_sentinel.get("classification") if isinstance(buy_funnel_sentinel, dict) else {}
+    buy_classification = buy_classification if isinstance(buy_classification, dict) else {}
+    wait_metrics = wait6579_ev.get("metrics") if isinstance(wait6579_ev.get("metrics"), dict) else {}
+    wait_approval = wait6579_ev.get("approval_gate") if isinstance(wait6579_ev.get("approval_gate"), dict) else {}
+    wait_rows = wait6579_ev.get("rows") if isinstance(wait6579_ev.get("rows"), list) else []
+    score_rows = [
+        row
+        for row in wait_rows
+        if 65 <= int(_safe_float((row or {}).get("ai_score"), 0.0) or 0.0) <= 74
+    ]
+    score_ev = [_safe_float(row.get("expected_ev_pct"), None) for row in score_rows if isinstance(row, dict)]
+    score_close = [_safe_float(row.get("close_10m_pct"), None) for row in score_rows if isinstance(row, dict)]
+    score_mfe = [_safe_float(row.get("mfe_10m_pct"), None) for row in score_rows if isinstance(row, dict)]
+    score_ev = [value for value in score_ev if value is not None]
+    score_close = [value for value in score_close if value is not None]
+    score_mfe = [value for value in score_mfe if value is not None]
+    missed_metrics = missed_entry.get("metrics") if isinstance(missed_entry.get("metrics"), dict) else {}
+    perf_metrics = performance_tuning.get("metrics") if isinstance(performance_tuning.get("metrics"), dict) else {}
+    soft_stop = holding_exit_observation.get("soft_stop_rebound") if isinstance(holding_exit_observation, dict) else {}
+    soft_stop = soft_stop if isinstance(soft_stop, dict) else {}
+    post_sell_soft = post_sell_feedback.get("soft_stop_forensics") if isinstance(post_sell_feedback, dict) else {}
+    post_sell_soft = post_sell_soft if isinstance(post_sell_soft, dict) else {}
+    trailing = holding_exit_observation.get("trailing_continuation") if isinstance(holding_exit_observation, dict) else {}
+    trailing = trailing if isinstance(trailing, dict) else {}
+    same_symbol = holding_exit_observation.get("same_symbol_reentry") if isinstance(holding_exit_observation, dict) else {}
+    same_symbol = same_symbol if isinstance(same_symbol, dict) else {}
+    current = holding_exit_sentinel.get("current") if isinstance(holding_exit_sentinel, dict) else {}
+    current = current if isinstance(current, dict) else {}
+    session = current.get("session") if isinstance(current.get("session"), dict) else {}
+    stage_events = session.get("stage_events") if isinstance(session.get("stage_events"), dict) else {}
+    classification = holding_exit_sentinel.get("classification") if isinstance(holding_exit_sentinel, dict) else {}
+    classification = classification if isinstance(classification, dict) else {}
+    matrix_entries = decision_matrix.get("entries") if isinstance(decision_matrix.get("entries"), list) else []
+    non_clear_matrix_entries = [
+        entry
+        for entry in matrix_entries
+        if isinstance(entry, dict) and str(entry.get("recommended_bias") or "no_clear_edge") != "no_clear_edge"
+    ]
+    saw_policy_counts = stat_action.get("policy_counts") if isinstance(stat_action.get("policy_counts"), dict) else {}
+    stat_action_sample = stat_action.get("sample") if isinstance(stat_action.get("sample"), dict) else {}
+
+    source_metrics = {
+        "buy_score65_74": {
+            "sentinel_primary": buy_classification.get("primary"),
+            "sentinel_secondary": buy_classification.get("secondary")
+            if isinstance(buy_classification.get("secondary"), list)
+            else [],
+            "wait6579_total_candidates": _safe_int(wait_metrics.get("total_candidates"), 0) or 0,
+            "wait6579_entered_attempts": _safe_int(wait_metrics.get("entered_attempts"), 0) or 0,
+            "wait6579_missed_attempts": _safe_int(wait_metrics.get("missed_attempts"), 0) or 0,
+            "wait6579_avg_expected_ev_pct": _safe_float(wait_metrics.get("avg_expected_ev_pct"), None),
+            "wait6579_avg_close_10m_pct": _safe_float(wait_metrics.get("avg_close_10m_pct"), None),
+            "score65_74_candidates": len(score_rows),
+            "score65_74_avg_expected_ev_pct": round(_avg(score_ev) or 0.0, 4) if score_ev else None,
+            "score65_74_avg_close_10m_pct": round(_avg(score_close) or 0.0, 4) if score_close else None,
+            "score65_74_avg_mfe_10m_pct": round(_avg(score_mfe) or 0.0, 4) if score_mfe else None,
+            "full_samples": _safe_int(wait_approval.get("full_samples"), 0) or 0,
+            "partial_samples": _safe_int(wait_approval.get("partial_samples"), 0) or 0,
+            "threshold_relaxation_approved": bool(wait_approval.get("threshold_relaxation_approved")),
+            "partial_sample_zero_is_calibration_target": (_safe_int(wait_approval.get("partial_samples"), 0) or 0) == 0,
+            "budget_pass": _safe_int(buy_stage_events.get("budget_pass"), 0) or 0,
+            "latency_pass": _safe_int(buy_stage_events.get("latency_pass"), 0) or 0,
+            "order_bundle_submitted": _safe_int(buy_stage_events.get("order_bundle_submitted"), 0) or 0,
+            "position_rebased_after_fill": _safe_int(buy_stage_events.get("position_rebased_after_fill"), 0) or 0,
+            "submitted_to_budget_unique_pct": _safe_float(buy_ratios.get("submitted_to_budget_unique_pct"), None),
+            "submitted_to_ai_unique_pct": _safe_float(buy_ratios.get("submitted_to_ai_unique_pct"), None),
+            "missed_winner_rate": _safe_float(missed_metrics.get("missed_winner_rate"), None),
+            "avoided_loser_rate": _safe_float(missed_metrics.get("avoided_loser_rate"), None),
+            "gatekeeper_eval_ms_p95": _safe_float(perf_metrics.get("gatekeeper_eval_ms_p95"), None),
+        },
+        "soft_stop": {
+            "holding_exit_observation_total": _safe_int(soft_stop.get("total_soft_stop"), 0) or 0,
+            "holding_exit_observation_rebound_above_sell_10m_rate": _safe_float(
+                soft_stop.get("rebound_above_sell_10m_rate"), None
+            ),
+            "holding_exit_observation_rebound_above_buy_10m_rate": _safe_float(
+                soft_stop.get("rebound_above_buy_10m_rate"), None
+            ),
+            "holding_exit_observation_whipsaw_signal": bool(soft_stop.get("whipsaw_signal")),
+            "cooldown_would_block_rate": _safe_float(soft_stop.get("cooldown_would_block_rate"), None),
+            "post_sell_soft_stop_total": _safe_int(post_sell_soft.get("total_soft_stop"), 0) or 0,
+            "post_sell_rebound_above_sell_10m_rate": _safe_float(
+                (post_sell_soft.get("rebound_above_sell_rate") or {}).get("10m")
+                if isinstance(post_sell_soft.get("rebound_above_sell_rate"), dict)
+                else None,
+                None,
+            ),
+            "post_sell_rebound_above_buy_10m_rate": _safe_float(
+                (post_sell_soft.get("rebound_above_buy_rate") or {}).get("10m")
+                if isinstance(post_sell_soft.get("rebound_above_buy_rate"), dict)
+                else None,
+                None,
+            ),
+        },
+        "holding_flow": {
+            "sentinel_primary": classification.get("primary"),
+            "sentinel_secondary": classification.get("secondary") if isinstance(classification.get("secondary"), list) else [],
+            "holding_flow_override_defer_exit": _safe_int(stage_events.get("holding_flow_override_defer_exit"), 0) or 0,
+            "holding_flow_override_force_exit": _safe_int(stage_events.get("holding_flow_override_force_exit"), 0) or 0,
+            "holding_flow_override_exit_confirmed": _safe_int(
+                stage_events.get("holding_flow_override_exit_confirmed"), 0
+            )
+            or 0,
+            "holding_flow_ofi_smoothing_applied": _safe_int(
+                stage_events.get("holding_flow_ofi_smoothing_applied"), 0
+            )
+            or 0,
+            "max_defer_worsen_pct": _safe_float(session.get("max_defer_worsen_pct"), None),
+        },
+        "trailing": {
+            "evaluated_trailing": _safe_int(trailing.get("evaluated_trailing"), 0) or 0,
+            "qualifying_cohort_count": _safe_int(trailing.get("qualifying_cohort_count"), 0) or 0,
+            "missed_upside_rate": _safe_float(trailing.get("missed_upside_rate"), None),
+            "good_exit_rate": _safe_float(trailing.get("good_exit_rate"), None),
+            "eligible_for_live_review": bool(trailing.get("eligible_for_live_review")),
+        },
+        "safety": {
+            "same_symbol_reentry_loss_count": _safe_int(same_symbol.get("after_soft_stop_next_loss_count"), 0) or 0,
+            "sell_order_sent": _safe_int(stage_events.get("sell_order_sent"), 0) or 0,
+            "sell_completed": _safe_int(stage_events.get("sell_completed"), 0) or 0,
+            "trade_review_completed_valid": _safe_int((trade_review.get("metrics") or {}).get("completed_valid"), 0)
+            if isinstance(trade_review.get("metrics"), dict)
+            else 0,
+        },
+        "decision_support": {
+            "matrix_version": decision_matrix.get("matrix_version"),
+            "matrix_entries": len(matrix_entries),
+            "matrix_non_clear_edge": len(non_clear_matrix_entries),
+            "matrix_no_clear_edge": sum(
+                1
+                for entry in matrix_entries
+                if isinstance(entry, dict) and str(entry.get("recommended_bias") or "") == "no_clear_edge"
+            ),
+            "saw_weight_source_ready": bool(stat_action.get("weight_source_ready")),
+            "saw_candidate_weight_source": _safe_int(saw_policy_counts.get("candidate_weight_source"), 0) or 0,
+            "saw_defensive_only_high_loss_rate": _safe_int(
+                saw_policy_counts.get("defensive_only_high_loss_rate"), 0
+            )
+            or 0,
+            "saw_insufficient_sample": _safe_int(saw_policy_counts.get("insufficient_sample"), 0) or 0,
+            "excluded_reports": {
+                "preclose_sell_target": "operator_preclose_review_only_not_tuning_source",
+            },
+        },
+        "scale_in_price_guard": {
+            "scale_in_price_resolved": _safe_int(stage_events.get("scale_in_price_resolved"), 0) or 0,
+            "scale_in_price_guard_block": _safe_int(stage_events.get("scale_in_price_guard_block"), 0) or 0,
+            "scale_in_price_p2_observe": _safe_int(stage_events.get("scale_in_price_p2_observe"), 0) or 0,
+            "compact_scale_in_executed": _safe_int(stat_action_sample.get("compact_scale_in_executed"), 0)
+            or 0,
+            "avg_down_wait": _safe_int(stat_action_sample.get("avg_down_wait"), 0) or 0,
+            "pyramid_wait": _safe_int(stat_action_sample.get("pyramid_wait"), 0) or 0,
+            "saw_weight_source_ready": bool(stat_action.get("weight_source_ready")),
+            "saw_candidate_weight_source": _safe_int(saw_policy_counts.get("candidate_weight_source"), 0) or 0,
+        },
+        "bad_entry": {
+            "refined_candidate": _safe_int(stage_events.get("bad_entry_refined_candidate"), 0)
+            or _safe_int(buy_stage_events.get("bad_entry_refined_candidate"), 0)
+            or 0,
+            "bad_entry_block_observed": _safe_int(stage_events.get("bad_entry_block_observed"), 0)
+            or _safe_int(buy_stage_events.get("bad_entry_block_observed"), 0)
+            or 0,
+            "soft_stop_tail_sample": _safe_int(soft_stop.get("total_soft_stop"), 0) or 0,
+            "soft_stop_rebound_above_sell_10m_rate": _safe_float(
+                soft_stop.get("rebound_above_sell_10m_rate"), None
+            ),
+            "holding_flow_override_defer_exit": _safe_int(stage_events.get("holding_flow_override_defer_exit"), 0)
+            or 0,
+            "sell_order_sent": _safe_int(stage_events.get("sell_order_sent"), 0) or 0,
+            "sell_completed": _safe_int(stage_events.get("sell_completed"), 0) or 0,
+        },
+    }
+    return {
+        "schema_version": 1,
+        "target_date": target_date,
+        "purpose": "efficient_tradeoff_threshold_calibration_source",
+        "sources": sources,
+        "source_metrics": source_metrics,
+        "warnings": warnings,
+        "new_observation_axis_created": False,
+    }
+
+
+def _summarize_holding_exit_report_sources(target_date: str) -> dict:
+    return _summarize_calibration_report_sources(target_date)
 
 
 def _default_pipeline_load_result(target_date: str) -> PipelineLoadResult:
@@ -805,6 +1264,75 @@ def _build_mechanical_entry_family(events: list[dict]) -> dict:
     }
 
 
+def _event_score(event: dict) -> float:
+    fields = event.get("fields") if isinstance(event.get("fields"), dict) else {}
+    for key in ("ai_score", "score", "wait6579_probe_canary_score"):
+        value = _safe_float(fields.get(key), None)
+        if value is not None:
+            return value
+    return 0.0
+
+
+def _build_score65_74_recovery_probe_family(events: list[dict]) -> dict:
+    current = {
+        "enabled": bool(getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_ENABLED", False)),
+        "min_score": int(getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE", 65) or 65),
+        "max_score": int(getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE", 74) or 74),
+        "min_buy_pressure": float(
+            getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE", 65.0) or 65.0
+        ),
+        "min_tick_accel": float(
+            getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MIN_TICK_ACCEL", 1.20) or 1.20
+        ),
+        "min_micro_vwap_bp": float(
+            getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP", 0.0) or 0.0
+        ),
+        "max_budget_krw": int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 50_000) or 50_000),
+        "max_qty": int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_QTY", 1) or 1),
+    }
+    wait_candidates = [
+        event
+        for event in events
+        if str(event.get("stage") or "") == "wait65_79_ev_candidate"
+        and current["min_score"] <= _event_score(event) <= current["max_score"]
+    ]
+    blocked_score = [
+        event
+        for event in events
+        if str(event.get("stage") or "") == "blocked_ai_score"
+        and current["min_score"] <= _event_score(event) <= current["max_score"]
+    ]
+    applied = _events_for_stage(events, "score65_74_recovery_probe")
+    submitted = _events_for_stage(events, "order_bundle_submitted")
+    filled = _events_for_stage(events, "position_rebased_after_fill")
+    budget_pass = _events_for_stage(events, "budget_pass")
+    sample_ready = len(wait_candidates) >= 20 and bool(budget_pass) and len(submitted) < max(20, len(budget_pass) // 10)
+    recommended = dict(current)
+    if sample_ready:
+        recommended["enabled"] = True
+    return {
+        "family": "score65_74_recovery_probe",
+        "stage": "entry",
+        "sample": {
+            "wait65_79_score65_74_candidate": len(wait_candidates),
+            "blocked_score65_74": len(blocked_score),
+            "probe_applied": len(applied),
+            "budget_pass": len(budget_pass),
+            "submitted": len(submitted),
+            "filled": len(filled),
+        },
+        "apply_ready": sample_ready,
+        "current": current,
+        "recommended": recommended,
+        "apply_mode": "efficient_tradeoff_canary_candidate" if sample_ready else "observe_only",
+        "notes": [
+            "broad score threshold 완화가 아니라 score65~74 전용 1주/5만원 bounded canary 후보만 만든다.",
+            "partial sample 0은 live 전면 차단이 아니라 post-apply calibration target으로 남긴다.",
+            "latency DANGER 제외, 수급/가속/micro-VWAP gate와 1주 cap은 유지한다.",
+        ],
+    }
+
+
 def _build_pre_submit_guard_family(events: list[dict]) -> dict:
     current = {
         "max_below_bid_bps": int(getattr(TRADING_RULES, "SCALPING_PRE_SUBMIT_MAX_BELOW_BID_BPS", 80) or 80),
@@ -958,9 +1486,66 @@ def _build_bad_entry_family(events: list[dict]) -> dict:
         "apply_mode": "next_preopen_single_owner" if sample_ready else "observe_only",
         "notes": [
             "today live block은 열지 않고 observe->postclose->next_preopen 순서만 허용한다.",
-            "후행 soft_stop/hard_stop 연결이 불충분하면 추천값은 shadow 유지다.",
+            "후행 soft_stop/hard_stop 연결이 불충분하면 추천값은 report-only reference로 유지한다.",
             "soft_stop_zone_candidate는 refined canary가 이미 soft stop 영역에 들어간 뒤 제외한 표본이다.",
             "early_capture_candidate가 0이면 soft stop threshold보다 앞서 잡을 수 있었던 표본은 아직 확인되지 않은 것으로 본다.",
+        ],
+    }
+
+
+def _build_bad_entry_refined_canary_family(events: list[dict]) -> dict:
+    current = {
+        "enabled": bool(getattr(TRADING_RULES, "SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED", False)),
+        "min_hold_sec": int(getattr(TRADING_RULES, "SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC", 180) or 180),
+        "min_loss_pct": float(getattr(TRADING_RULES, "SCALP_BAD_ENTRY_REFINED_MIN_LOSS_PCT", -1.16) or -1.16),
+        "max_peak_profit_pct": float(
+            getattr(TRADING_RULES, "SCALP_BAD_ENTRY_REFINED_MAX_PEAK_PROFIT_PCT", 0.05) or 0.05
+        ),
+        "ai_score_limit": int(getattr(TRADING_RULES, "SCALP_BAD_ENTRY_REFINED_AI_SCORE_LIMIT", 45) or 45),
+        "recovery_prob_max": float(
+            getattr(TRADING_RULES, "SCALP_BAD_ENTRY_REFINED_RECOVERY_PROB_MAX", 0.30) or 0.30
+        ),
+    }
+    refined_candidates = _events_for_stage(events, "bad_entry_refined_candidate")
+    refined_exits = _events_for_stage(events, "bad_entry_refined_exit")
+    would_exit = [
+        event
+        for event in refined_candidates
+        if str((event.get("fields") or {}).get("would_exit") or "").lower() == "true"
+        or str((event.get("fields") or {}).get("should_exit") or "").lower() == "true"
+    ]
+    soft_stop_zone = [
+        event
+        for event in refined_candidates
+        if str((event.get("fields") or {}).get("exclusion_reason") or "") == "soft_stop_zone"
+    ]
+    sell_order_failed = _stage_count(events, "sell_order_failed")
+    sell_order_sent = _stage_count(events, "sell_order_sent")
+    sell_completed = _stage_count(events, "sell_completed")
+    sample_ready = len(refined_candidates) >= 10 and sell_order_failed == 0
+    recommended = dict(current)
+    if sample_ready:
+        recommended["enabled"] = True
+    return {
+        "family": "bad_entry_refined_canary",
+        "stage": "holding_exit",
+        "sample": {
+            "refined_candidate": len(refined_candidates),
+            "would_exit": len(would_exit),
+            "refined_exit": len(refined_exits),
+            "soft_stop_zone_candidate": len(soft_stop_zone),
+            "sell_order_sent": sell_order_sent,
+            "sell_completed": sell_completed,
+            "sell_order_failed": sell_order_failed,
+        },
+        "apply_ready": sample_ready,
+        "current": current,
+        "recommended": recommended,
+        "apply_mode": "efficient_tradeoff_canary_candidate" if sample_ready else "observe_only",
+        "notes": [
+            "naive bad_entry hard block은 재개하지 않고 refined candidate만 bounded canary 후보로 본다.",
+            "목표는 완벽한 loser classifier가 아니라 soft-stop tail/defer cost 감소다.",
+            "GOOD_EXIT 감소가 허용 범위 안이면 rollback이 아니라 calibration으로 조정한다.",
         ],
     }
 
@@ -1240,6 +1825,87 @@ def _build_soft_stop_family(events: list[dict]) -> dict:
         "notes": [
             "rebound/missed-upside 연결이 없으면 grace_sec 추천은 direction-only로 본다.",
             "holding_exit stage는 same-day 다른 live owner와 동시 적용 금지다.",
+        ],
+    }
+
+
+def _build_soft_stop_whipsaw_confirmation_family(events: list[dict]) -> dict:
+    current = {
+        "enabled": bool(getattr(TRADING_RULES, "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED", False)),
+        "confirm_sec": int(getattr(TRADING_RULES, "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC", 60) or 60),
+        "buffer_pct": float(getattr(TRADING_RULES, "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_BUFFER_PCT", 0.20) or 0.20),
+        "max_worsen_pct": float(
+            getattr(TRADING_RULES, "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_MAX_WORSEN_PCT", 0.30) or 0.30
+        ),
+    }
+    grace_touches = _events_for_stage(events, "soft_stop_micro_grace")
+    confirmations = _events_for_stage(events, "soft_stop_whipsaw_confirmation")
+    expired = _events_for_stage(events, "soft_stop_whipsaw_confirmation_expired")
+    soft_stop_completed = [
+        event
+        for event in events
+        if str(event.get("stage") or "") == "sell_completed"
+        and str(_event_fields(event).get("exit_rule") or "") == "scalp_soft_stop_pct"
+    ]
+    confirmation_elapsed_values = [
+        value
+        for value in (
+            _safe_float(_event_fields(event).get("confirmation_elapsed_sec"), None)
+            for event in confirmations + expired
+        )
+        if value is not None
+    ]
+    worsen_values = [
+        value
+        for value in (
+            _safe_float(_event_fields(event).get("additional_worsen"), None)
+            for event in confirmations + expired
+        )
+        if value is not None
+    ]
+    completed_profit_values = [
+        value
+        for value in (
+            _safe_float(_event_fields(event).get("profit_rate"), None)
+            for event in soft_stop_completed
+        )
+        if value is not None
+    ]
+    sample_floor = int(CALIBRATION_FAMILY_METADATA["soft_stop_whipsaw_confirmation"]["sample_floor"])
+    sample_ready = len(grace_touches) >= sample_floor
+    recommended_confirm_sec = int(round(_clamp(_percentile(confirmation_elapsed_values, 75, 60.0), 20.0, 120.0)))
+    recommended_max_worsen = round(_clamp(_percentile(worsen_values, 75, current["max_worsen_pct"]), 0.10, 0.60), 2)
+    return {
+        "family": "soft_stop_whipsaw_confirmation",
+        "stage": "holding_exit",
+        "sample": {
+            "soft_stop_micro_grace": len(grace_touches),
+            "confirmation_started": len(confirmations),
+            "confirmation_expired": len(expired),
+            "soft_stop_completed": len(soft_stop_completed),
+            "completed_avg_profit_rate": round(_avg(completed_profit_values) or 0.0, 4)
+            if completed_profit_values
+            else None,
+            "avg_confirmation_elapsed_sec": round(_avg(confirmation_elapsed_values) or 0.0, 2)
+            if confirmation_elapsed_values
+            else None,
+            "avg_additional_worsen": round(_avg(worsen_values) or 0.0, 4) if worsen_values else None,
+            "sample_floor": sample_floor,
+        },
+        "apply_ready": sample_ready,
+        "current": current,
+        "recommended": {
+            "enabled": True,
+            "confirm_sec": recommended_confirm_sec,
+            "buffer_pct": current["buffer_pct"],
+            "max_worsen_pct": recommended_max_worsen,
+        },
+        "apply_mode": "calibrated_apply_candidate" if sample_ready else "observe_only",
+        "notes": [
+            "첫 live calibration family 후보이며 장중 자동 mutation 없이 다음 장전 1회 적용 단위로만 다룬다.",
+            "조건 미달은 rollback이 아니라 calibration trigger로 기록한다.",
+            "hard/protect/emergency stop, 주문 실패, provenance 손상, same-stage owner 충돌은 safety guard로 우선한다.",
+            "GOOD_EXIT 훼손은 +10%p까지 허용하고 soft-stop tail 또는 MISSED_UPSIDE 감소가 있으면 완만 조정/유지 대상이다.",
         ],
     }
 
@@ -1687,16 +2353,64 @@ def _build_family_reports(
     completed_rows = completed_rows or []
     return [
         _build_mechanical_entry_family(events),
+        _build_score65_74_recovery_probe_family(events),
         _build_pre_submit_guard_family(events),
         _build_entry_ofi_ai_smoothing_family(events),
         _build_bad_entry_family(events),
+        _build_bad_entry_refined_canary_family(events),
         _build_reversal_add_family(events),
         _build_soft_stop_family(events),
+        _build_soft_stop_whipsaw_confirmation_family(events),
         _build_scalp_trailing_take_profit_family(events),
         _build_protect_trailing_smoothing_family(events),
         _build_holding_flow_ofi_smoothing_family(events),
         _build_scale_in_price_guard_family(events),
         _build_statistical_action_weight_family(events, completed_rows, target_date=target_date),
+    ]
+
+
+def _build_report_source_families(report_source_context: dict | None) -> list[dict]:
+    metrics = (report_source_context or {}).get("source_metrics")
+    metrics = metrics if isinstance(metrics, dict) else {}
+    decision_support = metrics.get("decision_support") if isinstance(metrics.get("decision_support"), dict) else {}
+    matrix_entries = _safe_int(decision_support.get("matrix_entries"), 0) or 0
+    non_clear_edge = _safe_int(decision_support.get("matrix_non_clear_edge"), 0) or 0
+    candidate_weight_source = _safe_int(decision_support.get("saw_candidate_weight_source"), 0) or 0
+    sample_ready = non_clear_edge > 0 and candidate_weight_source > 0
+    return [
+        {
+            "family": "holding_exit_decision_matrix_advisory",
+            "stage": "decision_support",
+            "sample": {
+                "matrix_entries": matrix_entries,
+                "matrix_non_clear_edge": non_clear_edge,
+                "matrix_no_clear_edge": _safe_int(decision_support.get("matrix_no_clear_edge"), 0) or 0,
+                "saw_candidate_weight_source": candidate_weight_source,
+                "saw_defensive_only_high_loss_rate": _safe_int(
+                    decision_support.get("saw_defensive_only_high_loss_rate"), 0
+                )
+                or 0,
+                "saw_insufficient_sample": _safe_int(decision_support.get("saw_insufficient_sample"), 0) or 0,
+            },
+            "apply_ready": sample_ready,
+            "current": {
+                "enabled": False,
+                "mode": "advisory_flag_off",
+                "matrix_version": decision_support.get("matrix_version"),
+            },
+            "recommended": {
+                "enabled": sample_ready,
+                "mode": "advisory_canary_live_readiness" if sample_ready else "readiness_only",
+                "matrix_version": decision_support.get("matrix_version"),
+                "candidate_bucket_count": non_clear_edge,
+            },
+            "apply_mode": "efficient_tradeoff_canary_candidate" if sample_ready else "report_only_readiness",
+            "notes": [
+                "ADM은 shadow가 아니라 advisory canary/live-readiness 축으로만 본다.",
+                "recommended_bias가 전부 no_clear_edge이면 최소 edge 부재라 live AI 응답은 바꾸지 않는다.",
+                "SAW candidate_weight_source bucket만 matrix bias 후보로 연결한다.",
+            ],
+        }
     ]
 
 
@@ -1748,10 +2462,328 @@ def _build_rollback_guard_pack(families: list[dict]) -> list[dict]:
                 "loss_cap": "COMPLETED + valid profit_rate avg <= -0.30% or realized pnl regression",
                 "quality_regression": "submitted/full/partial 또는 soft/hard/trailing quality regression",
                 "cross_contamination": "same-stage multi-owner contamination 금지",
-                "sample_floor": "sample 부족 시 자동 승격 금지",
+                "sample_floor": "sample 부족은 cap 축소/hold_sample/max_step_per_day 축소 calibration으로 처리",
             }
         )
     return guards
+
+
+def _family_sample_count(family: dict) -> int:
+    sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+    scale_in_counts = [
+        _safe_int(sample.get("resolved"), None),
+        _safe_int(sample.get("guard_block"), None),
+        _safe_int(sample.get("p2_observe"), None),
+    ]
+    if any(value is not None for value in scale_in_counts):
+        return sum(int(value or 0) for value in scale_in_counts)
+    smooth_hold = _safe_int(sample.get("smooth_hold"), None)
+    smooth_confirmed = _safe_int(sample.get("smooth_confirmed"), None)
+    if smooth_hold is not None or smooth_confirmed is not None:
+        return int(smooth_hold or 0) + int(smooth_confirmed or 0)
+    for key in (
+        "soft_stop_micro_grace",
+        "applied",
+        "exit_signal",
+        "touches",
+    ):
+        value = _safe_int(sample.get(key), None)
+        if value is not None:
+            return int(value)
+    numeric_values = [_safe_int(value, None) for value in sample.values() if not isinstance(value, (dict, list))]
+    return max([int(value) for value in numeric_values if value is not None] or [0])
+
+
+def _source_metrics_for_family(output_family: str, report_source_context: dict | None) -> dict:
+    metrics = (report_source_context or {}).get("source_metrics")
+    metrics = metrics if isinstance(metrics, dict) else {}
+    if output_family == "score65_74_recovery_probe":
+        return metrics.get("buy_score65_74") if isinstance(metrics.get("buy_score65_74"), dict) else {}
+    if output_family == "bad_entry_refined_canary":
+        return metrics.get("bad_entry") if isinstance(metrics.get("bad_entry"), dict) else {}
+    if output_family == "holding_exit_decision_matrix_advisory":
+        return metrics.get("decision_support") if isinstance(metrics.get("decision_support"), dict) else {}
+    if output_family == "scale_in_price_guard":
+        return metrics.get("scale_in_price_guard") if isinstance(metrics.get("scale_in_price_guard"), dict) else {}
+    if output_family == "soft_stop_whipsaw_confirmation":
+        return metrics.get("soft_stop") if isinstance(metrics.get("soft_stop"), dict) else {}
+    if output_family == "holding_flow_ofi_smoothing":
+        return metrics.get("holding_flow") if isinstance(metrics.get("holding_flow"), dict) else {}
+    if output_family in {"protect_trailing_smoothing", "trailing_continuation"}:
+        return metrics.get("trailing") if isinstance(metrics.get("trailing"), dict) else {}
+    return {}
+
+
+def _source_sample_count_for_family(output_family: str, source_metrics: dict) -> int:
+    if output_family == "score65_74_recovery_probe":
+        return max(
+            _safe_int(source_metrics.get("score65_74_candidates"), 0) or 0,
+            _safe_int(source_metrics.get("wait6579_total_candidates"), 0) or 0,
+        )
+    if output_family == "bad_entry_refined_canary":
+        return max(
+            _safe_int(source_metrics.get("refined_candidate"), 0) or 0,
+            _safe_int(source_metrics.get("soft_stop_tail_sample"), 0) or 0,
+        )
+    if output_family == "holding_exit_decision_matrix_advisory":
+        return _safe_int(source_metrics.get("matrix_entries"), 0) or 0
+    if output_family == "scale_in_price_guard":
+        guard_events = (
+            (_safe_int(source_metrics.get("scale_in_price_resolved"), 0) or 0)
+            + (_safe_int(source_metrics.get("scale_in_price_guard_block"), 0) or 0)
+            + (_safe_int(source_metrics.get("scale_in_price_p2_observe"), 0) or 0)
+        )
+        saw_actions = (_safe_int(source_metrics.get("avg_down_wait"), 0) or 0) + (
+            _safe_int(source_metrics.get("pyramid_wait"), 0) or 0
+        )
+        return max(guard_events, _safe_int(source_metrics.get("compact_scale_in_executed"), 0) or 0, saw_actions)
+    if output_family == "soft_stop_whipsaw_confirmation":
+        return max(
+            _safe_int(source_metrics.get("holding_exit_observation_total"), 0) or 0,
+            _safe_int(source_metrics.get("post_sell_soft_stop_total"), 0) or 0,
+        )
+    if output_family == "holding_flow_ofi_smoothing":
+        return _safe_int(source_metrics.get("holding_flow_override_defer_exit"), 0) or 0
+    if output_family in {"protect_trailing_smoothing", "trailing_continuation"}:
+        return max(
+            _safe_int(source_metrics.get("evaluated_trailing"), 0) or 0,
+            _safe_int(source_metrics.get("qualifying_cohort_count"), 0) or 0,
+        )
+    return 0
+
+
+def _calibration_state_for_family(
+    output_family: str,
+    family: dict,
+    metadata: dict,
+    *,
+    source_metrics: dict | None = None,
+    sample_count: int | None = None,
+    sample_ready: bool | None = None,
+) -> tuple[str, str]:
+    source_metrics = source_metrics if isinstance(source_metrics, dict) else {}
+    sample_count = _family_sample_count(family) if sample_count is None else int(sample_count)
+    sample_floor = int(metadata.get("sample_floor") or 0)
+    if output_family == "trailing_continuation":
+        return (
+            "freeze",
+            "GOOD_EXIT 훼손 리스크가 커서 1차 loop에서는 report/calibration만 수행하고 live apply는 금지한다.",
+        )
+    ready = bool(family.get("apply_ready")) if sample_ready is None else bool(sample_ready)
+    if output_family == "holding_exit_decision_matrix_advisory":
+        family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+        non_clear_edge = _safe_int(family_sample.get("matrix_non_clear_edge"), 0) or 0
+        candidate_weight_source = _safe_int(family_sample.get("saw_candidate_weight_source"), 0) or 0
+        if non_clear_edge <= 0:
+            return ("hold_no_edge", "ADM/SAW matrix가 전부 no_clear_edge라 최소 edge 부재; live AI 응답 변경 없음")
+        if candidate_weight_source <= 0:
+            return ("hold_sample", "SAW candidate_weight_source bucket이 없어 advisory canary 후보 유지")
+    if output_family == "score65_74_recovery_probe":
+        family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+        avg_ev = _safe_float(source_metrics.get("score65_74_avg_expected_ev_pct"), None)
+        avg_close = _safe_float(source_metrics.get("score65_74_avg_close_10m_pct"), None)
+        submitted_to_budget = _safe_float(source_metrics.get("submitted_to_budget_unique_pct"), None)
+        if sample_count >= sample_floor and ((avg_ev is not None and avg_ev < 2.0) or (avg_close is not None and avg_close < 1.0)):
+            return ("hold", "score65~74 EV/close_10m 우위가 efficient trade-off gate에 미달해 값 유지")
+        if submitted_to_budget is not None and submitted_to_budget > 60.0:
+            return ("hold", "submitted drought가 아니므로 probe live 확대보다 baseline funnel 유지")
+        if sample_count >= sample_floor and ready:
+            return (
+                "adjust_up",
+                "partial_samples=0은 전면 금지가 아니라 post-apply calibration target; 1주/5만원 bounded canary 후보",
+            )
+        if _safe_int(family_sample.get("wait65_79_score65_74_candidate"), 0) or 0:
+            return ("hold_sample", "score65~74 후보는 있으나 source/report sample floor가 부족해 cap 유지")
+    if output_family == "bad_entry_refined_canary" and sample_count >= sample_floor and ready:
+        return (
+            "adjust_up",
+            "naive hard block이 아니라 refined canary를 soft-stop tail/defer cost 감소 후보로 한 단계 적용",
+        )
+    if output_family == "scale_in_price_guard":
+        family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+        resolved_executed = max(
+            _safe_int(family_sample.get("resolved_executed"), 0) or 0,
+            _safe_int(source_metrics.get("compact_scale_in_executed"), 0) or 0,
+        )
+        if resolved_executed <= 0:
+            return (
+                "hold_sample",
+                "물타기/불타기 resolved/executed cohort가 없어 가격·수량 guard 값은 유지하고 다음 장후 재산정",
+            )
+        if sample_count < sample_floor or not ready:
+            return ("hold_sample", f"scale-in sample floor 미달({sample_count}/{sample_floor}); 1주 cap과 가격가드 유지")
+        return (
+            "hold",
+            "scale_in_price_guard는 별도 승인 전 report-only calibration으로만 산출하며 live apply는 금지한다.",
+        )
+    if sample_count < sample_floor or not ready:
+        return ("hold_sample", f"sample floor 미달({sample_count}/{sample_floor}); 값 유지 후 다음 장후 재산정")
+
+    current = family.get("current") if isinstance(family.get("current"), dict) else {}
+    recommended = family.get("recommended") if isinstance(family.get("recommended"), dict) else {}
+    if "enabled" in current and "enabled" in recommended and bool(current.get("enabled")) != bool(
+        recommended.get("enabled")
+    ):
+        return ("adjust_up", "bounded live candidate: disabled -> enabled 전환은 다음 장전 단일 적용 후보")
+    primary_key = str(metadata.get("primary_key") or "")
+    current_value = current.get(primary_key)
+    recommended_value = recommended.get(primary_key)
+    if isinstance(current_value, bool) or isinstance(recommended_value, bool):
+        if bool(recommended_value) != bool(current_value):
+            return ("adjust_up", "bounded live candidate: disabled -> enabled 전환은 다음 장전 단일 적용 후보")
+    current_num = _safe_float(current_value, None)
+    recommended_num = _safe_float(recommended_value, None)
+    if current_num is None or recommended_num is None:
+        return ("hold", "추천값과 현행값을 수치 방향으로 비교할 수 없어 값 유지")
+    if recommended_num > current_num:
+        return ("adjust_up", "목표 미달 시 rollback이 아니라 max_step_per_day 안에서 상향 calibration")
+    if recommended_num < current_num:
+        return ("adjust_down", "목표 미달 시 rollback이 아니라 max_step_per_day 안에서 하향 calibration")
+    return ("hold", "현행값과 추천값이 같아 다음 장전 값 유지")
+
+
+def _build_calibration_candidates(families: list[dict], report_source_context: dict | None = None) -> list[dict]:
+    family_by_name = {str(family.get("family") or ""): family for family in families}
+    candidates: list[dict] = []
+    for output_family, metadata in sorted(
+        CALIBRATION_FAMILY_METADATA.items(), key=lambda item: int(item[1].get("priority") or 999)
+    ):
+        source_family = str(metadata.get("source_family") or output_family)
+        family = family_by_name.get(source_family)
+        if not family:
+            continue
+        current = family.get("current") if isinstance(family.get("current"), dict) else {}
+        recommended = family.get("recommended") if isinstance(family.get("recommended"), dict) else {}
+        source_metrics = _source_metrics_for_family(output_family, report_source_context)
+        source_sample_count = _source_sample_count_for_family(output_family, source_metrics)
+        sample_count = max(_family_sample_count(family), source_sample_count)
+        sample_floor = int(metadata.get("sample_floor") or 0)
+        source_ready = source_sample_count >= sample_floor
+        sample_ready = bool(family.get("apply_ready")) or source_ready
+        calibration_state, calibration_reason = _calibration_state_for_family(
+            output_family,
+            family,
+            metadata,
+            source_metrics=source_metrics,
+            sample_count=sample_count,
+            sample_ready=sample_ready,
+        )
+        sample_floor_status = "ready" if sample_count >= sample_floor and sample_ready else "hold_sample"
+        if calibration_state == "freeze":
+            sample_floor_status = "direction_conflict_or_live_risk"
+        if calibration_state == "hold_no_edge":
+            sample_floor_status = "minimum_edge_missing"
+        confidence = round(min(1.0, sample_count / sample_floor), 4) if sample_floor > 0 else 0.0
+        primary_key = str(metadata.get("primary_key") or "")
+        runtime_apply_candidate = (
+            sample_ready
+            and bool(metadata.get("allowed_runtime_apply"))
+            and calibration_state not in {"freeze", "hold_sample", "hold_no_edge"}
+        )
+        candidate = {
+            "family": output_family,
+            "source_family": source_family,
+            "threshold_version": f"{output_family}:{family.get('apply_mode', 'observe_only')}:{sample_floor_status}",
+            "stage": family.get("stage"),
+            "priority": int(metadata.get("priority") or 999),
+            "target_env_keys": list(metadata.get("target_env_keys") or []),
+            "current_value": current.get(primary_key),
+            "current_values": current,
+            "recommended_value": recommended.get(primary_key),
+            "recommended_values": recommended,
+            "applied_value": current.get(primary_key),
+            "applied_values": current,
+            "min_value": (metadata.get("bounds") or {}).get(primary_key, {}).get("min"),
+            "max_value": (metadata.get("bounds") or {}).get(primary_key, {}).get("max"),
+            "max_step_per_day": (metadata.get("bounds") or {}).get(primary_key, {}).get("max_step_per_day"),
+            "bounds": metadata.get("bounds") or {},
+            "sample_window": metadata.get("sample_window", "daily"),
+            "sample_count": sample_count,
+            "source_sample_count": source_sample_count,
+            "sample_floor": sample_floor,
+            "sample_floor_status": sample_floor_status,
+            "confidence": confidence,
+            "source_metrics": source_metrics,
+            "source_reports": {
+                name: source.get("path")
+                for name, source in ((report_source_context or {}).get("sources") or {}).items()
+                if isinstance(source, dict) and source.get("exists")
+            },
+            "calibration_state": calibration_state,
+            "calibration_reason": calibration_reason,
+            "safety_revert_required": False,
+            "safety_guard": list(CALIBRATION_SAFETY_GUARDS),
+            "apply_mode": "efficient_tradeoff_canary_candidate"
+            if runtime_apply_candidate
+            and (
+                family.get("apply_mode") == "efficient_tradeoff_canary_candidate"
+                or output_family
+                in {
+                    "score65_74_recovery_probe",
+                    "bad_entry_refined_canary",
+                    "holding_exit_decision_matrix_advisory",
+                }
+            )
+            else "calibrated_apply_candidate"
+            if runtime_apply_candidate
+            else "report_only_calibration",
+            "allowed_runtime_apply": bool(metadata.get("allowed_runtime_apply")),
+            "runtime_change": False,
+            "runtime_change_reason": "장중 자동 mutation 금지; 다음 장전 승인된 family만 bounded apply 대상",
+        }
+        candidates.append(candidate)
+    return candidates
+
+
+def _build_safety_guard_pack(calibration_candidates: list[dict]) -> list[dict]:
+    return [
+        {
+            "family": candidate["family"],
+            "safety_revert_required": bool(candidate.get("safety_revert_required")),
+            "safety_guard": candidate.get("safety_guard") or CALIBRATION_SAFETY_GUARDS,
+            "revert_policy": "safety breach only",
+        }
+        for candidate in calibration_candidates
+        if bool(candidate.get("allowed_runtime_apply"))
+    ]
+
+
+def _build_calibration_trigger_pack(calibration_candidates: list[dict]) -> list[dict]:
+    return [
+        {
+            "family": candidate["family"],
+            "calibration_state": candidate.get("calibration_state"),
+            "calibration_reason": candidate.get("calibration_reason"),
+            "next_manifest_action": "step_adjust_or_hold_or_freeze",
+            "rollback_policy": "not_a_rollback_trigger",
+        }
+        for candidate in calibration_candidates
+    ]
+
+
+def _build_post_apply_attribution(calibration_candidates: list[dict]) -> dict:
+    return {
+        "status": "pending_applied_cohort" if calibration_candidates else "no_calibration_candidate",
+        "runtime_change": False,
+        "cohort_key": "threshold_family|threshold_version|calibration_state",
+        "baseline_cohort": "current_values",
+        "applied_cohort": "next_preopen_approved_values",
+        "metrics": ["GOOD_EXIT", "MISSED_UPSIDE", "soft_stop_tail", "defer_cost", "safety_breach"],
+        "soft_stop_balanced_policy": {
+            "good_exit_regression_tolerance_pp": 10,
+            "keep_condition": "soft-stop 손실 tail 감소 또는 MISSED_UPSIDE 감소가 있으면 유지/완만 조정",
+            "perfect_win_rate_required": False,
+        },
+        "calibration_decisions": [
+            {
+                "family": candidate.get("family"),
+                "threshold_version": candidate.get("threshold_version"),
+                "calibration_state": candidate.get("calibration_state"),
+                "safety_revert_required": candidate.get("safety_revert_required"),
+            }
+            for candidate in calibration_candidates
+        ],
+    }
 
 
 def _markdown_value(value: Any) -> str:
@@ -1925,14 +2957,14 @@ def render_statistical_action_weight_markdown(artifact: dict) -> str:
             "## Threshold 반영 원칙",
             "",
             "- 이 리포트는 AI/주문 runtime을 직접 변경하지 않는다.",
-            "- `candidate_weight_source`는 다음 threshold weight 또는 decision matrix 후보일 뿐이다.",
-            "- `no_clear_edge`, `insufficient_sample`, `defensive_only_high_loss_rate`는 live 반영 금지다.",
+            "- `candidate_weight_source`는 ADM advisory canary/live-readiness 후보로 연결할 수 있다.",
+            "- `no_clear_edge`, `insufficient_sample`, `defensive_only_high_loss_rate`는 최소 edge 부재 또는 calibration 보류 상태다.",
             "",
             "## 다음 액션",
             "",
             "- Markdown 자동생성 상태와 표본 충분성을 확인한다.",
-            "- sample-ready이면 `holding_exit_decision_matrix` report-only contract 후보로 넘긴다.",
-            "- 부족하면 `stat_action_decision_snapshot`와 completed/action join 품질을 먼저 보강한다.",
+            "- sample-ready bucket은 `holding_exit_decision_matrix` advisory canary 후보로 넘긴다.",
+            "- 부족하면 live 금지가 아니라 `hold_sample` calibration과 join 품질 보강으로 남긴다.",
             "",
         ]
     )
@@ -2012,7 +3044,7 @@ def build_holding_exit_decision_matrix(report: dict) -> dict:
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "valid_for_date": "next_preopen",
         "runtime_change": False,
-        "application_mode": "shadow_prompt_or_observe_only_until_owner_approval",
+        "application_mode": "advisory_canary_live_readiness_until_owner_approval",
         "hard_veto": [
             "emergency_or_hard_stop",
             "active_sell_order_pending",
@@ -2022,7 +3054,7 @@ def build_holding_exit_decision_matrix(report: dict) -> dict:
         "entries": entries,
         "notes": [
             "장중 self-updating 금지: 장후 산정 matrix를 다음 장전 로드하고 장중에는 immutable context로만 사용한다.",
-            "AI 점수를 직접 덮어쓰지 않는다. shadow prompt 또는 observe-only nudge부터 검증한다.",
+            "AI 점수를 직접 덮어쓰지 않는다. recommended_bias가 no_clear_edge가 아닌 bucket만 advisory canary 후보로 검증한다.",
         ],
     }
 
@@ -2079,9 +3111,9 @@ def render_holding_exit_decision_matrix_markdown(matrix: dict) -> str:
             "",
             "## 다음 액션",
             "",
-            "- `ADM-2`에서는 이 matrix를 holding/exit shadow prompt context로만 주입한다.",
-            "- action_label/confidence/reason drift를 보고 observe-only nudge 여부를 판정한다.",
-            "- single-owner canary 승인 전에는 live AI 응답을 바꾸지 않는다.",
+            "- `ADM`은 shadow가 아니라 advisory canary/live-readiness 축으로 관리한다.",
+            "- `recommended_bias != no_clear_edge`이고 `policy_hint=candidate_weight_source`인 bucket만 다음 bounded canary 후보로 본다.",
+            "- all `no_clear_edge`이면 perfect spot 대기가 아니라 최소 edge 부재로 판정하고 live AI 응답을 바꾸지 않는다.",
             "",
         ]
     )
@@ -2357,8 +3389,10 @@ def build_daily_threshold_cycle_report(
     target_date: str,
     *,
     pipeline_loader: Callable[[str], list[dict]] | None = None,
+    report_source_loader: Callable[[str], dict] | None = None,
     completed_rows_loader: Callable[[str, str], list[dict]] | None = None,
     skip_completed_rows: bool = False,
+    calibration_run_phase: str = "postclose",
 ) -> dict:
     target_date = str(target_date).strip()
     ctx = ThresholdCycleContext(warnings=[])
@@ -2396,7 +3430,20 @@ def build_daily_threshold_cycle_report(
     else:
         ctx.warnings.append("completed trade 로드는 skip-db 옵션으로 생략됨")
 
+    report_source_context = (
+        report_source_loader(target_date)
+        if report_source_loader is not None
+        else _summarize_holding_exit_report_sources(target_date)
+    )
+    if isinstance(report_source_context, dict):
+        for warning in report_source_context.get("warnings") or []:
+            ctx.warnings.append(f"calibration source 경고: {warning}")
+    else:
+        report_source_context = {}
+        ctx.warnings.append("calibration source loader가 dict를 반환하지 않음")
+
     families = _build_family_reports(event_windows["same_day"], completed_rows, target_date=target_date)
+    families.extend(_build_report_source_families(report_source_context))
     completed = _completed_summary(completed_rows)
     threshold_snapshot = {
         family["family"]: {
@@ -2421,6 +3468,7 @@ def build_daily_threshold_cycle_report(
         }
         for family in families
     ]
+    calibration_candidates = _build_calibration_candidates(families, report_source_context)
     report = {
         "date": target_date,
         "meta": {
@@ -2428,6 +3476,8 @@ def build_daily_threshold_cycle_report(
             "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "report_path": str(report_path_for_date(target_date)),
             "pipeline_load": pipeline_meta_by_date,
+            "calibration_run_phase": str(calibration_run_phase or "postclose"),
+            "calibration_cadence": "twice_daily_intraday_and_postclose",
         },
         "windows": {
             "same_day": same_day,
@@ -2441,7 +3491,12 @@ def build_daily_threshold_cycle_report(
         },
         "threshold_snapshot": threshold_snapshot,
         "threshold_diff_report": threshold_diff_report,
+        "calibration_source_bundle": report_source_context,
         "apply_candidate_list": _build_apply_candidate_list(families),
+        "calibration_candidates": calibration_candidates,
+        "post_apply_attribution": _build_post_apply_attribution(calibration_candidates),
+        "safety_guard_pack": _build_safety_guard_pack(calibration_candidates),
+        "calibration_trigger_pack": _build_calibration_trigger_pack(calibration_candidates),
         "rollback_guard_pack": _build_rollback_guard_pack(families),
         "warnings": ctx.warnings,
     }
@@ -2453,9 +3508,29 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--date", dest="target_date", default=date.today().isoformat(), help="Target date (YYYY-MM-DD)")
     parser.add_argument("--print", dest="print_stdout", action="store_true", help="Print JSON to stdout")
     parser.add_argument("--skip-db", dest="skip_db", action="store_true", help="Skip completed trade DB lookup")
+    parser.add_argument(
+        "--calibration-run-phase",
+        choices=["intraday", "postclose"],
+        default="postclose",
+        help="Calibration run phase. Calibration is scheduled twice daily: intraday and postclose.",
+    )
+    parser.add_argument(
+        "--calibration-only",
+        action="store_true",
+        help="Save only the phase calibration artifact; do not overwrite canonical threshold cycle report.",
+    )
     args = parser.parse_args(argv)
 
-    report = build_daily_threshold_cycle_report(args.target_date, skip_completed_rows=args.skip_db)
+    report = build_daily_threshold_cycle_report(
+        args.target_date,
+        skip_completed_rows=args.skip_db,
+        calibration_run_phase=args.calibration_run_phase,
+    )
+    save_threshold_calibration_report(report, run_phase=args.calibration_run_phase)
+    if args.calibration_only:
+        if args.print_stdout:
+            print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
     save_threshold_cycle_report(report)
     save_statistical_action_weight_artifact(report)
     save_holding_exit_decision_matrix(report)

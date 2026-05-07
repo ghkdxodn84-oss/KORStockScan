@@ -451,6 +451,8 @@ def test_soft_stop_whipsaw_confirmation_respects_emergency_and_one_time_cap(monk
     assert decision["should_confirm"] is True
     assert decision["rebound_above_sell"] is True
     assert decision["rebound_above_buy"] is False
+    assert decision["threshold_family"] == "soft_stop_whipsaw_confirmation"
+    assert "confirm_sec=60" in decision["threshold_applied_value"]
 
     emergency = _build_soft_stop_whipsaw_confirmation_decision(
         {},

@@ -7,12 +7,13 @@ TMP_CRON="$(mktemp)"
 trap 'rm -f "$TMP_CRON"' EXIT
 
 crontab -l 2>/dev/null > "$TMP_CRON" || true
-awk '!/threshold cycle daily automation/ && !/THRESHOLD_CYCLE_PREOPEN/ && !/THRESHOLD_CYCLE_POSTCLOSE/' "$TMP_CRON" > "$TMP_CRON.filtered"
+awk '!/threshold cycle daily automation/ && !/THRESHOLD_CYCLE_PREOPEN/ && !/THRESHOLD_CYCLE_INTRADAY_CALIBRATION/ && !/THRESHOLD_CYCLE_POSTCLOSE/' "$TMP_CRON" > "$TMP_CRON.filtered"
 mv "$TMP_CRON.filtered" "$TMP_CRON"
 
 cat >> "$TMP_CRON" <<EOF
 # threshold cycle daily automation
 35 7 * * 1-5 $PROJECT_DIR/deploy/run_threshold_cycle_preopen.sh \$(TZ=Asia/Seoul date +\\%F) >> $PROJECT_DIR/logs/threshold_cycle_preopen_cron.log 2>&1 # THRESHOLD_CYCLE_PREOPEN
+5 12 * * 1-5 THRESHOLD_CYCLE_CALIBRATION_PHASE=intraday $PROJECT_DIR/deploy/run_threshold_cycle_calibration.sh \$(TZ=Asia/Seoul date +\\%F) >> $PROJECT_DIR/logs/threshold_cycle_calibration_intraday_cron.log 2>&1 # THRESHOLD_CYCLE_INTRADAY_CALIBRATION
 10 16 * * 1-5 $PROJECT_DIR/deploy/run_threshold_cycle_postclose.sh \$(TZ=Asia/Seoul date +\\%F) >> $PROJECT_DIR/logs/threshold_cycle_postclose_cron.log 2>&1 # THRESHOLD_CYCLE_POSTCLOSE
 EOF
 

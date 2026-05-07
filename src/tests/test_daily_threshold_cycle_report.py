@@ -131,6 +131,10 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
     assert "threshold_snapshot" in report
     assert "threshold_diff_report" in report
     assert "apply_candidate_list" in report
+    assert "calibration_candidates" in report
+    assert "post_apply_attribution" in report
+    assert "safety_guard_pack" in report
+    assert "calibration_trigger_pack" in report
     assert "rollback_guard_pack" in report
 
     bad_entry = report["threshold_snapshot"]["bad_entry_block"]
@@ -147,6 +151,16 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
 
     soft_stop = report["threshold_snapshot"]["soft_stop_micro_grace"]
     assert soft_stop["apply_ready"] is True
+    whipsaw = report["threshold_snapshot"]["soft_stop_whipsaw_confirmation"]
+    assert whipsaw["apply_ready"] is True
+    whipsaw_candidate = next(
+        item for item in report["calibration_candidates"] if item["family"] == "soft_stop_whipsaw_confirmation"
+    )
+    assert whipsaw_candidate["apply_mode"] == "calibrated_apply_candidate"
+    assert whipsaw_candidate["calibration_state"] in {"adjust_up", "adjust_down", "hold"}
+    assert whipsaw_candidate["safety_revert_required"] is False
+    assert whipsaw_candidate["target_env_keys"]
+    assert whipsaw_candidate["max_step_per_day"] is not None
     protect_trailing = report["threshold_snapshot"]["protect_trailing_smoothing"]
     assert protect_trailing["apply_ready"] is True
     assert protect_trailing["recommended"]["min_samples"] >= 3
@@ -164,6 +178,193 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
 
     apply_families = {item["family"] for item in report["apply_candidate_list"]}
     assert "pre_submit_price_guard" in apply_families or "entry_mechanical_momentum" in apply_families
+
+
+def test_threshold_cycle_report_marks_calibration_sample_and_live_risk_states():
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-04-30",
+        pipeline_loader=lambda target_date: [],
+        report_source_loader=lambda target_date: {"sources": {}, "source_metrics": {}, "new_observation_axis_created": False},
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    candidates = {item["family"]: item for item in report["calibration_candidates"]}
+    assert candidates["soft_stop_whipsaw_confirmation"]["calibration_state"] == "hold_sample"
+    assert candidates["soft_stop_whipsaw_confirmation"]["sample_floor_status"] == "hold_sample"
+    assert candidates["soft_stop_whipsaw_confirmation"]["safety_revert_required"] is False
+    assert candidates["trailing_continuation"]["calibration_state"] == "freeze"
+    assert candidates["trailing_continuation"]["allowed_runtime_apply"] is False
+    assert candidates["scale_in_price_guard"]["calibration_state"] == "hold_sample"
+    assert candidates["scale_in_price_guard"]["allowed_runtime_apply"] is False
+    assert candidates["scale_in_price_guard"]["apply_mode"] == "report_only_calibration"
+    assert report["post_apply_attribution"]["soft_stop_balanced_policy"]["perfect_win_rate_required"] is False
+
+
+def test_threshold_cycle_calibration_uses_holding_exit_report_sources():
+    report_sources = {
+        "schema_version": 1,
+        "target_date": "2026-04-30",
+        "sources": {
+            "holding_exit_observation": {"path": "data/report/monitor_snapshots/holding_exit_observation_2026-04-30.json", "exists": True},
+            "holding_exit_sentinel": {"path": "data/report/holding_exit_sentinel/holding_exit_sentinel_2026-04-30.json", "exists": True},
+        },
+        "source_metrics": {
+            "soft_stop": {
+                "holding_exit_observation_total": 20,
+                "holding_exit_observation_rebound_above_sell_10m_rate": 90.0,
+                "holding_exit_observation_whipsaw_signal": True,
+            },
+            "holding_flow": {
+                "sentinel_primary": "HOLD_DEFER_DANGER",
+                "holding_flow_override_defer_exit": 67,
+                "max_defer_worsen_pct": 0.8,
+            },
+            "trailing": {
+                "evaluated_trailing": 17,
+                "missed_upside_rate": 29.4,
+                "good_exit_rate": 41.2,
+            },
+        },
+        "new_observation_axis_created": False,
+    }
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-04-30",
+        pipeline_loader=lambda target_date: [],
+        report_source_loader=lambda target_date: report_sources,
+        completed_rows_loader=lambda start_date, end_date: [],
+        calibration_run_phase="intraday",
+    )
+
+    assert report["meta"]["calibration_run_phase"] == "intraday"
+    assert report["meta"]["calibration_cadence"] == "twice_daily_intraday_and_postclose"
+    assert report["calibration_source_bundle"]["new_observation_axis_created"] is False
+    candidates = {item["family"]: item for item in report["calibration_candidates"]}
+    assert candidates["soft_stop_whipsaw_confirmation"]["source_sample_count"] == 20
+    assert candidates["soft_stop_whipsaw_confirmation"]["sample_floor_status"] == "ready"
+    assert candidates["soft_stop_whipsaw_confirmation"]["source_metrics"]["holding_exit_observation_whipsaw_signal"] is True
+    assert candidates["holding_flow_ofi_smoothing"]["source_sample_count"] == 67
+    assert candidates["holding_flow_ofi_smoothing"]["source_metrics"]["sentinel_primary"] == "HOLD_DEFER_DANGER"
+
+
+def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates():
+    report_sources = {
+        "schema_version": 1,
+        "target_date": "2026-05-07",
+        "sources": {
+            "buy_funnel_sentinel": {"path": "data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-05-07.json", "exists": True},
+            "wait6579_ev_cohort": {"path": "data/report/monitor_snapshots/wait6579_ev_cohort_2026-05-07.json", "exists": True},
+            "holding_exit_decision_matrix": {"path": "data/report/holding_exit_decision_matrix/holding_exit_decision_matrix_2026-05-07.json", "exists": True},
+            "statistical_action_weight": {"path": "data/report/statistical_action_weight/statistical_action_weight_2026-05-07.json", "exists": True},
+        },
+        "source_metrics": {
+            "buy_score65_74": {
+                "sentinel_primary": "UPSTREAM_AI_THRESHOLD",
+                "sentinel_secondary": ["LATENCY_DROUGHT"],
+                "score65_74_candidates": 191,
+                "score65_74_avg_expected_ev_pct": 4.7,
+                "score65_74_avg_close_10m_pct": 5.5,
+                "full_samples": 181,
+                "partial_samples": 0,
+                "threshold_relaxation_approved": False,
+                "partial_sample_zero_is_calibration_target": True,
+                "budget_pass": 30,
+                "order_bundle_submitted": 10,
+            },
+            "bad_entry": {
+                "refined_candidate": 441,
+                "soft_stop_tail_sample": 20,
+                "holding_flow_override_defer_exit": 67,
+                "sell_order_sent": 9,
+                "sell_completed": 9,
+            },
+            "decision_support": {
+                "matrix_version": "holding_exit_decision_matrix_v1_2026-05-07",
+                "matrix_entries": 14,
+                "matrix_non_clear_edge": 0,
+                "matrix_no_clear_edge": 14,
+                "saw_candidate_weight_source": 7,
+                "saw_defensive_only_high_loss_rate": 4,
+                "saw_insufficient_sample": 3,
+            },
+        },
+        "new_observation_axis_created": False,
+    }
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-07",
+        pipeline_loader=lambda target_date: [
+            {"stage": "bad_entry_refined_candidate", "fields": {"would_exit": "True"}}
+            for _ in range(12)
+        ],
+        report_source_loader=lambda target_date: report_sources,
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    candidates = {item["family"]: item for item in report["calibration_candidates"]}
+    assert candidates["score65_74_recovery_probe"]["apply_mode"] == "efficient_tradeoff_canary_candidate"
+    assert candidates["score65_74_recovery_probe"]["calibration_state"] == "adjust_up"
+    assert candidates["score65_74_recovery_probe"]["source_metrics"]["partial_samples"] == 0
+    assert candidates["bad_entry_refined_canary"]["apply_mode"] == "efficient_tradeoff_canary_candidate"
+    assert candidates["bad_entry_refined_canary"]["source_metrics"]["holding_flow_override_defer_exit"] == 67
+    assert candidates["holding_exit_decision_matrix_advisory"]["calibration_state"] == "hold_no_edge"
+    assert candidates["holding_exit_decision_matrix_advisory"]["apply_mode"] == "report_only_calibration"
+    assert candidates["holding_exit_decision_matrix_advisory"]["sample_floor_status"] == "minimum_edge_missing"
+
+
+def test_scale_in_price_guard_calibration_uses_existing_sources_without_live_apply():
+    report_sources = {
+        "schema_version": 1,
+        "target_date": "2026-05-07",
+        "sources": {
+            "holding_exit_sentinel": {
+                "path": "data/report/holding_exit_sentinel/holding_exit_sentinel_2026-05-07.json",
+                "exists": True,
+            },
+            "statistical_action_weight": {
+                "path": "data/report/statistical_action_weight/statistical_action_weight_2026-05-07.json",
+                "exists": True,
+            },
+        },
+        "source_metrics": {
+            "scale_in_price_guard": {
+                "scale_in_price_resolved": 0,
+                "scale_in_price_guard_block": 4,
+                "scale_in_price_p2_observe": 0,
+                "compact_scale_in_executed": 0,
+                "avg_down_wait": 1,
+                "pyramid_wait": 6,
+            }
+        },
+        "new_observation_axis_created": False,
+    }
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-07",
+        pipeline_loader=lambda target_date: [
+            {
+                "stage": "scale_in_price_guard_block",
+                "fields": {
+                    "add_type": "PYRAMID",
+                    "reason": "micro_vwap_bp>60.0",
+                    "spread_bps": "27.1",
+                    "micro_vwap_bps": "70.0",
+                },
+            }
+            for _ in range(4)
+        ],
+        report_source_loader=lambda target_date: report_sources,
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    candidate = next(item for item in report["calibration_candidates"] if item["family"] == "scale_in_price_guard")
+    assert candidate["apply_mode"] == "report_only_calibration"
+    assert candidate["allowed_runtime_apply"] is False
+    assert candidate["runtime_change"] is False
+    assert candidate["calibration_state"] == "hold_sample"
+    assert candidate["sample_count"] == 7
+    assert candidate["source_sample_count"] == 7
+    assert candidate["source_metrics"]["compact_scale_in_executed"] == 0
 
 
 def test_statistical_action_weight_report_buckets_completed_rows():
@@ -435,6 +636,10 @@ def test_scale_in_price_guard_family_generates_manifest_only_candidate():
         if item["owner_rule"] == "manifest_only_no_runtime_mutation"
     }
     assert "scale_in_price_guard" in manifest_families
+    candidate = next(item for item in report["calibration_candidates"] if item["family"] == "scale_in_price_guard")
+    assert candidate["apply_mode"] == "report_only_calibration"
+    assert candidate["calibration_state"] == "hold"
+    assert candidate["allowed_runtime_apply"] is False
 
 
 def test_build_daily_threshold_cycle_report_keeps_unready_family_observe_only():

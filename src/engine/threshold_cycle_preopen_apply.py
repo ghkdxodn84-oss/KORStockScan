@@ -9,7 +9,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
-from src.engine.daily_threshold_cycle_report import REPORT_DIR, report_path_for_date
+from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.utils.constants import DATA_DIR
 
 
@@ -39,6 +39,10 @@ def apply_manifest_path(target_date: str) -> Path:
     return APPLY_PLAN_DIR / f"threshold_apply_{target_date}.json"
 
 
+def _report_path_for_date(target_date: str) -> Path:
+    return REPORT_DIR / f"threshold_cycle_{target_date}.json"
+
+
 def build_preopen_apply_manifest(
     target_date: str,
     *,
@@ -46,7 +50,7 @@ def build_preopen_apply_manifest(
     apply_mode: str = "manifest_only",
 ) -> dict[str, Any]:
     target_date = str(target_date).strip()
-    source_path = report_path_for_date(source_date) if source_date else _latest_report_before(target_date)
+    source_path = _report_path_for_date(source_date) if source_date else _latest_report_before(target_date)
     if source_path is None or not source_path.exists():
         manifest = {
             "target_date": target_date,
@@ -55,22 +59,46 @@ def build_preopen_apply_manifest(
             "runtime_change": False,
             "source_report": None,
             "candidates": [],
+            "calibration_candidates": [],
             "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         }
     else:
         report = _load_json(source_path)
         candidates = report.get("apply_candidate_list") if isinstance(report.get("apply_candidate_list"), list) else []
+        calibration_candidates = (
+            report.get("calibration_candidates") if isinstance(report.get("calibration_candidates"), list) else []
+        )
+        status = (
+            "efficient_tradeoff_manifest_ready"
+            if apply_mode == "efficient_tradeoff_canary_candidate"
+            else "calibrated_manifest_ready"
+            if apply_mode == "calibrated_apply_candidate"
+            else "manifest_ready"
+        )
         manifest = {
             "target_date": target_date,
             "source_date": report.get("date"),
             "source_report": str(source_path),
-            "status": "manifest_ready",
+            "status": status,
             "apply_mode": apply_mode,
             "runtime_change": False,
-            "runtime_change_reason": "threshold live auto-apply is gated until ThresholdOpsTransition acceptance",
+            "runtime_change_reason": (
+                "장중 자동 mutation 금지; calibrated/efficient trade-off 후보도 승인된 family의 다음 장전 bounded apply 후보만 생성"
+            ),
             "candidates": candidates,
+            "calibration_candidates": calibration_candidates,
             "threshold_snapshot": report.get("threshold_snapshot") or {},
+            "post_apply_attribution": report.get("post_apply_attribution") or {},
+            "safety_guard_pack": report.get("safety_guard_pack") or [],
+            "calibration_trigger_pack": report.get("calibration_trigger_pack") or [],
             "rollback_guard_pack": report.get("rollback_guard_pack") or [],
+            "calibration_policy": {
+                "condition_miss_action": "calibration_trigger",
+                "sample_shortfall_action": "cap_reduce_or_hold_sample_or_max_step_shrink",
+                "rollback_policy": "safety_breach_only",
+                "intraday_runtime_mutation": False,
+                "apply_frequency": "next_preopen_once",
+            },
             "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         }
     APPLY_PLAN_DIR.mkdir(parents=True, exist_ok=True)
@@ -85,13 +113,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--apply-mode",
         default=os.getenv("THRESHOLD_CYCLE_APPLY_MODE", "manifest_only"),
-        choices=["manifest_only"],
-        help="Apply mode. Live runtime mutation is intentionally unavailable until acceptance.",
+        choices=["manifest_only", "calibrated_apply_candidate", "efficient_tradeoff_canary_candidate"],
+        help="Apply mode. Runtime mutation is unavailable; calibrated modes emit bounded next-preopen candidates.",
     )
     args = parser.parse_args(argv)
     manifest = build_preopen_apply_manifest(args.target_date, source_date=args.source_date, apply_mode=args.apply_mode)
     print(json.dumps(manifest, ensure_ascii=False))
-    return 0 if manifest.get("status") == "manifest_ready" else 2
+    return 0 if manifest.get("status") in {"manifest_ready", "calibrated_manifest_ready", "efficient_tradeoff_manifest_ready"} else 2
 
 
 if __name__ == "__main__":

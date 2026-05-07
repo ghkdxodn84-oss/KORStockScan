@@ -70,5 +70,7 @@ if [ "$SKIP_DB" = "true" ]; then
   report_args+=(--skip-db)
 fi
 
-PYTHONPATH=. "$VENV_PY" -m src.engine.daily_threshold_cycle_report "${report_args[@]}"
+PYTHONPATH=. "$VENV_PY" -m src.engine.daily_threshold_cycle_report \
+  --calibration-run-phase postclose \
+  "${report_args[@]}"
 echo "[threshold-cycle] postclose report complete target_date=$TARGET_DATE"
