@@ -57,6 +57,7 @@ def test_record_and_evaluate_post_sell_feedback(monkeypatch, tmp_path):
     )
     assert candidate_upside is not None
     assert candidate_good_exit is not None
+    assert candidate_upside["exit_decision_source"] == "-"
 
     candle_map = {
         "111111": [

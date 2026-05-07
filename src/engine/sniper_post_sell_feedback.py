@@ -215,6 +215,7 @@ def record_post_sell_candidate(
             "profit_rate": round(_safe_float(profit_rate, 0.0), 3),
             "buy_qty": _safe_int(buy_qty, 0),
             "exit_rule": str(exit_rule or stock.get("last_exit_rule") or "-"),
+            "exit_decision_source": str(stock.get("last_exit_decision_source") or "-"),
             "revive": bool(revive),
             "peak_profit": round(_safe_float(peak_profit, stock.get("last_exit_peak_profit", 0.0)), 3),
             "held_sec": _safe_int(held_sec, stock.get("last_exit_held_sec", 0)),

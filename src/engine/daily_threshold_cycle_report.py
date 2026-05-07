@@ -20,6 +20,7 @@ REPORT_DIR.mkdir(parents=True, exist_ok=True)
 STAT_ACTION_REPORT_DIR = REPORT_DIR / "statistical_action_weight"
 AI_DECISION_MATRIX_DIR = REPORT_DIR / "holding_exit_decision_matrix"
 CUMULATIVE_THRESHOLD_REPORT_DIR = REPORT_DIR / "threshold_cycle_cumulative"
+POST_SELL_DIR = DATA_DIR / "post_sell"
 THRESHOLD_CYCLE_SCHEMA_VERSION = 1
 THRESHOLD_CYCLE_DIR = DATA_DIR / "threshold_cycle"
 RAW_PIPELINE_FALLBACK_MAX_BYTES = 64 * 1024 * 1024
@@ -453,6 +454,206 @@ def _record_id_stage_field_counter(events: list[dict], stage: str, record_ids: s
         if str(event.get("stage") or "") == stage and event.get("record_id") in record_ids
     )
     return dict(counter.most_common(10))
+
+
+def _parse_action_list(value: Any) -> list[str]:
+    if value in (None, "", "-", "None"):
+        return []
+    if isinstance(value, (list, tuple, set)):
+        raw_tokens = [str(item) for item in value]
+    else:
+        raw_tokens = str(value).replace(",", "|").split("|")
+    actions: list[str] = []
+    seen: set[str] = set()
+    for raw_token in raw_tokens:
+        token = str(raw_token or "").strip()
+        if not token or token in {"-", "None"}:
+            continue
+        action = token.split(":", 1)[0].strip()
+        if not action or action in seen:
+            continue
+        seen.add(action)
+        actions.append(action)
+    return actions
+
+
+def _parse_rejected_action_reasons(value: Any) -> dict[str, str]:
+    if value in (None, "", "-", "None"):
+        return {}
+    if isinstance(value, (list, tuple, set)):
+        raw_tokens = [str(item) for item in value]
+    else:
+        raw_tokens = str(value).replace(",", "|").split("|")
+    reasons: dict[str, str] = {}
+    for raw_token in raw_tokens:
+        token = str(raw_token or "").strip()
+        if not token or token in {"-", "None"}:
+            continue
+        action, sep, reason = token.partition(":")
+        action = action.strip()
+        if action:
+            reasons[action] = reason.strip() if sep else "-"
+    return reasons
+
+
+def _load_post_sell_evaluation_by_record_id(target_date: str | None) -> dict[str, dict]:
+    if not target_date:
+        return {}
+    path = POST_SELL_DIR / f"post_sell_evaluations_{target_date}.jsonl"
+    if not path.exists():
+        return {}
+    rows: dict[str, dict] = {}
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            record_id = payload.get("recommendation_id") or payload.get("record_id")
+            if record_id in (None, "", "-"):
+                continue
+            rows[str(record_id)] = payload
+    return rows
+
+
+def _post_sell_metric(row: dict | None, horizon: str, key: str) -> float | None:
+    if not isinstance(row, dict):
+        return None
+    metrics = row.get(f"metrics_{horizon}") or {}
+    if not isinstance(metrics, dict):
+        return None
+    return _safe_float(metrics.get(key), None)
+
+
+def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str | None) -> dict:
+    snapshots = _events_for_stage(events, "stat_action_decision_snapshot")
+    post_sell_by_record = _load_post_sell_evaluation_by_record_id(target_date)
+    rows: list[dict] = []
+    action_values: dict[str, dict[str, list[float]]] = {}
+    action_reasons: dict[str, Counter] = {}
+    joined_count = 0
+    for event in snapshots:
+        fields = _event_fields(event)
+        chosen = str(fields.get("chosen_action") or "-").strip()
+        eligible = _parse_action_list(fields.get("eligible_actions"))
+        rejected_reasons = _parse_rejected_action_reasons(fields.get("rejected_actions"))
+        candidates = [action for action in eligible if action != chosen]
+        for action in rejected_reasons:
+            if action != chosen and action not in candidates:
+                candidates.append(action)
+        if not candidates:
+            continue
+        record_id = event.get("record_id")
+        post_sell = post_sell_by_record.get(str(record_id)) if record_id not in (None, "", "-") else None
+        if post_sell:
+            joined_count += 1
+        profit_rate = _safe_float(fields.get("profit_rate"), None)
+        peak_profit = _safe_float(fields.get("peak_profit"), None)
+        drawdown = _safe_float(fields.get("drawdown_from_peak"), None)
+        current_ai_score = _safe_float(fields.get("current_ai_score"), None)
+        snapshot_mfe_proxy = (
+            round(max(0.0, peak_profit - profit_rate), 4)
+            if peak_profit is not None and profit_rate is not None
+            else None
+        )
+        snapshot_mae_proxy = round(min(0.0, -abs(drawdown)), 4) if drawdown is not None else None
+        for action in candidates:
+            reason = rejected_reasons.get(action, "eligible_not_chosen")
+            row = {
+                "record_id": record_id,
+                "stock_code": event.get("stock_code"),
+                "stock_name": event.get("stock_name"),
+                "emitted_at": event.get("emitted_at"),
+                "chosen_action": chosen,
+                "candidate_action": action,
+                "not_chosen_reason": reason,
+                "snapshot_profit_rate": profit_rate,
+                "snapshot_peak_profit": peak_profit,
+                "snapshot_drawdown_from_peak": drawdown,
+                "snapshot_mfe_proxy": snapshot_mfe_proxy,
+                "snapshot_mae_proxy": snapshot_mae_proxy,
+                "current_ai_score": current_ai_score,
+                "post_sell_joined": bool(post_sell),
+                "post_sell_outcome": post_sell.get("outcome") if isinstance(post_sell, dict) else None,
+                "post_sell_exit_rule": post_sell.get("exit_rule") if isinstance(post_sell, dict) else None,
+                "post_sell_profit_rate": _safe_float(post_sell.get("profit_rate"), None) if isinstance(post_sell, dict) else None,
+                "post_decision_mfe_10m_proxy": _post_sell_metric(post_sell, "10m", "mfe_pct"),
+                "post_decision_mae_10m_proxy": _post_sell_metric(post_sell, "10m", "mae_pct"),
+            }
+            rows.append(row)
+            bucket = action_values.setdefault(
+                action,
+                {
+                    "snapshot_profit_rate": [],
+                    "snapshot_drawdown_from_peak": [],
+                    "current_ai_score": [],
+                    "post_decision_mfe_10m_proxy": [],
+                    "post_decision_mae_10m_proxy": [],
+                },
+            )
+            for key in bucket:
+                value = _safe_float(row.get(key), None)
+                if value is not None:
+                    bucket[key].append(value)
+            action_reasons.setdefault(action, Counter())[str(reason or "-")] += 1
+
+    action_summary = []
+    for action, values in sorted(action_values.items()):
+        joined = sum(1 for row in rows if row.get("candidate_action") == action and row.get("post_sell_joined"))
+        action_summary.append(
+            {
+                "candidate_action": action,
+                "sample": sum(1 for row in rows if row.get("candidate_action") == action),
+                "post_sell_joined": joined,
+                "avg_snapshot_profit_rate": round(_avg(values["snapshot_profit_rate"]) or 0.0, 4)
+                if values["snapshot_profit_rate"]
+                else None,
+                "avg_snapshot_drawdown_from_peak": round(_avg(values["snapshot_drawdown_from_peak"]) or 0.0, 4)
+                if values["snapshot_drawdown_from_peak"]
+                else None,
+                "avg_current_ai_score": round(_avg(values["current_ai_score"]) or 0.0, 4)
+                if values["current_ai_score"]
+                else None,
+                "avg_post_decision_mfe_10m_proxy": round(_avg(values["post_decision_mfe_10m_proxy"]) or 0.0, 4)
+                if values["post_decision_mfe_10m_proxy"]
+                else None,
+                "avg_post_decision_mae_10m_proxy": round(_avg(values["post_decision_mae_10m_proxy"]) or 0.0, 4)
+                if values["post_decision_mae_10m_proxy"]
+                else None,
+                "top_not_chosen_reasons": dict(action_reasons.get(action, Counter()).most_common(5)),
+            }
+        )
+    return {
+        "schema_version": 1,
+        "status": "report_only",
+        "runtime_change": False,
+        "join_status": "post_sell_10m_proxy_when_record_id_matches",
+        "sample_snapshots": len(snapshots),
+        "sample_candidates": len(rows),
+        "post_sell_joined_candidates": sum(1 for row in rows if row.get("post_sell_joined")),
+        "post_sell_joined_snapshots": joined_count,
+        "fields": [
+            "candidate_action",
+            "chosen_action",
+            "snapshot_profit_rate",
+            "snapshot_mfe_proxy",
+            "snapshot_mae_proxy",
+            "post_decision_mfe_10m_proxy",
+            "post_decision_mae_10m_proxy",
+        ],
+        "action_summary": action_summary,
+        "examples": rows[:20],
+        "quality_notes": [
+            "post_decision_*_proxy는 post_sell_evaluation 10분 지표를 record_id로 붙인 report-only proxy다.",
+            "snapshot_*_proxy는 decision snapshot 순간의 peak/drawdown 기반 proxy이며 실현 후행 성과가 아니다.",
+            "이 섹션은 live 판단, AI routing, 주문/청산 변경에 직접 쓰지 않는다.",
+        ],
+    }
 
 
 def _completed_summary(rows: list[dict]) -> dict:
@@ -1390,7 +1591,12 @@ def _best_action_by_bucket(rows: list[dict], bucket_field: str, *, min_sample: i
     return recommendations
 
 
-def _build_statistical_action_weight_family(events: list[dict], completed_rows: list[dict]) -> dict:
+def _build_statistical_action_weight_family(
+    events: list[dict],
+    completed_rows: list[dict],
+    *,
+    target_date: str | None = None,
+) -> dict:
     completed_valid: list[dict] = []
     for row in completed_rows:
         profit_rate = _safe_float(row.get("profit_rate"), None)
@@ -1460,6 +1666,7 @@ def _build_statistical_action_weight_family(events: list[dict], completed_rows: 
                 "clear_edge_margin": 0.15,
                 "high_loss_rate_guard": 0.65,
             },
+            "eligible_but_not_chosen": _build_eligible_but_not_chosen_report(events, target_date),
         },
         "apply_mode": "report_only_weight_source",
         "notes": [
@@ -1471,7 +1678,12 @@ def _build_statistical_action_weight_family(events: list[dict], completed_rows: 
     }
 
 
-def _build_family_reports(events: list[dict], completed_rows: list[dict] | None = None) -> list[dict]:
+def _build_family_reports(
+    events: list[dict],
+    completed_rows: list[dict] | None = None,
+    *,
+    target_date: str | None = None,
+) -> list[dict]:
     completed_rows = completed_rows or []
     return [
         _build_mechanical_entry_family(events),
@@ -1484,7 +1696,7 @@ def _build_family_reports(events: list[dict], completed_rows: list[dict] | None 
         _build_protect_trailing_smoothing_family(events),
         _build_holding_flow_ofi_smoothing_family(events),
         _build_scale_in_price_guard_family(events),
-        _build_statistical_action_weight_family(events, completed_rows),
+        _build_statistical_action_weight_family(events, completed_rows, target_date=target_date),
     ]
 
 
@@ -1613,6 +1825,7 @@ def build_statistical_action_weight_artifact(report: dict) -> dict:
         "weight_source_ready": bool(family.get("weight_source_ready")),
         "current": family.get("current") or {},
         "recommended": recommended,
+        "eligible_but_not_chosen": recommended.get("eligible_but_not_chosen") or {},
         "policy_counts": dict(policy_counts),
         "operator_decision": (
             "candidate_weight_source_review"
@@ -1630,6 +1843,8 @@ def render_statistical_action_weight_markdown(artifact: dict) -> str:
     recommended = artifact.get("recommended") if isinstance(artifact.get("recommended"), dict) else {}
     data_completeness = recommended.get("data_completeness") if isinstance(recommended.get("data_completeness"), dict) else {}
     policy_counts = artifact.get("policy_counts") if isinstance(artifact.get("policy_counts"), dict) else {}
+    eligible_report = artifact.get("eligible_but_not_chosen")
+    eligible_report = eligible_report if isinstance(eligible_report, dict) else {}
     lines = [
         f"# Statistical Action Weight Report - {artifact.get('date')}",
         "",
@@ -1667,6 +1882,46 @@ def render_statistical_action_weight_markdown(artifact: dict) -> str:
     lines.extend(_render_bucket_markdown("Time Bucket", recommended.get("by_time_bucket") or []))
     lines.extend(
         [
+            "## Eligible But Not Chosen",
+            "",
+            f"- status: `{eligible_report.get('status', 'report_only')}`",
+            f"- join_status: `{eligible_report.get('join_status', '-')}`",
+            f"- sample_snapshots: `{_markdown_value(eligible_report.get('sample_snapshots'))}`",
+            f"- sample_candidates: `{_markdown_value(eligible_report.get('sample_candidates'))}`",
+            f"- post_sell_joined_candidates: `{_markdown_value(eligible_report.get('post_sell_joined_candidates'))}`",
+            "",
+            "| candidate_action | sample | joined | avg_snapshot_profit | avg_snapshot_dd | avg_post_mfe_10m_proxy | avg_post_mae_10m_proxy |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for row in eligible_report.get("action_summary") or []:
+        if not isinstance(row, dict):
+            continue
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _markdown_value(row.get("candidate_action")),
+                    _markdown_value(row.get("sample")),
+                    _markdown_value(row.get("post_sell_joined")),
+                    _markdown_value(row.get("avg_snapshot_profit_rate")),
+                    _markdown_value(row.get("avg_snapshot_drawdown_from_peak")),
+                    _markdown_value(row.get("avg_post_decision_mfe_10m_proxy")),
+                    _markdown_value(row.get("avg_post_decision_mae_10m_proxy")),
+                ]
+            )
+            + " |"
+        )
+    lines.extend(
+        [
+            "",
+            "- `post_decision_*_proxy`는 record_id가 post_sell 평가와 맞는 경우의 10분 proxy이며 live 판단 근거가 아니다.",
+            "- true 후행 quote join이 추가되기 전까지는 selection-bias 점검과 후보 발굴에만 쓴다.",
+            "",
+        ]
+    )
+    lines.extend(
+        [
             "## Threshold 반영 원칙",
             "",
             "- 이 리포트는 AI/주문 runtime을 직접 변경하지 않는다.",
@@ -1676,7 +1931,7 @@ def render_statistical_action_weight_markdown(artifact: dict) -> str:
             "## 다음 액션",
             "",
             "- Markdown 자동생성 상태와 표본 충분성을 확인한다.",
-            "- sample-ready이면 `holding_exit_decision_matrix`와 shadow prompt 주입 후보로 넘긴다.",
+            "- sample-ready이면 `holding_exit_decision_matrix` report-only contract 후보로 넘긴다.",
             "- 부족하면 `stat_action_decision_snapshot`와 completed/action join 품질을 먼저 보강한다.",
             "",
         ]
@@ -1920,8 +2175,13 @@ def build_cumulative_threshold_cycle_report(
 
     family_snapshots: dict[str, dict] = {}
     family_apply_candidates: dict[str, list[dict]] = {}
-    for label in window_dates:
-        families = _build_family_reports(events_by_window.get(label, []), completed_by_window.get(label, []))
+    for label, dates in window_dates.items():
+        window_target_date = dates[-1] if dates else target_date
+        families = _build_family_reports(
+            events_by_window.get(label, []),
+            completed_by_window.get(label, []),
+            target_date=window_target_date,
+        )
         family_snapshots[label] = _threshold_snapshot_from_families(families, report_only=True)
         family_apply_candidates[label] = []
 
@@ -2136,7 +2396,7 @@ def build_daily_threshold_cycle_report(
     else:
         ctx.warnings.append("completed trade 로드는 skip-db 옵션으로 생략됨")
 
-    families = _build_family_reports(event_windows["same_day"], completed_rows)
+    families = _build_family_reports(event_windows["same_day"], completed_rows, target_date=target_date)
     completed = _completed_summary(completed_rows)
     threshold_snapshot = {
         family["family"]: {

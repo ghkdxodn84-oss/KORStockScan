@@ -98,6 +98,38 @@ PROVIDER_ENGINES = [
 ]
 
 
+def _holding_matrix_runtime_context(cache_token: str) -> dict:
+    return {
+        "applied": True,
+        "status": "advisory_prompt_applied",
+        "cohort": "candidate",
+        "cache_token": cache_token,
+        "prompt_context": "[ADM Advisory Context]\n- matrix_version: matrix_v1",
+        "fields": {
+            "holding_exit_matrix_feature_enabled": True,
+            "holding_exit_matrix_applied": True,
+            "holding_exit_matrix_status": "advisory_prompt_applied",
+            "holding_exit_matrix_cohort": "candidate",
+            "holding_exit_matrix_version": "matrix_v1",
+            "holding_exit_matrix_source_date": "2026-05-07",
+            "holding_exit_matrix_valid_for_date": "next_preopen",
+            "holding_exit_matrix_application_mode": "observe_only_until_owner_approval",
+            "holding_exit_matrix_loaded_from": "/tmp/matrix.json",
+            "holding_exit_matrix_cache_token": cache_token,
+            "holding_exit_matrix_price_bucket": "price_10k_30k",
+            "holding_exit_matrix_volume_bucket": "volume_500k_2m",
+            "holding_exit_matrix_time_bucket": "time_0930_1030",
+            "holding_exit_matrix_recommended_biases": "no_clear_edge,no_clear_edge,no_clear_edge",
+            "holding_exit_matrix_policy_hints": "candidate_weight_source,candidate_weight_source,candidate_weight_source",
+        },
+        "matched_entries": [
+            {"axis": "price_bucket", "recommended_bias": "no_clear_edge"},
+            {"axis": "volume_bucket", "recommended_bias": "no_clear_edge"},
+            {"axis": "time_bucket", "recommended_bias": "no_clear_edge"},
+        ],
+    }
+
+
 def test_analyze_target_uses_short_ttl_cache(monkeypatch):
     engine = _build_engine()
     call_count = {"value": 0}
@@ -763,6 +795,95 @@ def test_provider_cache_set_enforces_max_entries(monkeypatch):
 
         assert len(engine._analysis_cache) == 3
         assert "k4" in engine._analysis_cache
+
+
+def test_provider_holding_matrix_context_appends_prompt_and_tags_result(monkeypatch):
+    ws_data = {"curr": 10000, "fluctuation": 1.0, "orderbook": {"asks": [], "bids": []}}
+    recent_ticks = [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}]
+    recent_candles = [{"체결시간": "10:00:00", "현재가": 10000, "거래량": 100}]
+
+    for engine_cls, module, call_name in PROVIDER_ENGINES:
+        engine = _build_provider_engine(engine_cls)
+        seen_inputs = []
+
+        monkeypatch.setattr(
+            module,
+            "build_holding_exit_matrix_runtime_context",
+            lambda **kwargs: _holding_matrix_runtime_context(
+                "candidate:matrix_v1:price_10k_30k:volume_500k_2m:time_0930_1030"
+            ),
+        )
+        monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "packet")
+
+        def _fake_call(prompt, user_input, *args, **kwargs):
+            seen_inputs.append(user_input)
+            return {"action": "HOLD", "score": 70, "reason": "hold"}
+
+        monkeypatch.setattr(engine, call_name, _fake_call)
+
+        result = engine.analyze_target(
+            "테스트",
+            ws_data,
+            recent_ticks,
+            recent_candles,
+            strategy="SCALPING",
+            cache_profile="holding",
+            prompt_profile="holding",
+        )
+
+        assert "[ADM Advisory Context]" in seen_inputs[0]
+        assert result["holding_exit_matrix_applied"] is True
+        assert result["holding_exit_matrix_version"] == "matrix_v1"
+        assert result["holding_exit_matrix_cohort"] == "candidate"
+        assert result["holding_exit_matrix_decision_alignment"] == "neutral_no_clear_edge"
+
+
+def test_provider_holding_matrix_cache_token_separates_cache_variants(monkeypatch):
+    ws_data = {"curr": 10000, "fluctuation": 1.0, "orderbook": {"asks": [], "bids": []}}
+    recent_ticks = [{"time": "10:00:00", "price": 10000, "volume": 10, "dir": "BUY"}]
+    recent_candles = [{"체결시간": "10:00:00", "현재가": 10000, "거래량": 100}]
+
+    for engine_cls, module, call_name in PROVIDER_ENGINES:
+        engine = _build_provider_engine(engine_cls)
+        call_count = {"value": 0}
+        contexts = iter(
+            [
+                _holding_matrix_runtime_context("candidate:matrix_v1:price_10k_30k:volume_500k_2m:time_0930_1030"),
+                _holding_matrix_runtime_context("candidate:matrix_v2:price_10k_30k:volume_500k_2m:time_0930_1030"),
+            ]
+        )
+
+        monkeypatch.setattr(module, "build_holding_exit_matrix_runtime_context", lambda **kwargs: next(contexts))
+        monkeypatch.setattr(engine, "_format_market_data", lambda ws, ticks, candles: "packet")
+
+        def _fake_call(*args, **kwargs):
+            call_count["value"] += 1
+            return {"action": "HOLD", "score": 61, "reason": "stable"}
+
+        monkeypatch.setattr(engine, call_name, _fake_call)
+
+        first = engine.analyze_target(
+            "테스트",
+            ws_data,
+            recent_ticks,
+            recent_candles,
+            strategy="SCALPING",
+            cache_profile="holding",
+            prompt_profile="holding",
+        )
+        second = engine.analyze_target(
+            "테스트",
+            ws_data,
+            recent_ticks,
+            recent_candles,
+            strategy="SCALPING",
+            cache_profile="holding",
+            prompt_profile="holding",
+        )
+
+        assert call_count["value"] == 2
+        assert first["cache_hit"] is False
+        assert second["cache_hit"] is False
 
 
 def test_provider_overnight_engine_disabled_is_annotated():

@@ -63,6 +63,7 @@ _EVENT_DETAIL_LABELS = {
     "sell_reason_type": "청산유형",
     "reason": "사유",
     "exit_rule": "청산 규칙",
+    "exit_decision_source": "청산 권한축",
     "peak_profit": "고점수익",
     "current_ai_score": "현재 AI",
     "curr_price": "현재가",
@@ -103,6 +104,7 @@ _DETAIL_HIDDEN_KEYS = {
 
 _DETAIL_KEY_ORDER = [
     "reason",
+    "exit_decision_source",
     "exit_rule",
     "profit_rate",
     "ai_score",
@@ -451,6 +453,7 @@ def _build_exit_signal_payload(
     *,
     reason: str | None = None,
     exit_rule: str | None = None,
+    exit_decision_source: str | None = None,
     sell_reason_type: str | None = None,
     inferred: bool = False,
 ) -> dict:
@@ -459,6 +462,8 @@ def _build_exit_signal_payload(
         fields["reason"] = reason
     if exit_rule is not None:
         fields["exit_rule"] = exit_rule
+    if exit_decision_source is not None:
+        fields["exit_decision_source"] = exit_decision_source
     if sell_reason_type is not None:
         fields["sell_reason_type"] = sell_reason_type
 
@@ -468,6 +473,7 @@ def _build_exit_signal_payload(
         "timestamp": event.timestamp,
         "reason": fields.get("reason") or "",
         "exit_rule": fields.get("exit_rule") or "",
+        "exit_decision_source": fields.get("exit_decision_source") or "",
         "sell_reason_type": fields.get("sell_reason_type") or "",
         "details": _build_event_details(
             HoldingEvent(
@@ -524,6 +530,43 @@ def _infer_exit_rule_from_reason(reason: Any) -> str:
     return ""
 
 
+def _infer_exit_decision_source(
+    *,
+    exit_rule: Any,
+    reason: Any = None,
+    fields: dict[str, str] | None = None,
+) -> str:
+    rule = _normalize_exit_rule(exit_rule)
+    reason_text = str(reason or "").strip().lower()
+    raw_fields = fields or {}
+
+    if str(raw_fields.get("exit_decision_source") or "").strip() not in {"", "-", "None"}:
+        return str(raw_fields.get("exit_decision_source") or "").strip()
+    if rule.startswith("overnight_") or "overnight_flow" in reason_text:
+        return "OVERNIGHT_FLOW"
+    if (
+        str(raw_fields.get("candidate_reason") or "").startswith("holding_flow_override")
+        or str(raw_fields.get("reason") or "").startswith("holding_flow_override")
+        or str(raw_fields.get("defer_reason") or "").startswith("ofi_stable_")
+    ):
+        return "HOLDING_FLOW_OVERRIDE"
+    if rule == "scalp_preset_hard_stop_pct":
+        return "PRESET_HARD_STOP"
+    if rule in {"scalp_preset_protect_profit", "protect_hard_stop", "protect_trailing_stop"}:
+        return "PRESET_PROTECT"
+    if rule == "scalp_preset_ai_review_exit":
+        return "AI_REVIEW_EXIT"
+    if "trailing" in rule:
+        return "TRAILING"
+    if "timeout" in rule:
+        return "TIMEOUT"
+    if rule == "scalp_soft_stop_pct":
+        return "SOFT_STOP"
+    if rule:
+        return "MANUAL"
+    return ""
+
+
 def _build_exit_signal(events: list[HoldingEvent]) -> dict | None:
     sell_completed = None
     fallback_exit_event = None
@@ -538,6 +581,11 @@ def _build_exit_signal(events: list[HoldingEvent]) -> dict | None:
             return _build_exit_signal_payload(
                 event,
                 exit_rule=normalized_exit_rule,
+                exit_decision_source=_infer_exit_decision_source(
+                    exit_rule=normalized_exit_rule,
+                    reason=event.fields.get("reason"),
+                    fields=event.fields,
+                ),
                 inferred=(event.stage != "exit_signal"),
             )
 
@@ -546,6 +594,11 @@ def _build_exit_signal(events: list[HoldingEvent]) -> dict | None:
             return _build_exit_signal_payload(
                 event,
                 exit_rule=inferred_exit_rule,
+                exit_decision_source=_infer_exit_decision_source(
+                    exit_rule=inferred_exit_rule,
+                    reason=event.fields.get("reason"),
+                    fields=event.fields,
+                ),
                 inferred=True,
             )
         if fallback_exit_event is None:
@@ -558,6 +611,7 @@ def _build_exit_signal(events: list[HoldingEvent]) -> dict | None:
                 sell_completed,
                 reason="추정: SCALP 출구엔진 손절선 도달",
                 exit_rule="scalp_preset_hard_stop_pct",
+                exit_decision_source="PRESET_HARD_STOP",
                 sell_reason_type="LOSS",
                 inferred=True,
             )

@@ -65,10 +65,12 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 
 `AI decision matrix`는 계속 보고서로만 두는 축이 아니다. 다만 live 반영은 아래 순서 외에는 허용하지 않는다.
 
+`2026-05-07 KST` 기준으로는 `ADM-2 shadow prompt` naming이 stale하다. 현재 코드 owner는 `HOLDING_EXIT_MATRIX_ADVISORY_ENABLED=False` 기본 OFF 상태의 readiness plumbing이며, runtime loader / feature flag / cache-key 분리 / provenance logging은 구현됐지만 same-day live prompt enable은 아직 열지 않는다.
+
 | 단계 | 상태 | 의미 | ON 기준 | 금지사항 |
 | --- | --- | --- | --- | --- |
 | `ADM-1 report-only` | 현재 ON | 장후 `holding_exit_decision_matrix_YYYY-MM-DD.json/md` 생성 | schema, `matrix_version`, `prompt_hint`, `hard_veto`, provenance 확인 | AI prompt/응답/주문 변경 금지 |
-| `ADM-2 shadow prompt` | 현재 OFF | 전일 matrix를 다음 장전 로드하고 shadow-only prompt context로 주입 | token budget, cache key 분리, Gemini/OpenAI/DeepSeek parity, action drift 로그 준비 | live AI 응답 채택 금지 |
+| `ADM-2 shadow prompt` | 현재 OFF (historical naming only) | 전일 matrix를 다음 장전 로드하고 shadow-only prompt context로 주입 | token budget, cache key 분리, Gemini/OpenAI/DeepSeek parity, action drift 로그 준비 | live AI 응답 채택 금지 |
 | `ADM-3 advisory nudge` | 현재 OFF | matrix가 `참고 권고`로 live prompt에 들어가지만 hard override는 하지 않음 | ADM-2에서 drift가 설명 가능하고 `GOOD_EXIT/MISSED_UPSIDE/soft_stop` 악화가 없을 때 | matrix 단독 청산/추가매수 금지 |
 | `ADM-4 weighted live` | 현재 OFF | AI 응답 후처리 또는 confidence weight에 제한 반영 | bucket sample floor, confidence-adjusted edge, rollback guard, single owner가 닫힐 때 | 다른 보유/청산 canary와 같은 stage에서 중복 live 금지 |
 | `ADM-5 policy gate` | 현재 OFF | 특정 bucket에서 강한 veto/allow gate로 사용 | 며칠 이상 반복 표본과 hard veto 정밀도 검증, owner 승인, 즉시 OFF env 필요 | 초기 운영에서 바로 진입 금지 |
@@ -76,7 +78,7 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 운영 규칙:
 
 1. matrix는 장중 self-updating 금지다. 전일 장후 산정본을 다음 장전 immutable context로만 로드한다.
-2. ADM-2 이상을 켜려면 별도 runtime flag가 필요하다. 현재 코드에는 `HOLDING_EXIT_DECISION_MATRIX_*` 토글이 없으므로 report-only 외 단계는 OFF로 본다.
+2. ADM-2 이상을 켜려면 별도 runtime flag가 필요하다. 현재 코드는 `HOLDING_EXIT_MATRIX_ADVISORY_ENABLED` 토글과 runtime provenance를 가지지만 기본값은 OFF다. flag OFF는 baseline cohort, flag ON은 candidate cohort로 보고 non-holding/shared prompt surface는 excluded cohort로 둔다.
 3. ADM-3 이상은 `soft_stop_micro_grace`, `REVERSAL_ADD`, `bad_entry_refined_canary`와 같은 보유/청산 stage live owner 충돌 여부를 먼저 확인한다.
 4. live 전환 판정은 손실 억제가 아니라 `COMPLETED + valid profit_rate`, `GOOD_EXIT/MISSED_UPSIDE`, soft stop tail, 추가매수 기회비용을 함께 본다.
 

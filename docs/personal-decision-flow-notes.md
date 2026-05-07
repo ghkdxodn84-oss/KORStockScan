@@ -6,7 +6,7 @@
 
 | 항목 | 현재 기준 |
 | --- | --- |
-| 기준일 | `2026-05-04 KST` 장후 정렬 기준 |
+| 기준일 | `2026-05-07 KST` 장후 정렬 기준 |
 | entry live owner | `mechanical_momentum_latency_relief` 운영 override와 `dynamic_entry_price_resolver_p1`/`dynamic_entry_ai_price_canary_p2` 가격축이다. `latency_quote_fresh_composite`, `latency_signal_quality_quote_composite`, fallback/split-entry 계열은 종료/폐기 축이다. |
 | AI score 50 | `AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED=True`로 score 50 또는 `ai_fallback_score_50=True`는 신규 BUY가 아니라 `blocked_ai_score` 보류로 본다. 유안타증권형 반복 손실은 단순 쿨다운 문제가 아니라 손절 thesis invalidation과 WATCHING 재진입 판단이 분리된 구조 문제로 본다. |
 | submitted 이후 해석 | submitted 이후는 진입병목이 아니라 체결 품질과 BUY 신호 적정성 관찰 구간이다. `full/partial`은 합치지 않고, 이후 `HOLDING -> exit_rule -> COMPLETED + valid profit_rate`로 BUY 품질을 본다. |
@@ -19,7 +19,10 @@
 | trailing/protect 위치 | trailing/protect 민감도는 5/4 장후 기준 active live 변경 없이 5/6 `TrailingProtectSensitivity0506` 단일 owner로 재판정한다. `scalp_trailing_take_profit`은 평균 완료수익이 양호하지만 weak borderline과 PYRAMID 교차가 크고, protect trailing은 손실 확대 차단과 missed upside가 섞여 있다. |
 | OFI/QI 위치 | OFI/QI는 P2 entry price 내부 입력 품질개선축이다. standalone hard gate가 아니며, `watching/holding/exit` 확장은 별도 workorder 없이는 금지한다. 5/4 장후 P2 stage 111건 중 `USE_DEFENSIVE=96`, `SKIP=8`, `skip_without_bearish_ofi=4`라 neutral/insufficient SKIP demotion 후보는 5/8 `OFIQExpansionLadder0508`에서 본다. |
 | OpenAI 위치 | OpenAI Responses WS/schema/deterministic config는 live routing 승격이 아니라 flag-off backlog다. 5/4 장후 실측 WS/shadow stage는 0건이므로 `runtime 미사용 backlog 유지`로 보고, 5/6 `AIEngineFlagOffBacklog0506`에서 route/diagnostic 존재 여부만 재분류한다. |
-| threshold/report 진행현황 | 실시간 자동변경은 금지다. 현재는 장전 manifest와 장후 report 생성까지만 허용하며, live runtime threshold mutation은 `ThresholdOpsTransition0506` acceptance 전까지 열지 않는다. `statistical_action_weight`, `holding_exit_decision_matrix`, 누적/rolling threshold report는 report-only/decision-support다. |
+| threshold/report 진행현황 | 실시간 자동변경은 금지다. 현재는 장전 manifest와 장후 report 생성까지만 허용하며, live runtime threshold mutation은 `ThresholdOpsTransition0506` acceptance 전까지 열지 않는다. `statistical_action_weight`, `holding_exit_decision_matrix`, 누적/rolling threshold report는 report-only/decision-support다. `preclose_sell_target`은 5/7 기준 AI fallback/Telegram 전송/15:00 cron까지 반영됐지만 consumer 범위는 여전히 `operator_preclose_review`까지만 승인이다. |
+| ADM 상태 | `holding_exit_decision_matrix`는 report-only 산출물에서 출발한다. 5/7 장후 `holding_exit_matrix_runtime.py`와 provider 3종 parity patch로 loader/flag/cache/provenance plumbing은 구현됐지만 `HOLDING_EXIT_MATRIX_ADVISORY_ENABLED=False` 기본 OFF를 유지한다. `ADM-2 shadow prompt` naming은 stale에 가깝고, 5/7 matrix entry는 `no_clear_edge` 비중이 높아 same-day live AI 응답 변경 근거는 약하다. |
+| 진입 후속 owner | 추상적으로 `submitted/full/partial funnel 회복`이라고 적는 대신, 다음 owner는 `EntryFunnelRecoveryDecision0508`로 고정한다. `BUY Funnel Sentinel + missed_entry_counterfactual + submitted/full/partial/COMPLETED valid PnL`을 한 owner에서 묶어 `score65_74 recovery probe` 다음 장전 enable/hold/drop을 닫는다. broad threshold 완화나 fallback 재개는 이 owner 범위가 아니다. |
+| 보유/청산 후속 owner | `ExitDecisionSourceProvenance0508`은 2026-05-07 KST에 선실행 완료했다. `exit_decision_source` taxonomy를 runtime/report/test/post-sell payload에 고정했고, 이후 matrix advisory, bad-entry refined, winner wide-window 해석은 이 field를 공통 provenance로 사용한다. `3-mode counterfactual`은 여전히 설계 only다. |
 | 휴장/이월 보정 | `2026-05-05`는 어린이날 휴장이다. 5/6 PREOPEN은 이미 코드/가드가 준비된 carry-over 로드 확인만 받고, 설계 가능한 항목은 5/4 장후에 즉시 닫거나 5/6 POSTCLOSE 단일 owner로 분리한다. |
 
 ## 추가매수 제한 해석 메모
@@ -212,7 +215,7 @@
 | 데이터 기반 threshold 산정 | `REVERSAL_ADD`만의 문제가 아니다. entry mechanical/VPW/liquidity/AI/pre-submit, holding soft stop/bad entry/reversal add/trailing/position sizing을 모두 threshold family로 보고, `데이터량 -> 산정 가능성 -> 단일 canary 후보값` 순서로 잠근다. 실시간 자동변경은 폐기하고 `장중 적재 -> 장후 산정 -> 다음 장전 적용`만 공식 운영 사이클로 쓴다. |
 | 통계 행동가중치 | 전문가 규칙 계층과 별도로 `statistical_action_weight`를 둔다. completed trade와 compact action stage를 이용해 가격대/거래량/시간대별로 `exit_only`, `avg_down_wait`, `pyramid_wait`의 평균손익/승률을 비교한다. 단순 평균이 아니라 action별 전체 prior로 shrinkage하고 불확실성 penalty를 뺀 `confidence_adjusted_score`를 쓴다. score 차이가 작으면 `no_clear_edge`, 손실비율이 높으면 `defensive_only_high_loss_rate`로 두고, live 행동 변경이 아니라 다음 threshold weight와 동적 수량화 설계의 근거로만 쓴다. |
 | decision snapshot | 행동가중치의 다음 수집축은 `stat_action_decision_snapshot`이다. HOLDING 판단 순간의 `chosen_action`, `eligible_actions`, `rejected_actions`, `scale_in_gate_reason`, `scale_in_action_reason`, `exit_rule_candidate`, 수익률/고점/AI/수급/호가 상태를 같이 남긴다. 목적은 실제 선택 행동만 보는 selection bias를 줄이고 `eligible_but_not_chosen` 후보의 후행 MFE/MAE를 나중에 복원하는 것이다. |
-| AI 보유/청산 decision matrix | 사용자가 요구한 최종형은 threshold 적용만이 아니라 AI가 보유/청산 판단 시 통계 matrix를 참조하는 것이다. 별도 산출물 `holding_exit_decision_matrix`를 두고, 전일 장후 산정값을 다음 장전 로드해 장중에는 immutable context로 쓴다. 단계는 `ADM-1 schema/report`, `ADM-2 shadow prompt injection`, `ADM-3 observe-only nudge`, `ADM-4 single-owner canary`, `ADM-5 daily feedback loop` 순서다. |
+| AI 보유/청산 decision matrix | 사용자가 요구한 최종형은 threshold 적용만이 아니라 AI가 보유/청산 판단 시 통계 matrix를 참조하는 것이다. 별도 산출물 `holding_exit_decision_matrix`를 두고, 전일 장후 산정값을 다음 장전 로드해 장중에는 immutable context로 쓴다. 5/7 장후에는 holding prompt/exit alias 전용 runtime loader, feature flag, cache key suffix, provenance logging, baseline/candidate/excluded cohort를 구현했다. 다만 `ADM-2 shadow prompt injection`은 naming이 stale에 가깝고 실제 runtime flag는 `HOLDING_EXIT_MATRIX_ADVISORY_ENABLED` 기본 OFF다. 현재 5/7 matrix는 `no_clear_edge` 비중이 높아 same-day live 전환 근거는 약하다. |
 | 롤백 기준 | `REVERSAL_ADD` 체결 cohort의 `COMPLETED + valid profit_rate` 평균이 `<= -0.30%`이거나 `reversal_add_used` 후 soft stop 전환율이 baseline 대비 `+5.0%p` 이상이면 OFF하고, `bad_entry_block` 관찰만 유지한다. `soft_stop_expert_defense`는 guarded cohort 평균손익 `<= -0.30%`, guarded 후 hard/protect stop 전이, `sell_order_failed`, `REVERSAL_ADD` 체결 포지션 적용 1건 이상이면 v2를 OFF하고 v1 micro grace만 유지한다. |
 
 ## ID 명명 규칙
@@ -634,3 +637,46 @@
 - 판정: `이번 이상치는 {classification}이며 {incident/threshold 후보/instrumentation gap/normal drift}로 본다.`
 - 근거: `{전환율}, {baseline 대비}, {top blocker}, {관련 report path}` 기준이다.
 - 다음 액션: `{R3 manifest 후보 생성/incident playbook 승인 요청/logging workorder 추가/no action}`으로 처리한다.
+
+## 운영자 메모: data/report 산출물 운용 구분
+
+이 섹션은 개인 운영 메모다. 공식 실행 판정의 Source는 날짜별 checklist, Plan Rebase, 산출물 원문에 둔다. 개인문서는 산출물 읽는 순서와 운영자 행동을 빠르게 맞추기 위한 보조 노트로만 쓴다.
+
+### 1. 공통 원칙
+
+- `data/report` 아래 산출물은 기본적으로 `관찰/판정 입력`이다. 파일이 생성됐다는 사실만으로 runtime env, threshold, score, spread cap, 청산 정책, bot restart를 바꾸지 않는다.
+- 리포트가 `runtime_change=false`, `report_only`, `observe_only`, `manifest_only`, `shadow_prompt`를 명시하면 그 경계를 그대로 따른다.
+- live 적용 검토는 `daily -> rolling -> cumulative` 방향 일치, sample floor, rollback owner, rollback command, cohort 분리, 기존 동일 단계 owner 충돌 확인이 있어야 한다.
+- `COMPLETED + valid profit_rate` 외 손익은 참고값이다. full fill과 partial fill, initial과 pyramid, fallback/historical trace는 합치지 않는다.
+- 운영 자동화의 성공은 `cron 발화`, `wrapper exit`, `산출물 완성`, `알림 발송`, `전략 효과`를 분리해서 본다.
+
+### 2. 리포트별 사용 방식
+
+| 산출물 | 운영 등급 | 먼저 볼 필드 | 운영자 행동 | 금지선 |
+| --- | --- | --- | --- | --- |
+| `data/report/buy_funnel_sentinel/` | 장중 이상치 감지 | `primary`, `secondary`, `ai_confirmed`, `budget_pass`, `submitted`, baseline 대비 | incident/threshold 후보/instrumentation gap/normal drift로 라우팅 | score threshold, spread cap, fallback, restart 자동 변경 금지 |
+| `data/report/holding_exit_sentinel/` | 장중 이상치 감지 | `primary`, `secondary`, `exit_signal`, `sell_completed`, defer/worsen, AI cache | 청산 drought, flow defer, whipsaw, trailing 조기익절을 분리 | 자동 매도, holding threshold, AI TTL, restart 자동 변경 금지 |
+| `data/report/threshold_cycle_YYYY-MM-DD.json` | 당일 threshold 입력 | `threshold_snapshot`, `threshold_diff_report`, `apply_candidate_list`, `rollback_guard_pack` | 당일 수치와 다음 장전 후보를 확인 | `apply_ready=True`여도 동일 단계 owner 충돌 전 live 금지 |
+| `data/report/threshold_cycle_cumulative/` | 누적/rolling 방향 확인 | `completed_cohorts`, `Family Readiness`, window별 sample | daily와 방향이 맞는지 확인하고 후보를 격상/격하 | 누적 평균 단독으로 threshold 적용 금지 |
+| `data/threshold_cycle/apply_plans/` | 장전 manifest 확인 | `apply_mode`, `owner_rule`, `blocked_reason`, rollback owner | R3 `manifest_only` 후보인지, R5 live apply가 막혔는지 확인 | manifest를 runtime mutation으로 해석 금지 |
+| `data/report/holding_exit_decision_matrix/` | AI/ADM context 후보 | `matrix_version`, `application_mode`, `Hard Veto`, `Prompt Hints` | 5/7 장후 기준 runtime loader/provenance 구현 완료, flag OFF baseline으로 유지 | live AI 응답/action 변경 금지 |
+| `data/report/preclose_sell_target*` | 장마감 후보 검토 | `policy_status`, `automation_stage`, `live_runtime_effect`, 후보 사유 | operator review 또는 AI/Telegram acceptance 분리 | 자동 주문, threshold/ADM consumer 자동 연결 금지 |
+| `data/report/monitor_snapshots/` | 상세 복원 근거 | `holding_exit_observation`, `wait6579_ev_cohort`, post-sell/MFE/MAE | checklist 항목의 증적이나 outcome 복원 입력으로 사용 | 단일 snapshot으로 broad threshold 변경 금지 |
+| `data/report/tuning_monitoring/status/` | 자동화 완성도 | step별 `started/success/failed`, attempt, exit_code | cron/wrapper 실패와 전략 효과를 분리 | lab/report 결과를 live mutation으로 직접 연결 금지 |
+
+### 3. 2026-05-06 산출물 기준 빠른 판정
+
+| 후보 | 현재 읽는 방식 | 운영자 메모 |
+| --- | --- | --- |
+| `protect_trailing_smoothing` | `threshold_cycle_2026-05-06.json` daily에서는 `next_preopen_single_owner` 후보 | 5/7 PREOPEN의 `soft_stop whipsaw confirmation`과 같은 holding/exit 단계라 동시 live enable 금지. 충돌 시 hold 또는 단일 owner 하나만 승인 |
+| `scale_in_price_guard` | `manifest_only` 유지 | `spread_bps_p90=83.26`은 완화 근거가 아니라 현행 `80bps / 1주 cap` safety 유지 근거 |
+| `statistical_action_weight` | `report_only_weight_source` | `time_1030_1400`, `volume_2m_10m`, `price_gte_70k`의 `pyramid_wait` 우위는 ADM/SAW 입력 후보일 뿐 live 주문/청산 판단이 아님 |
+| `holding_exit_decision_matrix` | `shadow_prompt_or_observe_only_until_owner_approval` | 5/7 장후 baseline/candidate/excluded cohort와 cache-key/provenance는 구현됐지만 `HOLDING_EXIT_MATRIX_ADVISORY_ENABLED=False` 유지. Hard Veto는 항상 기존 runtime safety가 우선 |
+
+### 4. 리포트 확인 후 문서화 순서
+
+1. 산출물의 `application_mode` 또는 `apply_mode`를 먼저 읽는다.
+2. 수치가 상위라도 `sample_ready`, `weight_source_ready`, `completed_valid`, `loss_rate`, `edge_margin`을 같이 본다.
+3. 같은 단계 live owner와 충돌하면 live가 아니라 checklist 후보/manifest 후보로 낮춘다.
+4. 운영 판단을 남길 때는 `판정 -> 근거 -> 다음 액션` 순서로 쓰고, 미래 작업은 날짜별 checklist에 `Due/Slot/TimeWindow/Track`이 있는 체크박스로 남긴다.
+5. checklist를 바꾼 뒤에는 parser 검증을 돌리고, Project/Calendar 동기화는 표준 수동 명령으로만 처리한다.

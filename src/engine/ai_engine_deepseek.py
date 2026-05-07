@@ -27,6 +27,10 @@ from src.engine.scalping_feature_packet import (
     build_scalping_feature_audit_fields,
     extract_scalping_feature_packet,
 )
+from src.engine.holding_exit_matrix_runtime import (
+    build_holding_exit_matrix_runtime_context,
+    merge_holding_exit_matrix_result_fields,
+)
 from src.utils.logger import log_error
 from src.utils.constants import TRADING_RULES
 from src.engine.macro_briefing_complete import build_scanner_data_input
@@ -1321,13 +1325,22 @@ class DeepSeekSniperEngine:
         analysis_started = time.perf_counter()
         prompt_version = "default_v1"
         cache_strategy = strategy
+        normalized_profile = "shared"
+        matrix_runtime = None
         if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
             prompt_type = "swing"
             prompt = SWING_SYSTEM_PROMPT
         else:
             prompt, prompt_type, prompt_version, normalized_profile = self._resolve_scalping_prompt(prompt_profile)
+            matrix_runtime = build_holding_exit_matrix_runtime_context(
+                prompt_profile=normalized_profile,
+                ws_data=ws_data if isinstance(ws_data, dict) else {},
+                recent_candles=recent_candles if isinstance(recent_candles, list) else [],
+                advisory_enabled=bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_ADVISORY_ENABLED", False)),
+            )
             if normalized_profile != "shared":
                 cache_strategy = f"{strategy}:{normalized_profile}"
+                cache_strategy = f"{cache_strategy}:adm:{matrix_runtime.get('cache_token', 'disabled')}"
         cache_key = self._build_analysis_cache_key_with_profile(
             target_name=target_name,
             strategy=cache_strategy,
@@ -1339,6 +1352,7 @@ class DeepSeekSniperEngine:
         )
         cached_result = self._cache_get("_analysis_cache", cache_key)
         if cached_result is not None:
+            cached_result = merge_holding_exit_matrix_result_fields(cached_result, matrix_runtime)
             return self._annotate_analysis_result(
                 cached_result,
                 prompt_type=prompt_type,
@@ -1354,7 +1368,10 @@ class DeepSeekSniperEngine:
 
         if not self.lock.acquire(blocking=False):
             return self._annotate_analysis_result(
-                {"action": "WAIT", "score": 50, "reason": "AI 경합 (다른 종목 분석 중)"},
+                merge_holding_exit_matrix_result_fields(
+                    {"action": "WAIT", "score": 50, "reason": "AI 경합 (다른 종목 분석 중)"},
+                    matrix_runtime,
+                ),
                 prompt_type=prompt_type,
                 prompt_version=prompt_version,
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),
@@ -1369,6 +1386,7 @@ class DeepSeekSniperEngine:
         try:
             cached_result = self._cache_get("_analysis_cache", cache_key)
             if cached_result is not None:
+                cached_result = merge_holding_exit_matrix_result_fields(cached_result, matrix_runtime)
                 return self._annotate_analysis_result(
                     cached_result,
                     prompt_type=prompt_type,
@@ -1384,7 +1402,10 @@ class DeepSeekSniperEngine:
 
             if self.ai_disabled:
                 return self._annotate_analysis_result(
-                    {"action": "DROP", "score": 0, "reason": "AI 엔진 일시 중단 (연속 실패)"},
+                    merge_holding_exit_matrix_result_fields(
+                        {"action": "DROP", "score": 0, "reason": "AI 엔진 일시 중단 (연속 실패)"},
+                        matrix_runtime,
+                    ),
                     prompt_type=prompt_type,
                     prompt_version=prompt_version,
                     response_ms=int((time.perf_counter() - analysis_started) * 1000),
@@ -1398,7 +1419,10 @@ class DeepSeekSniperEngine:
 
             if time.time() - self.last_call_time < self.min_interval:
                 return self._annotate_analysis_result(
-                    {"action": "WAIT", "score": 50, "reason": "AI 쿨타임"},
+                    merge_holding_exit_matrix_result_fields(
+                        {"action": "WAIT", "score": 50, "reason": "AI 쿨타임"},
+                        matrix_runtime,
+                    ),
                     prompt_type=prompt_type,
                     prompt_version=prompt_version,
                     response_ms=int((time.perf_counter() - analysis_started) * 1000),
@@ -1416,6 +1440,8 @@ class DeepSeekSniperEngine:
                 feature_audit_fields = {}
             else:
                 formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
+                if matrix_runtime and matrix_runtime.get("prompt_context"):
+                    formatted_data = f"{formatted_data}\n\n{matrix_runtime['prompt_context']}"
                 target_model = self._get_tier1_model()
                 feature_audit_fields = build_scalping_feature_audit_fields(
                     extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
@@ -1441,6 +1467,7 @@ class DeepSeekSniperEngine:
                 result = self._normalize_scalping_action_schema(result, prompt_type=prompt_type)
                 result.update(feature_audit_fields)
 
+            result = merge_holding_exit_matrix_result_fields(result, matrix_runtime)
             self._mark_successful_ai_call()
             self._cache_set(
                 "_analysis_cache",
@@ -1468,7 +1495,10 @@ class DeepSeekSniperEngine:
             log_error(f"🚨 [{target_name}][{strategy}] DeepSeek 실시간 분석 에러 (연속 실패 {failure_count}회, API키 인덱스 {self.current_api_key_index}): {e}")
 
             return self._annotate_analysis_result(
-                {"action": "WAIT", "score": 50, "reason": f"에러: {e}"},
+                merge_holding_exit_matrix_result_fields(
+                    {"action": "WAIT", "score": 50, "reason": f"에러: {e}"},
+                    matrix_runtime,
+                ),
                 prompt_type=prompt_type,
                 prompt_version=prompt_version,
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),

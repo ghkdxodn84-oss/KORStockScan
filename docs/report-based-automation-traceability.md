@@ -25,18 +25,35 @@
 | `data/threshold_cycle/date=YYYY-MM-DD/family=*/part-*.jsonl` | `backfill_threshold_cycle_events` | `daily_threshold_cycle_report` | `R0_collect` | `ThresholdCollectorIO0506` | immutable snapshot source, checkpoint, read bytes, availability guard |
 | `data/report/threshold_cycle_YYYY-MM-DD.json` | `daily_threshold_cycle_report` | `threshold_cycle_preopen_apply`, operator review | `R1_daily_report` | `ThresholdOpsTransition0506` | apply candidate, rollback guard, warnings |
 | `data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_YYYY-MM-DD.{json,md}` | `daily_threshold_cycle_report` | operator review, threshold candidate persistence check | `R2_cumulative_report` | `CumulativeThresholdCycleReport0504-Postclose`, `ThresholdOpsTransition0506` | daily/rolling/cumulative 방향성 일치 여부 |
-| `data/report/statistical_action_weight/statistical_action_weight_YYYY-MM-DD.{json,md}` | `daily_threshold_cycle_report` | action weight review, ADM ladder | `R1_daily_report` | `StatActionWeight0506`, `StatActionMarkdown0506` | bucket sample floor, policy_hint, data completeness |
+| `data/report/statistical_action_weight/statistical_action_weight_YYYY-MM-DD.{json,md}` | `daily_threshold_cycle_report` | action weight review, ADM ladder | `R1_daily_report` | `StatActionWeight0506`, `StatActionMarkdown0506`, `StatActionEligibleOutcome0507` | bucket sample floor, policy_hint, data completeness, `eligible_but_not_chosen` report-only proxy |
 | `data/report/holding_exit_decision_matrix/holding_exit_decision_matrix_YYYY-MM-DD.{json,md}` | `daily_threshold_cycle_report` | ADM ladder | `R1_daily_report` | `AIDecisionMatrix0506` | matrix_version, hard_veto, prompt_hint |
-| `data/report/preclose_sell_target/preclose_sell_target_YYYY-MM-DD.{json,md}` | `preclose_sell_target_report` | operator preclose review, holding/overnight decision support, future threshold/ADM context | `R1_daily_report` | `PrecloseSellTargetRevival0506-Intraday` | `policy_status=report_only`, `live_runtime_effect=false`, AI/Telegram/cron acceptance 분리 |
-| `data/report/buy_funnel_sentinel/buy_funnel_sentinel_YYYY-MM-DD.{json,md}` | `buy_funnel_sentinel` | Telegram admin alert, operator intraday review, threshold/anomaly routing | `R1_daily_report` | `BuyFunnelSentinel0506-Intraday`, `SentinelThresholdFeedback0507-Intraday` | classification, baseline comparison, forbidden auto mutation |
-| `data/report/holding_exit_sentinel/holding_exit_sentinel_YYYY-MM-DD.{json,md}` | `holding_exit_sentinel` | Telegram admin alert, operator intraday review, holding/exit anomaly routing | `R1_daily_report` | `HoldingExitSentinel0506-Intraday`, `SentinelThresholdFeedback0507-Intraday` | classification, holding/exit conversion, forbidden auto mutation |
+| `data/report/preclose_sell_target/preclose_sell_target_YYYY-MM-DD.{json,md}` | `preclose_sell_target_report` | operator preclose review. holding/overnight decision support, future threshold/ADM context는 후보만 유지 | `R1_daily_report` | `PrecloseSellTargetRevival0506-Intraday`, `PrecloseSellTargetAIRecovery0508`, `PrecloseSellTargetCronWrapper0508` | `policy_status=report_only`, `live_runtime_effect=false`, AI/Telegram/cron acceptance 분리. 5/7 Gemini key fallback 성공, Telegram 실제 전송/15:00 cron 등록 반영, consumer 범위는 operator review까지만 승인 |
+| `data/report/preclose_sell_target/status/preclose_sell_target_YYYY-MM-DD.status.json` | `run_preclose_sell_target_report.sh` | cron/manual wrapper health check | `R0_collect` | `PrecloseSellTargetCron0507`, `PrecloseSellTargetCronWrapper0508` | lock/status/log path/weekend guard, runtime_change=false, cron registration은 별도 승인 필요 |
+| `data/report/buy_funnel_sentinel/buy_funnel_sentinel_YYYY-MM-DD.{json,md}` | `buy_funnel_sentinel` | Telegram admin alert, operator intraday review, threshold/anomaly routing | `R1_daily_report` | `BuyFunnelSentinel0506-Intraday`, `SentinelThresholdFeedback0507-Intraday` | classification, baseline comparison, forbidden auto mutation, Telegram semantic dedupe state |
+| `data/report/holding_exit_sentinel/holding_exit_sentinel_YYYY-MM-DD.{json,md}` | `holding_exit_sentinel` | Telegram admin alert, operator intraday review, holding/exit anomaly routing | `R1_daily_report` | `HoldingExitSentinel0506-Intraday`, `SentinelThresholdFeedback0507-Intraday` | classification, holding/exit conversion, forbidden auto mutation, Telegram semantic dedupe state |
 | `tmp/monitor_snapshot_completion_YYYY-MM-DD_PROFILE.json` | `run_monitor_snapshot_safe.sh` | cron/admin completion check, web async refresh status | `R0_collect` | `MonitorSnapshotAsyncCompletion0507` | async worker pid, result file, status, skip/failure reason, log path |
 | `data/report/tuning_monitoring/status/tuning_monitoring_postclose_YYYY-MM-DD.json` | `run_tuning_monitoring_postclose.sh` | postclose monitoring chain health check | `R0_collect` | `TuningMonitoringPostcloseFallback0507` | lock/retry status, per-step exit code, failed step, command provenance |
 | `data/threshold_cycle/apply_plans/threshold_apply_YYYY-MM-DD.json` | `threshold_cycle_preopen_apply` | preopen operator/bot start workflow | `R3_manifest_only` | `ThresholdOpsTransition0506` | apply_mode, blocked reason, owner_rule |
 | threshold version attribution report | 미구현 | post-apply attribution | `R6_post_apply_attribution` pending | `ThresholdOpsTransition0506` 후속 | threshold_version, applied/not-applied cohort, rollback guard |
 | auto apply/restart wrapper | 미구현 | preopen automation | `R5_live_threshold_apply` blocked | 별도 workorder 필요 | env provenance, restart result, rollback command |
 
-## 3. 자동 threshold 적용 acceptance gate
+## 3. Sentinel Routing Standard
+
+| Sentinel classification | 기본 라우팅 | threshold-cycle 연결 조건 | 금지된 자동변경 |
+| --- | --- | --- | --- |
+| `UPSTREAM_AI_THRESHOLD` | score50/wait65_74 cohort review, single-axis canary 후보 검토 | `COMPLETED + valid profit_rate`, missed/avoided counterfactual, sample floor, rollback owner가 모두 닫힌 별도 workorder | score threshold 완화, fallback 재개 |
+| `LATENCY_DROUGHT` | latency 원인분해, quote freshness/SAFE normal submit 직전 수급 fade review | 두산 rollback 이후에는 spread cap 자동완화 금지. 반복성과 price/latency blocker attribution이 분리될 때만 `R3_manifest_only` 후보 | spread cap 완화, bot restart |
+| `PRICE_GUARD_DROUGHT` | price resolver/guard attribution review | guard family sample floor와 fill quality rollback owner가 닫힌 경우만 `R3_manifest_only` 후보 | entry/scale-in guard runtime mutation |
+| `HOLD_DEFER_DANGER` | holding_flow_override defer cost/worsen floor review | sell receipt/completed, GOOD_EXIT/MISSED_UPSIDE, defer worsen floor가 daily/rolling/cumulative에서 같은 방향일 때만 후보 | 자동 매도, holding_flow_override mutation |
+| `SOFT_STOP_WHIPSAW` | soft stop rebound/tail report-only review | same-stage owner 충돌 해소, sample floor, rollback command가 닫힌 다음 장전 단일 owner 후보 | hard/protect stop 완화, 자동 청산 변경 |
+| `TRAILING_EARLY_EXIT` | trailing missed-upside/winner wide-window review | protect/trailing family owner와 rollback guard가 닫힌 `R3_manifest_only` 후보 | trailing threshold runtime mutation |
+| `AI_HOLDING_OPS` | AI cache/Tier provenance instrumentation backlog | threshold-cycle 직결 금지. cache 변경은 별도 AI ops workorder 필요 | AI cache TTL mutation, provider routing 변경 |
+| `RUNTIME_OPS` | incident/playbook, stale pipeline/cron/runtime health check | threshold-cycle 직결 금지 | bot restart 자동 실행 |
+| `NORMAL` | no-action, notify state reset | 없음 | 없음 |
+
+Sentinel routing은 [2026-05-07 checklist](./2026-05-07-stage2-todo-checklist.md) `SentinelThresholdFeedback0507-Intraday`에서 표준화했다. `primary + secondary` semantic signature 중복은 날짜별 notify state로 억제하지만, report JSON/Markdown 생성과 classification 갱신은 매 실행 유지한다.
+
+## 4. 자동 threshold 적용 acceptance gate
 
 `R5_live_threshold_apply`로 넘어가려면 아래가 모두 checklist에 닫혀야 한다.
 
@@ -50,7 +67,7 @@
 8. 적용 후 threshold version별 post-apply attribution report가 생성된다.
 9. rollback guard 위반 시 자동 적용을 멈추고 `manifest_only`로 복귀한다.
 
-## 4. 금지선
+## 5. 금지선
 
 - 누적 평균 단독으로 live threshold를 적용하지 않는다.
 - report-only 산출물 이름에 `apply_ready=True`가 있어도 이 문서의 `R5` gate를 통과하기 전에는 runtime 변경으로 해석하지 않는다.
@@ -59,6 +76,6 @@
 - Sentinel abnormal alert를 즉시 threshold 완화/강화, fallback 재개, 자동 매도, cache TTL mutation, bot restart로 연결하지 않는다.
 - postclose collector가 live `pipeline_events_YYYY-MM-DD.jsonl` 대신 immutable snapshot을 읽어 `checkpoint_completed=true`를 만들더라도, 이는 R0/R1 수집 안정화일 뿐 R5 live apply 승인으로 보지 않는다.
 
-## 5. 다음 추적 항목
+## 6. 다음 추적 항목
 
 미래 작업의 실행 owner는 날짜별 checklist가 소유한다. 현재 연결 owner는 [2026-05-06-stage2-todo-checklist.md](./2026-05-06-stage2-todo-checklist.md)의 `ReportAutomationTraceability0506`이다.

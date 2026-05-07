@@ -113,9 +113,51 @@ def test_observation_flags_soft_stop_and_trailing(monkeypatch, tmp_path):
     assert "TRAILING_EARLY_EXIT" in report["classification"]["secondary"]
 
 
-def test_notify_admin_skips_normal(monkeypatch):
+def test_stale_after_all_positions_completed_is_not_runtime_ops(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event("2026-05-06", "10:00:00", "holding_started", record_id=1),
+            _event("2026-05-06", "10:01:00", "ai_holding_review", record_id=1, fields={"ai_cache": "miss"}),
+            _event("2026-05-06", "10:02:00", "sell_completed", record_id=1),
+        ],
+    )
+
+    report = sentinel.build_holding_exit_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:30:00"),
+    )
+
+    assert report["current"]["session"]["unique_symbols"]["active_holding"] == 0
+    assert "RUNTIME_OPS" not in report["classification"]["matches"]
+
+
+def test_stale_with_active_holding_is_runtime_ops(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event("2026-05-06", "10:00:00", "holding_started", record_id=1),
+            _event("2026-05-06", "10:01:00", "ai_holding_review", record_id=1, fields={"ai_cache": "miss"}),
+        ],
+    )
+
+    report = sentinel.build_holding_exit_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:30:00"),
+    )
+
+    assert report["current"]["session"]["unique_symbols"]["active_holding"] == 1
+    assert report["classification"]["primary"] == "RUNTIME_OPS"
+
+
+def test_notify_admin_skips_normal(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
     called = []
-    report = {"classification": {"primary": "NORMAL", "secondary": []}}
+    report = {"target_date": "2026-05-06", "classification": {"primary": "NORMAL", "secondary": []}}
     monkeypatch.setattr(sentinel, "_load_telegram_config", lambda: ("token", "admin"))
     monkeypatch.setattr(sentinel, "_send_telegram", lambda *args: called.append(args))
 
@@ -123,6 +165,43 @@ def test_notify_admin_skips_normal(monkeypatch):
 
     assert result == {"enabled": True, "status": "skipped", "reason": "normal"}
     assert called == []
+
+
+def test_notify_admin_deduplicates_until_normal_reset(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    called = []
+    report = {
+        "target_date": "2026-05-06",
+        "as_of": "2026-05-06T10:05:00",
+        "classification": {"primary": "HOLD_DEFER_DANGER", "secondary": ["AI_HOLDING_OPS"]},
+        "current": {
+            "session": {
+                "stage_unique": {"exit_signal": 2, "sell_order_sent": 2, "sell_completed": 1},
+                "stage_events": {"holding_flow_override_defer_exit": 3},
+                "ratios": {"sell_sent_to_exit_signal_unique_pct": 100.0, "ai_cache_miss_pct": 95.0},
+            }
+        },
+        "observation": {"metrics": {}},
+    }
+    normal_report = {
+        "target_date": "2026-05-06",
+        "as_of": "2026-05-06T10:10:00",
+        "classification": {"primary": "NORMAL", "secondary": []},
+    }
+
+    monkeypatch.setattr(sentinel, "_load_telegram_config", lambda: ("token", "admin"))
+    monkeypatch.setattr(sentinel, "_send_telegram", lambda *args: called.append(args))
+
+    first = sentinel.maybe_notify_admin(report, {"markdown": "report.md"}, enabled=True)
+    duplicate = sentinel.maybe_notify_admin(report, {"markdown": "report.md"}, enabled=True)
+    normal = sentinel.maybe_notify_admin(normal_report, {"markdown": "report.md"}, enabled=True)
+    after_reset = sentinel.maybe_notify_admin(report, {"markdown": "report.md"}, enabled=True)
+
+    assert first == {"enabled": True, "status": "sent", "reason": ""}
+    assert duplicate == {"enabled": True, "status": "skipped", "reason": "duplicate_signature"}
+    assert normal == {"enabled": True, "status": "skipped", "reason": "normal"}
+    assert after_reset == {"enabled": True, "status": "sent", "reason": ""}
+    assert len(called) == 2
 
 
 def test_telegram_message_is_concise_korean_summary():

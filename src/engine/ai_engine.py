@@ -26,6 +26,10 @@ from src.engine.ai_response_contracts import (
     AI_RESPONSE_SCHEMA_REGISTRY,
     resolve_ai_response_schema,
 )
+from src.engine.holding_exit_matrix_runtime import (
+    build_holding_exit_matrix_runtime_context,
+    merge_holding_exit_matrix_result_fields,
+)
 from src.engine.sniper_position_tags import normalize_position_tag
 
 GEMINI_RESPONSE_SCHEMA_REGISTRY = AI_RESPONSE_SCHEMA_REGISTRY
@@ -1876,13 +1880,22 @@ class GeminiSniperEngine:
         analysis_started = time.perf_counter()
         prompt_version = "default_v1"
         cache_strategy = strategy
+        normalized_profile = "shared"
+        matrix_runtime = None
         if strategy in ["KOSPI_ML", "KOSDAQ_ML"]:
             prompt_type = "swing"
             prompt = SWING_SYSTEM_PROMPT
         else:
             prompt, prompt_type, prompt_version, normalized_profile = self._resolve_scalping_prompt(prompt_profile)
+            matrix_runtime = build_holding_exit_matrix_runtime_context(
+                prompt_profile=normalized_profile,
+                ws_data=ws_data if isinstance(ws_data, dict) else {},
+                recent_candles=recent_candles if isinstance(recent_candles, list) else [],
+                advisory_enabled=bool(getattr(TRADING_RULES, "HOLDING_EXIT_MATRIX_ADVISORY_ENABLED", False)),
+            )
             if normalized_profile != "shared":
                 cache_strategy = f"{strategy}:{normalized_profile}"
+                cache_strategy = f"{cache_strategy}:adm:{matrix_runtime.get('cache_token', 'disabled')}"
         cache_signature_payload = self._build_analysis_cache_signature_payload(
             target_name=target_name,
             strategy=cache_strategy,
@@ -1902,6 +1915,10 @@ class GeminiSniperEngine:
         )
         cached_result = self._cache_get("_analysis_cache", cache_key)
         if cached_result is not None:
+            cached_result = merge_holding_exit_matrix_result_fields(
+                cached_result,
+                matrix_runtime,
+            )
             cached_result.update(
                 self._analysis_cache_log_fields(
                     cache_profile=cache_profile,
@@ -1927,6 +1944,7 @@ class GeminiSniperEngine:
 
         if not self.lock.acquire(blocking=False):
             result = {"action": "WAIT", "score": 50, "reason": "AI 경합 (다른 종목 분석 중)"}
+            result = merge_holding_exit_matrix_result_fields(result, matrix_runtime)
             result.update(
                 self._analysis_cache_log_fields(
                     cache_profile=cache_profile,
@@ -1953,6 +1971,10 @@ class GeminiSniperEngine:
         try:
             cached_result = self._cache_get("_analysis_cache", cache_key)
             if cached_result is not None:
+                cached_result = merge_holding_exit_matrix_result_fields(
+                    cached_result,
+                    matrix_runtime,
+                )
                 cached_result.update(
                     self._analysis_cache_log_fields(
                         cache_profile=cache_profile,
@@ -1979,6 +2001,7 @@ class GeminiSniperEngine:
             # AI 엔진이 비활성화되었을 경우 즉시 DROP 반환
             if self.ai_disabled:
                 result = {"action": "DROP", "score": 0, "reason": "AI 엔진 일시 중단 (연속 실패)"}
+                result = merge_holding_exit_matrix_result_fields(result, matrix_runtime)
                 result.update(
                     self._analysis_cache_log_fields(
                         cache_profile=cache_profile,
@@ -2004,6 +2027,7 @@ class GeminiSniperEngine:
 
             if time.time() - self.last_call_time < self.min_interval:
                 result = {"action": "WAIT", "score": 50, "reason": "AI 쿨타임"}
+                result = merge_holding_exit_matrix_result_fields(result, matrix_runtime)
                 result.update(
                     self._analysis_cache_log_fields(
                         cache_profile=cache_profile,
@@ -2034,6 +2058,8 @@ class GeminiSniperEngine:
                 feature_audit_fields = {}
             else:
                 formatted_data = self._format_market_data(ws_data, recent_ticks, recent_candles)
+                if matrix_runtime and matrix_runtime.get("prompt_context"):
+                    formatted_data = f"{formatted_data}\n\n{matrix_runtime['prompt_context']}"
                 target_model = self._get_tier1_model()
                 feature_audit_fields = build_scalping_feature_audit_fields(
                     extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles)
@@ -2061,6 +2087,7 @@ class GeminiSniperEngine:
                 result["ai_model"] = target_model
                 result["ai_model_tier"] = self._model_tier_label(target_model)
 
+            result = merge_holding_exit_matrix_result_fields(result, matrix_runtime)
             result.update(
                 self._analysis_cache_log_fields(
                     cache_profile=cache_profile,
@@ -2099,7 +2126,10 @@ class GeminiSniperEngine:
             log_error(f"🚨 [{target_name}][{strategy}] AI 실시간 분석 에러 (연속 실패 {failure_count}회, API키 인덱스 {self.current_api_key_index}): {e}")
             
             return self._annotate_analysis_result(
-                {"action": "WAIT", "score": 50, "reason": f"에러: {e}"},
+                merge_holding_exit_matrix_result_fields(
+                    {"action": "WAIT", "score": 50, "reason": f"에러: {e}"},
+                    matrix_runtime,
+                ),
                 prompt_type=prompt_type,
                 prompt_version=prompt_version,
                 response_ms=int((time.perf_counter() - analysis_started) * 1000),

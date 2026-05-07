@@ -60,6 +60,7 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "buy_qty",
     "code",
     "last_exit_current_ai_score",
+    "last_exit_decision_source",
     "last_exit_held_sec",
     "last_exit_peak_profit",
     "last_exit_rule",
@@ -321,6 +322,7 @@ def _handle_scalp_revive_sell_execution(
                 sell_price=int(exec_price or 0),
                 profit_rate=f"{profit_rate:+.2f}",
                 exit_rule=target_stock.get('last_exit_rule') or '-',
+                exit_decision_source=target_stock.get('last_exit_decision_source') or 'MANUAL',
                 revive=True,
                 new_watch_id=int(new_watch_id or 0),
             )
@@ -926,6 +928,7 @@ def _update_db_for_sell(target_id, exec_price, now, receipt_snapshot, strategy, 
                 sell_price=int(exec_price or 0),
                 profit_rate=f"{profit_rate:+.2f}",
                 exit_rule=receipt_snapshot.get('last_exit_rule') or '-',
+                exit_decision_source=receipt_snapshot.get('last_exit_decision_source') or 'MANUAL',
                 revive=bool(is_scalp_revive),
                 strategy=strategy,
             )

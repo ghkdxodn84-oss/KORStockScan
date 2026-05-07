@@ -296,6 +296,23 @@ def test_hard_stop_is_outside_holding_flow_override_scope():
     assert handlers._holding_flow_override_applicable("SCALPING", "scalp_hard_stop_pct") is False
 
 
+def test_exit_decision_source_marks_holding_flow_override_when_candidate_exists():
+    stock = {
+        "strategy": "SCALPING",
+        "holding_flow_override_candidate_key": "scalp_soft_stop_pct:LOSS",
+        "holding_flow_override_last_review_at": 1000.0,
+    }
+
+    assert (
+        handlers._resolve_exit_decision_source(
+            stock=stock,
+            exit_rule="scalp_soft_stop_pct",
+            reason="soft stop",
+        )
+        == "HOLDING_FLOW_OVERRIDE"
+    )
+
+
 def test_overnight_sell_today_flow_hold_flips_to_hold_overnight(monkeypatch):
     logs = []
     monkeypatch.setattr(

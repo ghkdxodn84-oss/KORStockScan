@@ -67,6 +67,28 @@ def _load_config():
         print(f"🚨 설정 파일 로드 실패: {e}")
         return {}
 
+
+def _gemini_key_sort_key(name: str) -> Tuple[int, str]:
+    suffix = name.replace("GEMINI_API_KEY", "", 1).lstrip("_")
+    if suffix == "":
+        return (1, name)
+    try:
+        return (int(suffix), name)
+    except ValueError:
+        return (999, name)
+
+
+def _load_gemini_api_keys(conf: Dict[str, Any]) -> List[Tuple[str, str]]:
+    """Return configured Gemini keys in deterministic key1/key2/key3 order."""
+    keys: List[Tuple[str, str]] = []
+    for name, value in sorted(conf.items(), key=lambda item: _gemini_key_sort_key(str(item[0]))):
+        if not str(name).startswith("GEMINI_API_KEY"):
+            continue
+        if value in (None, "", "-"):
+            continue
+        keys.append((str(name), str(value)))
+    return keys
+
 # --- Public API ---
 def run_preclose_sell_target_report(
     report_date: Optional[str] = None,
@@ -379,11 +401,9 @@ def _call_gemini_preclose(
     
     model_name = TRADING_RULES.AI_MODEL_TIER3
     CONF = _load_config()
-    api_keys = [v for k, v in CONF.items() if k.startswith("GEMINI_API_KEY")]
+    api_keys = _load_gemini_api_keys(CONF)
     if not api_keys:
         return {"sell_targets": [], "summary": "GEMINI_API_KEY 미설정", "market_caution": "API 키 없음"}
-    
-    client = genai.Client(api_key=api_keys[0])
     
     # 프롬프트 작성 (작업지시서에 제시된 프롬프트 사용)
     prompt = f"""
@@ -428,26 +448,48 @@ def _call_gemini_preclose(
 }}
 """
     
-    try:
-        response = client.models.generate_content(
-            model=model_name,
-            contents=prompt,
-            config=types.GenerateContentConfig(response_mime_type="application/json")
-        )
-        text = response.text.strip()
-        # JSON 파싱
-        start = text.find('{')
-        end = text.rfind('}') + 1
-        if start >= 0 and end > start:
-            json_str = text[start:end]
-            result = json.loads(json_str)
-        else:
-            result = {"sell_targets": [], "summary": "AI 응답 파싱 실패", "market_caution": "파싱 실패"}
-    except Exception as e:
-        log_error(f"Gemini 호출 실패: {e}")
-        result = {"sell_targets": [], "summary": "AI 호출 오류", "market_caution": str(e)}
-    
-    return result
+    attempt_errors = []
+    for attempt_index, (key_name, api_key) in enumerate(api_keys, start=1):
+        try:
+            client = genai.Client(api_key=api_key)
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(response_mime_type="application/json")
+            )
+            text = response.text.strip()
+            # JSON 파싱
+            start = text.find('{')
+            end = text.rfind('}') + 1
+            if start >= 0 and end > start:
+                json_str = text[start:end]
+                result = json.loads(json_str)
+            else:
+                result = {"sell_targets": [], "summary": "AI 응답 파싱 실패", "market_caution": "파싱 실패"}
+            result["ai_provider_status"] = {
+                "provider": "gemini",
+                "status": "success",
+                "key_name": key_name,
+                "attempt_index": attempt_index,
+                "attempted_keys": len(api_keys),
+            }
+            return result
+        except Exception as e:
+            attempt_errors.append({"key_name": key_name, "error": str(e)})
+            log_error(f"Gemini 호출 실패({key_name}, attempt={attempt_index}/{len(api_keys)}): {e}")
+
+    last_error = attempt_errors[-1]["error"] if attempt_errors else "unknown"
+    return {
+        "sell_targets": [],
+        "summary": "AI 호출 오류",
+        "market_caution": f"Gemini API key fallback 모두 실패: {last_error}",
+        "ai_provider_status": {
+            "provider": "gemini",
+            "status": "failed",
+            "attempted_keys": len(api_keys),
+            "errors": attempt_errors,
+        },
+    }
 
 # --- 출력 ---
 def _render_markdown(
@@ -562,6 +604,7 @@ def _build_structured_report(
             "sell_target_count": len(result.get("sell_targets", [])),
             "summary": result.get("summary", ""),
             "market_caution": result.get("market_caution", ""),
+            "ai_provider_status": result.get("ai_provider_status") or {},
         },
         "sell_targets": result.get("sell_targets", []),
         "track_a_holding_candidates": holding_candidates,

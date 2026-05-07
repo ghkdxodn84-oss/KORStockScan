@@ -154,9 +154,11 @@ def test_manual_and_test_events_are_excluded(monkeypatch, tmp_path):
     assert report["current"]["session"]["stage_unique"]["holding_started"] == 1
 
 
-def test_notify_admin_skips_normal_reports(monkeypatch):
+def test_notify_admin_skips_normal_reports(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
     called = []
     report = {
+        "target_date": "2026-05-06",
         "classification": {"primary": "NORMAL", "secondary": []},
     }
 
@@ -169,7 +171,8 @@ def test_notify_admin_skips_normal_reports(monkeypatch):
     assert called == []
 
 
-def test_notify_admin_sends_abnormal_reports(monkeypatch):
+def test_notify_admin_sends_abnormal_reports(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
     called = []
     report = {
         "target_date": "2026-05-06",
@@ -201,6 +204,52 @@ def test_notify_admin_sends_abnormal_reports(monkeypatch):
 
     assert result == {"enabled": True, "status": "sent", "reason": ""}
     assert len(called) == 1
+
+
+def test_notify_admin_deduplicates_until_normal_reset(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    called = []
+    report = {
+        "target_date": "2026-05-06",
+        "as_of": "2026-05-06T10:00:00",
+        "classification": {"primary": "LATENCY_DROUGHT", "secondary": []},
+        "recommended_actions": ["check latency"],
+        "policy": {"forbidden_automations": ["bot_restart"]},
+        "current": {
+            "session": {
+                "ratios": {"budget_to_ai_unique_pct": 100.0, "submitted_to_ai_unique_pct": 0.0},
+                "stage_unique": {
+                    "ai_confirmed": 5,
+                    "budget_pass": 5,
+                    "latency_pass": 0,
+                    "order_bundle_submitted": 0,
+                },
+                "blocker_top": [],
+                "upstream_blocker_top": [],
+                "latency_blocker_top": [],
+                "price_guard_top": [],
+            }
+        },
+    }
+    normal_report = {
+        "target_date": "2026-05-06",
+        "as_of": "2026-05-06T10:05:00",
+        "classification": {"primary": "NORMAL", "secondary": []},
+    }
+
+    monkeypatch.setattr(sentinel, "_load_telegram_config", lambda: ("token", "admin"))
+    monkeypatch.setattr(sentinel, "_send_telegram", lambda *args: called.append(args))
+
+    first = sentinel.maybe_notify_admin(report, {"markdown": "report.md"}, enabled=True)
+    duplicate = sentinel.maybe_notify_admin(report, {"markdown": "report.md"}, enabled=True)
+    normal = sentinel.maybe_notify_admin(normal_report, {"markdown": "report.md"}, enabled=True)
+    after_reset = sentinel.maybe_notify_admin(report, {"markdown": "report.md"}, enabled=True)
+
+    assert first == {"enabled": True, "status": "sent", "reason": ""}
+    assert duplicate == {"enabled": True, "status": "skipped", "reason": "duplicate_signature"}
+    assert normal == {"enabled": True, "status": "skipped", "reason": "normal"}
+    assert after_reset == {"enabled": True, "status": "sent", "reason": ""}
+    assert len(called) == 2
 
 
 def test_telegram_message_is_concise_korean_summary():

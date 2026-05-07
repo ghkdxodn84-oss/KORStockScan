@@ -197,6 +197,46 @@ def _max_field(events: list[PipelineEvent], stage: str, field: str) -> float:
     return max(values) if values else 0.0
 
 
+TERMINAL_HOLDING_STAGES = {"sell_completed"}
+ACTIVE_HOLDING_STAGES = {
+    "holding_started",
+    "position_rebased_after_fill",
+    "ai_holding_fast_reuse_band",
+    "ai_holding_reuse_bypass",
+    "ai_holding_review",
+    "ai_holding_skip_unchanged",
+    "bad_entry_refined_candidate",
+    "exit_signal",
+    "holding_flow_override_candidate_cleared",
+    "holding_flow_override_defer_exit",
+    "holding_flow_override_exit_confirmed",
+    "holding_flow_override_force_exit",
+    "holding_flow_override_review",
+    "reversal_add_blocked_reason",
+    "reversal_add_gate_blocked",
+    "scale_in_price_guard_block",
+    "scale_in_qty_block",
+    "sell_order_sent",
+    "soft_stop_expert_shadow",
+    "soft_stop_micro_grace",
+    "stat_action_decision_snapshot",
+}
+
+
+def _active_holding_keys(events: list[PipelineEvent]) -> set[str]:
+    last_by_key: dict[str, PipelineEvent] = {}
+    for event in events:
+        key = _attempt_key(event)
+        if not key:
+            continue
+        last_by_key[key] = event
+    return {
+        key
+        for key, event in last_by_key.items()
+        if event.stage in ACTIVE_HOLDING_STAGES and event.stage not in TERMINAL_HOLDING_STAGES
+    }
+
+
 def _stage_reason_top(events: list[PipelineEvent]) -> list[dict[str, Any]]:
     counter: Counter[str] = Counter()
     for event in events:
@@ -230,6 +270,7 @@ def _summarize_events(events: list[PipelineEvent], *, start_at: datetime, end_at
     flow_review = int(stage_events.get("holding_flow_override_review", 0) or 0)
     ai_review = int(stage_events.get("ai_holding_review", 0) or 0)
     cache_miss = _count_cache_miss(scoped)
+    active_keys = _active_holding_keys(scoped)
     latest_event_at = scoped[-1].emitted_at.isoformat(timespec="seconds") if scoped else None
     return {
         "start_at": start_at.isoformat(timespec="seconds"),
@@ -253,6 +294,7 @@ def _summarize_events(events: list[PipelineEvent], *, start_at: datetime, end_at
             "exit_signal": exit_signal,
             "sell_order_sent": sell_sent,
             "sell_completed": sell_completed,
+            "active_holding": len(active_keys),
         },
     }
 
@@ -295,6 +337,7 @@ def _classify(summary: dict[str, Any], baseline: dict[str, Any] | None, observat
     force_exit = int(stage_events.get("holding_flow_override_force_exit", 0) or 0)
     exit_confirmed = int(stage_events.get("holding_flow_override_exit_confirmed", 0) or 0)
     ai_review = int(stage_events.get("ai_holding_review", 0) or 0)
+    active_holding = int(summary.get("unique_symbols", {}).get("active_holding", 0) or 0)
 
     matches: list[str] = []
     reasons: list[str] = []
@@ -302,9 +345,15 @@ def _classify(summary: dict[str, Any], baseline: dict[str, Any] | None, observat
     if during_sentinel_hours and summary["event_count"] == 0:
         matches.append("RUNTIME_OPS")
         reasons.append("holding pipeline event stream is empty during sentinel hours")
-    elif during_sentinel_hours and stale_sec is not None and stale_sec > 900 and ai_review > 0:
+    elif (
+        during_sentinel_hours
+        and stale_sec is not None
+        and stale_sec > 900
+        and ai_review > 0
+        and active_holding > 0
+    ):
         matches.append("RUNTIME_OPS")
-        reasons.append("holding pipeline event stream is stale")
+        reasons.append("holding pipeline event stream is stale while active holdings remain")
 
     if exit_signal >= 1 and sell_sent < exit_signal:
         matches.append("SELL_EXECUTION_DROUGHT")
@@ -559,6 +608,38 @@ def _send_telegram(token: str, admin_id: str, message: str) -> None:
         response.read()
 
 
+def _notify_state_path(report: dict[str, Any]) -> Path:
+    target_date = _safe_str(report.get("target_date")) or datetime.now().strftime("%Y-%m-%d")
+    return _report_dir() / f"holding_exit_sentinel_notify_state_{target_date}.json"
+
+
+def _notification_signature(report: dict[str, Any]) -> str:
+    classification = report.get("classification", {})
+    primary = _safe_str(classification.get("primary")) or "NORMAL"
+    secondary = sorted(_safe_str(item) for item in (classification.get("secondary") or []) if _safe_str(item))
+    return "|".join([primary, ",".join(secondary)])
+
+
+def _load_notify_state(path: Path) -> dict[str, Any]:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _write_notify_state(path: Path, report: dict[str, Any], signature: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "target_date": _safe_str(report.get("target_date")),
+        "updated_at": datetime.now().isoformat(timespec="seconds"),
+        "as_of": _safe_str(report.get("as_of")),
+        "signature": signature,
+        "primary": _safe_str((report.get("classification") or {}).get("primary")),
+        "secondary": list((report.get("classification") or {}).get("secondary") or []),
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def should_notify_admin(report: dict[str, Any]) -> bool:
     classification = report.get("classification", {})
     primary = _safe_str(classification.get("primary"))
@@ -569,12 +650,21 @@ def should_notify_admin(report: dict[str, Any]) -> bool:
 def maybe_notify_admin(report: dict[str, Any], artifacts: dict[str, str], *, enabled: bool) -> dict[str, Any]:
     if not enabled:
         return {"enabled": False, "status": "skipped", "reason": "disabled"}
+    signature = _notification_signature(report)
+    state_path = _notify_state_path(report)
     if not should_notify_admin(report):
+        previous = _load_notify_state(state_path)
+        if previous.get("signature") != signature:
+            _write_notify_state(state_path, report, signature)
         return {"enabled": True, "status": "skipped", "reason": "normal"}
+    previous = _load_notify_state(state_path)
+    if previous.get("signature") == signature:
+        return {"enabled": True, "status": "skipped", "reason": "duplicate_signature"}
     token, admin_id = _load_telegram_config()
     if not token or not admin_id:
         return {"enabled": True, "status": "skipped", "reason": "missing_config"}
     _send_telegram(token, admin_id, build_telegram_message(report, artifacts))
+    _write_notify_state(state_path, report, signature)
     return {"enabled": True, "status": "sent", "reason": ""}
 
 

@@ -227,6 +227,58 @@ def test_statistical_action_weight_report_buckets_completed_rows():
     assert family["recommended"]["data_completeness"]["volume_known"] == 5
 
 
+def test_statistical_action_weight_reports_eligible_but_not_chosen(tmp_path, monkeypatch):
+    monkeypatch.setattr(report_mod, "POST_SELL_DIR", tmp_path)
+    (tmp_path / "post_sell_evaluations_2026-04-30.jsonl").write_text(
+        json.dumps(
+            {
+                "recommendation_id": 1001,
+                "outcome": "MISSED_UPSIDE",
+                "exit_rule": "scalp_soft_stop_pct",
+                "profit_rate": -1.2,
+                "metrics_10m": {"mfe_pct": 1.4, "mae_pct": -0.8},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-04-30",
+        pipeline_loader=lambda target_date: [
+            {
+                "stage": "stat_action_decision_snapshot",
+                "record_id": 1001,
+                "stock_code": "000100",
+                "fields": {
+                    "chosen_action": "hold_wait",
+                    "eligible_actions": "hold_wait|exit_now|pyramid_wait",
+                    "rejected_actions": "exit_now:no_sell_signal",
+                    "profit_rate": "-0.4",
+                    "peak_profit": "0.2",
+                    "drawdown_from_peak": "0.6",
+                    "current_ai_score": "62",
+                },
+            }
+        ],
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    eligible = report["threshold_snapshot"]["statistical_action_weight"]["recommended"]["eligible_but_not_chosen"]
+    assert eligible["status"] == "report_only"
+    assert eligible["sample_snapshots"] == 1
+    assert eligible["sample_candidates"] == 2
+    assert eligible["post_sell_joined_candidates"] == 2
+    exit_row = next(row for row in eligible["action_summary"] if row["candidate_action"] == "exit_now")
+    assert exit_row["avg_post_decision_mfe_10m_proxy"] == 1.4
+
+    artifact = report_mod.build_statistical_action_weight_artifact(report)
+    markdown = report_mod.render_statistical_action_weight_markdown(artifact)
+    assert "Eligible But Not Chosen" in markdown
+    assert "post_decision_*_proxy" in markdown
+
+
 def test_ofi_ai_smoothing_families_generate_manifest_only_candidates():
     pipeline_rows = []
     for record_id in range(1, 7):

@@ -284,6 +284,7 @@ def test_trade_review_infers_scalp_preset_hard_stop_from_sell_completed(monkeypa
     taxonomy_rows = {item["key"]: item for item in report["sections"]["hard_stop_taxonomy"]["rows"]}
 
     assert trade["exit_signal"]["exit_rule"] == "scalp_preset_hard_stop_pct"
+    assert trade["exit_signal"]["exit_decision_source"] == "PRESET_HARD_STOP"
     assert trade["exit_signal"]["sell_reason_type"] == "LOSS"
     assert trade["exit_signal"]["inferred"] is True
     assert timeline_stages == ["holding_started", "preset_exit_setup", "exit_signal", "sell_completed"]
@@ -329,4 +330,5 @@ def test_trade_review_restores_exit_rule_from_sell_order_sent(monkeypatch):
     trade = report["sections"]["recent_trades"][0]
 
     assert trade["exit_signal"]["exit_rule"] == "scalp_scanner_fallback_never_green"
+    assert trade["exit_signal"]["exit_decision_source"] == "MANUAL"
     assert trade["exit_signal"]["inferred"] is True

@@ -3852,8 +3852,11 @@ def test_holding_exit_signal_logs_exit_rule(monkeypatch):
     sent_logs = [fields for stage, fields in pipeline_logs if stage == "sell_order_sent"]
 
     assert stock["last_exit_rule"] == "scalp_soft_stop_pct"
+    assert stock["last_exit_decision_source"] == "SOFT_STOP"
     assert exit_logs and exit_logs[-1]["exit_rule"] == "scalp_soft_stop_pct"
+    assert exit_logs[-1]["exit_decision_source"] == "SOFT_STOP"
     assert sent_logs and sent_logs[-1]["exit_rule"] == "scalp_soft_stop_pct"
+    assert sent_logs[-1]["exit_decision_source"] == "SOFT_STOP"
 
 
 def test_scalp_preset_tp_hard_stop_logs_exit_rule(monkeypatch):
@@ -3910,10 +3913,13 @@ def test_scalp_preset_tp_hard_stop_logs_exit_rule(monkeypatch):
 
     assert stock["status"] == "SELL_ORDERED"
     assert stock["last_exit_rule"] == "scalp_preset_hard_stop_pct"
+    assert stock["last_exit_decision_source"] == "PRESET_HARD_STOP"
     assert stock["sell_ord_no"] == "SIOC1"
     assert exit_logs and exit_logs[-1]["exit_rule"] == "scalp_preset_hard_stop_pct"
+    assert exit_logs[-1]["exit_decision_source"] == "PRESET_HARD_STOP"
     assert exit_logs[-1]["sell_reason_type"] == "LOSS"
     assert sent_logs and sent_logs[-1]["exit_rule"] == "scalp_preset_hard_stop_pct"
+    assert sent_logs[-1]["exit_decision_source"] == "PRESET_HARD_STOP"
     assert sent_logs[-1]["order_type"] == "16"
 
 
@@ -4097,8 +4103,10 @@ def test_scalping_sell_after_market_close_blocks_order_once(monkeypatch):
     assert stock["status"] == "HOLDING"
     assert stock["market_closed_sell_pending"] is True
     assert stock["market_closed_sell_exit_rule"] == "scalp_soft_stop_pct"
+    assert stock["market_closed_sell_exit_decision_source"] == "SOFT_STOP"
     assert len(blocked) == 1
     assert blocked[-1]["exit_rule"] == "scalp_soft_stop_pct"
+    assert blocked[-1]["exit_decision_source"] == "SOFT_STOP"
     assert sell_calls == []
     assert not [stage for stage, _ in pipeline_logs if stage == "sell_order_failed"]
 

@@ -1,85 +1,84 @@
 {
-  "bundle_as_of": "2026-05-05T22:20:14Z",
+  "bundle_as_of": "2026-05-06T22:20:14Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7259.22,
-    "prev_value": 7200.75,
-    "change": 58.47,
-    "change_pct": 0.81,
-    "as_of": "2026-05-05T20:00:00Z",
-    "source": "The Washington Post"
+    "value": 7365.12,
+    "prev_value": 7259.22,
+    "change": 105.9,
+    "change_pct": 1.46,
+    "as_of": "2026-05-06T20:28:00Z",
+    "source": "Morningstar / Dow Jones Market Data"
   },
   "nasdaq": {
-    "name": "NASDAQ",
-    "value": 25326.13,
-    "prev_value": 25067.81,
-    "change": 258.32,
-    "change_pct": 1.03,
-    "as_of": "2026-05-05T20:00:00Z",
-    "source": "The Washington Post"
+    "name": "NASDAQ Composite",
+    "value": 25838.94,
+    "prev_value": 25326.12,
+    "change": 512.82,
+    "change_pct": 2.02,
+    "as_of": "2026-05-06T20:29:00Z",
+    "source": "Morningstar / Dow Jones Market Data"
   },
   "vix": {
     "name": "VIX",
-    "value": 17.44,
-    "prev_value": 18.29,
-    "change": -0.85,
-    "change_pct": -4.65,
-    "as_of": "2026-05-05T19:12:00Z",
-    "source": "Cboe Global Markets"
+    "value": 16.67,
+    "prev_value": 17.38,
+    "change": -0.71,
+    "change_pct": -4.09,
+    "as_of": "2026-05-06T20:15:00Z",
+    "source": "CryptoRank / CBOE"
   },
   "us10y": {
-    "name": "US 10-Year Treasury Yield",
-    "value": 4.42,
-    "prev_value": 4.44,
-    "change": -0.02,
-    "change_pct": -0.45,
-    "as_of": "2026-05-05T20:00:00Z",
+    "name": "US 10Y Treasury Yield",
+    "value": 4.36,
+    "prev_value": 4.43,
+    "change": -0.07,
+    "change_pct": -1.58,
+    "as_of": "2026-05-06T20:00:00Z",
     "source": "Trading Economics"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 110.13,
-    "prev_value": 114.43,
-    "change": -4.3,
-    "change_pct": -3.76,
-    "as_of": "2026-05-05T20:00:00Z",
+    "value": 101.67,
+    "prev_value": 109.87,
+    "change": -8.2,
+    "change_pct": -7.46,
+    "as_of": "2026-05-06T20:00:00Z",
     "source": "Trading Economics"
   },
   "headlines": [
     {
-      "title": "S&P 500, Nasdaq Tap More Records as Oil Prices Cool",
-      "source": "Schaeffer's Investment Research",
-      "published_at": "2026-05-05T20:27:00Z",
-      "url": "https://www.schaeffersresearch.com/"
+      "title": "S&P 500, Nasdaq end at record highs on hopes for US-Iran peace deal",
+      "source": "The Times of Israel",
+      "published_at": "2026-05-06T20:32:00Z",
+      "url": "https://www.timesofisrael.com/liveblog_entry/sp-500-nasdaq-end-at-record-highs-on-hopes-for-us-iran-peace-deal/"
     },
     {
-      "title": "Oil pulls back after hitting a 2026 high on day one of Trump's plan to unblock Hormuz",
-      "source": "CNN",
-      "published_at": "2026-05-05T09:45:00Z",
-      "url": "https://www.cnn.com/"
+      "title": "Brent crude falls below $100 a barrel amid Middle East peace hopes",
+      "source": "The Guardian",
+      "published_at": "2026-05-06T06:33:00Z",
+      "url": "https://www.theguardian.com/business/live/2026/may/06/brent-crude-falls-below-100-a-barrel-amid-middle-east-peace-hopes"
     },
     {
-      "title": "Chips ahoy: Semiconductors boost Nasdaq, S&P 500 to fresh all-time closing highs",
-      "source": "Reuters",
-      "published_at": "2026-05-05T20:13:00Z",
-      "url": "https://www.reuters.com/"
+      "title": "S&P 500 and Nasdaq-100 Surge: AMD Earnings Steal the Show at Midday",
+      "source": "The Motley Fool",
+      "published_at": "2026-05-06T16:00:00Z",
+      "url": "https://www.fool.com/investing/2026/05/06/sp-500-and-nasdaq-100-surge-amd-earnings/"
     },
     {
-      "title": "US 10-Year Treasury Yield Falls From July-Highs",
+      "title": "CBOE VIX Slides Toward 17 as Oil Retreat and Tech Stock Surge Restore Risk Appetite",
+      "source": "24/7 Wall St.",
+      "published_at": "2026-05-06T14:08:00Z",
+      "url": "https://247wallst.com/investing/2026/05/06/cboe-vix-slides-toward-17/"
+    },
+    {
+      "title": "Treasury Yields Fall Sharply on Easing Inflation Concerns",
       "source": "TradingView",
-      "published_at": "2026-05-05T15:17:00Z",
-      "url": "https://www.tradingview.com/"
-    },
-    {
-      "title": "Stock Market Today: S&P 500 edges up on Iran war developments",
-      "source": "TheStreet",
-      "published_at": "2026-05-05T15:22:00Z",
-      "url": "https://www.thestreet.com/"
+      "published_at": "2026-05-06T11:21:00Z",
+      "url": "https://www.tradingview.com/news/"
     }
   ],
   "notes": [
-    "미국 증시는 중동(호르무즈 해협) 지정학적 긴장이 완화되며 유가가 급락하자 반등하여 사상 최고치를 경신했습니다.",
-    "기술주 중심의 나스닥이 강세를 이끌었으며, 견고한 기업 실적이 투자 심리를 뒷받침했습니다.",
-    "안전자산 선호도 하락으로 국채 10년물 금리는 소폭 하락했고, VIX 지수 역시 하락 안정세를 보였습니다."
+    "Market data reflects closing values for the May 6, 2026 trading session.",
+    "Global markets surged and oil prices plummeted amid reports of an impending US-Iran peace deal and strong corporate earnings from AI-related tech stocks."
   ]
 }

@@ -952,6 +952,50 @@ def _resolve_same_symbol_loss_reentry_cooldown_sec(exit_rule: str | None, profit
     return max(0, _rule_int("SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC", 3600))
 
 
+def _resolve_exit_decision_source(
+    *,
+    stock: dict | None,
+    exit_rule: str | None,
+    reason: str | None = None,
+) -> str:
+    rule = str(exit_rule or "").strip()
+    reason_text = str(reason or "").strip().lower()
+    strategy = str((stock or {}).get("strategy") or "").upper()
+
+    if rule.startswith("overnight_") or "overnight_flow" in reason_text:
+        return "OVERNIGHT_FLOW"
+
+    if (
+        stock
+        and _holding_flow_override_applicable(strategy, rule)
+        and (
+            stock.get("holding_flow_override_candidate_key")
+            or _safe_float(stock.get("holding_flow_override_last_review_at"), 0.0) > 0
+        )
+    ):
+        return "HOLDING_FLOW_OVERRIDE"
+
+    if rule == "scalp_preset_hard_stop_pct":
+        return "PRESET_HARD_STOP"
+
+    if rule in {"scalp_preset_protect_profit", "protect_hard_stop", "protect_trailing_stop"}:
+        return "PRESET_PROTECT"
+
+    if rule == "scalp_preset_ai_review_exit":
+        return "AI_REVIEW_EXIT"
+
+    if "trailing" in rule:
+        return "TRAILING"
+
+    if "timeout" in rule:
+        return "TIMEOUT"
+
+    if rule == "scalp_soft_stop_pct":
+        return "SOFT_STOP"
+
+    return "MANUAL"
+
+
 def _mark_same_symbol_soft_stop(code: str, *, now_ts: float) -> None:
     if not _rule_bool("SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED", False):
         return
@@ -965,12 +1009,19 @@ def _remember_exit_context(
     *,
     stock: dict,
     exit_rule: str | None,
+    reason: str | None,
     peak_profit: float,
     held_sec: int,
     current_ai_score: float,
     soft_stop_threshold_pct: float | None = None,
 ) -> None:
+    exit_decision_source = _resolve_exit_decision_source(
+        stock=stock,
+        exit_rule=exit_rule,
+        reason=reason,
+    )
     stock["last_exit_rule"] = exit_rule or ""
+    stock["last_exit_decision_source"] = exit_decision_source
     stock["last_exit_peak_profit"] = round(float(peak_profit or 0.0), 3)
     stock["last_exit_held_sec"] = max(0, int(held_sec or 0))
     stock["last_exit_current_ai_score"] = round(float(current_ai_score or 0.0), 1)
@@ -1977,11 +2028,13 @@ def _dispatch_scalp_preset_exit(
     _remember_exit_context(
         stock=stock,
         exit_rule=exit_rule,
+        reason=reason,
         peak_profit=peak_profit,
         held_sec=preset_held_sec,
         current_ai_score=preset_ai_score,
     )
     stock['last_exit_reason'] = reason
+    exit_decision_source = str(stock.get("last_exit_decision_source") or "MANUAL")
     _log_holding_pipeline(
         stock,
         code,
@@ -1989,6 +2042,7 @@ def _dispatch_scalp_preset_exit(
         sell_reason_type=sell_reason_type,
         reason=reason,
         exit_rule=exit_rule or "-",
+        exit_decision_source=exit_decision_source,
         profit_rate=f"{profit_rate:+.2f}",
         peak_profit=f"{peak_profit:+.2f}",
         current_ai_score=f"{preset_ai_score:.0f}",
@@ -2035,6 +2089,7 @@ def _dispatch_scalp_preset_exit(
             "sell_order_sent",
             sell_reason_type=sell_reason_type,
             exit_rule=exit_rule or "-",
+            exit_decision_source=exit_decision_source,
             qty=rem_qty,
             ord_no=ord_no or "-",
             order_type=set_fields.get("exit_order_type") or stock.get("exit_order_type") or "-",
@@ -2818,9 +2873,27 @@ def _build_ai_ops_log_fields(
         "holding_cache_ttl_sec",
         "holding_cache_bucket_signature",
         "holding_cache_bucket_changed_fields",
+        "holding_exit_matrix_status",
+        "holding_exit_matrix_cohort",
+        "holding_exit_matrix_version",
+        "holding_exit_matrix_source_date",
+        "holding_exit_matrix_valid_for_date",
+        "holding_exit_matrix_application_mode",
+        "holding_exit_matrix_loaded_from",
+        "holding_exit_matrix_cache_token",
+        "holding_exit_matrix_price_bucket",
+        "holding_exit_matrix_volume_bucket",
+        "holding_exit_matrix_time_bucket",
+        "holding_exit_matrix_recommended_biases",
+        "holding_exit_matrix_policy_hints",
+        "holding_exit_matrix_decision_alignment",
     ):
         if field_name in payload:
             out[field_name] = str(payload.get(field_name, "-") or "-")
+    if "holding_exit_matrix_feature_enabled" in payload:
+        out["holding_exit_matrix_feature_enabled"] = bool(payload.get("holding_exit_matrix_feature_enabled"))
+    if "holding_exit_matrix_applied" in payload:
+        out["holding_exit_matrix_applied"] = bool(payload.get("holding_exit_matrix_applied"))
     if payload.get("scalp_feature_packet_version"):
         out["scalp_feature_packet_version"] = str(payload.get("scalp_feature_packet_version"))
     for field_name in (
@@ -7093,18 +7166,25 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         if strategy == "SCALPING" and now_t >= TIME_15_30:
             block_key = f"{exit_rule or '-'}:{sell_reason_type or '-'}:{now_dt.date().isoformat()}"
             if stock.get("_market_closed_sell_block_key") != block_key:
+                exit_decision_source = _resolve_exit_decision_source(
+                    stock=stock,
+                    exit_rule=exit_rule,
+                    reason=reason,
+                )
                 _mutate_stock_state(
                     stock,
                     set_fields={
                         "_market_closed_sell_block_key": block_key,
                         "market_closed_sell_pending": True,
                         "market_closed_sell_exit_rule": exit_rule or "-",
+                        "market_closed_sell_exit_decision_source": exit_decision_source,
                         "last_exit_reason": reason,
                     },
                 )
                 _remember_exit_context(
                     stock=stock,
                     exit_rule=exit_rule,
+                    reason=reason,
                     peak_profit=peak_profit,
                     held_sec=int(held_time_min * 60),
                     current_ai_score=current_ai_score,
@@ -7137,6 +7217,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     "sell_order_blocked_market_closed",
                     sell_reason_type=sell_reason_type,
                     exit_rule=exit_rule or "-",
+                    exit_decision_source=exit_decision_source,
                     status=stock.get("status", "-"),
                     profit_rate=f"{profit_rate:+.2f}",
                     peak_profit=f"{peak_profit:+.2f}",
@@ -7169,12 +7250,14 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
         _remember_exit_context(
             stock=stock,
             exit_rule=exit_rule,
+            reason=reason,
             peak_profit=peak_profit,
             held_sec=int(held_time_min * 60),
             current_ai_score=current_ai_score,
             soft_stop_threshold_pct=dynamic_stop_pct if str(exit_rule or "").strip() == "scalp_soft_stop_pct" else None,
         )
         _mutate_stock_state(stock, set_fields={'last_exit_reason': reason})
+        exit_decision_source = str(stock.get("last_exit_decision_source") or "MANUAL")
         _log_holding_pipeline(
             stock,
             code,
@@ -7182,6 +7265,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             sell_reason_type=sell_reason_type,
             reason=reason,
             exit_rule=exit_rule or "-",
+            exit_decision_source=exit_decision_source,
             profit_rate=f"{profit_rate:+.2f}",
             peak_profit=f"{peak_profit:+.2f}",
             current_ai_score=f"{current_ai_score:.0f}",
@@ -7304,6 +7388,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 "sell_order_sent",
                 sell_reason_type=sell_reason_type,
                 exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
+                exit_decision_source=stock.get("last_exit_decision_source") or "MANUAL",
                 qty=buy_qty,
                 ord_no=ord_no or "-",
                 order_type=stock.get("exit_order_type") or "-",
@@ -7365,6 +7450,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 "sell_order_failed",
                 sell_reason_type=sell_reason_type,
                 exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
+                exit_decision_source=stock.get("last_exit_decision_source") or "MANUAL",
                 new_status=new_status,
                 error=err_msg or "unknown",
                 sellable_qty=sellable_qty if sellable_qty is not None else "-",

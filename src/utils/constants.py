@@ -502,6 +502,7 @@ class TradingConfig:
     AI_GATEKEEPER_FAST_REUSE_SEC: float = 30.0  # 동일 감시 스냅샷 재평가 생략
     AI_HOLDING_FAST_REUSE_MAX_WS_AGE_SEC: float = 1.5  # 보유 AI fast reuse 허용 최대 WS 나이
     AI_GATEKEEPER_FAST_REUSE_MAX_WS_AGE_SEC: float = 2.0  # Gatekeeper fast reuse 허용 최대 WS 나이
+    HOLDING_EXIT_MATRIX_ADVISORY_ENABLED: bool = False  # holding/exit decision matrix advisory prompt canary 기본 OFF
     HOLDING_FLOW_OVERRIDE_ENABLED: bool = True  # 운영 override: 단일 보유/청산 점수 대신 흐름 판단으로 최종 청산
     HOLDING_FLOW_OVERRIDE_WORSEN_PCT: float = 0.80  # 최초 후보 대비 추가 악화 허용폭(%p)
     HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC: int = 90  # flow HOLD/TRIM 보류 최대 시간
@@ -1314,6 +1315,7 @@ def _build_trading_rules() -> TradingConfig:
             else config.OPENAI_PREVIOUS_RESPONSE_ID_ENABLED,
         )
 
+    env_holding_exit_matrix_advisory_enabled = _env_bool("KORSTOCKSCAN_HOLDING_EXIT_MATRIX_ADVISORY_ENABLED")
     env_holding_flow_override_enabled = _env_bool("KORSTOCKSCAN_HOLDING_FLOW_OVERRIDE_ENABLED")
     env_holding_flow_worsen = _env_float("KORSTOCKSCAN_HOLDING_FLOW_OVERRIDE_WORSEN_PCT")
     env_holding_flow_max_defer = _env_int("KORSTOCKSCAN_HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC")
@@ -1328,6 +1330,8 @@ def _build_trading_rules() -> TradingConfig:
     env_holding_flow_candle_limit = _env_int("KORSTOCKSCAN_HOLDING_FLOW_REVIEW_CANDLE_LIMIT")
     env_holding_flow_max_ws_age = _env_float("KORSTOCKSCAN_HOLDING_FLOW_REVIEW_MAX_WS_AGE_SEC")
     if (
+        env_holding_exit_matrix_advisory_enabled is not None
+        or
         env_holding_flow_override_enabled is not None
         or env_holding_flow_worsen is not None
         or env_holding_flow_max_defer is not None
@@ -1342,6 +1346,9 @@ def _build_trading_rules() -> TradingConfig:
     ):
         config = replace(
             config,
+            HOLDING_EXIT_MATRIX_ADVISORY_ENABLED=env_holding_exit_matrix_advisory_enabled
+            if env_holding_exit_matrix_advisory_enabled is not None
+            else config.HOLDING_EXIT_MATRIX_ADVISORY_ENABLED,
             HOLDING_FLOW_OVERRIDE_ENABLED=env_holding_flow_override_enabled
             if env_holding_flow_override_enabled is not None
             else config.HOLDING_FLOW_OVERRIDE_ENABLED,

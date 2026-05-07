@@ -30,7 +30,7 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 | Server Comparison | `data/report/server_comparison/server_comparison_YYYY-MM-DD.md` | `src.engine.log_archive_service._save_server_comparison_artifacts` | full monitor snapshot에서 server comparison이 enabled일 때 | 정기 경로 존재. 최근 기본 wrapper는 `MONITOR_SNAPSHOT_SKIP_SERVER_COMPARISON=1`이라 자동 생성이 정책상 꺼질 수 있음 |
 | Statistical Action Weight | `data/report/statistical_action_weight/statistical_action_weight_YYYY-MM-DD.md` | `src.engine.daily_threshold_cycle_report` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | 2026-04-30, 2026-05-01 생성 확인 |
 | Holding/Exit Decision Matrix | `data/report/holding_exit_decision_matrix/holding_exit_decision_matrix_YYYY-MM-DD.md` | `src.engine.daily_threshold_cycle_report` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | 2026-04-30, 2026-05-01 생성 확인 |
-| Preclose Sell Target | `data/report/preclose_sell_target/preclose_sell_target_YYYY-MM-DD.md` | `src.scanners.preclose_sell_target_report` | `deploy/run_preclose_sell_target_report.sh YYYY-MM-DD --no-ai --no-telegram`로 1차 검증 후 정기화 판단 | 재개 준비. canonical JSON과 같은 디렉터리에 생성하며 현재는 report-only |
+| Preclose Sell Target | `data/report/preclose_sell_target/preclose_sell_target_YYYY-MM-DD.md` | `src.scanners.preclose_sell_target_report` | `deploy/run_preclose_sell_target_report.sh YYYY-MM-DD --no-ai --no-telegram`로 1차 검증 후 정기화 판단 | canonical JSON과 같은 디렉터리에 생성하며 현재는 report-only. wrapper status는 `data/report/preclose_sell_target/status/`에 기록 |
 
 ## 비정기/legacy Markdown
 
@@ -117,6 +117,7 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 
 - canonical data는 `data/report/preclose_sell_target/preclose_sell_target_YYYY-MM-DD.json`이다.
 - Markdown은 운영자 검토용이며 자동화 소비자는 JSON만 읽는다.
-- 검증은 먼저 `deploy/run_preclose_sell_target_report.sh YYYY-MM-DD --no-ai --no-telegram`로 수행한다.
-- cron 등록, AI/Telegram enable, threshold/ADM 소비자 연결은 각각 별도 checklist owner가 닫힌 뒤 진행한다.
+- 검증은 먼저 `deploy/run_preclose_sell_target_report.sh YYYY-MM-DD --no-ai --no-telegram`로 수행한다. wrapper는 lock, log path, status manifest, venv guard, weekend/holiday guard를 남긴다.
+- threshold/ADM 소비자 연결은 별도 checklist owner가 닫힌 뒤 진행한다.
 - 별도 acceptance 없이 이 리포트를 live threshold mutation, bot restart, 자동 주문 제출 근거로 쓰지 않는다.
+- 2026-05-07 판정: Gemini key fallback으로 AI JSON schema parse와 canonical JSON/Markdown 생성은 통과했고, 같은 날 Telegram 실제 전송과 `15:00` cron 등록까지 반영했다. consumer 범위는 `operator_preclose_review`까지만 승인한다. threshold/ADM 자동 소비와 live threshold mutation 연결은 계속 금지한다.
