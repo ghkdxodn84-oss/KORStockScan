@@ -14,6 +14,8 @@ AI_CORRECTION_PROVIDER="${THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER:-openai}"
 AI_CORRECTION_RESPONSE_JSON="${THRESHOLD_CYCLE_AI_CORRECTION_RESPONSE_JSON:-}"
 RUN_PATTERN_LABS="${THRESHOLD_CYCLE_RUN_PATTERN_LABS:-true}"
 PATTERN_LAB_START_DATE="${PATTERN_LAB_ANALYSIS_START_DATE:-2026-04-21}"
+BUILD_CODE_IMPROVEMENT_WORKORDER="${THRESHOLD_CYCLE_BUILD_CODE_IMPROVEMENT_WORKORDER:-true}"
+CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS="${CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS:-12}"
 
 mkdir -p "$PROJECT_DIR/logs"
 cd "$PROJECT_DIR"
@@ -89,5 +91,10 @@ if [ "$RUN_PATTERN_LABS" = "true" ] || [ "$RUN_PATTERN_LABS" = "1" ]; then
     "$PROJECT_DIR/analysis/claude_scalping_pattern_lab/run_all.sh"
 fi
 PYTHONPATH=. "$VENV_PY" -m src.engine.scalping_pattern_lab_automation --date "$TARGET_DATE"
+if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "1" ]; then
+  PYTHONPATH=. "$VENV_PY" -m src.engine.build_code_improvement_workorder \
+    --date "$TARGET_DATE" \
+    --max-orders "$CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS"
+fi
 PYTHONPATH=. "$VENV_PY" -m src.engine.threshold_cycle_ev_report --date "$TARGET_DATE"
-echo "[threshold-cycle] postclose report complete target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER pattern_labs=$RUN_PATTERN_LABS daily_ev=true"
+echo "[threshold-cycle] postclose report complete target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER pattern_labs=$RUN_PATTERN_LABS code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true"

@@ -201,8 +201,77 @@ def test_threshold_cycle_report_marks_calibration_sample_and_live_risk_states():
     assert candidates["scale_in_price_guard"]["allowed_runtime_apply"] is False
     assert candidates["scale_in_price_guard"]["apply_mode"] == "report_only_calibration"
     assert candidates["scale_in_price_guard"]["sample_window"] == "rolling_10d_or_cumulative_sparse"
+    assert candidates["pre_submit_price_guard"]["calibration_state"] == "hold_sample"
+    assert candidates["pre_submit_price_guard"]["allowed_runtime_apply"] is True
+    assert candidates["liquidity_gate_refined_candidate"]["allowed_runtime_apply"] is False
+    assert candidates["liquidity_gate_refined_candidate"]["apply_mode"] == "report_only_calibration"
+    assert candidates["overbought_gate_refined_candidate"]["allowed_runtime_apply"] is False
     assert candidates["holding_flow_ofi_smoothing"]["sample_window"] == "daily_intraday"
     assert report["post_apply_attribution"]["soft_stop_balanced_policy"]["perfect_win_rate_required"] is False
+
+
+def test_threshold_cycle_report_routes_entry_filter_ev_sources_to_calibration_families():
+    report_sources = {
+        "sources": {
+            "missed_entry_counterfactual": {
+                "path": "data/report/monitor_snapshots/missed_entry_counterfactual_2026-05-08.json",
+                "exists": True,
+            },
+            "performance_tuning": {
+                "path": "data/report/monitor_snapshots/performance_tuning_2026-05-08.json",
+                "exists": True,
+            },
+        },
+        "source_metrics": {
+            "latency_guard_miss_ev_recovery": {
+                "evaluated_candidates": 25,
+                "missed_winner_rate": 70.0,
+                "avoided_loser_rate": 20.0,
+                "quote_fresh_latency_pass_rate": 90.0,
+                "performance_latency_block_events": 25,
+            },
+            "buy_score65_74": {
+                "score65_74_candidates": 3,
+                "wait6579_total_candidates": 3,
+                "blocked_ai_score_evaluated": 22,
+                "blocked_ai_score_missed_winner_rate": 60.0,
+                "blocked_ai_score_avoided_loser_rate": 20.0,
+            },
+            "liquidity_gate_refined_candidate": {
+                "evaluated_candidates": 21,
+                "missed_winner_rate": 45.0,
+                "avoided_loser_rate": 35.0,
+                "performance_blocked_liquidity_events": 21,
+            },
+            "overbought_gate_refined_candidate": {
+                "evaluated_candidates": 21,
+                "missed_winner_rate": 15.0,
+                "avoided_loser_rate": 45.0,
+                "performance_blocked_overbought_events": 21,
+            },
+        },
+    }
+    pipeline_rows = (
+        [{"stage": "pre_submit_price_guard_block", "fields": {"price_below_bid_bps": "85"}} for _ in range(5)]
+        + [{"stage": "blocked_liquidity", "fields": {}} for _ in range(5)]
+        + [{"stage": "blocked_overbought", "fields": {}} for _ in range(5)]
+        + [{"stage": "blocked_ai_score", "fields": {"ai_score": "70"}} for _ in range(5)]
+    )
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-08",
+        pipeline_loader=lambda target_date: pipeline_rows,
+        report_source_loader=lambda target_date: report_sources,
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    candidates = {item["family"]: item for item in report["calibration_candidates"]}
+    assert candidates["pre_submit_price_guard"]["calibration_state"] == "adjust_up"
+    assert candidates["pre_submit_price_guard"]["source_metrics"]["missed_winner_rate"] == 70.0
+    assert candidates["score65_74_recovery_probe"]["source_metrics"]["blocked_ai_score_evaluated"] == 22
+    assert candidates["liquidity_gate_refined_candidate"]["calibration_state"] == "hold"
+    assert candidates["liquidity_gate_refined_candidate"]["allowed_runtime_apply"] is False
+    assert candidates["overbought_gate_refined_candidate"]["calibration_state"] == "freeze"
 
 
 def test_threshold_cycle_calibration_uses_holding_exit_report_sources():

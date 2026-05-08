@@ -48,7 +48,7 @@ _STRATEGY_LABELS = {
     "other": "기타",
 }
 _STRATEGY_ORDER = ("scalping", "swing")
-PERFORMANCE_TUNING_SCHEMA_VERSION = 5
+PERFORMANCE_TUNING_SCHEMA_VERSION = 6
 _BLOCKER_LABELS = {
     "blocked_strength_momentum": "동적 체결강도",
     "blocked_liquidity": "유동성",
@@ -1864,6 +1864,13 @@ def build_performance_tuning_report(
                 dual_persona_hard_flags[clean_flag] += 1
 
     latency_reason_counts = Counter(str(e.fields.get("reason") or "-") for e in latency_block_events)
+    entry_terminal_blocker_counts = Counter()
+    entry_terminal_blocker_stock_sets: dict[str, set[str]] = defaultdict(set)
+    for event in entry_events:
+        if event.stage not in _BLOCKER_LABELS:
+            continue
+        entry_terminal_blocker_counts[event.stage] += 1
+        entry_terminal_blocker_stock_sets[event.stage].add(str(event.code or "").strip()[:6] or str(event.name or "").strip())
     latency_danger_reason_counts = Counter()
     for event in latency_block_events:
         raw_danger_reasons = str(event.fields.get("latency_danger_reasons") or "").strip()
@@ -1982,6 +1989,8 @@ def build_performance_tuning_report(
         "budget_pass_to_submitted_rate": _ratio(len(submitted_events), len(budget_pass_events)),
         "latency_block_events": int(len(latency_block_events)),
         "latency_pass_events": int(len(latency_pass_events)),
+        "latency_guard_miss_events": int(len(latency_block_events)),
+        "latency_guard_miss_unique_stocks": int(len(entry_terminal_blocker_stock_sets.get("latency_block", set()))),
         "quote_fresh_latency_blocks": int(quote_fresh_latency_blocks),
         "quote_fresh_latency_passes": int(quote_fresh_latency_passes),
         "quote_fresh_latency_pass_rate": _ratio(
@@ -2001,6 +2010,9 @@ def build_performance_tuning_report(
         "ai_overlap_events": int(len(ai_overlap_events)),
         "ai_overlap_blocked_events": int(sum(ai_overlap_blocked_stage_counts.values())),
         "ai_overlap_overbought_blocked_events": int(ai_overlap_overbought_blocks),
+        "entry_blocked_ai_score_events": int(entry_terminal_blocker_counts.get("blocked_ai_score", 0)),
+        "entry_blocked_liquidity_events": int(entry_terminal_blocker_counts.get("blocked_liquidity", 0)),
+        "entry_blocked_overbought_events": int(entry_terminal_blocker_counts.get("blocked_overbought", 0)),
         "exit_signals": len(exit_signals),
         "dual_persona_shadow_samples": len(dual_persona_events),
         "dual_persona_gatekeeper_samples": len(dual_gatekeeper_events),
@@ -2137,6 +2149,15 @@ def build_performance_tuning_report(
         },
     }
     breakdowns = {
+        "entry_terminal_blocker_breakdown": [
+            {
+                "label": stage,
+                "display_label": _BLOCKER_LABELS.get(stage, stage),
+                "count": count,
+                "unique_stocks": len(entry_terminal_blocker_stock_sets.get(stage, set())),
+            }
+            for stage, count in entry_terminal_blocker_counts.most_common()
+        ],
         "latency_reason_breakdown": [{"label": key, "count": value} for key, value in latency_reason_counts.most_common()],
         "latency_danger_reason_breakdown": [{"label": key, "count": value} for key, value in latency_danger_reason_counts.most_common()],
         "holding_ai_cache_modes": [{"label": key, "count": value} for key, value in holding_ai_cache_modes.most_common()],

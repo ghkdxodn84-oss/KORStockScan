@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.engine.build_code_improvement_workorder import code_improvement_workorder_paths
 from src.engine.scalping_pattern_lab_automation import automation_report_paths
 from src.engine.threshold_cycle_preopen_apply import apply_manifest_path
 
@@ -146,6 +147,46 @@ def _pattern_lab_automation_summary(target_date: str) -> tuple[dict[str, Any], s
     )
 
 
+def _code_improvement_workorder_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+    json_path, md_path = code_improvement_workorder_paths(target_date)
+    payload = _load_json(json_path)
+    if not payload:
+        return (
+            {
+                "available": False,
+                "artifact": None,
+                "markdown": str(md_path) if md_path.exists() else None,
+                "selected_order_count": 0,
+                "decision_counts": {},
+                "top_orders": [],
+            },
+            None,
+            ["code_improvement_workorder_missing"],
+        )
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    orders = payload.get("orders") if isinstance(payload.get("orders"), list) else []
+    return (
+        {
+            "available": True,
+            "artifact": str(json_path),
+            "markdown": str(md_path) if md_path.exists() else None,
+            "selected_order_count": _safe_int(summary.get("selected_order_count"), 0),
+            "decision_counts": summary.get("decision_counts") if isinstance(summary.get("decision_counts"), dict) else {},
+            "top_orders": [
+                {
+                    "order_id": item.get("order_id"),
+                    "decision": item.get("decision"),
+                    "target_subsystem": item.get("target_subsystem"),
+                }
+                for item in orders[:3]
+                if isinstance(item, dict)
+            ],
+        },
+        str(json_path),
+        [],
+    )
+
+
 def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     target_date = str(target_date).strip()
     trade_review_path = MONITOR_SNAPSHOT_DIR / f"trade_review_{target_date}.json"
@@ -160,6 +201,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     trade_metrics = trade_review.get("metrics") if isinstance(trade_review.get("metrics"), dict) else {}
     perf_metrics = performance.get("metrics") if isinstance(performance.get("metrics"), dict) else {}
     pattern_lab_summary, pattern_lab_path, pattern_lab_warnings = _pattern_lab_automation_summary(target_date)
+    code_workorder_summary, code_workorder_path, code_workorder_warnings = _code_improvement_workorder_summary(target_date)
     selected_families = _selected_families(apply_manifest)
     completed = _safe_int(trade_metrics.get("completed_trades"), 0)
     win = _safe_int(trade_metrics.get("win_trades"), 0)
@@ -213,12 +255,14 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "decisions": _cohort_decisions(calibration),
         },
         "pattern_lab_automation": pattern_lab_summary,
+        "code_improvement_workorder": code_workorder_summary,
         "sources": {
             "trade_review": str(trade_review_path) if trade_review_path.exists() else None,
             "performance_tuning": str(performance_path) if performance_path.exists() else None,
             "calibration": str(calibration_path) if calibration_path.exists() else None,
             "apply_manifest": str(apply_path) if apply_path.exists() else None,
             "pattern_lab_automation": pattern_lab_path,
+            "code_improvement_workorder": code_workorder_path,
         },
         "warnings": [
             message
@@ -228,6 +272,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
                 "calibration_report_missing" if not calibration_path.exists() else "",
                 "apply_manifest_missing" if not apply_path.exists() else "",
                 *pattern_lab_warnings,
+                *code_workorder_warnings,
             ]
             if message
         ],
@@ -245,6 +290,7 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
     holding = report.get("holding_exit") if isinstance(report.get("holding_exit"), dict) else {}
     runtime = report.get("runtime_apply") if isinstance(report.get("runtime_apply"), dict) else {}
     pattern_lab = report.get("pattern_lab_automation") if isinstance(report.get("pattern_lab_automation"), dict) else {}
+    code_workorder = report.get("code_improvement_workorder") if isinstance(report.get("code_improvement_workorder"), dict) else {}
     decisions = ((report.get("calibration_outcome") or {}).get("decisions") or []) if isinstance(report.get("calibration_outcome"), dict) else []
     lines = [
         f"# Threshold Cycle Daily EV Report - {report.get('date')}",
@@ -276,8 +322,23 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- fresh: gemini=`{pattern_lab.get('gemini_fresh')}` claude=`{pattern_lab.get('claude_fresh')}`",
         f"- consensus/orders/family_candidates: `{pattern_lab.get('consensus_count')}` / `{pattern_lab.get('code_improvement_order_count')}` / `{pattern_lab.get('auto_family_candidate_count')}`",
         "",
+        "## Code Improvement Workorder",
+        f"- artifact: `{code_workorder.get('artifact') or '-'}`",
+        f"- markdown: `{code_workorder.get('markdown') or '-'}`",
+        f"- selected_order_count: `{code_workorder.get('selected_order_count')}`",
+        f"- decision_counts: `{code_workorder.get('decision_counts')}`",
+        "",
         "## Calibration Decisions",
     ]
+    top_orders = code_workorder.get("top_orders") if isinstance(code_workorder.get("top_orders"), list) else []
+    if top_orders:
+        lines.extend(["## Code Improvement Top Orders"])
+        for item in top_orders[:3]:
+            if isinstance(item, dict):
+                lines.append(
+                    f"- `{item.get('order_id')}` decision=`{item.get('decision')}` subsystem=`{item.get('target_subsystem')}`"
+                )
+        lines.append("")
     top_findings = pattern_lab.get("top_consensus_findings") if isinstance(pattern_lab.get("top_consensus_findings"), list) else []
     if top_findings:
         lines.extend(["## Pattern Lab Top Findings"])

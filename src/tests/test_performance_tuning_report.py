@@ -276,6 +276,9 @@ def test_performance_tuning_report_builds_metrics(monkeypatch):
         "[2026-04-03 10:00:05] [ENTRY_PIPELINE] 테스트B(000002) stage=gatekeeper_fast_reuse action=눌림|대기 age_sec=4.2 ws_age_sec=0.30",
         "[2026-04-03 10:00:06] [ENTRY_PIPELINE] 테스트C(000003) stage=gatekeeper_fast_reuse_bypass strategy=SCALPING score=68 age_sec=12.4 ws_age_sec=0.22 reason_codes=sig_changed,score_boundary",
         "[2026-04-03 10:00:07] [ENTRY_PIPELINE] 테스트A(000001) stage=dual_persona_shadow strategy=KOSPI_ML decision_type=gatekeeper dual_mode=shadow gemini_action=ALLOW_ENTRY gemini_score=85 aggr_action=ALLOW_ENTRY aggr_score=90 cons_action=WAIT cons_score=58 cons_veto=true fused_action=WAIT fused_score=69 winner=conservative_veto agreement_bucket=gemini_vs_cons_conflict hard_flags=VWAP_BELOW,LARGE_SELL_PRINT shadow_extra_ms=1320",
+        "[2026-04-03 10:00:08] [ENTRY_PIPELINE] 테스트D(000004) stage=latency_block reason=latency_state_danger quote_stale=false",
+        "[2026-04-03 10:00:09] [ENTRY_PIPELINE] 테스트E(000005) stage=blocked_liquidity liquidity_value=70000000 min_liquidity=350000000",
+        "[2026-04-03 10:00:10] [ENTRY_PIPELINE] 테스트F(000006) stage=blocked_overbought overbought_blocked=true",
     ]
     holding_lines = [
         "[2026-04-03 10:01:00] [HOLDING_PIPELINE] 테스트A(000001) stage=ai_holding_review review_ms=510 ai_cache=miss profit_rate=+0.50",
@@ -421,6 +424,11 @@ def test_performance_tuning_report_builds_metrics(monkeypatch):
     assert report["strategy_rows"][0]["outcomes"]["completed_rows"] == 2
     assert report["strategy_rows"][0]["outcomes"]["realized_pnl_krw"] == -8000
     assert report["metrics"]["dual_persona_shadow_samples"] == 2
+    assert report["metrics"]["latency_guard_miss_events"] == 1
+    assert report["metrics"]["entry_blocked_liquidity_events"] == 1
+    assert report["metrics"]["entry_blocked_overbought_events"] == 1
+    terminal_blockers = {item["label"]: item for item in report["breakdowns"]["entry_terminal_blocker_breakdown"]}
+    assert terminal_blockers["blocked_liquidity"]["display_label"] == "유동성"
     assert report["metrics"]["dual_persona_gatekeeper_samples"] == 1
     assert report["metrics"]["dual_persona_overnight_samples"] == 1
     assert report["metrics"]["dual_persona_conflict_ratio"] == 100.0

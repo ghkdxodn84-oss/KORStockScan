@@ -27,7 +27,18 @@
 - fresh: gemini=`True` claude=`True`
 - consensus/orders/family_candidates: `5` / `14` / `2`
 
+## Code Improvement Workorder
+- artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-08.json`
+- markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-08.md`
+- selected_order_count: `12`
+- decision_counts: `{'implement_now': 1, 'attach_existing_family': 2, 'design_family_candidate': 2, 'defer_evidence': 5, 'reject': 4}`
+
 ## Calibration Decisions
+## Code Improvement Top Orders
+- `order_latency_guard_miss_ev_recovery` decision=`implement_now` subsystem=`runtime_instrumentation`
+- `order_ai_threshold_dominance` decision=`attach_existing_family` subsystem=`entry_funnel`
+- `order_ai_threshold_miss_ev_recovery` decision=`attach_existing_family` subsystem=`entry_funnel`
+
 ## Pattern Lab Top Findings
 - `AI threshold dominance` route=`existing_family` family=`score65_74_recovery_probe`
 - `AI threshold miss EV recovery` route=`existing_family` family=`score65_74_recovery_probe`
@@ -37,7 +48,10 @@
 - `holding_flow_ofi_smoothing`: `hold` sample=`59/20`
 - `protect_trailing_smoothing`: `hold_sample` sample=`18/20`
 - `trailing_continuation`: `freeze` sample=`18/20`
+- `pre_submit_price_guard`: `freeze` sample=`692/20`
 - `score65_74_recovery_probe`: `adjust_up` sample=`703/20`
+- `liquidity_gate_refined_candidate`: `hold_sample` sample=`0/20`
+- `overbought_gate_refined_candidate`: `hold_sample` sample=`0/20`
 - `bad_entry_refined_canary`: `hold_sample` sample=`55/10`
 - `holding_exit_decision_matrix_advisory`: `hold_no_edge` sample=`14/1`
 - `scale_in_price_guard`: `hold` sample=`21/20`

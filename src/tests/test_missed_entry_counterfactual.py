@@ -163,6 +163,10 @@ def test_build_missed_entry_counterfactual_report(monkeypatch, tmp_path):
     assert report["summary"]["outcome_counts"]["AVOIDED_LOSER"] == 1
     assert report["metrics"]["missed_winner_rate"] == 50.0
     assert report["metrics"]["avoided_loser_rate"] == 50.0
+    blocker_metrics = report["metrics"]["blocker_outcome_metrics"]
+    assert blocker_metrics["latency_block"]["missed_winner_rate"] == 100.0
+    assert blocker_metrics["blocked_liquidity"]["avoided_loser_rate"] == 100.0
+    assert blocker_metrics["latency_block"]["avg_close_10m_pct"] > 0
     assert report["buy_signal_universe"]["metrics"]["total_buy_judged_attempts"] == 3
     assert report["buy_signal_universe"]["metrics"]["entered_attempts"] == 1
     assert report["buy_signal_universe"]["metrics"]["missed_attempts"] == 2

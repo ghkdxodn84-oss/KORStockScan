@@ -2,6 +2,7 @@ from urllib.error import HTTPError, URLError
 
 from src.engine.build_codex_daily_workorder import (
     ProjectTask,
+    build_runbook_operational_checks,
     _filter_stale_same_day_managed_tasks,
     _graphql_request,
     _parse_project_item,
@@ -113,6 +114,40 @@ def test_render_markdown_includes_template_and_ids():
     removed_rule = "현재 시간 기준으로" + " 작업시작 시간이 도래한 작업만 실행"
     assert removed_rule not in md
     assert "작업시간이 지났으나 반복적으로 실행해야하는 작업" in md
+
+
+def test_build_runbook_operational_checks_for_slot():
+    checks = build_runbook_operational_checks(target_date="2026-05-11", slots=["PREOPEN"])
+
+    assert [check.check_id for check in checks] == ["PreopenAutomationHealthCheck20260511"]
+    assert checks[0].slot == "PREOPEN"
+    assert "threshold_apply_2026-05-11.json" in "\n".join(checks[0].artifact_checks)
+    assert "수동 env override" in checks[0].forbidden
+
+
+def test_render_markdown_includes_runbook_operational_checks():
+    checks = build_runbook_operational_checks(target_date="2026-05-11", slots=["INTRADAY"])
+    md = render_markdown(
+        owner="JaehwanPark",
+        project_number=1,
+        project_title="KORStockScan Ops",
+        generated_at="2026-05-11T09:00:00+09:00",
+        target_date="2026-05-11",
+        include_overdue=True,
+        holiday_override=False,
+        holiday_reason="",
+        statuses=["Todo", "In Progress"],
+        slots=["INTRADAY"],
+        tasks=[],
+        max_items=20,
+        runbook_checks=checks,
+    )
+
+    assert "Runbook 운영 확인 큐" in md
+    assert "IntradayAutomationHealthCheck20260511" in md
+    assert "logs/threshold_cycle_calibration_intraday_cron.log" in md
+    assert "[Runbook 운영 확인]" in md
+    assert "판정=pass|warning|fail|not_yet_due" in md
 
 
 def test_matches_slot_case_insensitive():

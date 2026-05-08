@@ -44,6 +44,19 @@ class ProjectTask:
     apply_target: str = ""
 
 
+@dataclass(frozen=True)
+class RunbookCheck:
+    check_id: str
+    title: str
+    slot: str
+    time_window: str
+    source: str
+    section: str
+    artifact_checks: tuple[str, ...]
+    decision_rule: str
+    forbidden: str
+
+
 def _env(name: str, default: str | None = None) -> str:
     value = os.getenv(name)
     if value is None or not str(value).strip():
@@ -512,6 +525,89 @@ def _filter_stale_same_day_managed_tasks(tasks: list[ProjectTask], target_date: 
     return filtered
 
 
+def _target_date_compact(target_date: str | None) -> str:
+    raw = str(target_date or _local_today_iso()).strip()
+    return raw.replace("-", "") if raw else "YYYYMMDD"
+
+
+def build_runbook_operational_checks(*, target_date: str | None, slots: list[str] | None) -> list[RunbookCheck]:
+    """Build runbook-derived Codex workorder checks without creating Project items."""
+
+    compact = _target_date_compact(target_date)
+    date_text = str(target_date or "YYYY-MM-DD")
+    selected = {_norm(slot) for slot in (slots or []) if str(slot or "").strip()}
+    include_all = not selected
+    checks: list[RunbookCheck] = []
+
+    if include_all or "preopen" in selected:
+        checks.append(
+            RunbookCheck(
+                check_id=f"PreopenAutomationHealthCheck{compact}",
+                title="장전 자동화체인 상태 확인",
+                slot="PREOPEN",
+                time_window="08:00~09:00",
+                source="docs/time-based-operations-runbook.md",
+                section="장전 확인 절차",
+                artifact_checks=(
+                    "logs/threshold_cycle_preopen_cron.log",
+                    f"data/threshold_cycle/apply_plans/threshold_apply_{date_text}.json",
+                    f"data/threshold_cycle/runtime_env/threshold_runtime_env_{date_text}.json",
+                    "tmux bot session / src/run_bot.sh runtime env source 여부",
+                ),
+                decision_rule=(
+                    "pass|warning|fail|not_yet_due 중 하나로 판정. apply plan selected/blocked family, "
+                    "AI guard, same-stage owner 충돌, runtime env 생성 여부 확인."
+                ),
+                forbidden="실패해도 수동 env override나 장전 수동 enable/hold 판정 금지.",
+            )
+        )
+    if include_all or "intraday" in selected:
+        checks.append(
+            RunbookCheck(
+                check_id=f"IntradayAutomationHealthCheck{compact}",
+                title="장중 자동화체인 상태 확인",
+                slot="INTRADAY",
+                time_window="09:05~15:30",
+                source="docs/time-based-operations-runbook.md",
+                section="장중 확인 절차",
+                artifact_checks=(
+                    "logs/run_buy_funnel_sentinel_cron.log",
+                    "logs/run_holding_exit_sentinel_cron.log",
+                    "logs/threshold_cycle_calibration_intraday_cron.log",
+                    f"data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_{date_text}_intraday.md",
+                ),
+                decision_rule=(
+                    "pass|warning|fail|not_yet_due 중 하나로 판정. Sentinel RUNTIME_OPS, "
+                    "intraday calibration 생성 여부, AI correction ai_status, runtime_change=false 유지 확인."
+                ),
+                forbidden="장중 calibration이나 Sentinel 결과로 당일 runtime threshold 변경 금지.",
+            )
+        )
+    if include_all or "postclose" in selected:
+        checks.append(
+            RunbookCheck(
+                check_id=f"PostcloseAutomationHealthCheck{compact}",
+                title="장후 자동화체인 상태 확인",
+                slot="POSTCLOSE",
+                time_window="16:10~17:30",
+                source="docs/time-based-operations-runbook.md",
+                section="장후 확인 절차",
+                artifact_checks=(
+                    "logs/threshold_cycle_postclose_cron.log",
+                    f"data/report/threshold_cycle_ev/threshold_cycle_ev_{date_text}.md",
+                    f"data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_{date_text}.md",
+                    f"docs/code-improvement-workorders/code_improvement_workorder_{date_text}.md",
+                ),
+                decision_rule=(
+                    "pass|warning|fail|not_yet_due 중 하나로 판정. daily EV 제출물, postclose AI correction, "
+                    "pattern lab automation, code improvement workorder 생성 여부 확인."
+                ),
+                forbidden="postclose 실패 시 threshold 수동 변경이 아니라 같은 date wrapper 재실행/복구 우선.",
+            )
+        )
+    return checks
+
+
 def render_markdown(
     *,
     owner: str,
@@ -526,9 +622,11 @@ def render_markdown(
     slots: list[str],
     tasks: list[ProjectTask],
     max_items: int,
+    runbook_checks: list[RunbookCheck] | None = None,
 ) -> str:
     unique_tasks = dedupe_tasks(tasks)
     top = sort_tasks(unique_tasks, statuses)[:max_items]
+    runbook_checks = runbook_checks or []
     track_counts: dict[str, int] = {}
     for item in top:
         key = item.track or "-"
@@ -548,6 +646,7 @@ def render_markdown(
     lines.append(
         f"- 후보건수: `{len(tasks)}` / 중복제거후: `{len(unique_tasks)}` / 지시반영건수: `{len(top)}`"
     )
+    lines.append(f"- Runbook 운영확인 항목: `{len(runbook_checks)}`")
     if duplicate_count:
         lines.append(f"- 중복축약건수: `{duplicate_count}`")
     if track_counts:
@@ -570,6 +669,7 @@ def render_markdown(
     lines.append("")
     if not top:
         lines.append("1. 현재 상태필터에 해당하는 항목이 없습니다.")
+        lines.append("")
     else:
         idx = 1
         for slot in slot_order:
@@ -619,6 +719,24 @@ def render_markdown(
                 lines.append("")
                 idx += 1
 
+    lines.append("## Runbook 운영 확인 큐")
+    lines.append("")
+    if not runbook_checks:
+        lines.append("1. 현재 슬롯에 해당하는 runbook 운영 확인 항목이 없습니다.")
+        lines.append("")
+    else:
+        for idx, check in enumerate(runbook_checks, start=1):
+            lines.append(f"{idx}. `{check.check_id}` - {check.title}")
+            lines.append(
+                f"   - 슬롯: `{check.slot}` / TimeWindow: `{check.time_window}` / Source: `{check.source}` / Section: `{check.section}`"
+            )
+            lines.append(f"   - 판정 기준: {check.decision_rule}")
+            lines.append(f"   - 금지/주의: {check.forbidden}")
+            lines.append("   - 확인 artifact:")
+            for artifact in check.artifact_checks:
+                lines.append(f"     - `{artifact}`")
+            lines.append("")
+
     lines.append("## Codex 전달 템플릿")
     lines.append("")
     lines.append("```text")
@@ -650,6 +768,15 @@ def render_markdown(
                 lines.append(
                     f"- {item.title} | 상태={item.status or '-'} | 슬롯={item.slot or '-'} | 반영대상={item.apply_target or '-'} | Due={item.due_date or '-'} | Source={item.source or '-'} | Section={item.section or '-'} | ID={item.item_id}"
                 )
+    else:
+        lines.append("- 없음")
+    lines.append("")
+    lines.append("[Runbook 운영 확인]")
+    if runbook_checks:
+        for check in runbook_checks:
+            lines.append(
+                f"- [{check.check_id}] {check.title} | 슬롯={check.slot} | TimeWindow={check.time_window} | Source={check.source} | Section={check.section} | 판정=pass|warning|fail|not_yet_due"
+            )
     else:
         lines.append("- 없음")
     lines.append("```")
@@ -705,6 +832,7 @@ def build_daily_workorder(
         include_overdue=resolved_include_overdue,
     )
     tasks = _filter_stale_same_day_managed_tasks(tasks, resolved_target_date)
+    runbook_checks = build_runbook_operational_checks(target_date=resolved_target_date, slots=effective_slots)
     generated_at = datetime.now().astimezone().isoformat(timespec="seconds")
     markdown = render_markdown(
         owner=owner,
@@ -719,6 +847,7 @@ def build_daily_workorder(
         slots=effective_slots,
         tasks=tasks,
         max_items=max_items,
+        runbook_checks=runbook_checks,
     )
     write_markdown(output, markdown)
 
@@ -733,6 +862,7 @@ def build_daily_workorder(
         "holiday_override": holiday_override,
         "holiday_reason": holiday_reason,
         "candidate_tasks": len(tasks),
+        "runbook_operational_checks": len(runbook_checks),
         "output": str(output),
         "max_items": max_items,
     }

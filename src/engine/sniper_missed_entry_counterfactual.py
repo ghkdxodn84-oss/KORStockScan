@@ -12,7 +12,7 @@ from src.utils.constants import DATA_DIR
 from src.utils.logger import log_error
 
 
-MISSED_ENTRY_COUNTERFACTUAL_SCHEMA_VERSION = 1
+MISSED_ENTRY_COUNTERFACTUAL_SCHEMA_VERSION = 2
 _ENTRY_ARMED_STAGES = {"entry_armed", "entry_armed_resume"}
 _ATTEMPT_AUXILIARY_STAGES = {
     "dual_persona_shadow",
@@ -404,6 +404,46 @@ def _classify_candidate(metrics_5m: dict, metrics_10m: dict) -> str:
     return "NEUTRAL"
 
 
+def _build_blocker_outcome_metrics(items: list[dict]) -> dict:
+    buckets: dict[str, list[dict]] = defaultdict(list)
+    for item in items:
+        stage = str(item.get("terminal_stage") or "-")
+        buckets[stage].append(item)
+
+    metrics: dict[str, dict] = {}
+    for stage, rows in sorted(buckets.items()):
+        total = len(rows)
+        missed = sum(1 for row in rows if str(row.get("outcome") or "") == "MISSED_WINNER")
+        avoided = sum(1 for row in rows if str(row.get("outcome") or "") == "AVOIDED_LOSER")
+        neutral = sum(1 for row in rows if str(row.get("outcome") or "") == "NEUTRAL")
+        estimated_pnl = int(sum(_safe_int(row.get("estimated_counterfactual_pnl_10m_krw"), 0) for row in rows))
+        metrics[stage] = {
+            "stage": stage,
+            "stage_label": _stage_label(stage),
+            "evaluated_candidates": total,
+            "missed_winner_count": missed,
+            "avoided_loser_count": avoided,
+            "neutral_count": neutral,
+            "missed_winner_rate": _ratio(missed, total),
+            "avoided_loser_rate": _ratio(avoided, total),
+            "avg_close_5m_pct": _avg(
+                [_safe_float((row.get("metrics_5m") or {}).get("close_ret_pct"), 0.0) for row in rows]
+            ),
+            "avg_close_10m_pct": _avg(
+                [_safe_float((row.get("metrics_10m") or {}).get("close_ret_pct"), 0.0) for row in rows]
+            ),
+            "avg_mfe_10m_pct": _avg(
+                [_safe_float((row.get("metrics_10m") or {}).get("mfe_pct"), 0.0) for row in rows]
+            ),
+            "avg_mae_10m_pct": _avg(
+                [_safe_float((row.get("metrics_10m") or {}).get("mae_pct"), 0.0) for row in rows]
+            ),
+            "estimated_counterfactual_pnl_10m_krw_sum": estimated_pnl,
+            "candidate_ids": [str(row.get("candidate_id") or "") for row in rows[:20]],
+        }
+    return metrics
+
+
 def missed_entry_counterfactual_summary_to_dict(summary: MissedEntryCounterfactualSummary) -> dict:
     return {
         "date": summary.date,
@@ -447,6 +487,7 @@ def build_missed_entry_counterfactual_report(
                 "avg_mfe_10m_pct": 0.0,
                 "avg_mae_10m_pct": 0.0,
                 "estimated_counterfactual_pnl_10m_krw_sum": 0,
+                "blocker_outcome_metrics": {},
             },
             "buy_signal_universe": {
                 "metrics": {
@@ -587,6 +628,7 @@ def build_missed_entry_counterfactual_report(
     reason_buckets: dict[str, list[dict]] = defaultdict(list)
     for item in evaluations:
         reason_buckets[str(item.get("terminal_stage") or "-")].append(item)
+    blocker_outcome_metrics = _build_blocker_outcome_metrics(evaluations)
     reason_breakdown = []
     for stage, items in sorted(reason_buckets.items(), key=lambda pair: len(pair[1]), reverse=True):
         trades = len(items)
@@ -648,6 +690,7 @@ def build_missed_entry_counterfactual_report(
             "avg_mfe_10m_pct": float(avg_mfe_10m),
             "avg_mae_10m_pct": float(avg_mae_10m),
             "estimated_counterfactual_pnl_10m_krw_sum": int(estimated_pnl_sum),
+            "blocker_outcome_metrics": blocker_outcome_metrics,
         },
         "buy_signal_universe": {
             "metrics": {

@@ -170,6 +170,8 @@ HTML 대시보드 경로는 `/`, `/dashboard`, `/daily-report`, `/entry-pipeline
 | `data/report/threshold_cycle_calibration/threshold_cycle_calibration_YYYY-MM-DD_{intraday,postclose}.json` | 장중/장후 calibration artifact |
 | `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_{intraday,postclose}.{json,md}` | AI correction proposal와 deterministic guard 결과 |
 | `data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_YYYY-MM-DD.{json,md}` | pattern lab 기반 improvement order 및 auto family 후보 |
+| `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md` | Codex 세션 입력용 code improvement 작업지시서 |
+| `data/report/code_improvement_workorder/code_improvement_workorder_YYYY-MM-DD.json` | code improvement 작업지시서 machine-readable 요약 |
 | `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.{json,md}` | 무인 threshold 반영 이후 daily EV 성과 리포트 |
 | `data/report/statistical_action_weight/` | statistical action weight JSON/Markdown |
 | `data/report/holding_exit_decision_matrix/` | holding/exit decision matrix JSON/Markdown |
@@ -189,7 +191,7 @@ JSON/JSONL이 canonical data이며, 사람이 장후 판정에 바로 읽어야 
 | --- | --- | --- |
 | threshold PREOPEN | `deploy/run_threshold_cycle_preopen.sh` | 전일 report/AI correction guard 기반 `auto_bounded_live` apply plan과 runtime env 생성 |
 | threshold INTRADAY calibration | `deploy/run_threshold_cycle_calibration.sh` | 12:05 KST 장중 calibration/AI correction artifact 생성. runtime mutation 없음 |
-| threshold POSTCLOSE | `deploy/run_threshold_cycle_postclose.sh` | compact backfill, postclose calibration/AI correction, pattern lab automation, daily EV report 생성 |
+| threshold POSTCLOSE | `deploy/run_threshold_cycle_postclose.sh` | compact backfill, postclose calibration/AI correction, pattern lab automation, code improvement workorder, daily EV report 생성 |
 | tuning monitoring POSTCLOSE | `deploy/run_tuning_monitoring_postclose.sh` | Parquet/DuckDB refresh와 shadow diff. pattern lab은 기본 skip하고 `THRESHOLD_CYCLE_POSTCLOSE`를 canonical runner로 둠 |
 | monitor snapshot | `deploy/run_monitor_snapshot_safe.sh`, `deploy/run_monitor_snapshot_incremental_cron.sh` | 장중/장후 snapshot 생성 |
 | system metric sampler | `deploy/run_system_metric_sampler_cron.sh` | 1분 단위 시스템 지표 |
@@ -315,6 +317,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print
 | [docs/plan-korStockScanPerformanceOptimization.execution-delta.md](docs/plan-korStockScanPerformanceOptimization.execution-delta.md) | 원안 대비 실행 변경 |
 | [docs/plan-korStockScanPerformanceOptimization.performance-report.md](docs/plan-korStockScanPerformanceOptimization.performance-report.md) | Plan Rebase 성과 기준과 반복 성과값 |
 | [docs/README.md](docs/README.md) | 문서 구조와 archive 기준 |
+| [docs/time-based-operations-runbook.md](docs/time-based-operations-runbook.md) | 시간대별 장전/장중/장후 운영 runbook |
 | [data/report/README.md](data/report/README.md) | report inventory와 Markdown 누락 후보 |
 | [data/threshold_cycle/README.md](data/threshold_cycle/README.md) | threshold cycle 운영 원칙 |
 | [docs/workorder-shadow-canary-runtime-classification.md](docs/workorder-shadow-canary-runtime-classification.md) | shadow/canary/historical 분류와 runtime ON/OFF 기준 |

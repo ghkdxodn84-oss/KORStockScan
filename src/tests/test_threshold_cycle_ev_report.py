@@ -10,10 +10,14 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
     apply_dir = tmp_path / "apply_plans"
     ev_dir = report_dir / "threshold_cycle_ev"
     automation_dir = report_dir / "scalping_pattern_lab_automation"
+    workorder_report_dir = report_dir / "code_improvement_workorder"
+    workorder_doc_dir = tmp_path / "docs" / "code-improvement-workorders"
     monitor_dir.mkdir(parents=True)
     calibration_dir.mkdir(parents=True)
     apply_dir.mkdir(parents=True)
     automation_dir.mkdir(parents=True)
+    workorder_report_dir.mkdir(parents=True)
+    workorder_doc_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
     monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", calibration_dir)
     monkeypatch.setattr(mod, "EV_REPORT_DIR", ev_dir)
@@ -24,6 +28,14 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
         lambda target_date: (
             automation_dir / f"scalping_pattern_lab_automation_{target_date}.json",
             automation_dir / f"scalping_pattern_lab_automation_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(
+        mod,
+        "code_improvement_workorder_paths",
+        lambda target_date: (
+            workorder_report_dir / f"code_improvement_workorder_{target_date}.json",
+            workorder_doc_dir / f"code_improvement_workorder_{target_date}.md",
         ),
     )
 
@@ -116,6 +128,26 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
         ),
         encoding="utf-8",
     )
+    (workorder_report_dir / "code_improvement_workorder_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "summary": {
+                    "selected_order_count": 1,
+                    "decision_counts": {"attach_existing_family": 1},
+                },
+                "orders": [
+                    {
+                        "order_id": "order_ai_threshold",
+                        "decision": "attach_existing_family",
+                        "target_subsystem": "entry_funnel",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (workorder_doc_dir / "code_improvement_workorder_2026-05-08.md").write_text("# workorder\n", encoding="utf-8")
 
     report = mod.build_threshold_cycle_ev_report("2026-05-08")
 
@@ -125,6 +157,8 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
     assert report["entry_funnel"]["budget_pass_to_submitted_rate_pct"] == 5.0
     assert report["pattern_lab_automation"]["consensus_count"] == 1
     assert report["pattern_lab_automation"]["top_consensus_findings"][0]["mapped_family"] == "score65_74_recovery_probe"
+    assert report["code_improvement_workorder"]["selected_order_count"] == 1
+    assert report["code_improvement_workorder"]["top_orders"][0]["order_id"] == "order_ai_threshold"
     assert (ev_dir / "threshold_cycle_ev_2026-05-08.json").exists()
     assert (ev_dir / "threshold_cycle_ev_2026-05-08.md").exists()
 
@@ -136,6 +170,8 @@ def test_build_threshold_cycle_ev_report_warns_when_pattern_lab_artifact_missing
     apply_dir = tmp_path / "apply_plans"
     ev_dir = report_dir / "threshold_cycle_ev"
     automation_dir = report_dir / "scalping_pattern_lab_automation"
+    workorder_report_dir = report_dir / "code_improvement_workorder"
+    workorder_doc_dir = tmp_path / "docs" / "code-improvement-workorders"
     monitor_dir.mkdir(parents=True)
     calibration_dir.mkdir(parents=True)
     apply_dir.mkdir(parents=True)
@@ -151,6 +187,14 @@ def test_build_threshold_cycle_ev_report_warns_when_pattern_lab_artifact_missing
             automation_dir / f"scalping_pattern_lab_automation_{target_date}.md",
         ),
     )
+    monkeypatch.setattr(
+        mod,
+        "code_improvement_workorder_paths",
+        lambda target_date: (
+            workorder_report_dir / f"code_improvement_workorder_{target_date}.json",
+            workorder_doc_dir / f"code_improvement_workorder_{target_date}.md",
+        ),
+    )
 
     (monitor_dir / "trade_review_2026-05-08.json").write_text(json.dumps({"metrics": {}}), encoding="utf-8")
     (monitor_dir / "performance_tuning_2026-05-08.json").write_text(json.dumps({"metrics": {}}), encoding="utf-8")
@@ -164,5 +208,6 @@ def test_build_threshold_cycle_ev_report_warns_when_pattern_lab_artifact_missing
 
     assert report["pattern_lab_automation"]["available"] is False
     assert "pattern_lab_automation_missing" in report["warnings"]
+    assert "code_improvement_workorder_missing" in report["warnings"]
     markdown = (ev_dir / "threshold_cycle_ev_2026-05-08.md").read_text(encoding="utf-8")
     assert "AI threshold miss EV 회수 조건 점검" not in markdown

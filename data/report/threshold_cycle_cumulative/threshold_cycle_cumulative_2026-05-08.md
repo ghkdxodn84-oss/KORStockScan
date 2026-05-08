@@ -48,6 +48,8 @@
 | cumulative | entry_mechanical_momentum | entry | 49466 | True | report_only_reference |
 | cumulative | score65_74_recovery_probe | entry | 49466 | False | report_only_reference |
 | cumulative | pre_submit_price_guard | entry | - | True | report_only_reference |
+| cumulative | liquidity_gate_refined_candidate | entry | - | False | report_only_reference |
+| cumulative | overbought_gate_refined_candidate | entry | - | False | report_only_reference |
 | cumulative | entry_ofi_ai_smoothing | entry | - | False | report_only_reference |
 | cumulative | bad_entry_block | holding_exit | 575 | True | report_only_reference |
 | cumulative | bad_entry_refined_canary | holding_exit | - | True | report_only_reference |
@@ -62,6 +64,8 @@
 | rolling_5d | entry_mechanical_momentum | entry | 10424 | True | report_only_reference |
 | rolling_5d | score65_74_recovery_probe | entry | 10424 | False | report_only_reference |
 | rolling_5d | pre_submit_price_guard | entry | - | True | report_only_reference |
+| rolling_5d | liquidity_gate_refined_candidate | entry | - | False | report_only_reference |
+| rolling_5d | overbought_gate_refined_candidate | entry | - | False | report_only_reference |
 | rolling_5d | entry_ofi_ai_smoothing | entry | - | False | report_only_reference |
 | rolling_5d | bad_entry_block | holding_exit | 236 | True | report_only_reference |
 | rolling_5d | bad_entry_refined_canary | holding_exit | - | True | report_only_reference |
@@ -76,6 +80,8 @@
 | rolling_10d | entry_mechanical_momentum | entry | 33297 | True | report_only_reference |
 | rolling_10d | score65_74_recovery_probe | entry | 33297 | False | report_only_reference |
 | rolling_10d | pre_submit_price_guard | entry | - | True | report_only_reference |
+| rolling_10d | liquidity_gate_refined_candidate | entry | - | False | report_only_reference |
+| rolling_10d | overbought_gate_refined_candidate | entry | - | False | report_only_reference |
 | rolling_10d | entry_ofi_ai_smoothing | entry | - | False | report_only_reference |
 | rolling_10d | bad_entry_block | holding_exit | 575 | True | report_only_reference |
 | rolling_10d | bad_entry_refined_canary | holding_exit | - | True | report_only_reference |
@@ -90,6 +96,8 @@
 | rolling_20d | entry_mechanical_momentum | entry | 49466 | True | report_only_reference |
 | rolling_20d | score65_74_recovery_probe | entry | 49466 | False | report_only_reference |
 | rolling_20d | pre_submit_price_guard | entry | - | True | report_only_reference |
+| rolling_20d | liquidity_gate_refined_candidate | entry | - | False | report_only_reference |
+| rolling_20d | overbought_gate_refined_candidate | entry | - | False | report_only_reference |
 | rolling_20d | entry_ofi_ai_smoothing | entry | - | False | report_only_reference |
 | rolling_20d | bad_entry_block | holding_exit | 575 | True | report_only_reference |
 | rolling_20d | bad_entry_refined_canary | holding_exit | - | True | report_only_reference |
