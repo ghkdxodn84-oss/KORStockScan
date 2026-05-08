@@ -2166,6 +2166,112 @@ def test_entry_ai_price_canary_falls_back_on_guard_block(monkeypatch):
     assert any(fields.get("reason") == "pre_submit_price_guard" for stage, fields in logs if stage == "entry_ai_price_canary_fallback")
 
 
+def test_entry_ai_price_canary_clamps_wait_danger_passive_probe_to_one_tick(monkeypatch):
+    monkeypatch.setattr(
+        state_handlers,
+        "TRADING_RULES",
+        replace(
+            CONFIG,
+            SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED=True,
+            SCALPING_ENTRY_AI_PRICE_MIN_CONFIDENCE=60,
+        ),
+    )
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [{"price": 92000}])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [{"close": 92000}])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_size", lambda price: 100)
+    logs = []
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+
+    class DummyAI:
+        def evaluate_scalping_entry_price(self, *args, **kwargs):
+            return {
+                "action": "USE_DEFENSIVE",
+                "confidence": 85,
+                "reason": "latency danger defensive",
+                "max_wait_sec": 60,
+                "ai_parse_ok": True,
+                "ai_parse_fail": False,
+            }
+
+    latency_gate = {
+        "target_buy_price": 91900,
+        "latency_guarded_order_price": 91700,
+        "normal_defensive_order_price": 91900,
+        "order_price": 91700,
+        "price_resolution_reason": "defensive_order_price",
+        "latency_state": "DANGER",
+    }
+    planned_orders = [{"tag": "normal", "qty": 1, "price": 91700, "tif": "DAY", "order_type": "LIMIT"}]
+    stock = {
+        "name": "파두",
+        "strategy": "SCALPING",
+        "position_tag": "SCANNER",
+        "prob": 0.75,
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 75,
+    }
+
+    adjusted, touched = state_handlers._apply_entry_ai_price_canary(
+        stock=stock,
+        code="440110",
+        strategy="SCALPING",
+        ws_data={"curr": 92000},
+        ai_engine=DummyAI(),
+        latency_gate=latency_gate,
+        planned_orders=planned_orders,
+        curr_price=92000,
+        best_bid=92000,
+        best_ask=92100,
+    )
+
+    assert touched is True
+    assert adjusted[0]["price"] == 91900
+    assert latency_gate["order_price"] == 91900
+    assert latency_gate["entry_order_lifecycle"] == "passive_probe"
+    assert latency_gate["entry_passive_probe_applied"] is True
+    assert stock["entry_timeout_sec_override"] == 30
+    applied = [fields for stage, fields in logs if stage == "entry_ai_price_canary_applied"][0]
+    assert applied["entry_passive_probe_original_price"] == 91700
+    assert applied["entry_passive_probe_adjusted_price"] == 91900
+
+
+def test_pending_entry_cancel_logs_receipt_provenance(monkeypatch):
+    logs = []
+    monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_cancel_order",
+        lambda **kwargs: {"return_code": "0", "ord_no": "C1", "return_msg": "정상"},
+    )
+    stock = {
+        "id": 1,
+        "name": "TEST",
+        "pending_entry_orders": [
+            {
+                "tag": "normal",
+                "qty": 1,
+                "filled_qty": 0,
+                "price": 91900,
+                "ord_no": "O1",
+                "status": "OPEN",
+                "sent_at": time.time() - 31,
+                "entry_order_lifecycle": "passive_probe",
+                "entry_passive_probe_applied": True,
+                "best_bid_at_submit": 92000,
+                "best_ask_at_submit": 92100,
+                "price_below_bid_bps": 11,
+            }
+        ],
+    }
+
+    assert state_handlers._cancel_pending_entry_orders(stock, "440110", force=True) == "cancelled"
+    stages = {stage: fields for stage, fields in logs}
+    assert stages["entry_order_cancel_requested"]["orig_ord_no"] == "O1"
+    assert stages["entry_order_cancel_requested"]["entry_order_lifecycle"] == "passive_probe"
+    assert stages["entry_order_cancel_confirmed"]["cancel_ord_no"] == "C1"
+    assert stages["entry_order_cancel_confirmed"]["submitted_price"] == 91900
+
+
 def test_entry_ai_price_context_includes_orderbook_micro_when_enabled(monkeypatch):
     monkeypatch.setattr(
         state_handlers,

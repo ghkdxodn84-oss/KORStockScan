@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from src.engine import ai_engine_openai as openai_module
 from src.engine.ai_engine_openai import (
     GPTSniperEngine,
+    OPENAI_PROMPT_CONTRACT_MARKER,
     OPENAI_RESPONSE_SCHEMA_REGISTRY,
     OpenAIResponseRequest,
     OpenAIResponsesWSPool,
@@ -109,6 +110,14 @@ def _sample_candles():
     ]
 
 
+def test_openai_engine_default_model_routing_uses_requested_tiers():
+    engine = GPTSniperEngine(["test-key"], announce_startup=False)
+
+    assert engine.fast_model_name == "gpt-5-nano"
+    assert engine.report_model_name == "gpt-5.4-mini"
+    assert engine.deep_model_name == "gpt-5.4"
+
+
 def test_openai_call_applies_endpoint_response_schema_when_flag_enabled(monkeypatch):
     engine = _build_engine()
     captured = {}
@@ -146,6 +155,11 @@ def test_openai_call_applies_endpoint_response_schema_when_flag_enabled(monkeypa
     assert captured["text"]["format"]["type"] == "json_schema"
     assert captured["text"]["format"]["name"] == "condition_entry_v1"
     assert captured["text"]["format"]["schema"] == OPENAI_RESPONSE_SCHEMA_REGISTRY["condition_entry_v1"]
+    assert OPENAI_PROMPT_CONTRACT_MARKER in captured["instructions"]
+    assert "Control language: English" in captured["instructions"]
+    assert "Korean domain glossary" in captured["instructions"]
+    assert "Preserve all raw enum labels" in captured["instructions"]
+    assert "PROMPT" in captured["instructions"]
 
 
 def test_openai_holding_flow_uses_flow_schema_and_normalizes_payload(monkeypatch):

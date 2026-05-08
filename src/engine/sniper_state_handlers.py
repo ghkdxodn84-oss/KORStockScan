@@ -2476,6 +2476,110 @@ def _is_pre_submit_price_guard_block(strategy, price, best_bid):
     return _compute_price_below_bid_bps(price, best_bid) > threshold_bps
 
 
+def _entry_planned_total_qty(planned_orders) -> int:
+    total = 0
+    for order in planned_orders or []:
+        try:
+            total += max(0, int((order or {}).get("qty", 0) or 0))
+        except (TypeError, ValueError):
+            continue
+    return total
+
+
+def _resolve_passive_probe_candidate_price(*, candidate_price, best_bid, curr_price, max_below_bid_ticks):
+    candidate_price = _coerce_int_value(candidate_price)
+    best_bid = _coerce_int_value(best_bid)
+    if candidate_price <= 0 or best_bid <= 0:
+        return candidate_price, 0, 0
+    tick_size = int(kiwoom_utils.get_tick_size(_coerce_int_value(curr_price) or best_bid) or 1)
+    tick_size = max(1, tick_size)
+    max_below_bid_ticks = max(0, int(max_below_bid_ticks or 0))
+    floor_price = clamp_price_to_tick(best_bid - (tick_size * max_below_bid_ticks))
+    if floor_price <= 0:
+        return candidate_price, tick_size, 0
+    return max(candidate_price, floor_price), tick_size, floor_price
+
+
+def _maybe_apply_entry_passive_probe(
+    *,
+    stock,
+    latency_gate,
+    planned_orders,
+    action,
+    candidate_price,
+    curr_price,
+    best_bid,
+    best_ask,
+):
+    if not bool(_rule("SCALPING_ENTRY_PASSIVE_PROBE_ENABLED", True)):
+        return candidate_price, {}
+    if str(action or "").strip().upper() != "USE_DEFENSIVE":
+        return candidate_price, {}
+    latency_state = str((latency_gate or {}).get("latency_state") or "").strip().upper()
+    if latency_state != "DANGER":
+        return candidate_price, {}
+    watching_action = str((stock or {}).get("last_watching_ai_action") or "").strip().upper()
+    watching_score = _safe_float((stock or {}).get("last_watching_ai_score"), 0.0)
+    min_score = float(_rule("SCALPING_ENTRY_PASSIVE_PROBE_MIN_AI_SCORE", 75) or 75)
+    if watching_action != "WAIT" or watching_score < min_score:
+        return candidate_price, {}
+    max_qty = int(_rule("SCALPING_ENTRY_PASSIVE_PROBE_MAX_QTY", 1) or 1)
+    total_qty = _entry_planned_total_qty(planned_orders)
+    if total_qty <= 0 or total_qty > max_qty:
+        return candidate_price, {}
+
+    max_below_bid_ticks = int(_rule("SCALPING_ENTRY_PASSIVE_PROBE_MAX_BELOW_BID_TICKS", 1) or 1)
+    adjusted_price, tick_size, floor_price = _resolve_passive_probe_candidate_price(
+        candidate_price=candidate_price,
+        best_bid=best_bid,
+        curr_price=curr_price,
+        max_below_bid_ticks=max_below_bid_ticks,
+    )
+    if adjusted_price <= 0:
+        return candidate_price, {}
+    if _coerce_int_value(best_ask) > 0 and adjusted_price > _coerce_int_value(best_ask):
+        return candidate_price, {}
+
+    return adjusted_price, {
+        "entry_order_lifecycle": "passive_probe",
+        "entry_passive_probe_applied": True,
+        "entry_passive_probe_reason": "wait_score_danger_defensive_1share",
+        "entry_passive_probe_original_price": _coerce_int_value(candidate_price),
+        "entry_passive_probe_adjusted_price": _coerce_int_value(adjusted_price),
+        "entry_passive_probe_floor_price": _coerce_int_value(floor_price),
+        "entry_passive_probe_tick_size": int(tick_size or 0),
+        "entry_passive_probe_max_below_bid_ticks": max_below_bid_ticks,
+        "entry_passive_probe_ai_action": watching_action,
+        "entry_passive_probe_ai_score": f"{watching_score:.1f}",
+        "entry_passive_probe_total_qty": total_qty,
+    }
+
+
+def _build_entry_submit_revalidation_fields(ws_data, latency_gate, *, now_ts=None):
+    now_ts = float(now_ts or time.time())
+    decision_ts = _safe_float((latency_gate or {}).get("ai_entry_price_canary_decision_ts"), 0.0)
+    context_age_ms = _coerce_int_value((latency_gate or {}).get("ai_entry_price_canary_context_age_ms"))
+    quote_age_sec = _get_ws_snapshot_age_sec(ws_data)
+    quote_age_ms = "-" if quote_age_sec is None else int(round(quote_age_sec * 1000.0))
+    decision_age_ms = "-" if decision_ts <= 0 else int(round(max(0.0, now_ts - decision_ts) * 1000.0))
+    max_context_age_ms = int(_rule("SCALPING_ENTRY_SUBMIT_REVALIDATION_MAX_CONTEXT_AGE_MS", 8000) or 8000)
+    max_quote_age_ms = int(_rule("SCALPING_ENTRY_SUBMIT_REVALIDATION_MAX_QUOTE_AGE_MS", 2000) or 2000)
+    context_stale = context_age_ms > max_context_age_ms if context_age_ms else False
+    quote_stale = quote_age_ms != "-" and int(quote_age_ms) > max_quote_age_ms
+    return {
+        "entry_submit_revalidation": "checked",
+        "price_decision_age_ms": decision_age_ms,
+        "price_decision_context_age_ms": context_age_ms or "-",
+        "quote_age_at_submit_ms": quote_age_ms,
+        "price_context_stale_at_submit": bool(context_stale),
+        "quote_stale_at_submit": bool(quote_stale),
+        "entry_submit_revalidation_warning": "stale_context_or_quote" if (context_stale or quote_stale) else "",
+        "entry_order_lifecycle": str((latency_gate or {}).get("entry_order_lifecycle") or "standard"),
+        "entry_passive_probe_applied": bool((latency_gate or {}).get("entry_passive_probe_applied")),
+        "entry_passive_probe_reason": str((latency_gate or {}).get("entry_passive_probe_reason") or ""),
+    }
+
+
 def _resolve_buy_order_timeout_sec(stock, strategy):
     normalized_strategy = 'SCALPING' if str(strategy or '').upper() in ('SCALPING', 'SCALP') else str(strategy or '').upper()
     if normalized_strategy != 'SCALPING':
@@ -2564,6 +2668,7 @@ def _apply_entry_ai_price_canary(
     defensive_price = _coerce_int_value((latency_gate or {}).get("latency_guarded_order_price"))
     reference_price = _coerce_int_value((latency_gate or {}).get("target_buy_price"))
     resolved_price = _coerce_int_value((latency_gate or {}).get("order_price"))
+    price_context_started_at = time.time()
     price_ctx = _build_entry_ai_price_context(
         stock,
         latency_gate,
@@ -2589,6 +2694,7 @@ def _apply_entry_ai_price_canary(
         )
         return planned_orders, False
 
+    ai_eval_started_at = time.perf_counter()
     result = ai_engine.evaluate_scalping_entry_price(
         stock.get("name"),
         code,
@@ -2597,6 +2703,9 @@ def _apply_entry_ai_price_canary(
         recent_candles,
         price_ctx,
     )
+    ai_eval_ms = int(round((time.perf_counter() - ai_eval_started_at) * 1000.0))
+    decision_ts = time.time()
+    context_age_ms = int(round(max(0.0, decision_ts - price_context_started_at) * 1000.0))
     action = str((result or {}).get("action") or "USE_DEFENSIVE").strip().upper()
     confidence = _coerce_int_value((result or {}).get("confidence"))
     min_confidence = int(_rule("SCALPING_ENTRY_AI_PRICE_MIN_CONFIDENCE", 60) or 60)
@@ -2717,6 +2826,32 @@ def _apply_entry_ai_price_canary(
         )
         return planned_orders, False
 
+    passive_price, passive_fields = _maybe_apply_entry_passive_probe(
+        stock=stock,
+        latency_gate=latency_gate,
+        planned_orders=planned_orders,
+        action=action,
+        candidate_price=candidate_price,
+        curr_price=current_price,
+        best_bid=best_bid,
+        best_ask=best_ask,
+    )
+    if passive_fields:
+        candidate_price = clamp_price_to_tick(passive_price)
+        if _is_pre_submit_price_guard_block(strategy, candidate_price, best_bid):
+            _log_entry_pipeline(
+                stock,
+                code,
+                "entry_ai_price_canary_fallback",
+                reason="passive_probe_price_guard",
+                action=action,
+                candidate_price=candidate_price,
+                best_bid=best_bid,
+                **passive_fields,
+                **micro_log_fields,
+            )
+            return planned_orders, False
+
     adjusted_orders = []
     for order in planned_orders or []:
         next_order = dict(order)
@@ -2725,6 +2860,9 @@ def _apply_entry_ai_price_canary(
         adjusted_orders.append(next_order)
 
     max_wait_sec = max(5, min(1200, _coerce_int_value((result or {}).get("max_wait_sec"), 90)))
+    if passive_fields:
+        passive_timeout_sec = int(_rule("SCALPING_ENTRY_PASSIVE_PROBE_TIMEOUT_SEC", 30) or 30)
+        max_wait_sec = max(5, min(max_wait_sec, passive_timeout_sec))
     latency_gate["orders"] = adjusted_orders
     latency_gate["order_price"] = candidate_price
     latency_gate["price_resolution_reason"] = f"ai_tier2_{action.lower()}"
@@ -2733,6 +2871,13 @@ def _apply_entry_ai_price_canary(
     latency_gate["ai_entry_price_canary_confidence"] = confidence
     latency_gate["ai_entry_price_canary_reason"] = reason
     latency_gate["ai_entry_price_canary_max_wait_sec"] = max_wait_sec
+    latency_gate["ai_entry_price_canary_eval_ms"] = ai_eval_ms
+    latency_gate["ai_entry_price_canary_decision_ts"] = decision_ts
+    latency_gate["ai_entry_price_canary_context_age_ms"] = context_age_ms
+    latency_gate["ai_entry_price_canary_context_best_bid"] = _coerce_int_value(best_bid)
+    latency_gate["ai_entry_price_canary_context_best_ask"] = _coerce_int_value(best_ask)
+    if passive_fields:
+        latency_gate.update(passive_fields)
     _mutate_stock_state(stock, set_fields={"entry_timeout_sec_override": max_wait_sec})
     _log_entry_pipeline(
         stock,
@@ -2746,6 +2891,9 @@ def _apply_entry_ai_price_canary(
         reference_target_price=reference_price,
         defensive_order_price=defensive_price,
         max_wait_sec=max_wait_sec,
+        ai_eval_ms=ai_eval_ms,
+        price_decision_context_age_ms=context_age_ms,
+        **passive_fields,
         **micro_log_fields,
     )
     return adjusted_orders, True
@@ -4047,6 +4195,15 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                             action = ai_decision.get('action', 'WAIT')
                             ai_score = ai_decision.get('score', 50)
                             reason = ai_decision.get('reason', '사유 없음')
+                            _mutate_stock_state(
+                                stock,
+                                set_fields={
+                                    'last_watching_ai_action': str(action or 'WAIT').upper(),
+                                    'last_watching_ai_score': float(ai_score or 0.0),
+                                    'last_watching_ai_reason': str(reason or '')[:240],
+                                    'last_watching_ai_confirmed_at': now_ts,
+                                },
+                            )
                             feature_probe = _extract_buy_recovery_probe_features(
                                 ai_engine,
                                 ws_data,
@@ -4901,6 +5058,14 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             latency_gate, request_price=latency_gate.get('order_price', 0), curr_price=curr_price,
             best_bid=best_bid_at_submit, best_ask=best_ask_at_submit,
         )
+    submit_revalidation_fields = _build_entry_submit_revalidation_fields(ws_data, latency_gate, now_ts=time.time())
+    if submit_revalidation_fields.get("entry_submit_revalidation_warning"):
+        _log_entry_pipeline(
+            stock,
+            code,
+            "entry_submit_revalidation_warning",
+            **submit_revalidation_fields,
+        )
 
     _log_entry_pipeline(
         stock, code, "latency_pass", mode=entry_mode, decision=latency_gate.get('decision'),
@@ -4917,6 +5082,8 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         latency_guarded_order_price=int(latency_gate.get('latency_guarded_order_price', 0) or 0),
         counterfactual_order_price_1tick=int(latency_gate.get('counterfactual_order_price_1tick', 0) or 0),
         order_price=int(latency_gate.get('order_price', 0) or 0),
+        ai_entry_price_canary_eval_ms=int(latency_gate.get('ai_entry_price_canary_eval_ms', 0) or 0),
+        **submit_revalidation_fields,
         **latency_price_snapshot,
         **_build_orderbook_micro_log_fields(
             _build_orderbook_micro_context(
@@ -4992,6 +5159,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             normal_defensive_order_price=int(latency_gate.get('normal_defensive_order_price', 0) or 0),
             latency_guarded_order_price=int(latency_gate.get('latency_guarded_order_price', 0) or 0),
             counterfactual_order_price_1tick=int(latency_gate.get('counterfactual_order_price_1tick', 0) or 0),
+            **submit_revalidation_fields,
             **price_snapshot,
         )
         res = kiwoom_orders.send_buy_order(
@@ -5013,6 +5181,13 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         successful_orders.append({
             'tag': request['tag'], 'qty': qty, 'price': price, 'ord_no': ord_no, 'tif': request['tif'],
             'order_type': request['order_type_code'], 'status': 'OPEN', 'filled_qty': 0, 'sent_at': now_ts,
+            'entry_order_lifecycle': submit_revalidation_fields.get('entry_order_lifecycle', 'standard'),
+            'entry_passive_probe_applied': bool(submit_revalidation_fields.get('entry_passive_probe_applied')),
+            'best_bid_at_submit': price_snapshot.get('best_bid_at_submit'),
+            'best_ask_at_submit': price_snapshot.get('best_ask_at_submit'),
+            'price_below_bid_bps': price_snapshot.get('price_below_bid_bps'),
+            'price_decision_context_age_ms': submit_revalidation_fields.get('price_decision_context_age_ms'),
+            'quote_age_at_submit_ms': submit_revalidation_fields.get('quote_age_at_submit_ms'),
         })
         _stage_buy_order_submission(
             stock=stock, code=code, curr_price=curr_price, requested_qty=requested_qty, msg=msg, entry_orders=successful_orders,
@@ -5050,7 +5225,9 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         normal_defensive_order_price=int(latency_gate.get('normal_defensive_order_price', 0) or 0),
         latency_guarded_order_price=int(latency_gate.get('latency_guarded_order_price', 0) or 0),
         counterfactual_order_price_1tick=int(latency_gate.get('counterfactual_order_price_1tick', 0) or 0),
-        order_price=int(latency_gate.get('order_price', 0) or 0), **bundle_price_snapshot,
+        order_price=int(latency_gate.get('order_price', 0) or 0),
+        **submit_revalidation_fields,
+        **bundle_price_snapshot,
     )
 
     if strategy in ['SCALPING', 'SCALP']:
@@ -5462,22 +5639,61 @@ def _cancel_pending_entry_orders(stock, code, *, force=False):
         had_failure = False
         for order in open_orders:
             ord_no = str(order.get('ord_no', '') or '').strip()
+            sent_at = _safe_float(order.get('sent_at'), 0.0)
+            order_age_sec = max(0.0, time.time() - sent_at) if sent_at > 0 else 0.0
+            cancel_fields = {
+                "orig_ord_no": ord_no,
+                "tag": order.get('tag'),
+                "qty": _coerce_int_value(order.get('qty')),
+                "filled_qty": _coerce_int_value(order.get('filled_qty')),
+                "remaining_qty": max(0, _coerce_int_value(order.get('qty')) - _coerce_int_value(order.get('filled_qty'))),
+                "submitted_price": _coerce_int_value(order.get('price')),
+                "order_age_sec": f"{order_age_sec:.1f}",
+                "cancel_reason": "entry_timeout_or_reconcile",
+                "entry_order_lifecycle": str(order.get('entry_order_lifecycle') or "standard"),
+                "entry_passive_probe_applied": bool(order.get('entry_passive_probe_applied')),
+                "best_bid_at_submit": _coerce_int_value(order.get('best_bid_at_submit')),
+                "best_ask_at_submit": _coerce_int_value(order.get('best_ask_at_submit')),
+                "price_below_bid_bps": _coerce_int_value(order.get('price_below_bid_bps')),
+                "price_decision_context_age_ms": order.get('price_decision_context_age_ms', "-"),
+                "quote_age_at_submit_ms": order.get('quote_age_at_submit_ms', "-"),
+            }
+            _log_entry_pipeline(stock, code, "entry_order_cancel_requested", **cancel_fields)
             res = kiwoom_orders.send_cancel_order(code=code, orig_ord_no=ord_no, token=KIWOOM_TOKEN, qty=0)
             is_success = False
             err_msg = str(res)
+            cancel_ord_no = ""
             if isinstance(res, dict):
                 if str(res.get('return_code', res.get('rt_cd', ''))) == '0':
                     is_success = True
                 err_msg = str(res.get('return_msg', '') or '')
+                cancel_ord_no = str(res.get('ord_no', '') or res.get('odno', '') or '')
             elif res:
                 is_success = True
 
             if is_success or any(keyword in err_msg for keyword in ['취소가능수량', '잔고', '주문없음', '체결']):
                 order['status'] = 'CANCELLED'
                 order['cancelled_at'] = time.time()
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "entry_order_cancel_confirmed",
+                    **cancel_fields,
+                    cancel_ord_no=cancel_ord_no,
+                    cancel_response="success" if is_success else "already_resolved",
+                    cancel_message=err_msg[:160],
+                )
                 continue
 
             had_failure = True
+            _log_entry_pipeline(
+                stock,
+                code,
+                "entry_order_cancel_failed",
+                **cancel_fields,
+                cancel_response="failed",
+                cancel_message=err_msg[:160],
+            )
             log_error(
                 f"⚠️ [ENTRY_CANCEL] {stock.get('name')}({code}) "
                 f"tag={order.get('tag')} ord_no={ord_no} cancel_failed msg={err_msg}"

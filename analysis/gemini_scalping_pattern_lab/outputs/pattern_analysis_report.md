@@ -7,82 +7,82 @@
 
 ## 2. Plan Rebase 관찰축 요약
 
-- `WAIT65~79 total_candidates=0`
-- `recovery_check=0`, `promoted=0`, `submitted=0`
-- `blocked_ai_score_share=0.0%`, `gatekeeper_eval_ms_p95=29336ms`
+- `WAIT65~79 total_candidates=511`
+- `recovery_check=0`, `promoted=0`, `submitted=1`
+- `blocked_ai_score_share=90.2%`, `gatekeeper_eval_ms_p95=11428ms`
 
 ## 3. 손실 패턴 (Top 5)
 
 ### 1. split-entry / scalp_soft_stop_pct
 - 판정: 음수 EV 기여 패턴
-- 근거: 발생 13건, 중앙손익 -1.550%, 평균손익 -1.625%, 기여손익 -21.120%
+- 근거: 발생 26건, 중앙손익 -1.745%, 평균손익 -1.843%, 기여손익 -47.910%
 - 다음 액션: 전역 조정이 아니라 해당 코호트/패턴을 분리해 shadow 점검
 
-### 2. full_fill / scalp_hard_stop_pct
+### 2. full_fill / scalp_soft_stop_pct
 - 판정: 음수 EV 기여 패턴
-- 근거: 발생 1건, 중앙손익 -3.380%, 평균손익 -3.380%, 기여손익 -3.380%
+- 근거: 발생 3건, 중앙손익 -1.710%, 평균손익 -1.763%, 기여손익 -5.290%
 - 다음 액션: 전역 조정이 아니라 해당 코호트/패턴을 분리해 shadow 점검
 
-### 3. split-entry / scalp_ai_early_exit
+### 3. split-entry / protect_trailing_stop
 - 판정: 음수 EV 기여 패턴
-- 근거: 발생 3건, 중앙손익 -1.000%, 평균손익 -1.000%, 기여손익 -3.000%
+- 근거: 발생 3건, 중앙손익 -1.170%, 평균손익 -0.813%, 기여손익 -2.440%
 - 다음 액션: 전역 조정이 아니라 해당 코호트/패턴을 분리해 shadow 점검
 
-### 4. split-entry / scalp_preset_hard_stop_pct
+### 4. full_fill / scalp_hard_stop_pct
 - 판정: 음수 EV 기여 패턴
-- 근거: 발생 4건, 중앙손익 -0.770%, 평균손익 -0.740%, 기여손익 -2.960%
+- 근거: 발생 1건, 중앙손익 -2.250%, 평균손익 -2.250%, 기여손익 -2.250%
 - 다음 액션: 전역 조정이 아니라 해당 코호트/패턴을 분리해 shadow 점검
 
-### 5. full_fill / scalp_soft_stop_pct
+### 5. split-entry / scalp_preset_hard_stop_pct
 - 판정: 음수 EV 기여 패턴
-- 근거: 발생 1건, 중앙손익 -2.040%, 평균손익 -2.040%, 기여손익 -2.040%
+- 근거: 발생 1건, 중앙손익 -0.830%, 평균손익 -0.830%, 기여손익 -0.830%
 - 다음 액션: 전역 조정이 아니라 해당 코호트/패턴을 분리해 shadow 점검
 
 ## 4. 수익 패턴 (Top 5)
 
 ### 1. split-entry / scalp_trailing_take_profit / nan
 - 판정: 양수 EV 기여 패턴
-- 근거: 발생 20건, 중앙손익 +0.800%, 평균손익 +1.111%, 기여손익 +22.220%
+- 근거: 발생 22건, 중앙손익 +0.760%, 평균손익 +1.015%, 기여손익 +22.340%
 - 다음 액션: 해당 패턴을 훼손하지 않는 범위에서 병목 해소 우선
 
-### 2. full_fill / scalp_preset_ai_review_exit / nan
+### 2. split-entry / scalp_ai_momentum_decay / nan
 - 판정: 양수 EV 기여 패턴
-- 근거: 발생 1건, 중앙손익 +1.920%, 평균손익 +1.920%, 기여손익 +1.920%
+- 근거: 발생 3건, 중앙손익 +2.470%, 평균손익 +1.950%, 기여손익 +5.850%
 - 다음 액션: 해당 패턴을 훼손하지 않는 범위에서 병목 해소 우선
 
-### 3. split-entry / scalp_ai_momentum_decay / nan
+### 3. full_fill / scalp_trailing_take_profit / nan
 - 판정: 양수 EV 기여 패턴
-- 근거: 발생 3건, 중앙손익 +0.580%, 평균손익 +0.540%, 기여손익 +1.620%
+- 근거: 발생 3건, 중앙손익 +0.590%, 평균손익 +0.913%, 기여손익 +2.740%
 - 다음 액션: 해당 패턴을 훼손하지 않는 범위에서 병목 해소 우선
 
-### 4. full_fill / scalp_trailing_take_profit / nan
+### 4. split-entry / scalp_trailing_take_profit / normal
 - 판정: 양수 EV 기여 패턴
-- 근거: 발생 1건, 중앙손익 +1.030%, 평균손익 +1.030%, 기여손익 +1.030%
+- 근거: 발생 1건, 중앙손익 +1.300%, 평균손익 +1.300%, 기여손익 +1.300%
 - 다음 액션: 해당 패턴을 훼손하지 않는 범위에서 병목 해소 우선
 
-### 5. split-entry / scalp_preset_protect_profit / nan
+### 5. split-entry / protect_trailing_stop / nan
 - 판정: 양수 EV 기여 패턴
-- 근거: 발생 2건, 중앙손익 +0.250%, 평균손익 +0.250%, 기여손익 +0.500%
+- 근거: 발생 1건, 중앙손익 +0.190%, 평균손익 +0.190%, 기여손익 +0.190%
 - 다음 액션: 해당 패턴을 훼손하지 않는 범위에서 병목 해소 우선
 
 ## 5. 기회비용 분해
 
 ### 1. AI threshold miss
 - 판정: EV 회수 우선 후보
-- 근거: 차단건수 983997건, 차단비율 100.0%, 관찰일수 7일
+- 근거: 차단건수 2546880건, 차단비율 100.0%, 관찰일수 16일
 - 다음 액션: blocker 성격을 관찰축과 연결해 원인 귀속
 
 ### 2. overbought gate miss
 - 판정: EV 회수 우선 후보
-- 근거: 차단건수 411938건, 차단비율 100.0%, 관찰일수 7일
+- 근거: 차단건수 818347건, 차단비율 100.0%, 관찰일수 16일
 - 다음 액션: blocker 성격을 관찰축과 연결해 원인 귀속
 
 ### 3. latency guard miss
 - 판정: EV 회수 우선 후보
-- 근거: 차단건수 18025건, 차단비율 99.2%, 관찰일수 7일
+- 근거: 차단건수 58907건, 차단비율 99.5%, 관찰일수 16일
 - 다음 액션: blocker 성격을 관찰축과 연결해 원인 귀속
 
 ### 4. liquidity gate miss
 - 판정: EV 회수 우선 후보
-- 근거: 차단건수 12991건, 차단비율 98.9%, 관찰일수 7일
+- 근거: 차단건수 44016건, 차단비율 99.3%, 관찰일수 16일
 - 다음 액션: blocker 성격을 관찰축과 연결해 원인 귀속

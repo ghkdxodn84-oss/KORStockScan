@@ -1084,7 +1084,7 @@ def run_sniper(is_test_mode=False):
     if scalping_ai_route == "openai" and runtime_role == "main" and openai_api_keys:
         try:
             openai_scalping_engine = GPTSniperEngine(api_keys=openai_api_keys, announce_startup=False)
-            fast_model = str(getattr(TRADING_RULES, "GPT_FAST_MODEL", "gpt-5.4-nano") or "gpt-5.4-nano")
+            fast_model = str(getattr(TRADING_RULES, "GPT_FAST_MODEL", "gpt-5-nano") or "gpt-5-nano")
             deep_model = str(getattr(TRADING_RULES, "GPT_DEEP_MODEL", fast_model) or fast_model)
             report_model = str(getattr(TRADING_RULES, "GPT_REPORT_MODEL", fast_model) or fast_model)
             openai_scalping_engine.set_model_names(

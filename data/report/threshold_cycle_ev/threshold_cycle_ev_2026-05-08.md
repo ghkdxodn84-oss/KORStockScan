@@ -6,37 +6,38 @@
 - selected_families: `-`
 
 ## Daily EV
-- completed: `2` / open: `0`
-- win/loss: `1` / `1` (`50.0`%)
-- avg_profit_rate: `-0.39`%
-- realized_pnl_krw: `-282`
-- full_fill_completed_avg_profit_rate: `-0.395`%
+- completed: `3` / open: `0`
+- win/loss: `1` / `2` (`33.33`%)
+- avg_profit_rate: `-0.85`%
+- realized_pnl_krw: `-431`
+- full_fill_completed_avg_profit_rate: `-0.847`%
 
 ## Entry Funnel
-- budget_pass_to_submitted: `6` / `368` (`1.63`%)
-- latency pass/block: `6` / `362`
-- full/partial fill: `2` / `0`
+- budget_pass_to_submitted: `10` / `703` (`1.42`%)
+- latency pass/block: `11` / `692`
+- full/partial fill: `12` / `9`
 
 ## Holding Exit
-- holding_reviews: `17`
-- exit_signals: `2`
-- holding_review_ms_p95: `17022.0`
+- holding_reviews: `31`
+- exit_signals: `18`
+- holding_review_ms_p95: `15354.0`
 
 ## Pattern Lab Automation
 - artifact: `/home/ubuntu/KORStockScan/data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_2026-05-08.json`
-- fresh: gemini=`False` claude=`False`
-- consensus/orders/family_candidates: `0` / `0` / `0`
+- fresh: gemini=`True` claude=`True`
+- consensus/orders/family_candidates: `5` / `14` / `2`
 
 ## Calibration Decisions
-- `soft_stop_whipsaw_confirmation`: `hold_sample` sample=`13/10`
-- `holding_flow_ofi_smoothing`: `hold` sample=`50/20`
-- `protect_trailing_smoothing`: `hold_sample` sample=`0/20`
-- `trailing_continuation`: `freeze` sample=`1/20`
-- `score65_74_recovery_probe`: `adjust_up` sample=`294/20`
-- `bad_entry_refined_canary`: `adjust_up` sample=`20/10`
-- `holding_exit_decision_matrix_advisory`: `hold_no_edge` sample=`0/1`
-- `scale_in_price_guard`: `hold_sample` sample=`3/20`
+## Pattern Lab Top Findings
+- `AI threshold dominance` route=`existing_family` family=`score65_74_recovery_probe`
+- `AI threshold miss EV recovery` route=`existing_family` family=`score65_74_recovery_probe`
+- `latency guard miss EV recovery` route=`instrumentation_order` family=`-`
 
-## Warnings
-- `pattern_lab_gemini_stale`
-- `pattern_lab_claude_stale`
+- `soft_stop_whipsaw_confirmation`: `adjust_up` sample=`28/10`
+- `holding_flow_ofi_smoothing`: `hold` sample=`59/20`
+- `protect_trailing_smoothing`: `hold_sample` sample=`18/20`
+- `trailing_continuation`: `freeze` sample=`18/20`
+- `score65_74_recovery_probe`: `adjust_up` sample=`703/20`
+- `bad_entry_refined_canary`: `hold_sample` sample=`55/10`
+- `holding_exit_decision_matrix_advisory`: `hold_no_edge` sample=`14/1`
+- `scale_in_price_guard`: `hold` sample=`21/20`

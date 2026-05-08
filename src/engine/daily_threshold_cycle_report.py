@@ -11,6 +11,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
+from src.engine.ai_response_contracts import build_openai_response_text_format
 from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH, POSTGRES_URL, TRADING_RULES
 from src.utils.threshold_cycle_registry import TARGET_STAGES, is_threshold_cycle_stage
 
@@ -23,7 +24,7 @@ CUMULATIVE_THRESHOLD_REPORT_DIR = REPORT_DIR / "threshold_cycle_cumulative"
 THRESHOLD_CALIBRATION_REPORT_DIR = REPORT_DIR / "threshold_cycle_calibration"
 THRESHOLD_AI_REVIEW_DIR = REPORT_DIR / "threshold_cycle_ai_review"
 POST_SELL_DIR = DATA_DIR / "post_sell"
-THRESHOLD_CYCLE_SCHEMA_VERSION = 2
+THRESHOLD_CYCLE_SCHEMA_VERSION = 3
 THRESHOLD_AI_CORRECTION_SCHEMA_VERSION = 1
 THRESHOLD_CYCLE_DIR = DATA_DIR / "threshold_cycle"
 RAW_PIPELINE_FALLBACK_MAX_BYTES = 64 * 1024 * 1024
@@ -446,6 +447,7 @@ def save_threshold_calibration_report(report: dict, *, run_phase: str | None = N
         "source_report": str(report_path_for_date(target_date)),
         "runtime_change": False,
         "calibration_source_bundle": report.get("calibration_source_bundle") or {},
+        "trade_lifecycle_attribution": report.get("trade_lifecycle_attribution") or {},
         "calibration_candidates": report.get("calibration_candidates") or [],
         "post_apply_attribution": report.get("post_apply_attribution") or {},
         "safety_guard_pack": report.get("safety_guard_pack") or [],
@@ -1094,6 +1096,31 @@ def _load_post_sell_evaluation_by_record_id(target_date: str | None) -> dict[str
     return rows
 
 
+def _load_post_sell_candidate_by_record_id(target_date: str | None) -> dict[str, dict]:
+    if not target_date:
+        return {}
+    path = POST_SELL_DIR / f"post_sell_candidates_{target_date}.jsonl"
+    if not path.exists():
+        return {}
+    rows: dict[str, dict] = {}
+    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(payload, dict):
+                continue
+            record_id = payload.get("recommendation_id") or payload.get("record_id")
+            if record_id in (None, "", "-"):
+                continue
+            rows[str(record_id)] = payload
+    return rows
+
+
 def _post_sell_metric(row: dict | None, horizon: str, key: str) -> float | None:
     if not isinstance(row, dict):
         return None
@@ -1101,6 +1128,357 @@ def _post_sell_metric(row: dict | None, horizon: str, key: str) -> float | None:
     if not isinstance(metrics, dict):
         return None
     return _safe_float(metrics.get(key), None)
+
+
+def _truthy(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value or "").strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _last_stage_event(events: list[dict], stage: str) -> dict | None:
+    for event in reversed(events):
+        if str(event.get("stage") or "") == stage:
+            return event
+    return None
+
+
+def _first_stage_event(events: list[dict], stage: str) -> dict | None:
+    for event in events:
+        if str(event.get("stage") or "") == stage:
+            return event
+    return None
+
+
+def _classify_lifecycle_type(
+    *,
+    stages: Counter,
+    exit_rule: str,
+    exit_decision_source: str,
+    post_sell_outcome: str,
+) -> str:
+    if stages.get("entry_order_cancel_confirmed", 0) and not stages.get("sell_completed", 0):
+        return "entry_unfilled_cancelled"
+    if stages.get("order_bundle_submitted", 0) and not stages.get("sell_completed", 0):
+        return "entry_submitted_unresolved"
+    if not stages.get("sell_completed", 0):
+        return "pre_entry_or_holding_unresolved"
+    if post_sell_outcome == "PENDING_POST_SELL":
+        return "closed_pending_post_sell_outcome"
+
+    rule = str(exit_rule or "-")
+    if rule in {"scalp_soft_stop_pct", "scalp_soft_stop_whipsaw_confirmation"}:
+        return "soft_stop_good_exit" if post_sell_outcome == "GOOD_EXIT" else "soft_stop_missed_upside" if post_sell_outcome == "MISSED_UPSIDE" else "soft_stop_neutral"
+    if rule in {"scalp_trailing_take_profit", "protect_trailing_stop"}:
+        return "trailing_good_exit" if post_sell_outcome == "GOOD_EXIT" else "trailing_early_exit" if post_sell_outcome == "MISSED_UPSIDE" else "trailing_neutral"
+    if rule in {"scalp_hard_stop_pct", "protect_hard_stop", "scalp_emergency_stop"}:
+        return "hard_stop_good_exit" if post_sell_outcome == "GOOD_EXIT" else "hard_stop_missed_upside" if post_sell_outcome == "MISSED_UPSIDE" else "hard_stop_neutral"
+    if rule == "scalp_bad_entry_refined_canary":
+        return "bad_entry_refined_good_exit" if post_sell_outcome == "GOOD_EXIT" else "bad_entry_refined_missed_upside" if post_sell_outcome == "MISSED_UPSIDE" else "bad_entry_refined_neutral"
+    if str(exit_decision_source or "") == "HOLDING_FLOW_OVERRIDE":
+        return "holding_flow_good_exit" if post_sell_outcome == "GOOD_EXIT" else "holding_flow_missed_upside" if post_sell_outcome == "MISSED_UPSIDE" else "holding_flow_neutral"
+    return "closed_other_good_exit" if post_sell_outcome == "GOOD_EXIT" else "closed_other_missed_upside" if post_sell_outcome == "MISSED_UPSIDE" else "closed_other_neutral"
+
+
+def _build_trade_lifecycle_attribution(events: list[dict], target_date: str | None) -> dict:
+    material_stages = {
+        "order_bundle_submitted",
+        "entry_order_cancel_requested",
+        "entry_order_cancel_confirmed",
+        "entry_order_cancel_failed",
+        "position_rebased_after_fill",
+        "bad_entry_refined_candidate",
+        "bad_entry_refined_exit",
+        "soft_stop_micro_grace",
+        "soft_stop_whipsaw_confirmation",
+        "holding_flow_override_review",
+        "holding_flow_override_exit_confirmed",
+        "holding_flow_override_defer_exit",
+        "holding_flow_ofi_smoothing_applied",
+        "scale_in_price_resolved",
+        "scale_in_price_guard_block",
+        "scale_in_executed",
+        "stat_action_decision_snapshot",
+        "exit_signal",
+        "sell_order_sent",
+        "sell_completed",
+    }
+    grouped: dict[str, list[dict]] = {}
+    for event in events:
+        record_id = event.get("record_id")
+        if record_id in (None, "", "-"):
+            continue
+        if str(event.get("stage") or "") not in material_stages:
+            continue
+        grouped.setdefault(str(record_id), []).append(event)
+
+    post_sell_candidates = _load_post_sell_candidate_by_record_id(target_date)
+    post_sell_evaluations = _load_post_sell_evaluation_by_record_id(target_date)
+    type_counts: Counter = Counter()
+    phase_counts: Counter = Counter()
+    exit_rule_outcomes: Counter = Counter()
+    decision_source_outcomes: Counter = Counter()
+    entry_lifecycle_outcomes: Counter = Counter()
+    bad_entry_signal_types: Counter = Counter()
+    scale_in_outcomes: Counter = Counter()
+    examples: list[dict] = []
+
+    for record_id, record_events in sorted(grouped.items()):
+        record_events = sorted(record_events, key=lambda item: str(item.get("emitted_at") or ""))
+        stages = Counter(str(event.get("stage") or "-") for event in record_events)
+        exit_event = _last_stage_event(record_events, "exit_signal")
+        sell_completed = _last_stage_event(record_events, "sell_completed")
+        order_event = _first_stage_event(record_events, "order_bundle_submitted")
+        post_sell = post_sell_evaluations.get(record_id)
+        post_sell_candidate = post_sell_candidates.get(record_id)
+
+        exit_fields = _event_fields(exit_event or {})
+        sell_fields = _event_fields(sell_completed or {})
+        order_fields = _event_fields(order_event or {})
+        exit_rule = str(
+            exit_fields.get("exit_rule")
+            or sell_fields.get("exit_rule")
+            or (post_sell or {}).get("exit_rule")
+            or "-"
+        )
+        exit_decision_source = str(
+            exit_fields.get("exit_decision_source")
+            or sell_fields.get("exit_decision_source")
+            or (post_sell_candidate or {}).get("exit_decision_source")
+            or "-"
+        )
+        post_sell_outcome = str((post_sell or {}).get("outcome") or "PENDING_POST_SELL")
+        entry_lifecycle = str(order_fields.get("entry_order_lifecycle") or "-")
+        primary_type = _classify_lifecycle_type(
+            stages=stages,
+            exit_rule=exit_rule,
+            exit_decision_source=exit_decision_source,
+            post_sell_outcome=post_sell_outcome,
+        )
+        if stages.get("sell_completed") and post_sell:
+            phase_state = "closed_post_sell_joined"
+        elif stages.get("sell_completed"):
+            phase_state = "closed_pending_post_sell"
+        elif stages.get("entry_order_cancel_confirmed"):
+            phase_state = "entry_cancelled_no_position"
+        elif stages.get("order_bundle_submitted"):
+            phase_state = "submitted_unresolved"
+        else:
+            phase_state = "pre_entry_or_holding_unresolved"
+
+        bad_candidates = [event for event in record_events if str(event.get("stage") or "") == "bad_entry_refined_candidate"]
+        bad_signal_type = "-"
+        if bad_candidates:
+            exclusion_reasons = {
+                str(_event_fields(event).get("exclusion_reason") or "-")
+                for event in bad_candidates
+            }
+            would_exit = any(
+                _truthy(_event_fields(event).get("would_exit"))
+                or _truthy(_event_fields(event).get("should_exit"))
+                for event in bad_candidates
+            )
+            if post_sell_outcome == "PENDING_POST_SELL":
+                bad_signal_type = "pending_post_sell_outcome"
+            elif post_sell_outcome == "MISSED_UPSIDE":
+                bad_signal_type = "false_positive_risk_after_candidate"
+            elif stages.get("bad_entry_refined_exit"):
+                bad_signal_type = "refined_exit_finalized"
+            elif "soft_stop_zone" in exclusion_reasons:
+                bad_signal_type = "late_detected_soft_stop_zone"
+            elif would_exit:
+                bad_signal_type = "preventable_bad_entry_candidate"
+            else:
+                bad_signal_type = "candidate_signal_only"
+            bad_entry_signal_types[bad_signal_type] += 1
+
+        if stages.get("scale_in_price_resolved") or stages.get("scale_in_price_guard_block") or stages.get("scale_in_executed"):
+            scale_in_outcomes[f"{post_sell_outcome}|{primary_type}"] += 1
+
+        type_counts[primary_type] += 1
+        phase_counts[phase_state] += 1
+        exit_rule_outcomes[f"{exit_rule}|{post_sell_outcome}"] += 1
+        decision_source_outcomes[f"{exit_decision_source}|{post_sell_outcome}"] += 1
+        entry_lifecycle_outcomes[f"{entry_lifecycle}|{post_sell_outcome}"] += 1
+
+        if len(examples) < 30:
+            examples.append(
+                {
+                    "record_id": record_id,
+                    "stock_code": (exit_event or sell_completed or order_event or {}).get("stock_code"),
+                    "stock_name": (exit_event or sell_completed or order_event or {}).get("stock_name"),
+                    "phase_state": phase_state,
+                    "primary_type": primary_type,
+                    "entry_lifecycle": entry_lifecycle,
+                    "entry_price_guard": order_fields.get("entry_price_guard"),
+                    "exit_rule": exit_rule,
+                    "exit_decision_source": exit_decision_source,
+                    "post_sell_candidate_registered": bool(post_sell_candidate),
+                    "post_sell_joined": bool(post_sell),
+                    "post_sell_outcome": post_sell_outcome,
+                    "profit_rate": _safe_float((post_sell or {}).get("profit_rate") or sell_fields.get("profit_rate"), None),
+                    "mfe_10m_pct": _post_sell_metric(post_sell, "10m", "mfe_pct"),
+                    "mae_10m_pct": _post_sell_metric(post_sell, "10m", "mae_pct"),
+                    "bad_entry_signal_type": bad_signal_type,
+                    "stages": dict(stages),
+                }
+            )
+
+    return {
+        "schema_version": 1,
+        "status": "postclose_finalized_for_joined_records",
+        "runtime_change": False,
+        "join_key": "record_id",
+        "records": len(grouped),
+        "phase_counts": dict(phase_counts),
+        "primary_type_counts": dict(type_counts),
+        "family_views": {
+            "entry_price": {
+                "entry_lifecycle_outcomes": dict(entry_lifecycle_outcomes),
+                "entry_unfilled_cancelled": _safe_int(type_counts.get("entry_unfilled_cancelled"), 0) or 0,
+                "submitted_unresolved": _safe_int(phase_counts.get("submitted_unresolved"), 0) or 0,
+            },
+            "soft_stop": {
+                "good_exit": _safe_int(type_counts.get("soft_stop_good_exit"), 0) or 0,
+                "missed_upside": _safe_int(type_counts.get("soft_stop_missed_upside"), 0) or 0,
+                "neutral": _safe_int(type_counts.get("soft_stop_neutral"), 0) or 0,
+                "pending_post_sell": sum(
+                    count
+                    for key, count in exit_rule_outcomes.items()
+                    if key
+                    in {
+                        "scalp_soft_stop_pct|PENDING_POST_SELL",
+                        "scalp_soft_stop_whipsaw_confirmation|PENDING_POST_SELL",
+                    }
+                ),
+            },
+            "trailing": {
+                "good_exit": _safe_int(type_counts.get("trailing_good_exit"), 0) or 0,
+                "early_exit": _safe_int(type_counts.get("trailing_early_exit"), 0) or 0,
+                "neutral": _safe_int(type_counts.get("trailing_neutral"), 0) or 0,
+            },
+            "holding_flow": {
+                "decision_source_outcomes": {
+                    key: value
+                    for key, value in decision_source_outcomes.items()
+                    if key.startswith("HOLDING_FLOW_OVERRIDE|")
+                }
+            },
+            "bad_entry_refined": {
+                "signal_type_counts": dict(bad_entry_signal_types),
+                "provisional_only": _safe_int(bad_entry_signal_types.get("pending_post_sell_outcome"), 0) or 0,
+                "false_positive_risk": _safe_int(bad_entry_signal_types.get("false_positive_risk_after_candidate"), 0) or 0,
+                "late_detected_soft_stop_zone": _safe_int(bad_entry_signal_types.get("late_detected_soft_stop_zone"), 0) or 0,
+                "preventable_candidate": _safe_int(bad_entry_signal_types.get("preventable_bad_entry_candidate"), 0) or 0,
+            },
+            "scale_in": {
+                "outcomes": dict(scale_in_outcomes),
+            },
+        },
+        "exit_rule_outcomes": dict(exit_rule_outcomes),
+        "decision_source_outcomes": dict(decision_source_outcomes),
+        "examples": examples,
+        "quality_notes": [
+            "런타임 후보 stage는 provisional signal이며 최종 유형은 장후 post-sell outcome join 후 닫는다.",
+            "각 family는 이 공통 lifecycle view를 참조하고, 단일 종목 질의 시점의 부분 로그만으로 최종 라벨을 확정하지 않는다.",
+            "post-sell 미조인 record는 pending으로 남겨 다음 장후 snapshot refresh 또는 evaluator 재실행 대상이 된다.",
+        ],
+    }
+
+
+def _build_bad_entry_lifecycle_attribution(events: list[dict], target_date: str | None) -> dict:
+    candidates = _events_for_stage(events, "bad_entry_refined_candidate")
+    refined_exits = _events_for_stage(events, "bad_entry_refined_exit")
+    post_sell_by_record = _load_post_sell_evaluation_by_record_id(target_date)
+
+    by_record: dict[str, list[dict]] = {}
+    for event in candidates:
+        record_id = event.get("record_id")
+        if record_id in (None, "", "-"):
+            continue
+        by_record.setdefault(str(record_id), []).append(event)
+
+    refined_exit_record_ids = {
+        str(event.get("record_id"))
+        for event in refined_exits
+        if event.get("record_id") not in (None, "", "-")
+    }
+    outcome_counts: Counter = Counter()
+    type_counts: Counter = Counter()
+    examples: list[dict] = []
+    post_sell_joined = 0
+    post_sell_pending = 0
+
+    for record_id, record_events in sorted(by_record.items()):
+        post_sell = post_sell_by_record.get(record_id)
+        if isinstance(post_sell, dict):
+            post_sell_joined += 1
+        else:
+            post_sell_pending += 1
+        outcome = str(post_sell.get("outcome") or "PENDING_POST_SELL") if isinstance(post_sell, dict) else "PENDING_POST_SELL"
+        outcome_counts[outcome] += 1
+        exclusion_reasons = {
+            str(_event_fields(event).get("exclusion_reason") or "-")
+            for event in record_events
+        }
+        would_exit = any(
+            _truthy(_event_fields(event).get("would_exit"))
+            or _truthy(_event_fields(event).get("should_exit"))
+            for event in record_events
+        )
+        has_soft_stop_zone = "soft_stop_zone" in exclusion_reasons
+        if outcome == "PENDING_POST_SELL":
+            final_type = "pending_post_sell_outcome"
+        elif outcome == "MISSED_UPSIDE":
+            final_type = "false_positive_risk_after_candidate"
+        elif record_id in refined_exit_record_ids:
+            final_type = "refined_exit_finalized"
+        elif would_exit and not has_soft_stop_zone:
+            final_type = "preventable_bad_entry_candidate"
+        elif has_soft_stop_zone:
+            final_type = "late_detected_soft_stop_zone"
+        else:
+            final_type = "candidate_only_finalized"
+        type_counts[final_type] += 1
+        if len(examples) < 20:
+            examples.append(
+                {
+                    "record_id": record_id,
+                    "candidate_events": len(record_events),
+                    "would_exit": would_exit,
+                    "exclusion_reasons": sorted(exclusion_reasons),
+                    "refined_exit_applied": record_id in refined_exit_record_ids,
+                    "post_sell_joined": isinstance(post_sell, dict),
+                    "post_sell_outcome": outcome,
+                    "post_sell_exit_rule": post_sell.get("exit_rule") if isinstance(post_sell, dict) else None,
+                    "post_sell_profit_rate": _safe_float(post_sell.get("profit_rate"), None)
+                    if isinstance(post_sell, dict)
+                    else None,
+                    "mfe_10m_pct": _post_sell_metric(post_sell, "10m", "mfe_pct"),
+                    "mae_10m_pct": _post_sell_metric(post_sell, "10m", "mae_pct"),
+                    "final_type": final_type,
+                }
+            )
+
+    return {
+        "schema_version": 1,
+        "status": "postclose_finalized_when_post_sell_joined",
+        "runtime_change": False,
+        "join_status": "record_id_to_post_sell_evaluations_after_postclose",
+        "candidate_events": len(candidates),
+        "candidate_records": len(by_record),
+        "post_sell_joined_records": post_sell_joined,
+        "post_sell_pending_records": post_sell_pending,
+        "refined_exit_records": len(refined_exit_record_ids),
+        "post_sell_outcome_counts": dict(outcome_counts),
+        "final_type_counts": dict(type_counts),
+        "examples": examples,
+        "quality_notes": [
+            "bad_entry_refined_candidate는 runtime provisional signal이며 최종 유형이 아니다.",
+            "최종 유형은 postclose post_sell_evaluation이 record_id로 join된 뒤에만 닫는다.",
+            "soft_stop_zone 후보는 조기 진입 차단 근거가 아니라 late-detected 후보로 분리한다.",
+        ],
+    }
 
 
 def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str | None) -> dict:
@@ -1454,6 +1832,14 @@ def _build_pre_submit_guard_family(events: list[dict]) -> dict:
     values = _extract_field_values(events, "order_bundle_submitted", "price_below_bid_bps")
     if not values:
         values = _extract_field_values(events, "latency_pass", "price_below_bid_bps")
+    passive_probe_events = [
+        event
+        for event in events
+        if str(_event_fields(event).get("entry_order_lifecycle") or "") == "passive_probe"
+        or bool(_event_fields(event).get("entry_passive_probe_applied"))
+    ]
+    cancel_confirmed = _events_for_stage(events, "entry_order_cancel_confirmed")
+    revalidation_warnings = _events_for_stage(events, "entry_submit_revalidation_warning")
     sample_ready = len(values) >= 50
     recommended = {
         "max_below_bid_bps": int(round(_clamp(_percentile(values, 90, current["max_below_bid_bps"]), 60.0, 120.0))),
@@ -1461,7 +1847,13 @@ def _build_pre_submit_guard_family(events: list[dict]) -> dict:
     return {
         "family": "pre_submit_price_guard",
         "stage": "entry",
-        "sample": {"price_below_bid_bps": len(values), "guard_block": _stage_count(events, "pre_submit_price_guard_block")},
+        "sample": {
+            "price_below_bid_bps": len(values),
+            "guard_block": _stage_count(events, "pre_submit_price_guard_block"),
+            "passive_probe": len(passive_probe_events),
+            "entry_timeout_cancel_confirmed": len(cancel_confirmed),
+            "submit_revalidation_warning": len(revalidation_warnings),
+        },
         "apply_ready": sample_ready,
         "current": current,
         "recommended": recommended,
@@ -1469,6 +1861,7 @@ def _build_pre_submit_guard_family(events: list[dict]) -> dict:
         "notes": [
             "실제 guard_block 표본이 0이면 분포 anchor만 사용한다.",
             "일일 변경폭은 +-10bps cap으로 본다.",
+            "WAIT+score 통과+DANGER+1주 passive_probe와 timeout cancel은 같은 pre_submit_price_guard family에서 attribution한다.",
         ],
     }
 
@@ -1607,7 +2000,7 @@ def _build_bad_entry_family(events: list[dict]) -> dict:
     }
 
 
-def _build_bad_entry_refined_canary_family(events: list[dict]) -> dict:
+def _build_bad_entry_refined_canary_family(events: list[dict], target_date: str | None = None) -> dict:
     current = {
         "enabled": bool(getattr(TRADING_RULES, "SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED", False)),
         "min_hold_sec": int(getattr(TRADING_RULES, "SCALP_BAD_ENTRY_REFINED_MIN_HOLD_SEC", 180) or 180),
@@ -1636,6 +2029,7 @@ def _build_bad_entry_refined_canary_family(events: list[dict]) -> dict:
     sell_order_failed = _stage_count(events, "sell_order_failed")
     sell_order_sent = _stage_count(events, "sell_order_sent")
     sell_completed = _stage_count(events, "sell_completed")
+    lifecycle_attribution = _build_bad_entry_lifecycle_attribution(events, target_date)
     sample_ready = len(refined_candidates) >= 10 and sell_order_failed == 0
     recommended = dict(current)
     if sample_ready:
@@ -1651,12 +2045,14 @@ def _build_bad_entry_refined_canary_family(events: list[dict]) -> dict:
             "sell_order_sent": sell_order_sent,
             "sell_completed": sell_completed,
             "sell_order_failed": sell_order_failed,
+            "lifecycle_attribution": lifecycle_attribution,
         },
         "apply_ready": sample_ready,
         "current": current,
         "recommended": recommended,
         "apply_mode": "efficient_tradeoff_canary_candidate" if sample_ready else "observe_only",
         "notes": [
+            "bad_entry_refined_candidate는 postclose post_sell outcome join 전까지 provisional signal이다.",
             "naive bad_entry hard block은 재개하지 않고 refined candidate만 bounded canary 후보로 본다.",
             "목표는 완벽한 loser classifier가 아니라 soft-stop tail/defer cost 감소다.",
             "GOOD_EXIT 감소가 허용 범위 안이면 rollback이 아니라 calibration으로 조정한다.",
@@ -2471,7 +2867,7 @@ def _build_family_reports(
         _build_pre_submit_guard_family(events),
         _build_entry_ofi_ai_smoothing_family(events),
         _build_bad_entry_family(events),
-        _build_bad_entry_refined_canary_family(events),
+        _build_bad_entry_refined_canary_family(events, target_date=target_date),
         _build_reversal_add_family(events),
         _build_soft_stop_family(events),
         _build_soft_stop_whipsaw_confirmation_family(events),
@@ -2708,11 +3104,43 @@ def _calibration_state_for_family(
             )
         if _safe_int(family_sample.get("wait65_79_score65_74_candidate"), 0) or 0:
             return ("hold_sample", "score65~74 후보는 있으나 source/report sample floor가 부족해 cap 유지")
-    if output_family == "bad_entry_refined_canary" and sample_count >= sample_floor and ready:
-        return (
-            "adjust_up",
-            "naive hard block이 아니라 refined canary를 soft-stop tail/defer cost 감소 후보로 한 단계 적용",
-        )
+    if output_family == "bad_entry_refined_canary":
+        lifecycle = source_metrics.get("lifecycle_attribution")
+        lifecycle = lifecycle if isinstance(lifecycle, dict) else {}
+        candidate_records = _safe_int(lifecycle.get("candidate_records"), 0) or 0
+        if candidate_records > 0:
+            pending_records = _safe_int(lifecycle.get("post_sell_pending_records"), 0) or 0
+            joined_records = _safe_int(lifecycle.get("post_sell_joined_records"), 0) or 0
+            type_counts = lifecycle.get("final_type_counts") if isinstance(lifecycle.get("final_type_counts"), dict) else {}
+            false_positive_risk = _safe_int(type_counts.get("false_positive_risk_after_candidate"), 0) or 0
+            preventable = _safe_int(type_counts.get("preventable_bad_entry_candidate"), 0) or 0
+            refined_exit_finalized = _safe_int(type_counts.get("refined_exit_finalized"), 0) or 0
+            late_soft_stop_zone = _safe_int(type_counts.get("late_detected_soft_stop_zone"), 0) or 0
+            if pending_records > 0 or joined_records <= 0:
+                return (
+                    "hold_sample",
+                    "bad_entry 후보는 runtime provisional signal이며 postclose post-sell outcome join 후 최종 유형을 닫는다.",
+                )
+            if false_positive_risk > 0:
+                return (
+                    "freeze",
+                    "post-sell MISSED_UPSIDE 후보가 있어 bad-entry live 확대 대신 false-positive risk를 먼저 calibration한다.",
+                )
+            if preventable <= 0 and refined_exit_finalized <= 0 and late_soft_stop_zone > 0:
+                return (
+                    "hold",
+                    "후보가 soft-stop zone에서 late-detected되어 조기 진입 차단 근거가 아니라 lifecycle attribution 표본으로 유지한다.",
+                )
+            if preventable <= 0 and refined_exit_finalized <= 0:
+                return (
+                    "hold",
+                    "post-sell outcome은 확정됐지만 preventable/refined-exit edge가 없어 값 유지",
+                )
+        if sample_count >= sample_floor and ready:
+            return (
+                "adjust_up",
+                "postclose lifecycle attribution 또는 rolling aggregate가 통과한 refined canary를 한 단계 적용",
+            )
     if output_family == "scale_in_price_guard":
         family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
         resolved_executed = max(
@@ -2775,8 +3203,40 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
             continue
         current = family.get("current") if isinstance(family.get("current"), dict) else {}
         recommended = family.get("recommended") if isinstance(family.get("recommended"), dict) else {}
-        source_metrics = _source_metrics_for_family(output_family, report_source_context)
+        source_metrics = dict(_source_metrics_for_family(output_family, report_source_context))
+        if output_family == "bad_entry_refined_canary":
+            family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+            lifecycle_attribution = family_sample.get("lifecycle_attribution")
+            if isinstance(lifecycle_attribution, dict) and lifecycle_attribution.get("candidate_records"):
+                source_metrics["lifecycle_attribution"] = lifecycle_attribution
+                source_metrics["post_sell_joined_candidate_records"] = _safe_int(
+                    lifecycle_attribution.get("post_sell_joined_records"), 0
+                ) or 0
+                source_metrics["post_sell_pending_candidate_records"] = _safe_int(
+                    lifecycle_attribution.get("post_sell_pending_records"), 0
+                ) or 0
+                type_counts = (
+                    lifecycle_attribution.get("final_type_counts")
+                    if isinstance(lifecycle_attribution.get("final_type_counts"), dict)
+                    else {}
+                )
+                source_metrics["preventable_bad_entry_candidate_records"] = _safe_int(
+                    type_counts.get("preventable_bad_entry_candidate"), 0
+                ) or 0
+                source_metrics["false_positive_risk_after_candidate_records"] = _safe_int(
+                    type_counts.get("false_positive_risk_after_candidate"), 0
+                ) or 0
+                source_metrics["late_detected_soft_stop_zone_records"] = _safe_int(
+                    type_counts.get("late_detected_soft_stop_zone"), 0
+                ) or 0
         source_sample_count = _source_sample_count_for_family(output_family, source_metrics)
+        if output_family == "bad_entry_refined_canary":
+            lifecycle = source_metrics.get("lifecycle_attribution")
+            if isinstance(lifecycle, dict):
+                source_sample_count = max(
+                    source_sample_count,
+                    _safe_int(lifecycle.get("post_sell_joined_records"), 0) or 0,
+                )
         sample_count = max(_family_sample_count(family), source_sample_count)
         sample_floor = int(metadata.get("sample_floor") or 0)
         source_ready = source_sample_count >= sample_floor
@@ -3207,6 +3667,7 @@ def _build_ai_correction_input_context(calibration_report: dict, cumulative_repo
     return {
         "calibration_candidates": candidate_context,
         "calibration_source_bundle": calibration_report.get("calibration_source_bundle") or {},
+        "trade_lifecycle_attribution": calibration_report.get("trade_lifecycle_attribution") or {},
         "threshold_cycle_cumulative": cumulative_summary,
         "recent_anomaly_report": {
             "source_bundle_reports": (calibration_report.get("calibration_source_bundle") or {}).get("sources", {}),
@@ -3241,6 +3702,52 @@ def _load_threshold_ai_gemini_keys() -> list[tuple[str, str]]:
             continue
         keys.append((str(name), str(value)))
     return keys
+
+
+def _openai_key_sort_key(name: str) -> tuple[int, str]:
+    suffix = name.replace("OPENAI_API_KEY", "", 1).lstrip("_")
+    if suffix == "":
+        return (1, name)
+    try:
+        return (int(suffix), name)
+    except ValueError:
+        return (999, name)
+
+
+def _load_threshold_ai_openai_keys() -> list[tuple[str, str]]:
+    target_path = CONFIG_PATH if CONFIG_PATH.exists() else DEV_PATH
+    try:
+        payload = json.loads(target_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    keys: list[tuple[str, str]] = []
+    for name, value in sorted(payload.items(), key=lambda item: _openai_key_sort_key(str(item[0]))):
+        if not str(name).startswith("OPENAI_API_KEY"):
+            continue
+        if value in (None, "", "-"):
+            continue
+        keys.append((str(name), str(value)))
+    return keys
+
+
+def _threshold_ai_openai_model_sequence() -> list[str]:
+    primary = str(getattr(TRADING_RULES, "GPT_THRESHOLD_CORRECTION_MODEL", "") or "gpt-5.5").strip()
+    fallback = getattr(
+        TRADING_RULES,
+        "GPT_THRESHOLD_CORRECTION_FALLBACK_MODELS",
+        ("gpt-5.4", "gpt-5.4-mini"),
+    )
+    if isinstance(fallback, str):
+        fallback_models = [item.strip() for item in fallback.split(",") if item.strip()]
+    else:
+        fallback_models = [str(item).strip() for item in (fallback or ()) if str(item).strip()]
+    models: list[str] = []
+    for model in [primary, *fallback_models]:
+        if model and model not in models:
+            models.append(model)
+    return models or ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini"]
 
 
 def _build_ai_correction_prompt(input_context: dict) -> str:
@@ -3281,6 +3788,115 @@ def _build_ai_correction_prompt(input_context: dict) -> str:
         "[입력]\n"
         f"{json.dumps(input_context, ensure_ascii=False, indent=2)}"
     )
+
+
+def _build_openai_ai_correction_instructions(run_phase: str) -> str:
+    reasoning_mode = "intraday calibration pass" if str(run_phase) == "intraday" else "postclose calibration pass"
+    return (
+        "You are the threshold-cycle calibration AI reviewer and anomaly correction proposer.\n"
+        f"Run phase: {reasoning_mode}.\n"
+        "Your authority is proposal-only. You must not command env, code, runtime, restart, or intraday threshold mutation.\n"
+        "The deterministic calibration guard remains the final source of truth.\n\n"
+        "Control rules:\n"
+        "- Propose only adjust_up, adjust_down, hold, hold_sample, or freeze.\n"
+        "- Propose threshold values only as candidates; guard will clamp/reject by family bounds and max_step_per_day.\n"
+        "- Route anomalies only as threshold_candidate, incident, instrumentation_gap, or normal_drift.\n"
+        "- Use sample windows only as daily_intraday, rolling_5d, rolling_10d, or cumulative.\n"
+        "- Never change safety_revert_required and never infer live enable from a single case.\n"
+        "- Preserve raw enum labels, family ids, ticker names, field names, and quoted evidence exactly.\n\n"
+        "Korean domain glossary for interpretation only:\n"
+        "- 수급 = order-flow pressure\n"
+        "- 호가 = order book quote/depth\n"
+        "- 체결강도 = execution strength\n"
+        "- 틱가속 = tick acceleration\n"
+        "- 매수압 = buy pressure\n"
+        "- 휩쏘 = whipsaw rebound\n"
+        "- 소프트손절 = soft stop\n"
+        "- 물타기 = averaging down / REVERSAL_ADD\n"
+        "- 불타기 = pyramiding / PYRAMID\n\n"
+        "Return only JSON that conforms to the strict threshold_ai_correction_v1 schema."
+    )
+
+
+def _extract_openai_response_text(response: Any) -> str:
+    raw_text = str(getattr(response, "output_text", "") or "").strip()
+    if raw_text:
+        return raw_text
+    fragments: list[str] = []
+    for item in list(getattr(response, "output", []) or []):
+        content_items = item.get("content", []) if isinstance(item, dict) else getattr(item, "content", [])
+        for content in list(content_items or []):
+            if isinstance(content, dict):
+                text_value = content.get("text") or content.get("value")
+            else:
+                text_value = getattr(content, "text", None) or getattr(content, "value", None)
+            if text_value:
+                fragments.append(str(text_value))
+    return "\n".join(fragment.strip() for fragment in fragments if fragment.strip()).strip()
+
+
+def _call_openai_threshold_ai_correction(input_context: dict, *, run_phase: str) -> tuple[str | None, dict]:
+    try:
+        from openai import OpenAI, RateLimitError
+    except Exception as exc:
+        return None, {"provider": "openai", "status": "unavailable", "reason": f"openai import failed: {exc}"}
+
+    api_keys = _load_threshold_ai_openai_keys()
+    if not api_keys:
+        return None, {"provider": "openai", "status": "unavailable", "reason": "OPENAI_API_KEY not configured"}
+
+    model_sequence = _threshold_ai_openai_model_sequence()
+    reasoning_effort = "medium" if str(run_phase) == "intraday" else "high"
+    user_input = json.dumps(input_context, ensure_ascii=False, indent=2, default=str)
+    errors: list[dict] = []
+    for model_index, model_name in enumerate(model_sequence, start=1):
+        for attempt_index, (key_name, api_key) in enumerate(api_keys, start=1):
+            try:
+                client = OpenAI(api_key=api_key)
+                response = client.responses.create(
+                    model=model_name,
+                    instructions=_build_openai_ai_correction_instructions(run_phase),
+                    input=user_input,
+                    text={
+                        "format": build_openai_response_text_format("threshold_ai_correction_v1"),
+                        "verbosity": "low",
+                    },
+                    reasoning={"effort": reasoning_effort},
+                    store=False,
+                    metadata={
+                        "endpoint_name": "threshold_ai_correction",
+                        "schema_name": "threshold_ai_correction_v1",
+                        "run_phase": str(run_phase or "-"),
+                    },
+                    timeout=180,
+                )
+                return _extract_openai_response_text(response), {
+                    "provider": "openai",
+                    "status": "success",
+                    "key_name": key_name,
+                    "attempt_index": attempt_index,
+                    "model_index": model_index,
+                    "attempted_keys": len(api_keys),
+                    "attempted_models": model_sequence,
+                    "model": model_name,
+                    "schema_name": "threshold_ai_correction_v1",
+                    "reasoning_effort": reasoning_effort,
+                }
+            except RateLimitError as exc:
+                errors.append({"key_name": key_name, "model": model_name, "error": str(exc)})
+                continue
+            except Exception as exc:
+                errors.append({"key_name": key_name, "model": model_name, "error": str(exc)})
+                continue
+    return None, {
+        "provider": "openai",
+        "status": "failed",
+        "attempted_keys": len(api_keys),
+        "attempted_models": model_sequence,
+        "schema_name": "threshold_ai_correction_v1",
+        "reasoning_effort": reasoning_effort,
+        "errors": errors,
+    }
 
 
 def _call_gemini_threshold_ai_correction(input_context: dict) -> tuple[str | None, dict]:
@@ -3423,6 +4039,7 @@ def build_threshold_cycle_ai_correction_report(
             "input_sections": [
                 "calibration_candidates",
                 "calibration_source_bundle",
+                "trade_lifecycle_attribution",
                 "threshold_cycle_cumulative",
                 "recent_anomaly_report",
             ],
@@ -4189,6 +4806,7 @@ def build_daily_threshold_cycle_report(
         }
         for family in families
     ]
+    trade_lifecycle_attribution = _build_trade_lifecycle_attribution(event_windows["same_day"], target_date)
     calibration_candidates = _build_calibration_candidates(families, report_source_context)
     report = {
         "date": target_date,
@@ -4212,6 +4830,7 @@ def build_daily_threshold_cycle_report(
         },
         "threshold_snapshot": threshold_snapshot,
         "threshold_diff_report": threshold_diff_report,
+        "trade_lifecycle_attribution": trade_lifecycle_attribution,
         "calibration_source_bundle": report_source_context,
         "apply_candidate_list": _build_apply_candidate_list(families),
         "calibration_candidates": calibration_candidates,
@@ -4246,7 +4865,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--ai-correction-provider",
-        choices=["none", "gemini"],
+        choices=["none", "gemini", "openai"],
         default="none",
         help="Optional AI provider for correction proposal generation. Default keeps deterministic calibration only.",
     )
@@ -4266,6 +4885,11 @@ def main(argv: list[str] | None = None) -> int:
     elif args.ai_correction_provider == "gemini":
         ai_raw_response, ai_provider_status = _call_gemini_threshold_ai_correction(
             _build_ai_correction_input_context(report)
+        )
+    elif args.ai_correction_provider == "openai":
+        ai_raw_response, ai_provider_status = _call_openai_threshold_ai_correction(
+            _build_ai_correction_input_context(report),
+            run_phase=args.calibration_run_phase,
         )
     ai_correction_report = build_threshold_cycle_ai_correction_report(
         report,

@@ -1,7 +1,7 @@
 # 스캘핑 패턴 분석 최종 리뷰 보고서 (for Lead AI)
 
-생성일: 2026-05-07 18:01:24
-분석 기간: 2026-04-20 ~ 2026-04-20
+생성일: 2026-05-08 16:18:04
+분석 기간: 2026-04-21 ~ 2026-05-08
 
 ---
 
@@ -11,57 +11,71 @@
 
 | 코호트 | 거래수 | 승률 | 손익 중앙값 | 기여손익 합 | 표본충분 |
 |---|---:|---:|---:|---:|---|
-| full_fill | 21 | 52.4% | +0.230% | -0.030% | ⚠️부족 |
-| split-entry | 15 | 33.3% | -1.560% | -13.410% | ⚠️부족 |
+| full_fill | 139 | 42.4% | -0.950% | -64.540% | ✓ |
+| partial_fill | 2 | 50.0% | +0.295% | +0.590% | ⚠️부족 |
+| split-entry | 3 | 0.0% | -1.740% | -5.060% | ⚠️부족 |
 
 ### 1-4. 튜닝 관찰축 요약
 
-- `WAIT65~79 total_candidates=0`, `recovery_check=0`, `promoted=0`, `submitted=0`
-- `blocked_ai_score_share=0.0%`, `gatekeeper_eval_ms_p95=19917ms`, `budget_pass_to_submitted_rate=2.7%`
+- `WAIT65~79 total_candidates=511`, `recovery_check=0`, `promoted=0`, `submitted=1`
+- `blocked_ai_score_share=90.2%`, `gatekeeper_eval_ms_p95=11428ms`, `budget_pass_to_submitted_rate=1.4%`
 
-- `Gatekeeper latency high`: 경고 — `gatekeeper_eval_ms_p95=19917ms`로 지연 경고 구간에 들어가 있다.
+- `AI threshold dominance`: 경고 — `blocked_ai_score_share=90.2%`로 WAIT/BLOCK 비중이 높아 BUY drought 해석을 지지한다.
 
 ### 1-2. 손실 패턴 Top 5
 
-**#1** — 코호트: `split-entry` / 청산규칙: `scalp_soft_stop_pct`
-- 빈도: 10건 | 손익 중앙값: -1.720% | 기여손익: -17.180%
-- 보유시간 중앙값: 385.0초
+**#1** — 코호트: `full_fill` / 청산규칙: `scalp_soft_stop_pct`
+- 빈도: 53건 | 손익 중앙값: -1.750% | 기여손익: -96.150%
+- 보유시간 중앙값: 552.0초
 - 선행 조건: 없음
 
-**#2** — 코호트: `full_fill` / 청산규칙: `scalp_soft_stop_pct`
-- 빈도: 6건 | 손익 중앙값: -1.665% | 기여손익: -10.100%
-- 보유시간 중앙값: 1374.5초
+**#2** — 코호트: `full_fill` / 청산규칙: `scalp_ai_early_exit`
+- 빈도: 4건 | 손익 중앙값: -1.430% | 기여손익: -5.520%
+- 보유시간 중앙값: 1522.0초
 - 선행 조건: 없음
 
-**#3** — 코호트: `full_fill` / 청산규칙: `scalp_preset_hard_stop_pct`
-- 빈도: 4건 | 손익 중앙값: -0.755% | 기여손익: -3.030%
-- 보유시간 중앙값: 375.0초
+**#3** — 코호트: `full_fill` / 청산규칙: `protect_trailing_stop`
+- 빈도: 5건 | 손익 중앙값: -1.170% | 기여손익: -4.800%
+- 보유시간 중앙값: 3251.0초
+- 선행 조건: 없음
+
+**#4** — 코호트: `split-entry` / 청산규칙: `scalp_soft_stop_pct`
+- 빈도: 2건 | 손익 중앙값: -1.820% | 기여손익: -3.640%
+- 보유시간 중앙값: 22.5초
+- 선행 조건: 없음
+
+**#5** — 코호트: `full_fill` / 청산규칙: `scalp_preset_hard_stop_pct`
+- 빈도: 4건 | 손익 중앙값: -0.795% | 기여손익: -2.770%
+- 보유시간 중앙값: 130.5초
 - 선행 조건: 없음
 
 ### 1-3. 수익 패턴 Top 5
 
 **#1** — 코호트: `full_fill` / 청산규칙: `scalp_trailing_take_profit` / 진입모드: `normal`
-- 빈도: 10건 | 손익 중앙값: +0.750% | 기여손익: +12.800%
+- 빈도: 51건 | 손익 중앙값: +0.740% | 기여손익: +50.200%
 
-**#2** — 코호트: `split-entry` / 청산규칙: `scalp_trailing_take_profit` / 진입모드: `normal`
-- 빈도: 5건 | 손익 중앙값: +0.830% | 기여손익: +3.770%
+**#2** — 코호트: `full_fill` / 청산규칙: `scalp_ai_momentum_decay` / 진입모드: `normal`
+- 빈도: 2건 | 손익 중앙값: +0.655% | 기여손익: +1.310%
 
-**#3** — 코호트: `full_fill` / 청산규칙: `scalp_preset_protect_profit` / 진입모드: `normal`
-- 빈도: 1건 | 손익 중앙값: +0.300% | 기여손익: +0.300%
+**#3** — 코호트: `partial_fill` / 청산규칙: `scalp_trailing_take_profit` / 진입모드: `fallback`
+- 빈도: 1건 | 손익 중앙값: +0.590% | 기여손익: +0.590%
+
+**#4** — 코호트: `full_fill` / 청산규칙: `scalp_preset_protect_profit` / 진입모드: `normal`
+- 빈도: 1건 | 손익 중앙값: +0.090% | 기여손익: +0.090%
 
 ### 1-4. 기회비용 회수 후보 Top 5
 
 **#1** — `AI threshold miss`
-- 차단 건수 합계: 90856건 | 차단 비율: 100.0% | 관찰 일수: 1일
+- 차단 건수 합계: 3045476건 | 차단 비율: 100.0% | 관찰 일수: 17일
 
 **#2** — `overbought gate miss`
-- 차단 건수 합계: 33826건 | 차단 비율: 99.9% | 관찰 일수: 1일
+- 차단 건수 합계: 747810건 | 차단 비율: 100.0% | 관찰 일수: 17일
 
 **#3** — `latency guard miss`
-- 차단 건수 합계: 1395건 | 차단 비율: 97.3% | 관찰 일수: 1일
+- 차단 건수 합계: 50159건 | 차단 비율: 99.5% | 관찰 일수: 17일
 
 **#4** — `liquidity gate miss`
-- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 1일
+- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 17일
 
 ---
 
@@ -69,10 +83,10 @@
 
 ### 2-1. split-entry 코호트 핵심 위험
 
-- rebase_integrity_flag: 2건
-- partial_then_expand_flag: 16건
-- same_symbol_repeat_flag: 26건
-- same_ts_multi_rebase_flag: 1건
+- rebase_integrity_flag: 23건
+- partial_then_expand_flag: 17건
+- same_symbol_repeat_flag: 98건
+- same_ts_multi_rebase_flag: 15건
 
 ### 2-2. 전역 손절 강화 비권고 이유
 
@@ -95,7 +109,7 @@
 
 **canary (shadow 결과 확인 후):**
 
-- 없음
+- `latency canary tag 완화 1축 canary 승인` — 필요표본: bugfix-only canary_applied 건수 50건 이상 (현재 19건)
 
 **승격 후보 (canary 통과 후):**
 

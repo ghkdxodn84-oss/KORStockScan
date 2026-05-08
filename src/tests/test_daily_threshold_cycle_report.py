@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 from src.engine import daily_threshold_cycle_report as report_mod
 
@@ -480,6 +481,41 @@ def test_ai_correction_parse_failure_keeps_deterministic_report_available():
     assert review["items"][0]["runtime_change"] is False
 
 
+def test_openai_threshold_ai_correction_uses_strict_schema_and_deep_model(monkeypatch):
+    captured = {}
+
+    class _FakeResponses:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace(output_text=json.dumps({"schema_version": 1, "corrections": []}))
+
+    class _FakeOpenAI:
+        def __init__(self, api_key):
+            self.api_key = api_key
+            self.responses = _FakeResponses()
+
+    monkeypatch.setattr(report_mod, "_load_threshold_ai_openai_keys", lambda: [("OPENAI_API_KEY", "test-key")])
+    monkeypatch.setattr("openai.OpenAI", _FakeOpenAI)
+
+    raw_response, status = report_mod._call_openai_threshold_ai_correction(
+        {"calibration_candidates": [], "calibration_source_bundle": {}},
+        run_phase="postclose",
+    )
+
+    assert json.loads(raw_response) == {"schema_version": 1, "corrections": []}
+    assert status["provider"] == "openai"
+    assert status["model"] == "gpt-5.5"
+    assert status["reasoning_effort"] == "high"
+    assert captured["model"] == "gpt-5.5"
+    assert captured["reasoning"]["effort"] == "high"
+    assert captured["text"]["format"]["type"] == "json_schema"
+    assert captured["text"]["format"]["name"] == "threshold_ai_correction_v1"
+    assert captured["text"]["format"]["strict"] is True
+    assert captured["text"]["format"]["schema"]["additionalProperties"] is False
+    assert "Korean domain glossary" in captured["instructions"]
+    assert "Return only JSON" in captured["instructions"]
+
+
 def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates():
     report_sources = {
         "schema_version": 1,
@@ -543,6 +579,196 @@ def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates(
     assert candidates["holding_exit_decision_matrix_advisory"]["calibration_state"] == "hold_no_edge"
     assert candidates["holding_exit_decision_matrix_advisory"]["apply_mode"] == "report_only_calibration"
     assert candidates["holding_exit_decision_matrix_advisory"]["sample_floor_status"] == "minimum_edge_missing"
+
+
+def test_bad_entry_refined_candidate_waits_for_postclose_lifecycle_attribution(tmp_path, monkeypatch):
+    monkeypatch.setattr(report_mod, "POST_SELL_DIR", tmp_path)
+    (tmp_path / "post_sell_evaluations_2026-05-08.jsonl").write_text(
+        json.dumps(
+            {
+                "recommendation_id": 5645,
+                "outcome": "GOOD_EXIT",
+                "exit_rule": "scalp_soft_stop_pct",
+                "profit_rate": -1.75,
+                "metrics_10m": {"mfe_pct": 0.713, "mae_pct": -11.058},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-08",
+        pipeline_loader=lambda target_date: [
+            {
+                "stage": "bad_entry_refined_candidate",
+                "record_id": 5645,
+                "fields": {
+                    "exclusion_reason": "soft_stop_zone",
+                    "would_exit": "False",
+                    "should_exit": "False",
+                },
+            }
+            for _ in range(10)
+        ],
+        report_source_loader=lambda target_date: {"sources": {}, "source_metrics": {}, "new_observation_axis_created": False},
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    family = report["threshold_snapshot"]["bad_entry_refined_canary"]
+    lifecycle = family["sample"]["lifecycle_attribution"]
+    assert lifecycle["post_sell_joined_records"] == 1
+    assert lifecycle["final_type_counts"]["late_detected_soft_stop_zone"] == 1
+
+    candidate = next(item for item in report["calibration_candidates"] if item["family"] == "bad_entry_refined_canary")
+    assert candidate["calibration_state"] == "hold"
+    assert candidate["source_metrics"]["post_sell_joined_candidate_records"] == 1
+    assert candidate["source_metrics"]["late_detected_soft_stop_zone_records"] == 1
+    assert candidate["runtime_change"] is False
+
+
+def test_trade_lifecycle_attribution_splits_entry_holding_exit_and_post_sell_types(tmp_path, monkeypatch):
+    monkeypatch.setattr(report_mod, "POST_SELL_DIR", tmp_path)
+    (tmp_path / "post_sell_candidates_2026-05-08.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "recommendation_id": 5645,
+                        "exit_decision_source": "HOLDING_FLOW_OVERRIDE",
+                        "exit_rule": "scalp_soft_stop_pct",
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "recommendation_id": 6001,
+                        "exit_decision_source": "HOLDING_FLOW_OVERRIDE",
+                        "exit_rule": "scalp_trailing_take_profit",
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "post_sell_evaluations_2026-05-08.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "recommendation_id": 5645,
+                        "outcome": "GOOD_EXIT",
+                        "exit_rule": "scalp_soft_stop_pct",
+                        "profit_rate": -1.75,
+                        "metrics_10m": {"mfe_pct": 0.7, "mae_pct": -11.0},
+                    },
+                    ensure_ascii=False,
+                ),
+                json.dumps(
+                    {
+                        "recommendation_id": 6001,
+                        "outcome": "MISSED_UPSIDE",
+                        "exit_rule": "scalp_trailing_take_profit",
+                        "profit_rate": 0.5,
+                        "metrics_10m": {"mfe_pct": 2.2, "mae_pct": -0.3},
+                    },
+                    ensure_ascii=False,
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-08",
+        pipeline_loader=lambda target_date: [
+            {
+                "stage": "order_bundle_submitted",
+                "record_id": 5645,
+                "stock_code": "298830",
+                "stock_name": "슈어소프트테크",
+                "emitted_at": "2026-05-08T12:53:39",
+                "fields": {"entry_order_lifecycle": "normal", "entry_price_guard": "latency_danger_override_defensive"},
+            },
+            {
+                "stage": "bad_entry_refined_candidate",
+                "record_id": 5645,
+                "emitted_at": "2026-05-08T12:59:40",
+                "fields": {"exclusion_reason": "soft_stop_zone", "would_exit": "False"},
+            },
+            {
+                "stage": "exit_signal",
+                "record_id": 5645,
+                "stock_code": "298830",
+                "stock_name": "슈어소프트테크",
+                "emitted_at": "2026-05-08T12:59:53",
+                "fields": {
+                    "exit_rule": "scalp_soft_stop_pct",
+                    "exit_decision_source": "HOLDING_FLOW_OVERRIDE",
+                    "profit_rate": "-1.87",
+                },
+            },
+            {
+                "stage": "sell_completed",
+                "record_id": 5645,
+                "emitted_at": "2026-05-08T12:59:54",
+                "fields": {"exit_rule": "scalp_soft_stop_pct", "profit_rate": "-1.75"},
+            },
+            {
+                "stage": "order_bundle_submitted",
+                "record_id": 6001,
+                "stock_code": "000001",
+                "stock_name": "트레일링",
+                "emitted_at": "2026-05-08T10:00:00",
+                "fields": {"entry_order_lifecycle": "normal"},
+            },
+            {
+                "stage": "exit_signal",
+                "record_id": 6001,
+                "stock_code": "000001",
+                "stock_name": "트레일링",
+                "emitted_at": "2026-05-08T10:05:00",
+                "fields": {
+                    "exit_rule": "scalp_trailing_take_profit",
+                    "exit_decision_source": "HOLDING_FLOW_OVERRIDE",
+                },
+            },
+            {
+                "stage": "sell_completed",
+                "record_id": 6001,
+                "emitted_at": "2026-05-08T10:05:01",
+                "fields": {"exit_rule": "scalp_trailing_take_profit", "profit_rate": "0.5"},
+            },
+            {
+                "stage": "order_bundle_submitted",
+                "record_id": 7001,
+                "stock_code": "000002",
+                "stock_name": "미체결",
+                "emitted_at": "2026-05-08T11:00:00",
+                "fields": {"entry_order_lifecycle": "passive_probe"},
+            },
+            {
+                "stage": "entry_order_cancel_confirmed",
+                "record_id": 7001,
+                "emitted_at": "2026-05-08T11:00:30",
+                "fields": {"entry_order_lifecycle": "passive_probe"},
+            },
+        ],
+        report_source_loader=lambda target_date: {"sources": {}, "source_metrics": {}, "new_observation_axis_created": False},
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    lifecycle = report["trade_lifecycle_attribution"]
+    assert lifecycle["primary_type_counts"]["soft_stop_good_exit"] == 1
+    assert lifecycle["primary_type_counts"]["trailing_early_exit"] == 1
+    assert lifecycle["primary_type_counts"]["entry_unfilled_cancelled"] == 1
+    assert lifecycle["family_views"]["bad_entry_refined"]["late_detected_soft_stop_zone"] == 1
+    assert lifecycle["family_views"]["entry_price"]["entry_unfilled_cancelled"] == 1
+    assert lifecycle["family_views"]["trailing"]["early_exit"] == 1
 
 
 def test_scale_in_price_guard_calibration_uses_existing_sources_without_live_apply():

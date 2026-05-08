@@ -13,8 +13,8 @@ mv "$TMP_CRON.filtered" "$TMP_CRON"
 cat >> "$TMP_CRON" <<EOF
 # threshold cycle daily automation
 35 7 * * 1-5 THRESHOLD_CYCLE_APPLY_MODE=auto_bounded_live THRESHOLD_CYCLE_AUTO_APPLY=true THRESHOLD_CYCLE_AUTO_APPLY_REQUIRE_AI=true $PROJECT_DIR/deploy/run_threshold_cycle_preopen.sh \$(TZ=Asia/Seoul date +\\%F) >> $PROJECT_DIR/logs/threshold_cycle_preopen_cron.log 2>&1 # THRESHOLD_CYCLE_PREOPEN
-5 12 * * 1-5 THRESHOLD_CYCLE_CALIBRATION_PHASE=intraday THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER=gemini $PROJECT_DIR/deploy/run_threshold_cycle_calibration.sh \$(TZ=Asia/Seoul date +\\%F) >> $PROJECT_DIR/logs/threshold_cycle_calibration_intraday_cron.log 2>&1 # THRESHOLD_CYCLE_INTRADAY_CALIBRATION
-10 16 * * 1-5 THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER=gemini $PROJECT_DIR/deploy/run_threshold_cycle_postclose.sh \$(TZ=Asia/Seoul date +\\%F) >> $PROJECT_DIR/logs/threshold_cycle_postclose_cron.log 2>&1 # THRESHOLD_CYCLE_POSTCLOSE
+5 12 * * 1-5 THRESHOLD_CYCLE_CALIBRATION_PHASE=intraday THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER=openai $PROJECT_DIR/deploy/run_threshold_cycle_calibration.sh \$(TZ=Asia/Seoul date +\\%F) >> $PROJECT_DIR/logs/threshold_cycle_calibration_intraday_cron.log 2>&1 # THRESHOLD_CYCLE_INTRADAY_CALIBRATION
+10 16 * * 1-5 THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER=openai $PROJECT_DIR/deploy/run_threshold_cycle_postclose.sh \$(TZ=Asia/Seoul date +\\%F) >> $PROJECT_DIR/logs/threshold_cycle_postclose_cron.log 2>&1 # THRESHOLD_CYCLE_POSTCLOSE
 EOF
 
 crontab "$TMP_CRON"

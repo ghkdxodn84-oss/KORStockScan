@@ -9,16 +9,16 @@
 
 ## 근거
 
-- as_of: `2026-05-08T12:45:04`
-- exit_signal unique: `2`
-- sell_order_sent unique: `2`
-- sell_completed unique: `2`
+- as_of: `2026-05-08T15:30:07`
+- exit_signal unique: `3`
+- sell_order_sent unique: `3`
+- sell_completed unique: `3`
 - sell_sent/exit_signal: `100.0%`
-- flow defer events: `50`
+- flow defer events: `59`
 - AI holding cache MISS: `100.0%`
 - soft_stop rebound above sell 10m: `90.5%`
 - trailing missed-upside: `27.8%`
-- top reasons: `flow유예:scalp_soft_stop_pct=48, AI보유감시:cache_miss=17, soft_stop_grace=13, flow유예:scalp_trailing_take_profit=2, sell_order_sent=2`
+- top reasons: `flow유예:scalp_soft_stop_pct=48, AI보유감시:cache_miss=31, soft_stop_grace=28, flow유예:scalp_trailing_take_profit=11, sell_order_sent=3`
 
 ## 금지된 자동변경
 

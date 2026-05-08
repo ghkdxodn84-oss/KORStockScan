@@ -125,6 +125,89 @@ AI_RESPONSE_SCHEMA_REGISTRY = {
         },
         "required": ["market_summary", "one_point_lesson", "top5"],
     },
+    "threshold_ai_correction_v1": {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {
+            "schema_version": {"type": "integer", "enum": [1]},
+            "corrections": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "properties": {
+                        "family": {"type": "string"},
+                        "anomaly_type": {"type": "string"},
+                        "ai_review_state": {
+                            "type": "string",
+                            "enum": [
+                                "agree",
+                                "correction_proposed",
+                                "caution",
+                                "insufficient_context",
+                                "safety_concern",
+                                "unavailable",
+                            ],
+                        },
+                        "correction_proposal": {
+                            "type": "object",
+                            "additionalProperties": False,
+                            "properties": {
+                                "proposed_state": {
+                                    "type": ["string", "null"],
+                                    "enum": [
+                                        "adjust_up",
+                                        "adjust_down",
+                                        "hold",
+                                        "hold_sample",
+                                        "freeze",
+                                        None,
+                                    ],
+                                },
+                                "proposed_value": {
+                                    "type": ["number", "integer", "boolean", "string", "null"],
+                                },
+                                "anomaly_route": {
+                                    "type": ["string", "null"],
+                                    "enum": [
+                                        "threshold_candidate",
+                                        "incident",
+                                        "instrumentation_gap",
+                                        "normal_drift",
+                                        None,
+                                    ],
+                                },
+                                "sample_window": {
+                                    "type": ["string", "null"],
+                                    "enum": [
+                                        "daily_intraday",
+                                        "rolling_5d",
+                                        "rolling_10d",
+                                        "cumulative",
+                                        None,
+                                    ],
+                                },
+                            },
+                            "required": ["proposed_state", "proposed_value", "anomaly_route", "sample_window"],
+                        },
+                        "correction_reason": {"type": "string"},
+                        "required_evidence": {"type": "array", "items": {"type": "string"}},
+                        "risk_flags": {"type": "array", "items": {"type": "string"}},
+                    },
+                    "required": [
+                        "family",
+                        "anomaly_type",
+                        "ai_review_state",
+                        "correction_proposal",
+                        "correction_reason",
+                        "required_evidence",
+                        "risk_flags",
+                    ],
+                },
+            },
+        },
+        "required": ["schema_version", "corrections"],
+    },
 }
 
 

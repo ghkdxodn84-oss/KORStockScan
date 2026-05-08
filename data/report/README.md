@@ -141,7 +141,8 @@ calibration의 source는 `threshold_cycle` compact event만이 아니다. 아래
 - BUY 병목은 partial sample `0`을 live 전면 차단으로 쓰지 않고, score65~74 EV/close_10m 우위와 submitted drought를 `score65_74_recovery_probe` 후보로 연결한다.
 - soft-stop/post-sell feedback은 10분 중심 분류를 유지하되 `1/3/5/10/20/30/60분` forward horizon을 함께 남겨 회복 지연, late rebound, defer cost calibration source로 쓴다.
 - ADM/SAW는 all `no_clear_edge`이면 `hold_no_edge`로 두고, non-`no_clear_edge` + `candidate_weight_source` bucket만 advisory canary 후보로 연결한다.
-- bad-entry는 naive hard block 재개가 아니라 `bad_entry_refined_candidate`의 soft-stop tail/defer cost 감소 후보만 calibration한다.
+- bad-entry는 naive hard block 재개가 아니라 `bad_entry_refined_candidate`의 soft-stop tail/defer cost 감소 후보만 calibration한다. 단, `bad_entry_refined_candidate`는 provisional signal이며 최종 유형은 진입부터 청산, 장후 `post_sell_evaluations`까지 `record_id`로 join한 lifecycle attribution에서 닫는다.
+- `trade_lifecycle_attribution`은 bad-entry 전용 리포트가 아니라 entry price/passive probe, soft-stop, trailing, holding_flow, scale-in family가 공통으로 참조하는 전중후 attribution layer다. 각 family는 부분 로그의 즉시 라벨이 아니라 postclose joined lifecycle type을 calibration 입력으로 쓴다.
 - `preclose_sell_target`은 tuning/calibration source가 아니다. operator preclose review와 Telegram/cron acceptance 산출물로만 유지한다.
 
 ## Statistical Action Weight 적용 범위

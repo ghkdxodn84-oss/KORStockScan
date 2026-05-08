@@ -7,7 +7,7 @@ KORStockScan 작업 기본 규칙:
 - 현재 active/open 상태는 `Plan Rebase` §7~§8을 기준으로 읽되, 과거 checklist의 `[x]` 완료 항목은 현재 OPEN owner로 보지 않는다. 완료 항목은 증적/근거 링크이고, 현재 owner는 같은 행에 명시된 다음 checklist 또는 현재 runtime owner다.
 - `docs/plan-korStockScanPerformanceOptimization.prompt.md`는 세션 진입용 경량 포인터다. 일반 작업마다 필수로 읽지 않고, 사용자가 명시적으로 요구했거나 Plan Rebase 위치, Source of Truth 문서 맵, 현재 실행표가 불명확할 때만 확인한다.
 
-## 1.1 현재 상태 기준 (`2026-05-06 KST`)
+## 1.1 현재 상태 기준 (`2026-05-08 KST`)
 
 - 현재 단계는 `Plan Rebase`이며, 목적은 손실 억제가 아니라 기대값/순이익 극대화다.
 - 현재 entry owner는 `mechanical_momentum_latency_relief` 운영 override와 `dynamic_entry_price_resolver_p1`/`dynamic_entry_ai_price_canary_p2` 가격축이다.
@@ -21,8 +21,8 @@ KORStockScan 작업 기본 규칙:
 - `holding_flow_override`는 `2026-05-04` 장전부터 보유/청산 및 오버나이트 `SELL_TODAY` 후보를 재검문하는 운영 override다. hard stop/protect hard stop/주문·잔고 안전장치는 우회하지 않는다. `2026-05-04` 장후부터 오버나이트 flow `TRIM`은 `HOLD_OVERNIGHT` 승격이 아니라 원래 `SELL_TODAY` 유지로 본다.
 - `stat_action_decision_snapshot`, `statistical_action_weight`, `holding_exit_decision_matrix`는 report-only/observe-only다. runtime 판단 변경이나 AI live 반영은 ADM ladder 승인 전까지 금지한다.
 - `hard_time_stop_shadow`, `same_symbol_soft_stop_cooldown_shadow`, `partial_only_timeout_shadow`는 2026-05-04 runtime 기본 OFF로 정리했다. `ai_holding_fast_reuse_band`는 shadow가 아니라 HOLDING fast-reuse telemetry다.
-- threshold cycle 자동화는 장전 manifest와 장후 report 생성까지만 허용한다. Sentinel 이상치는 `incident/playbook`, `threshold-family 후보`, `instrumentation gap`, `normal drift`로 먼저 분류하고, sample floor/rollback owner가 있는 반복 이상치만 manifest 후보로 연결한다. `ThresholdOpsTransition0506` 전에는 live threshold runtime mutation을 열지 않는다.
-- Gemini/DeepSeek/OpenAI 후속은 live routing 승격이 아니라 flag-off acceptance, endpoint schema contract, transport provenance로 분리한다. Gemini live enable과 OpenAI live routing은 별도 checklist 없이 열지 않는다.
+- threshold cycle 자동화는 장중/장후 calibration, AI correction proposal, 다음 장전 `auto_bounded_live` runtime env apply, daily EV report까지 무인 loop로 관리한다. 장중 runtime threshold mutation은 금지하며, Sentinel 이상치는 `incident/playbook`, `threshold-family 후보`, `instrumentation gap`, `normal drift`로 먼저 분류하고 deterministic guard가 최종 threshold state/value를 결정한다.
+- Gemini/DeepSeek/OpenAI 후속은 live routing 승격이 아니라 flag-off acceptance, endpoint schema contract, transport provenance로 분리한다. OpenAI runtime tier는 `FAST=gpt-5-nano`, `REPORT=gpt-5.4-mini`, `DEEP=gpt-5.4`이며, threshold AI correction은 runtime routing과 분리된 proposal layer로 `gpt-5.5 -> gpt-5.4 -> gpt-5.4-mini` fallback과 strict JSON schema를 쓴다. Gemini live enable과 OpenAI live routing은 별도 checklist 없이 열지 않는다.
 
 ## 1.2 AGENTS.md 일일 개정 절차
 

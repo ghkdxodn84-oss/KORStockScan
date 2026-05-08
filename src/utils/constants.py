@@ -443,9 +443,11 @@ class TradingConfig:
     # ==========================================
     # 🎯 AI 엔진 제어값 (OpenAI)
     # ==========================================
-    GPT_FAST_MODEL = "gpt-5.4-nano"
+    GPT_FAST_MODEL = "gpt-5-nano"
     GPT_DEEP_MODEL = "gpt-5.4"
     GPT_REPORT_MODEL = "gpt-5.4-mini"
+    GPT_THRESHOLD_CORRECTION_MODEL = "gpt-5.5"
+    GPT_THRESHOLD_CORRECTION_FALLBACK_MODELS: tuple = ("gpt-5.4", "gpt-5.4-mini")
     GPT_ENABLE_SCALPING_DEEP_RECHECK: bool = False
     GPT_ENGINE_MIN_INTERVAL: float = 0.5 # OpenAI 서버에 쏘는 최소 간격 (초 단위, 0.5초 = 500ms)
     OPENAI_JSON_DETERMINISTIC_CONFIG_ENABLED: bool = False  # JSON path에만 deterministic temperature 적용
@@ -1275,6 +1277,10 @@ def _build_trading_rules() -> TradingConfig:
     env_openai_ws_late_discard = _env_bool("KORSTOCKSCAN_OPENAI_RESPONSES_WS_LATE_DISCARD_ENABLED")
     env_openai_entry_timeout_reject = _env_bool("KORSTOCKSCAN_OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED")
     env_openai_previous_response_id = _env_bool("KORSTOCKSCAN_OPENAI_PREVIOUS_RESPONSE_ID_ENABLED")
+    env_openai_threshold_correction_model = _env_str("KORSTOCKSCAN_GPT_THRESHOLD_CORRECTION_MODEL")
+    env_openai_threshold_correction_fallback_models = _env_csv_tuple(
+        "KORSTOCKSCAN_GPT_THRESHOLD_CORRECTION_FALLBACK_MODELS"
+    )
     if (
         env_openai_json_deterministic is not None
         or env_openai_schema_registry is not None
@@ -1285,6 +1291,8 @@ def _build_trading_rules() -> TradingConfig:
         or env_openai_ws_late_discard is not None
         or env_openai_entry_timeout_reject is not None
         or env_openai_previous_response_id is not None
+        or env_openai_threshold_correction_model is not None
+        or env_openai_threshold_correction_fallback_models is not None
     ):
         config = replace(
             config,
@@ -1313,6 +1321,12 @@ def _build_trading_rules() -> TradingConfig:
             OPENAI_PREVIOUS_RESPONSE_ID_ENABLED=env_openai_previous_response_id
             if env_openai_previous_response_id is not None
             else config.OPENAI_PREVIOUS_RESPONSE_ID_ENABLED,
+            GPT_THRESHOLD_CORRECTION_MODEL=env_openai_threshold_correction_model
+            if env_openai_threshold_correction_model is not None
+            else config.GPT_THRESHOLD_CORRECTION_MODEL,
+            GPT_THRESHOLD_CORRECTION_FALLBACK_MODELS=env_openai_threshold_correction_fallback_models
+            if env_openai_threshold_correction_fallback_models is not None
+            else config.GPT_THRESHOLD_CORRECTION_FALLBACK_MODELS,
         )
 
     env_holding_exit_matrix_advisory_enabled = _env_bool("KORSTOCKSCAN_HOLDING_EXIT_MATRIX_ADVISORY_ENABLED")

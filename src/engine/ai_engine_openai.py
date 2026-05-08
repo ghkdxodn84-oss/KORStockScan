@@ -127,6 +127,24 @@ OPENAI_RESPONSES_WS_ENDPOINTS = {
     "analyze_target_shadow_prompt",
 }
 OPENAI_RESPONSE_SCHEMA_REGISTRY = AI_RESPONSE_SCHEMA_REGISTRY
+OPENAI_PROMPT_CONTRACT_MARKER = "OPENAI_PROMPT_CONTRACT_V1"
+OPENAI_PROMPT_CONTRACT_HEADER = f"""
+[{OPENAI_PROMPT_CONTRACT_MARKER}]
+Control language: English. Market data, raw labels, and operator notes may remain in Korean.
+Preserve all raw enum labels exactly as provided. Do not translate labels such as BUY, WAIT, DROP, HOLD, TRIM, EXIT, SELL_TODAY, HOLD_OVERNIGHT, ALLOW_ENTRY, REJECT, USE_DEFENSIVE, USE_REFERENCE, IMPROVE_LIMIT, SKIP.
+Korean domain glossary:
+- 수급 = order-flow pressure
+- 호가 = order book quote/depth
+- 체결강도 = execution strength
+- 틱가속 = tick acceleration
+- 매수압 = buy pressure
+- 매도벽/매수벽 = ask/bid depth wall
+- 휩쏘 = whipsaw rebound
+- 소프트손절 = soft stop
+- 물타기 = averaging down / REVERSAL_ADD
+- 불타기 = pyramiding / PYRAMID
+Use the glossary to interpret Korean terms, but keep the original field names, enum labels, ticker names, and quoted evidence unchanged.
+"""
 
 
 class OpenAIWSLateResponseError(TimeoutError):
@@ -391,7 +409,7 @@ class GPTSniperEngine:
         self._rotate_client()
 
         # OpenAI 엔진도 Gemini/DeepSeek과 동일한 tier 구조를 사용한다.
-        self.model_tier1_fast = getattr(TRADING_RULES, 'GPT_FAST_MODEL', 'gpt-5.4-nano')
+        self.model_tier1_fast = getattr(TRADING_RULES, 'GPT_FAST_MODEL', 'gpt-5-nano')
         self.model_tier2_balanced = getattr(TRADING_RULES, 'GPT_REPORT_MODEL', self.model_tier1_fast)
         self.model_tier3_deep = getattr(TRADING_RULES, 'GPT_DEEP_MODEL', self.model_tier2_balanced)
         self.current_model_name = self.model_tier1_fast
@@ -475,7 +493,7 @@ class GPTSniperEngine:
         return getattr(
             self,
             "model_tier1_fast",
-            getattr(self, "current_model_name", "gpt-5.4-nano"),
+            getattr(self, "current_model_name", "gpt-5-nano"),
         )
 
     def _get_tier2_model(self):
@@ -575,6 +593,12 @@ class GPTSniperEngine:
             "symbol": str(symbol or "-"),
             "cache_key": str(cache_key or "-"),
         }
+        prompt = self._wrap_openai_prompt_contract(
+            prompt,
+            require_json=bool(require_json),
+            schema_name=schema_name,
+            endpoint_name=endpoint_name,
+        )
         return OpenAIResponseRequest(
             prompt=prompt,
             user_input=user_input,
@@ -594,6 +618,24 @@ class GPTSniperEngine:
             ),
             metadata=metadata,
         )
+
+    def _wrap_openai_prompt_contract(self, prompt, *, require_json, schema_name=None, endpoint_name="generic"):
+        base_prompt = str(prompt or "").strip()
+        if OPENAI_PROMPT_CONTRACT_MARKER in base_prompt:
+            return base_prompt
+        output_rule = (
+            "Output rule: return only JSON that conforms to the provided schema. "
+            "Do not add markdown, commentary, or schema-external fields."
+            if require_json
+            else "Output rule: produce the requested report text. Preserve raw labels and evidence exactly."
+        )
+        context_rule = (
+            f"Endpoint: {endpoint_name or 'generic'}; schema: {schema_name or '-'}.\n"
+            f"{output_rule}\n"
+        )
+        if base_prompt:
+            return f"{OPENAI_PROMPT_CONTRACT_HEADER.strip()}\n{context_rule}\n[Task prompt]\n{base_prompt}"
+        return f"{OPENAI_PROMPT_CONTRACT_HEADER.strip()}\n{context_rule}".strip()
 
     def _should_use_responses_ws(self, request: OpenAIResponseRequest):
         transport_mode = str(getattr(TRADING_RULES, "OPENAI_TRANSPORT_MODE", "http") or "http").strip().lower()
