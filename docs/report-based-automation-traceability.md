@@ -13,10 +13,10 @@
 | `R2_cumulative_report` | active | 누적/rolling cohort 산출물을 만든다 | 없음 |
 | `R3_manifest_only` | active | 다음 장전 apply plan artifact를 만든다 | 없음 |
 | `R4_preopen_apply_candidate` | active | owner/safety guard/sample floor가 닫힌 후보를 `manifest_only`, `calibrated_apply_candidate`, `efficient_tradeoff_canary_candidate`로 분류한다 | 직접 변경 전 단계 |
-| `R5_bounded_calibrated_apply` | gated | 승인된 family만 다음 장전 1회 bounded apply 후보로 만든다. 조건 미달은 rollback이 아니라 calibration trigger다 | 승인 시 있음 |
-| `R6_post_apply_attribution` | active artifact / gated decision | threshold version별 applied/not-applied cohort와 다음 calibration state를 장후 제출한다 | 없음 |
+| `R5_bounded_calibrated_apply` | active | deterministic guard + AI correction guard를 통과한 family를 다음 장전 1회 runtime env로 자동 반영한다. 조건 미달은 rollback이 아니라 calibration trigger다 | 있음 |
+| `R6_post_apply_attribution` | active | threshold version별 applied/not-applied cohort와 daily EV performance report를 장후 제출한다 | 없음 |
 
-현재 허용선은 report/apply artifact 생성과 `calibrated_apply_candidate`/`efficient_tradeoff_canary_candidate` 산출까지다. calibration은 매일 `intraday`, `postclose` 2회 생성한다. 실제 env/code 반영은 승인된 family만 다음 장전 1회로 제한한다. safety breach가 아닌 목표 미달은 `calibration_state=adjust_up|adjust_down|hold|hold_sample|hold_no_edge|freeze`로 처리하고, `rollback/safety_revert_required`는 hard/protect/emergency stop 지연, 주문 실패, provenance 손상, same-stage owner 충돌, severe loss guard 초과에만 쓴다. Sentinel 이상치는 자동 튜닝 명령이 아니라 기존 report source bundle 입력이다. 반복 이상치를 이유로 새 관찰축을 늘리지 않고, 운영장애는 incident playbook, 로그 누락은 instrumentation backlog, 정상 변동은 no-action으로 분리한다.
+현재 허용선은 완전 무인 `auto_bounded_live`다. calibration은 매일 `intraday`, `postclose` 2회 생성하고, preopen cron은 전일 report + AI correction guard를 읽어 다음 장전 runtime env를 만든다. env/code hot mutation은 하지 않고, 봇은 기동 시 당일 runtime env를 source한다. safety breach가 아닌 목표 미달은 `calibration_state=adjust_up|adjust_down|hold|hold_sample|hold_no_edge|freeze`로 처리하고, `rollback/safety_revert_required`는 hard/protect/emergency stop 지연, 주문 실패, provenance 손상, same-stage owner 충돌, severe loss guard 초과에만 쓴다. Sentinel 이상치는 자동 튜닝 명령이 아니라 기존 report source bundle 입력이다. 반복 이상치를 이유로 새 관찰축을 늘리지 않고, 운영장애는 incident playbook, 로그 누락은 instrumentation backlog, 정상 변동은 no-action으로 분리한다.
 
 ## 2. 산출물 추적성
 
@@ -25,18 +25,21 @@
 | `data/threshold_cycle/date=YYYY-MM-DD/family=*/part-*.jsonl` | `backfill_threshold_cycle_events` | `daily_threshold_cycle_report` | `R0_collect` | `ThresholdCollectorIO0506` | immutable snapshot source, checkpoint, read bytes, availability guard |
 | `data/report/threshold_cycle_YYYY-MM-DD.json` | `daily_threshold_cycle_report` | `threshold_cycle_preopen_apply`, operator review | `R1_daily_report` | `ThresholdOpsTransition0506` | apply candidate, calibration candidates, safety guard, calibration trigger, post-apply attribution, warnings |
 | `data/report/threshold_cycle_calibration/threshold_cycle_calibration_YYYY-MM-DD_{intraday,postclose}.json` | `daily_threshold_cycle_report` | operator review, next preopen manifest review | `R4_preopen_apply_candidate` artifact | `ThresholdCalibrationLoop0508`, `EfficientTradeoffCalibration0508` | calibration source bundle, candidate state, safety guard, no runtime mutation |
+| `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_{intraday,postclose}.{json,md}` | `daily_threshold_cycle_report` via threshold cron wrappers | next preopen auto bounded apply guard | `R4_preopen_apply_candidate` support artifact | `ThresholdAICorrectionCron0508`, `ThresholdUnattendedApply0508` | cron 기본 Gemini proposal 연동, strict schema parse, family bounds/max-step guard, sample-window guard, AI 단독 runtime_change=false |
+| `data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_YYYY-MM-DD.{json,md}` | `scalping_pattern_lab_automation` | daily EV report, future implementation order queue | `R6_post_apply_attribution` support artifact | `PatternLabAutomation0508` | Gemini/Claude freshness, consensus findings, existing family inputs, auto family candidates(`allowed_runtime_apply=false`), code improvement orders(`runtime_effect=false`) |
 | `data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_YYYY-MM-DD.{json,md}` | `daily_threshold_cycle_report` | operator review, threshold candidate persistence check | `R2_cumulative_report` | `CumulativeThresholdCycleReport0504-Postclose`, `ThresholdOpsTransition0506` | daily/rolling/cumulative 방향성 일치 여부 |
 | `data/report/statistical_action_weight/statistical_action_weight_YYYY-MM-DD.{json,md}` | `daily_threshold_cycle_report` | action weight review, ADM ladder, threshold-cycle source bundle | `R1_daily_report` | `StatActionWeight0506`, `StatActionMarkdown0506`, `StatActionEligibleOutcome0507`, `EfficientTradeoffCalibration0508` | bucket sample floor, policy_hint, data completeness, `eligible_but_not_chosen` report-only proxy, candidate_weight_source count |
 | `data/report/holding_exit_decision_matrix/holding_exit_decision_matrix_YYYY-MM-DD.{json,md}` | `daily_threshold_cycle_report` | ADM advisory canary/live-readiness, threshold-cycle source bundle | `R1_daily_report` | `AIDecisionMatrix0506`, `EfficientTradeoffCalibration0508` | matrix_version, hard_veto, prompt_hint, non-no_clear_edge bucket count |
 | `data/report/preclose_sell_target/preclose_sell_target_YYYY-MM-DD.{json,md}` | `preclose_sell_target_report` | operator preclose review. holding/overnight decision support, future threshold/ADM context는 후보만 유지 | `R1_daily_report` | `PrecloseSellTargetRevival0506-Intraday`, `PrecloseSellTargetAIRecovery0508`, `PrecloseSellTargetCronWrapper0508` | `policy_status=report_only`, `live_runtime_effect=false`, AI/Telegram/cron acceptance 분리. 5/7 Gemini key fallback 성공, Telegram 실제 전송/15:00 cron 등록 반영, consumer 범위는 operator review까지만 승인 |
 | `data/report/preclose_sell_target/status/preclose_sell_target_YYYY-MM-DD.status.json` | `run_preclose_sell_target_report.sh` | cron/manual wrapper health check | `R0_collect` | `PrecloseSellTargetCron0507`, `PrecloseSellTargetCronWrapper0508` | lock/status/log path/weekend guard, runtime_change=false, cron registration은 별도 승인 필요 |
-| `data/report/buy_funnel_sentinel/buy_funnel_sentinel_YYYY-MM-DD.{json,md}` | `buy_funnel_sentinel` | Telegram admin alert, operator intraday review, threshold/anomaly routing | `R1_daily_report` | `BuyFunnelSentinel0506-Intraday`, `SentinelThresholdFeedback0507-Intraday` | classification, baseline comparison, forbidden auto mutation, Telegram semantic dedupe state |
-| `data/report/holding_exit_sentinel/holding_exit_sentinel_YYYY-MM-DD.{json,md}` | `holding_exit_sentinel` | Telegram admin alert, operator intraday review, holding/exit anomaly routing | `R1_daily_report` | `HoldingExitSentinel0506-Intraday`, `SentinelThresholdFeedback0507-Intraday` | classification, holding/exit conversion, forbidden auto mutation, Telegram semantic dedupe state |
+| `data/report/buy_funnel_sentinel/buy_funnel_sentinel_YYYY-MM-DD.{json,md}` | `buy_funnel_sentinel` | operator intraday review, threshold/anomaly routing | `R1_daily_report` | `BuyFunnelSentinel0506-Intraday`, `SentinelThresholdFeedback0507-Intraday`, `SentinelTelegramRemoval0508` | classification, baseline comparison, forbidden auto mutation, no Telegram alert |
+| `data/report/holding_exit_sentinel/holding_exit_sentinel_YYYY-MM-DD.{json,md}` | `holding_exit_sentinel` | operator intraday review, holding/exit anomaly routing | `R1_daily_report` | `HoldingExitSentinel0506-Intraday`, `SentinelThresholdFeedback0507-Intraday`, `SentinelTelegramRemoval0508` | classification, holding/exit conversion, forbidden auto mutation, no Telegram alert |
 | `tmp/monitor_snapshot_completion_YYYY-MM-DD_PROFILE.json` | `run_monitor_snapshot_safe.sh` | cron/admin completion check, web async refresh status | `R0_collect` | `MonitorSnapshotAsyncCompletion0507` | async worker pid, result file, status, skip/failure reason, log path |
 | `data/report/tuning_monitoring/status/tuning_monitoring_postclose_YYYY-MM-DD.json` | `run_tuning_monitoring_postclose.sh` | postclose monitoring chain health check | `R0_collect` | `TuningMonitoringPostcloseFallback0507` | lock/retry status, per-step exit code, failed step, command provenance |
-| `data/threshold_cycle/apply_plans/threshold_apply_YYYY-MM-DD.json` | `threshold_cycle_preopen_apply` | preopen operator/bot start workflow | `R3_manifest_only` / `R4_preopen_apply_candidate` | `ThresholdOpsTransition0506`, `EfficientTradeoffCalibration0508` | apply_mode, efficient trade-off calibration candidates, safety guard, calibration trigger, owner_rule |
-| threshold version attribution section | `daily_threshold_cycle_report` | post-apply attribution | `R6_post_apply_attribution` artifact active | `ThresholdOpsTransition0506` 후속 | threshold_version, applied/not-applied cohort key, calibration_state, safety_revert_required |
-| auto apply/restart wrapper | 미구현 | preopen automation | `R5_bounded_calibrated_apply` gated | 별도 승인 family 필요 | env provenance, restart result, safety revert command |
+| `data/threshold_cycle/apply_plans/threshold_apply_YYYY-MM-DD.json` | `threshold_cycle_preopen_apply` | preopen bot start workflow | `R5_bounded_calibrated_apply` | `ThresholdUnattendedApply0508` | apply_mode, auto_apply_decisions, selected family, runtime env, safety guard, calibration trigger, same-stage owner rule |
+| `data/threshold_cycle/runtime_env/threshold_runtime_env_YYYY-MM-DD.{env,json}` | `threshold_cycle_preopen_apply` | `src/run_bot.sh` | `R5_bounded_calibrated_apply` | `ThresholdUnattendedApply0508` | env override provenance, selected family, source report, generated_at |
+| `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.{json,md}` | `threshold_cycle_ev_report` | postclose daily EV submission | `R6_post_apply_attribution` | `ThresholdDailyEVReport0508` | selected families, completed valid PnL, entry funnel, holding/exit latency, calibration decisions, pattern lab automation summary |
+| threshold version attribution section | `daily_threshold_cycle_report`, `threshold_cycle_ev_report` | post-apply attribution | `R6_post_apply_attribution` active | `ThresholdDailyEVReport0508` | threshold_version, applied/not-applied cohort key, calibration_state, safety_revert_required, daily EV |
 
 ## 3. Sentinel Routing Standard
 
@@ -50,22 +53,22 @@
 | `TRAILING_EARLY_EXIT` | trailing missed-upside/winner wide-window review | protect/trailing family owner와 rollback guard가 닫힌 `R3_manifest_only` 후보 | trailing threshold runtime mutation |
 | `AI_HOLDING_OPS` | AI cache/Tier provenance instrumentation backlog | threshold-cycle 직결 금지. cache 변경은 별도 AI ops workorder 필요 | AI cache TTL mutation, provider routing 변경 |
 | `RUNTIME_OPS` | incident/playbook, stale pipeline/cron/runtime health check | threshold-cycle 직결 금지 | bot restart 자동 실행 |
-| `NORMAL` | no-action, notify state reset | 없음 | 없음 |
+| `NORMAL` | no-action | 없음 | 없음 |
 
-Sentinel routing은 [2026-05-07 checklist](./2026-05-07-stage2-todo-checklist.md) `SentinelThresholdFeedback0507-Intraday`에서 표준화했다. `primary + secondary` semantic signature 중복은 날짜별 notify state로 억제하지만, report JSON/Markdown 생성과 classification 갱신은 매 실행 유지한다.
+Sentinel routing은 [2026-05-07 checklist](./2026-05-07-stage2-todo-checklist.md) `SentinelThresholdFeedback0507-Intraday`에서 표준화했다. `2026-05-08`부터 Sentinel Telegram 알림과 날짜별 notify state는 삭제됐고, report JSON/Markdown 생성과 classification 갱신만 매 실행 유지한다.
 
-## 4. bounded calibration acceptance gate
+## 4. auto bounded calibration gate
 
-`R5_bounded_calibrated_apply`로 넘어가려면 아래가 모두 checklist에 닫혀야 한다.
+`R5_bounded_calibrated_apply`는 완전 무인으로 실행하되 아래 조건을 deterministic guard와 AI correction guard가 매일 자동 확인한다.
 
 1. 후보 family별 sample floor와 current/recommended diff가 report에 존재한다.
 2. `daily`, `rolling`, `cumulative`가 같은 방향을 가리킨다.
 3. `main-only`, `normal_only`, `post_fallback_deprecation` cohort를 분리할 수 있다.
 4. full fill과 partial fill이 섞여 있으면 손익 결론을 hard 승인 근거로 쓰지 않는다.
 5. 같은 stage의 live owner가 하나만 존재한다.
-6. safety guard owner, safety revert command, env key, restart 필요 여부가 문서화되어 있다.
-7. apply plan은 장중 mutation이 아니라 다음 장전 immutable manifest로만 반영된다.
-8. 적용 후 threshold version별 post-apply attribution report가 생성된다.
+6. safety guard owner, env key, 봇 기동 시 runtime env source 절차가 문서화되어 있다.
+7. apply plan은 장중 mutation이 아니라 다음 장전 runtime env manifest로만 반영된다.
+8. 적용 후 threshold version별 post-apply attribution과 daily EV report가 생성된다.
 9. 조건 미달은 다음 manifest의 `calibration_state`로 조정한다. safety guard 위반 시에만 `safety_revert_required=true`로 원복 후보 처리한다.
 
 첫 bounded calibration family는 `score65_74_recovery_probe`, `bad_entry_refined_canary`, `soft_stop_whipsaw_confirmation`, `holding_flow_ofi_smoothing`, `protect_trailing_smoothing`, `holding_exit_decision_matrix_advisory`다. `trailing_continuation`은 GOOD_EXIT 훼손 리스크가 커서 1차 loop에서는 report/calibration만 수행하고 live apply는 후순위로 둔다. calibration source는 `threshold_cycle` compact event와 함께 `data/report`의 BUY source(`buy_funnel_sentinel`, `sentinel_followup`, `wait6579_ev_cohort`, `missed_entry_counterfactual`, `performance_tuning`), 보유/청산 source(`holding_exit_observation`, `post_sell_feedback`, `trade_review`, `holding_exit_sentinel`), decision-support source(`holding_exit_decision_matrix`, `statistical_action_weight`) 요약을 사용한다. `preclose_sell_target`은 operator review 산출물이며 tuning/calibration source가 아니다.
@@ -73,11 +76,11 @@ Sentinel routing은 [2026-05-07 checklist](./2026-05-07-stage2-todo-checklist.md
 ## 5. 금지선
 
 - 누적 평균 단독으로 live threshold를 적용하지 않는다.
-- report-only 산출물 이름에 `apply_ready=True`가 있어도 이 문서의 `R5` gate를 통과하기 전에는 runtime 변경으로 해석하지 않는다.
+- report-only 산출물 이름에 `apply_ready=True`가 있어도 `auto_bounded_live`의 deterministic/AI/same-stage owner guard를 통과하기 전에는 runtime 변경으로 해석하지 않는다.
 - 장중 threshold runtime mutation은 열지 않는다. 적용 단위는 장후 산출 -> 다음 장전 apply plan -> 장후 attribution이다.
 - Project/Calendar owner가 없는 미래 자동화 작업은 유효한 next action으로 보지 않는다.
 - Sentinel abnormal alert를 즉시 threshold 완화/강화, fallback 재개, 자동 매도, cache TTL mutation, bot restart로 연결하지 않는다.
-- postclose collector가 live `pipeline_events_YYYY-MM-DD.jsonl` 대신 immutable snapshot을 읽어 `checkpoint_completed=true`를 만들더라도, 이는 R0/R1 수집 안정화일 뿐 R5 bounded apply 승인으로 보지 않는다.
+- postclose collector가 live `pipeline_events_YYYY-MM-DD.jsonl` 대신 immutable snapshot을 읽어 `checkpoint_completed=true`를 만들더라도, 이는 R0/R1 수집 안정화일 뿐 auto bounded apply 통과로 보지 않는다.
 
 ## 6. 다음 추적 항목
 

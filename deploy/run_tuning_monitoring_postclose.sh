@@ -13,6 +13,8 @@ RETRY_DELAY_SEC="${TUNING_MONITORING_RETRY_DELAY_SEC:-10}"
 STATUS_DIR="${TUNING_MONITORING_STATUS_DIR:-$PROJECT_DIR/data/report/tuning_monitoring/status}"
 STATUS_FILE="${TUNING_MONITORING_STATUS_FILE:-$STATUS_DIR/tuning_monitoring_postclose_${TARGET_DATE}.json}"
 DRY_RUN="${TUNING_MONITORING_DRY_RUN:-0}"
+RUN_PATTERN_LABS="${TUNING_MONITORING_RUN_PATTERN_LABS:-false}"
+PATTERN_LAB_START_DATE="${PATTERN_LAB_ANALYSIS_START_DATE:-2026-04-21}"
 
 mkdir -p "$PROJECT_DIR/logs" "$PROJECT_DIR/tmp" "$STATUS_DIR"
 cd "$PROJECT_DIR"
@@ -156,15 +158,19 @@ main() {
     --start "$START_DATE" \
     --end "$TARGET_DATE"
 
-  run_step "gemini_scalping_pattern_lab" "$PROJECT_DIR/analysis/gemini_scalping_pattern_lab/run.sh"
-  run_step "claude_scalping_pattern_lab" "$PROJECT_DIR/analysis/claude_scalping_pattern_lab/run_all.sh"
+  if [[ "$RUN_PATTERN_LABS" == "1" || "$RUN_PATTERN_LABS" == "true" ]]; then
+    run_step "gemini_scalping_pattern_lab" env ANALYSIS_START_DATE="$PATTERN_LAB_START_DATE" ANALYSIS_END_DATE="$TARGET_DATE" "$PROJECT_DIR/analysis/gemini_scalping_pattern_lab/run.sh"
+    run_step "claude_scalping_pattern_lab" env ANALYSIS_START_DATE="$PATTERN_LAB_START_DATE" ANALYSIS_END_DATE="$TARGET_DATE" "$PROJECT_DIR/analysis/claude_scalping_pattern_lab/run_all.sh"
+  else
+    record_step "pattern_labs" "skipped" 1 0 "canonical_runner=THRESHOLD_CYCLE_POSTCLOSE"
+  fi
 
   write_status "success" "" 0 1
   echo "[INFO] tuning monitoring postclose completed status_file=$STATUS_FILE"
 }
 
 set +e
-flock -w "$LOCK_WAIT_SEC" "$LOCK_FILE" bash -c "$(declare -f validate_int write_status record_step run_step main); set -euo pipefail; PROJECT_DIR='$PROJECT_DIR' VENV_PY='$VENV_PY' TARGET_DATE='$TARGET_DATE' START_DATE='$START_DATE' STATUS_FILE='$STATUS_FILE' MAX_RETRIES='$MAX_RETRIES' RETRY_DELAY_SEC='$RETRY_DELAY_SEC' DRY_RUN='$DRY_RUN'; main"
+flock -w "$LOCK_WAIT_SEC" "$LOCK_FILE" bash -c "$(declare -f validate_int write_status record_step run_step main); set -euo pipefail; PROJECT_DIR='$PROJECT_DIR' VENV_PY='$VENV_PY' TARGET_DATE='$TARGET_DATE' START_DATE='$START_DATE' STATUS_FILE='$STATUS_FILE' MAX_RETRIES='$MAX_RETRIES' RETRY_DELAY_SEC='$RETRY_DELAY_SEC' DRY_RUN='$DRY_RUN' RUN_PATTERN_LABS='$RUN_PATTERN_LABS' PATTERN_LAB_START_DATE='$PATTERN_LAB_START_DATE'; main"
 RUN_STATUS=$?
 set -e
 

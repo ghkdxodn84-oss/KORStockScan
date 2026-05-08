@@ -11,6 +11,15 @@ while true; do
     export KORSTOCKSCAN_INVEST_RATIO_SCALPING_MAX=1.0
     export KORSTOCKSCAN_SCALPING_MAX_BUY_BUDGET_KRW=3000000
 
+    THRESHOLD_RUNTIME_ENV="../data/threshold_cycle/runtime_env/threshold_runtime_env_$(TZ=Asia/Seoul date +%F).env"
+    if [ -f "$THRESHOLD_RUNTIME_ENV" ]; then
+        echo "📌 threshold runtime env 적용: $THRESHOLD_RUNTIME_ENV"
+        set -a
+        # shellcheck source=/dev/null
+        . "$THRESHOLD_RUNTIME_ENV"
+        set +a
+    fi
+
     # 봇 실행 (경로나 파일명은 환경에 맞게 수정)
     python bot_main.py
 

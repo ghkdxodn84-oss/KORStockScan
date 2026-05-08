@@ -1,8 +1,8 @@
 """Intraday HOLD/EXIT bottleneck sentinel.
 
 This module is report-only. It reads structured holding pipeline events and
-saved observation reports, classifies HOLD/EXIT anomalies, writes artifacts,
-and optionally notifies the admin Telegram chat.
+saved observation reports, classifies HOLD/EXIT anomalies, and writes
+artifacts.
 """
 
 from __future__ import annotations
@@ -14,9 +14,8 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
-from urllib import parse, request
 
-from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH
+from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
 
 
@@ -469,7 +468,7 @@ def build_holding_exit_sentinel_report(
         "policy": {
             "report_only": True,
             "live_runtime_effect": False,
-            "allowed_automations": ["json_report", "markdown_report", "telegram_admin_alert", "action_recommendation"],
+            "allowed_automations": ["json_report", "markdown_report", "action_recommendation"],
             "forbidden_automations": FORBIDDEN_AUTOMATIONS,
         },
         "baseline": {"date": baseline_date, "same_time_summary": baseline_summary},
@@ -535,146 +534,12 @@ def save_report_artifacts(report: dict[str, Any]) -> dict[str, str]:
     return {"json": str(json_path), "markdown": str(md_path)}
 
 
-def _classification_label_ko(primary: str, secondary: list[str]) -> str:
-    labels = {
-        "SELL_EXECUTION_DROUGHT": "매도 주문/체결 병목",
-        "HOLD_DEFER_DANGER": "HOLD 유예 악화",
-        "SOFT_STOP_WHIPSAW": "soft stop 반등 과다",
-        "TRAILING_EARLY_EXIT": "trailing 조기청산",
-        "AI_HOLDING_OPS": "AI 보유감시 이상",
-        "RUNTIME_OPS": "런타임/이벤트 이상",
-        "NORMAL": "정상",
-    }
-    parts = [labels.get(primary, primary)]
-    parts.extend(labels.get(item, item) for item in secondary if item and item != primary)
-    return " + ".join(parts)
-
-
-def _format_as_of_hm(value: str) -> str:
-    try:
-        return datetime.fromisoformat(value).strftime("%H:%M")
-    except Exception:
-        return value
-
-
-def build_telegram_message(report: dict[str, Any], artifacts: dict[str, str]) -> str:
-    session = report["current"]["session"]
-    unique = session["stage_unique"]
-    ratios = session["ratios"]
-    obs = report["observation"]["metrics"]
-    classification = report["classification"]
-    primary = classification["primary"]
-    secondary = classification.get("secondary") or []
-    return "\n".join(
-        [
-            "[KORStockScan] HOLD/EXIT 이상치",
-            f"- 시각: {_format_as_of_hm(report['as_of'])}",
-            f"- 판정: {_classification_label_ko(primary, secondary)}",
-            (
-                "- 전환: "
-                f"청산신호 {unique.get('exit_signal', 0)} -> "
-                f"매도주문 {unique.get('sell_order_sent', 0)}"
-                f"({ratios.get('sell_sent_to_exit_signal_unique_pct', 0.0)}%) -> "
-                f"매도완료 {unique.get('sell_completed', 0)}"
-            ),
-            (
-                "- 원인: "
-                f"HOLD유예 {session['stage_events'].get('holding_flow_override_defer_exit', 0)}건, "
-                f"AI MISS {ratios.get('ai_cache_miss_pct', 0.0)}%, "
-                f"softStop반등 {obs.get('soft_stop_rebound_above_sell_10m_rate', 0.0)}%, "
-                f"trailing미스 {obs.get('trailing_missed_upside_rate', 0.0)}%"
-            ),
-            "- 자동조치: 없음",
-            f"- 상세: {artifacts.get('markdown', '-')}",
-        ]
-    )
-
-
-def _load_telegram_config() -> tuple[str, str]:
-    config_path = CONFIG_PATH if CONFIG_PATH.exists() else DEV_PATH
-    if not config_path.exists():
-        return "", ""
-    try:
-        config = json.loads(config_path.read_text(encoding="utf-8"))
-    except Exception:
-        return "", ""
-    return _safe_str(config.get("TELEGRAM_TOKEN")), _safe_str(config.get("ADMIN_ID"))
-
-
-def _send_telegram(token: str, admin_id: str, message: str) -> None:
-    data = parse.urlencode({"chat_id": admin_id, "text": message}).encode("utf-8")
-    req = request.Request(f"https://api.telegram.org/bot{token}/sendMessage", data=data, method="POST")
-    with request.urlopen(req, timeout=10) as response:
-        response.read()
-
-
-def _notify_state_path(report: dict[str, Any]) -> Path:
-    target_date = _safe_str(report.get("target_date")) or datetime.now().strftime("%Y-%m-%d")
-    return _report_dir() / f"holding_exit_sentinel_notify_state_{target_date}.json"
-
-
-def _notification_signature(report: dict[str, Any]) -> str:
-    classification = report.get("classification", {})
-    primary = _safe_str(classification.get("primary")) or "NORMAL"
-    secondary = sorted(_safe_str(item) for item in (classification.get("secondary") or []) if _safe_str(item))
-    return "|".join([primary, ",".join(secondary)])
-
-
-def _load_notify_state(path: Path) -> dict[str, Any]:
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-
-
-def _write_notify_state(path: Path, report: dict[str, Any], signature: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {
-        "target_date": _safe_str(report.get("target_date")),
-        "updated_at": datetime.now().isoformat(timespec="seconds"),
-        "as_of": _safe_str(report.get("as_of")),
-        "signature": signature,
-        "primary": _safe_str((report.get("classification") or {}).get("primary")),
-        "secondary": list((report.get("classification") or {}).get("secondary") or []),
-    }
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
-def should_notify_admin(report: dict[str, Any]) -> bool:
-    classification = report.get("classification", {})
-    primary = _safe_str(classification.get("primary"))
-    secondary = classification.get("secondary") or []
-    return primary != "NORMAL" or bool(secondary)
-
-
-def maybe_notify_admin(report: dict[str, Any], artifacts: dict[str, str], *, enabled: bool) -> dict[str, Any]:
-    if not enabled:
-        return {"enabled": False, "status": "skipped", "reason": "disabled"}
-    signature = _notification_signature(report)
-    state_path = _notify_state_path(report)
-    if not should_notify_admin(report):
-        previous = _load_notify_state(state_path)
-        if previous.get("signature") != signature:
-            _write_notify_state(state_path, report, signature)
-        return {"enabled": True, "status": "skipped", "reason": "normal"}
-    previous = _load_notify_state(state_path)
-    if previous.get("signature") == signature:
-        return {"enabled": True, "status": "skipped", "reason": "duplicate_signature"}
-    token, admin_id = _load_telegram_config()
-    if not token or not admin_id:
-        return {"enabled": True, "status": "skipped", "reason": "missing_config"}
-    _send_telegram(token, admin_id, build_telegram_message(report, artifacts))
-    _write_notify_state(state_path, report, signature)
-    return {"enabled": True, "status": "sent", "reason": ""}
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Build intraday HOLD/EXIT sentinel report.")
     parser.add_argument("--date", dest="target_date", default=datetime.now().strftime("%Y-%m-%d"))
     parser.add_argument("--as-of", dest="as_of", default="")
     parser.add_argument("--window-min", dest="window_min", action="append", type=int, default=[])
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--notify-admin", action="store_true")
     parser.add_argument("--print-json", action="store_true")
     return parser
 
@@ -690,14 +555,12 @@ def main() -> int:
         dry_run=bool(args.dry_run),
     )
     artifacts = save_report_artifacts(report)
-    notify_result = maybe_notify_admin(report, artifacts, enabled=bool(args.notify_admin and not args.dry_run))
     result = {
         "status": "success",
         "target_date": args.target_date,
         "classification": report["classification"]["primary"],
         "secondary": report["classification"]["secondary"],
         "artifacts": artifacts,
-        "notify": notify_result,
     }
     print(json.dumps(result, ensure_ascii=False, indent=2 if args.print_json else None))
     return 0

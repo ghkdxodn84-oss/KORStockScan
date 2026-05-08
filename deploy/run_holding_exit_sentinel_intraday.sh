@@ -15,7 +15,6 @@ COOLDOWN_STATE_FILE="${HOLDING_EXIT_SENTINEL_COOLDOWN_STATE_FILE:-$PROJECT_DIR/t
 COOLDOWN_SEC="${HOLDING_EXIT_SENTINEL_COOLDOWN_SEC:-240}"
 LOG_FILE="${HOLDING_EXIT_SENTINEL_LOG_FILE:-$PROJECT_DIR/logs/run_holding_exit_sentinel.log}"
 DRY_RUN="${HOLDING_EXIT_SENTINEL_DRY_RUN:-0}"
-NOTIFY_ADMIN="${HOLDING_EXIT_SENTINEL_NOTIFY_ADMIN:-1}"
 IONICE_CLASS="${HOLDING_EXIT_SENTINEL_IONICE_CLASS:-2}"
 IONICE_LEVEL="${HOLDING_EXIT_SENTINEL_IONICE_LEVEL:-7}"
 NICE_LEVEL="${HOLDING_EXIT_SENTINEL_NICE_LEVEL:-12}"
@@ -59,8 +58,6 @@ fi
 cmd=(env PYTHONPATH=. "$VENV_PY" -m src.engine.holding_exit_sentinel --date "$TARGET_DATE" --print-json "$@")
 if [[ "$DRY_RUN" == "1" ]]; then
   cmd+=(--dry-run)
-elif [[ "$NOTIFY_ADMIN" == "1" ]]; then
-  cmd+=(--notify-admin)
 fi
 
 if command -v ionice >/dev/null 2>&1 && [[ "$IONICE_CLASS" -ge 0 ]]; then

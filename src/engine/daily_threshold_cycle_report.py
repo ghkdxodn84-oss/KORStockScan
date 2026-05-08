@@ -11,7 +11,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable
 
-from src.utils.constants import DATA_DIR, POSTGRES_URL, TRADING_RULES
+from src.utils.constants import CONFIG_PATH, DATA_DIR, DEV_PATH, POSTGRES_URL, TRADING_RULES
 from src.utils.threshold_cycle_registry import TARGET_STAGES, is_threshold_cycle_stage
 
 
@@ -21,8 +21,10 @@ STAT_ACTION_REPORT_DIR = REPORT_DIR / "statistical_action_weight"
 AI_DECISION_MATRIX_DIR = REPORT_DIR / "holding_exit_decision_matrix"
 CUMULATIVE_THRESHOLD_REPORT_DIR = REPORT_DIR / "threshold_cycle_cumulative"
 THRESHOLD_CALIBRATION_REPORT_DIR = REPORT_DIR / "threshold_cycle_calibration"
+THRESHOLD_AI_REVIEW_DIR = REPORT_DIR / "threshold_cycle_ai_review"
 POST_SELL_DIR = DATA_DIR / "post_sell"
 THRESHOLD_CYCLE_SCHEMA_VERSION = 2
+THRESHOLD_AI_CORRECTION_SCHEMA_VERSION = 1
 THRESHOLD_CYCLE_DIR = DATA_DIR / "threshold_cycle"
 RAW_PIPELINE_FALLBACK_MAX_BYTES = 64 * 1024 * 1024
 CUMULATIVE_BASELINE_START_DATE = "2026-04-21"
@@ -33,6 +35,26 @@ CALIBRATION_SAFETY_GUARDS = [
     "same-stage owner conflict",
     "severe loss guard breach",
 ]
+AI_CORRECTION_ALLOWED_STATES = {"adjust_up", "adjust_down", "hold", "hold_sample", "freeze"}
+AI_CORRECTION_ALLOWED_ROUTES = {"threshold_candidate", "incident", "instrumentation_gap", "normal_drift"}
+AI_CORRECTION_ALLOWED_SAMPLE_WINDOWS = {"daily_intraday", "rolling_5d", "rolling_10d", "cumulative"}
+AI_CORRECTION_ALLOWED_REVIEW_STATES = {
+    "agree",
+    "correction_proposed",
+    "caution",
+    "insufficient_context",
+    "safety_concern",
+    "unavailable",
+}
+AI_CORRECTION_FORBIDDEN_FIELDS = {
+    "apply_now",
+    "runtime_change",
+    "runtime_mutation",
+    "env_change",
+    "code_change",
+    "restart_required",
+    "safety_revert_required",
+}
 CALIBRATION_FAMILY_METADATA = {
     "soft_stop_whipsaw_confirmation": {
         "priority": 1,
@@ -50,7 +72,13 @@ CALIBRATION_FAMILY_METADATA = {
             "max_worsen_pct": {"min": 0.10, "max": 0.60, "max_step_per_day": 0.05},
         },
         "sample_floor": 10,
-        "sample_window": "daily",
+        "sample_window": "rolling_10d_with_daily_guard",
+        "window_policy": {
+            "primary": "rolling_10d",
+            "secondary": ["daily", "cumulative_since_2026-04-21"],
+            "use": "soft-stop whipsaw는 당일 1건이 아니라 4월 이후 누적/rolling 지속성과 당일 safety guard를 함께 본다.",
+            "daily_only_allowed": False,
+        },
         "allowed_runtime_apply": True,
     },
     "holding_flow_ofi_smoothing": {
@@ -69,7 +97,13 @@ CALIBRATION_FAMILY_METADATA = {
             "worsen_floor_pct": {"min": 0.40, "max": 1.20, "max_step_per_day": 0.10},
         },
         "sample_floor": 20,
-        "sample_window": "daily",
+        "sample_window": "daily_intraday",
+        "window_policy": {
+            "primary": "daily_intraday",
+            "secondary": ["rolling_5d"],
+            "use": "holding_flow defer cost는 장중 운영 상태가 빨리 변하므로 당일/장중 이상치로 calibration하고 rolling은 재발성 확인에만 쓴다.",
+            "daily_only_allowed": True,
+        },
         "allowed_runtime_apply": True,
     },
     "protect_trailing_smoothing": {
@@ -90,7 +124,13 @@ CALIBRATION_FAMILY_METADATA = {
             "buffer_pct": {"min": 0.50, "max": 1.50, "max_step_per_day": 0.10},
         },
         "sample_floor": 20,
-        "sample_window": "daily",
+        "sample_window": "rolling_10d_with_daily_guard",
+        "window_policy": {
+            "primary": "rolling_10d",
+            "secondary": ["daily", "rolling_20d"],
+            "use": "protect trailing smoothing은 단일 tick/단일 종목 표본보다 반복 이탈 분포와 safety guard를 우선한다.",
+            "daily_only_allowed": False,
+        },
         "allowed_runtime_apply": True,
     },
     "trailing_continuation": {
@@ -107,7 +147,13 @@ CALIBRATION_FAMILY_METADATA = {
             "strong_limit": {"min": 0.80, "max": 1.50, "max_step_per_day": 0.05},
         },
         "sample_floor": 20,
-        "sample_window": "daily",
+        "sample_window": "rolling_10d_with_daily_guard",
+        "window_policy": {
+            "primary": "rolling_10d",
+            "secondary": ["daily", "rolling_20d"],
+            "use": "trailing continuation은 GOOD_EXIT 훼손 리스크가 커서 당일 표본만으로 live apply하지 않는다.",
+            "daily_only_allowed": False,
+        },
         "allowed_runtime_apply": False,
     },
     "score65_74_recovery_probe": {
@@ -131,7 +177,13 @@ CALIBRATION_FAMILY_METADATA = {
             "max_budget_krw": {"min": 10_000, "max": 50_000, "max_step_per_day": 10_000},
         },
         "sample_floor": 20,
-        "sample_window": "daily",
+        "sample_window": "daily_intraday_with_rolling_confirmation",
+        "window_policy": {
+            "primary": "daily_intraday",
+            "secondary": ["rolling_5d", "cumulative_since_2026-04-21"],
+            "use": "BUY drought/score65~74는 당일 병목을 빠르게 보되, EV/close 우위와 false-positive risk는 rolling으로 확인한다.",
+            "daily_only_allowed": True,
+        },
         "allowed_runtime_apply": True,
     },
     "bad_entry_refined_canary": {
@@ -153,7 +205,13 @@ CALIBRATION_FAMILY_METADATA = {
             "recovery_prob_max": {"min": 0.15, "max": 0.45, "max_step_per_day": 0.05},
         },
         "sample_floor": 10,
-        "sample_window": "daily",
+        "sample_window": "rolling_10d_with_daily_guard",
+        "window_policy": {
+            "primary": "rolling_10d",
+            "secondary": ["daily", "cumulative_since_2026-04-21"],
+            "use": "bad-entry refined는 loser classifier 과적합을 피하기 위해 누적/rolling tail과 당일 safety를 같이 본다.",
+            "daily_only_allowed": False,
+        },
         "allowed_runtime_apply": True,
     },
     "holding_exit_decision_matrix_advisory": {
@@ -163,7 +221,13 @@ CALIBRATION_FAMILY_METADATA = {
         "primary_key": "enabled",
         "bounds": {},
         "sample_floor": 1,
-        "sample_window": "daily",
+        "sample_window": "latest_report_with_rolling_bucket_context",
+        "window_policy": {
+            "primary": "latest_report",
+            "secondary": ["rolling_bucket_context"],
+            "use": "ADM/SAW advisory는 최신 matrix edge 존재 여부를 보되 bucket confidence는 rolling action weight를 참조한다.",
+            "daily_only_allowed": False,
+        },
         "allowed_runtime_apply": True,
     },
     "scale_in_price_guard": {
@@ -187,7 +251,13 @@ CALIBRATION_FAMILY_METADATA = {
             "effective_qty_cap": {"min": 1, "max": 1, "max_step_per_day": 0},
         },
         "sample_floor": 20,
-        "sample_window": "daily",
+        "sample_window": "rolling_10d_or_cumulative_sparse",
+        "window_policy": {
+            "primary": "rolling_10d",
+            "secondary": ["cumulative_since_2026-04-21", "daily"],
+            "use": "scale-in은 체결 표본이 희소하므로 당일만으로 결론 내리지 않고 rolling/cumulative로 guard 값을 산정한다.",
+            "daily_only_allowed": False,
+        },
         "allowed_runtime_apply": False,
     },
 }
@@ -354,6 +424,14 @@ def save_threshold_cycle_report(report: dict) -> Path:
 def calibration_report_path_for_date(target_date: str, run_phase: str) -> Path:
     phase = str(run_phase or "postclose").strip() or "postclose"
     return THRESHOLD_CALIBRATION_REPORT_DIR / f"threshold_cycle_calibration_{target_date}_{phase}.json"
+
+
+def threshold_ai_review_paths(target_date: str, run_phase: str) -> tuple[Path, Path]:
+    phase = str(run_phase or "postclose").strip() or "postclose"
+    return (
+        THRESHOLD_AI_REVIEW_DIR / f"threshold_cycle_ai_review_{target_date}_{phase}.json",
+        THRESHOLD_AI_REVIEW_DIR / f"threshold_cycle_ai_review_{target_date}_{phase}.md",
+    )
 
 
 def save_threshold_calibration_report(report: dict, *, run_phase: str | None = None) -> Path:
@@ -684,6 +762,42 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             ),
             "post_sell_rebound_above_buy_10m_rate": _safe_float(
                 (post_sell_soft.get("rebound_above_buy_rate") or {}).get("10m")
+                if isinstance(post_sell_soft.get("rebound_above_buy_rate"), dict)
+                else None,
+                None,
+            ),
+            "post_sell_rebound_above_sell_20m_rate": _safe_float(
+                (post_sell_soft.get("rebound_above_sell_rate") or {}).get("20m")
+                if isinstance(post_sell_soft.get("rebound_above_sell_rate"), dict)
+                else None,
+                None,
+            ),
+            "post_sell_rebound_above_buy_20m_rate": _safe_float(
+                (post_sell_soft.get("rebound_above_buy_rate") or {}).get("20m")
+                if isinstance(post_sell_soft.get("rebound_above_buy_rate"), dict)
+                else None,
+                None,
+            ),
+            "post_sell_rebound_above_sell_30m_rate": _safe_float(
+                (post_sell_soft.get("rebound_above_sell_rate") or {}).get("30m")
+                if isinstance(post_sell_soft.get("rebound_above_sell_rate"), dict)
+                else None,
+                None,
+            ),
+            "post_sell_rebound_above_buy_30m_rate": _safe_float(
+                (post_sell_soft.get("rebound_above_buy_rate") or {}).get("30m")
+                if isinstance(post_sell_soft.get("rebound_above_buy_rate"), dict)
+                else None,
+                None,
+            ),
+            "post_sell_rebound_above_sell_60m_rate": _safe_float(
+                (post_sell_soft.get("rebound_above_sell_rate") or {}).get("60m")
+                if isinstance(post_sell_soft.get("rebound_above_sell_rate"), dict)
+                else None,
+                None,
+            ),
+            "post_sell_rebound_above_buy_60m_rate": _safe_float(
+                (post_sell_soft.get("rebound_above_buy_rate") or {}).get("60m")
                 if isinstance(post_sell_soft.get("rebound_above_buy_rate"), dict)
                 else None,
                 None,
@@ -2616,6 +2730,13 @@ def _calibration_state_for_family(
             "hold",
             "scale_in_price_guard는 별도 승인 전 report-only calibration으로만 산출하며 live apply는 금지한다.",
         )
+    if output_family == "soft_stop_whipsaw_confirmation":
+        source_count = _source_sample_count_for_family(output_family, source_metrics)
+        if 0 < source_count < sample_floor:
+            return (
+                "hold_sample",
+                f"post-sell/holding-exit soft-stop source sample floor 미달({source_count}/{sample_floor}); 단일 사례로 live enable 금지",
+            )
     if sample_count < sample_floor or not ready:
         return ("hold_sample", f"sample floor 미달({sample_count}/{sample_floor}); 값 유지 후 다음 장후 재산정")
 
@@ -2673,6 +2794,8 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
             sample_floor_status = "direction_conflict_or_live_risk"
         if calibration_state == "hold_no_edge":
             sample_floor_status = "minimum_edge_missing"
+        if calibration_state == "hold_sample":
+            sample_floor_status = "hold_sample"
         confidence = round(min(1.0, sample_count / sample_floor), 4) if sample_floor > 0 else 0.0
         primary_key = str(metadata.get("primary_key") or "")
         runtime_apply_candidate = (
@@ -2698,6 +2821,7 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
             "max_step_per_day": (metadata.get("bounds") or {}).get(primary_key, {}).get("max_step_per_day"),
             "bounds": metadata.get("bounds") or {},
             "sample_window": metadata.get("sample_window", "daily"),
+            "window_policy": dict(metadata.get("window_policy") or {}),
             "sample_count": sample_count,
             "source_sample_count": source_sample_count,
             "sample_floor": sample_floor,
@@ -2784,6 +2908,603 @@ def _build_post_apply_attribution(calibration_candidates: list[dict]) -> dict:
             for candidate in calibration_candidates
         ],
     }
+
+
+def _normalize_ai_sample_window(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    aliases = {
+        "daily": "daily_intraday",
+        "intraday": "daily_intraday",
+        "same_day": "daily_intraday",
+        "rolling": "rolling_10d",
+        "rolling10": "rolling_10d",
+        "rolling_10": "rolling_10d",
+        "rolling5": "rolling_5d",
+        "rolling_5": "rolling_5d",
+        "cumulative_since_2026-04-21": "cumulative",
+    }
+    return aliases.get(text, text)
+
+
+def _allowed_sample_windows_for_candidate(candidate: dict) -> set[str]:
+    policy = candidate.get("window_policy") if isinstance(candidate.get("window_policy"), dict) else {}
+    primary = _normalize_ai_sample_window(policy.get("primary") or candidate.get("sample_window"))
+    allowed: set[str] = set()
+    if primary in AI_CORRECTION_ALLOWED_SAMPLE_WINDOWS:
+        allowed.add(primary)
+    for raw_secondary in policy.get("secondary") or []:
+        normalized = _normalize_ai_sample_window(raw_secondary)
+        if normalized in AI_CORRECTION_ALLOWED_SAMPLE_WINDOWS:
+            allowed.add(normalized)
+    if policy and not bool(policy.get("daily_only_allowed")):
+        allowed.discard("daily_intraday")
+    return allowed or set(AI_CORRECTION_ALLOWED_SAMPLE_WINDOWS)
+
+
+def _parse_ai_correction_response(ai_raw_response: Any) -> tuple[str, list[dict], list[str]]:
+    if ai_raw_response in (None, "", b""):
+        return ("unavailable", [], ["ai correction response not provided"])
+    if isinstance(ai_raw_response, (str, bytes)):
+        try:
+            payload = json.loads(ai_raw_response)
+        except Exception as exc:
+            return ("parse_rejected", [], [f"AI response JSON parse failed: {exc}"])
+    else:
+        payload = ai_raw_response
+    if not isinstance(payload, dict):
+        return ("parse_rejected", [], ["AI response must be a JSON object"])
+    allowed_top_keys = {"schema_version", "corrections"}
+    unknown_top_keys = set(payload) - allowed_top_keys
+    if unknown_top_keys:
+        return ("parse_rejected", [], [f"AI response has unsupported top-level fields: {sorted(unknown_top_keys)}"])
+    corrections = payload.get("corrections")
+    if not isinstance(corrections, list):
+        return ("parse_rejected", [], ["AI response must contain corrections list"])
+
+    parsed: list[dict] = []
+    allowed_item_keys = {
+        "family",
+        "anomaly_type",
+        "ai_review_state",
+        "correction_proposal",
+        "correction_reason",
+        "required_evidence",
+        "risk_flags",
+    }
+    allowed_proposal_keys = {"proposed_state", "proposed_value", "anomaly_route", "sample_window"}
+    for index, item in enumerate(corrections):
+        if not isinstance(item, dict):
+            return ("parse_rejected", [], [f"corrections[{index}] must be an object"])
+        unknown_keys = set(item) - allowed_item_keys
+        if unknown_keys:
+            return ("parse_rejected", [], [f"corrections[{index}] has unsupported fields: {sorted(unknown_keys)}"])
+        family = str(item.get("family") or "").strip()
+        if not family:
+            return ("parse_rejected", [], [f"corrections[{index}].family is required"])
+        review_state = str(item.get("ai_review_state") or "correction_proposed").strip()
+        if review_state not in AI_CORRECTION_ALLOWED_REVIEW_STATES:
+            return ("parse_rejected", [], [f"corrections[{index}].ai_review_state is invalid: {review_state}"])
+        proposal = item.get("correction_proposal") or {}
+        if not isinstance(proposal, dict):
+            return ("parse_rejected", [], [f"corrections[{index}].correction_proposal must be an object"])
+        unknown_proposal_keys = set(proposal) - allowed_proposal_keys
+        forbidden_proposal_keys = set(proposal) & AI_CORRECTION_FORBIDDEN_FIELDS
+        if unknown_proposal_keys:
+            return (
+                "parse_rejected",
+                [],
+                [f"corrections[{index}].correction_proposal has unsupported fields: {sorted(unknown_proposal_keys)}"],
+            )
+        if forbidden_proposal_keys:
+            return (
+                "parse_rejected",
+                [],
+                [f"corrections[{index}].correction_proposal has forbidden fields: {sorted(forbidden_proposal_keys)}"],
+            )
+        proposed_state = proposal.get("proposed_state")
+        if proposed_state not in (None, "") and str(proposed_state) not in AI_CORRECTION_ALLOWED_STATES:
+            return ("parse_rejected", [], [f"corrections[{index}].proposed_state is invalid: {proposed_state}"])
+        anomaly_route = proposal.get("anomaly_route")
+        if anomaly_route not in (None, "") and str(anomaly_route) not in AI_CORRECTION_ALLOWED_ROUTES:
+            return ("parse_rejected", [], [f"corrections[{index}].anomaly_route is invalid: {anomaly_route}"])
+        sample_window = _normalize_ai_sample_window(proposal.get("sample_window"))
+        if sample_window not in (None, "") and sample_window not in AI_CORRECTION_ALLOWED_SAMPLE_WINDOWS:
+            return ("parse_rejected", [], [f"corrections[{index}].sample_window is invalid: {sample_window}"])
+        required_evidence = item.get("required_evidence") or []
+        risk_flags = item.get("risk_flags") or []
+        if not isinstance(required_evidence, list) or not all(isinstance(value, str) for value in required_evidence):
+            return ("parse_rejected", [], [f"corrections[{index}].required_evidence must be a string list"])
+        if not isinstance(risk_flags, list) or not all(isinstance(value, str) for value in risk_flags):
+            return ("parse_rejected", [], [f"corrections[{index}].risk_flags must be a string list"])
+        parsed.append(
+            {
+                "family": family,
+                "anomaly_type": str(item.get("anomaly_type") or "-"),
+                "ai_review_state": review_state,
+                "correction_proposal": {
+                    key: _normalize_ai_sample_window(value) if key == "sample_window" else value
+                    for key, value in proposal.items()
+                },
+                "correction_reason": str(item.get("correction_reason") or ""),
+                "required_evidence": required_evidence,
+                "risk_flags": risk_flags,
+            }
+        )
+    return ("parsed", parsed, [])
+
+
+def _current_numeric_step_bounds(candidate: dict) -> tuple[float | None, float | None]:
+    lower = _safe_float(candidate.get("min_value"), None)
+    upper = _safe_float(candidate.get("max_value"), None)
+    step = _safe_float(candidate.get("max_step_per_day"), None)
+    current = _safe_float(candidate.get("current_value"), None)
+    if step is not None and current is not None:
+        if lower is not None:
+            lower = max(lower, current - step)
+        else:
+            lower = current - step
+        if upper is not None:
+            upper = min(upper, current + step)
+        else:
+            upper = current + step
+    return lower, upper
+
+
+def _guard_ai_correction_proposal(candidate: dict, proposal: dict) -> dict:
+    proposed_state = proposal.get("proposed_state")
+    proposed_state = str(proposed_state) if proposed_state not in (None, "") else None
+    proposed_value = proposal.get("proposed_value")
+    anomaly_route = proposal.get("anomaly_route")
+    anomaly_route = str(anomaly_route) if anomaly_route not in (None, "") else None
+    sample_window = _normalize_ai_sample_window(proposal.get("sample_window"))
+    current_value = candidate.get("current_value")
+    effective_state = proposed_state or candidate.get("calibration_state")
+    effective_value = current_value
+    clamped = False
+    guard_reject_reason = ""
+    guard_accepted = False
+    route_action = "proposal_only"
+
+    if anomaly_route == "instrumentation_gap":
+        return {
+            "guard_accepted": True,
+            "guard_reject_reason": "",
+            "effective_state": "hold_sample",
+            "effective_value": current_value,
+            "clamped": False,
+            "anomaly_route": anomaly_route,
+            "route_action": "exclude_from_threshold_candidate_review",
+            "runtime_change": False,
+        }
+
+    if sample_window:
+        allowed_windows = _allowed_sample_windows_for_candidate(candidate)
+        if sample_window not in allowed_windows:
+            return {
+                "guard_accepted": False,
+                "guard_reject_reason": f"sample_window_mismatch:{sample_window} not in {sorted(allowed_windows)}",
+                "effective_state": "hold_sample",
+                "effective_value": current_value,
+                "clamped": False,
+                "anomaly_route": anomaly_route,
+                "route_action": "reject_or_hold_sample",
+                "runtime_change": False,
+            }
+
+    policy = candidate.get("window_policy") if isinstance(candidate.get("window_policy"), dict) else {}
+    sample_floor = _safe_int(candidate.get("sample_floor"), 0) or 0
+    source_sample_count = _safe_int(candidate.get("source_sample_count"), 0) or 0
+    needs_rolling_context = policy and not bool(policy.get("daily_only_allowed"))
+    changes_value_or_state = (
+        proposed_value not in (None, "")
+        or proposed_state in {"adjust_up", "adjust_down"}
+        or anomaly_route == "threshold_candidate"
+    )
+    if needs_rolling_context and 0 < source_sample_count < sample_floor and changes_value_or_state:
+        return {
+            "guard_accepted": False,
+            "guard_reject_reason": (
+                f"window_policy_blocks_single_case_live_candidate:{source_sample_count}/{sample_floor}"
+            ),
+            "effective_state": "hold_sample",
+            "effective_value": current_value,
+            "clamped": False,
+            "anomaly_route": anomaly_route,
+            "route_action": "hold_sample",
+            "runtime_change": False,
+        }
+
+    if proposed_value not in (None, ""):
+        if isinstance(current_value, bool):
+            effective_value = bool(proposed_value)
+            guard_accepted = True
+        else:
+            numeric_value = _safe_float(proposed_value, None)
+            if numeric_value is None:
+                return {
+                    "guard_accepted": False,
+                    "guard_reject_reason": "proposed_value_not_numeric_or_bool",
+                    "effective_state": "hold_sample",
+                    "effective_value": current_value,
+                    "clamped": False,
+                    "anomaly_route": anomaly_route,
+                    "route_action": "reject_or_hold_sample",
+                    "runtime_change": False,
+                }
+            lower, upper = _current_numeric_step_bounds(candidate)
+            if lower is None or upper is None:
+                return {
+                    "guard_accepted": False,
+                    "guard_reject_reason": "missing_bounds_for_value_proposal",
+                    "effective_state": "hold_sample",
+                    "effective_value": current_value,
+                    "clamped": False,
+                    "anomaly_route": anomaly_route,
+                    "route_action": "reject_or_hold_sample",
+                    "runtime_change": False,
+                }
+            effective_value = _clamp(numeric_value, lower, upper)
+            clamped = effective_value != numeric_value
+            guard_accepted = True
+    elif proposed_state or anomaly_route:
+        guard_accepted = True
+    else:
+        guard_reject_reason = "empty_proposal"
+
+    if candidate.get("allowed_runtime_apply") is False and proposed_state in {"adjust_up", "adjust_down"}:
+        guard_accepted = False
+        guard_reject_reason = "runtime_apply_not_allowed_for_family"
+        effective_state = "hold_sample"
+        route_action = "report_only_hold"
+
+    return {
+        "guard_accepted": guard_accepted,
+        "guard_reject_reason": guard_reject_reason,
+        "effective_state": effective_state,
+        "effective_value": effective_value,
+        "clamped": clamped,
+        "anomaly_route": anomaly_route,
+        "route_action": route_action,
+        "runtime_change": False,
+    }
+
+
+def _build_ai_correction_input_context(calibration_report: dict, cumulative_report: dict | None = None) -> dict:
+    candidates = calibration_report.get("calibration_candidates") or []
+    candidate_context = []
+    for candidate in candidates if isinstance(candidates, list) else []:
+        if not isinstance(candidate, dict):
+            continue
+        candidate_context.append(
+            {
+                "family": candidate.get("family"),
+                "threshold_version": candidate.get("threshold_version"),
+                "current_value": candidate.get("current_value"),
+                "recommended_value": candidate.get("recommended_value"),
+                "calibration_state": candidate.get("calibration_state"),
+                "calibration_reason": candidate.get("calibration_reason"),
+                "sample_count": candidate.get("sample_count"),
+                "source_sample_count": candidate.get("source_sample_count"),
+                "sample_floor": candidate.get("sample_floor"),
+                "sample_window": candidate.get("sample_window"),
+                "window_policy": candidate.get("window_policy"),
+                "bounds": candidate.get("bounds"),
+                "max_step_per_day": candidate.get("max_step_per_day"),
+                "safety_revert_required": candidate.get("safety_revert_required"),
+                "source_metrics": candidate.get("source_metrics"),
+            }
+        )
+    cumulative_summary = {}
+    if isinstance(cumulative_report, dict):
+        cumulative_summary = {
+            "date": cumulative_report.get("date"),
+            "summary": cumulative_report.get("summary"),
+            "family_direction": cumulative_report.get("family_direction"),
+            "warnings": cumulative_report.get("warnings"),
+        }
+    return {
+        "calibration_candidates": candidate_context,
+        "calibration_source_bundle": calibration_report.get("calibration_source_bundle") or {},
+        "threshold_cycle_cumulative": cumulative_summary,
+        "recent_anomaly_report": {
+            "source_bundle_reports": (calibration_report.get("calibration_source_bundle") or {}).get("sources", {}),
+            "source_metrics": (calibration_report.get("calibration_source_bundle") or {}).get("source_metrics", {}),
+        },
+    }
+
+
+def _gemini_key_sort_key(name: str) -> tuple[int, str]:
+    suffix = name.replace("GEMINI_API_KEY", "", 1).lstrip("_")
+    if suffix == "":
+        return (1, name)
+    try:
+        return (int(suffix), name)
+    except ValueError:
+        return (999, name)
+
+
+def _load_threshold_ai_gemini_keys() -> list[tuple[str, str]]:
+    target_path = CONFIG_PATH if CONFIG_PATH.exists() else DEV_PATH
+    try:
+        payload = json.loads(target_path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    keys: list[tuple[str, str]] = []
+    for name, value in sorted(payload.items(), key=lambda item: _gemini_key_sort_key(str(item[0]))):
+        if not str(name).startswith("GEMINI_API_KEY"):
+            continue
+        if value in (None, "", "-"):
+            continue
+        keys.append((str(name), str(value)))
+    return keys
+
+
+def _build_ai_correction_prompt(input_context: dict) -> str:
+    return (
+        "너는 threshold-cycle calibration AI reviewer + anomaly corrector다.\n"
+        "역할은 수정안 제안까지이며 env/code/runtime 직접 변경 명령을 내면 안 된다.\n"
+        "최종 source of truth는 deterministic calibration guard다.\n\n"
+        "허용 제안:\n"
+        "- proposed_state: adjust_up|adjust_down|hold|hold_sample|freeze\n"
+        "- proposed_value: family bounds와 max_step_per_day 안에서 검증될 후보값\n"
+        "- anomaly_route: threshold_candidate|incident|instrumentation_gap|normal_drift\n"
+        "- sample_window: daily_intraday|rolling_5d|rolling_10d|cumulative\n\n"
+        "금지:\n"
+        "- env/code/runtime 직접 변경\n"
+        "- 장중 threshold mutation\n"
+        "- safety guard 우회 또는 safety_revert_required 변경\n"
+        "- 단일 사례 기반 live enable 확정\n\n"
+        "반드시 JSON only로 출력한다. schema 외 field를 넣지 않는다:\n"
+        "{\n"
+        '  "schema_version": 1,\n'
+        '  "corrections": [\n'
+        "    {\n"
+        '      "family": "soft_stop_whipsaw_confirmation",\n'
+        '      "anomaly_type": "late_rebound|defer_cost|entry_drought|instrumentation_gap|normal_drift",\n'
+        '      "ai_review_state": "agree|correction_proposed|caution|insufficient_context|safety_concern|unavailable",\n'
+        '      "correction_proposal": {\n'
+        '        "proposed_state": "adjust_up|adjust_down|hold|hold_sample|freeze",\n'
+        '        "proposed_value": 60,\n'
+        '        "anomaly_route": "threshold_candidate|incident|instrumentation_gap|normal_drift",\n'
+        '        "sample_window": "daily_intraday|rolling_5d|rolling_10d|cumulative"\n'
+        "      },\n"
+        '      "correction_reason": "1~2 sentence reason",\n'
+        '      "required_evidence": ["evidence name"],\n'
+        '      "risk_flags": ["risk flag"]\n'
+        "    }\n"
+        "  ]\n"
+        "}\n\n"
+        "[입력]\n"
+        f"{json.dumps(input_context, ensure_ascii=False, indent=2)}"
+    )
+
+
+def _call_gemini_threshold_ai_correction(input_context: dict) -> tuple[str | None, dict]:
+    try:
+        from google import genai
+        from google.genai import types
+    except Exception as exc:
+        return None, {"provider": "gemini", "status": "unavailable", "reason": f"google.genai import failed: {exc}"}
+
+    api_keys = _load_threshold_ai_gemini_keys()
+    if not api_keys:
+        return None, {"provider": "gemini", "status": "unavailable", "reason": "GEMINI_API_KEY not configured"}
+
+    model_name = str(getattr(TRADING_RULES, "AI_MODEL_TIER3", "") or "models/gemini-3.1-pro-preview-customtools")
+    prompt = _build_ai_correction_prompt(input_context)
+    errors: list[dict] = []
+    for attempt_index, (key_name, api_key) in enumerate(api_keys, start=1):
+        try:
+            client = genai.Client(api_key=api_key)
+            response = client.models.generate_content(
+                model=model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(response_mime_type="application/json"),
+            )
+            return str(response.text or ""), {
+                "provider": "gemini",
+                "status": "success",
+                "key_name": key_name,
+                "attempt_index": attempt_index,
+                "attempted_keys": len(api_keys),
+                "model": model_name,
+            }
+        except Exception as exc:
+            errors.append({"key_name": key_name, "error": str(exc)})
+    return None, {
+        "provider": "gemini",
+        "status": "failed",
+        "attempted_keys": len(api_keys),
+        "model": model_name,
+        "errors": errors,
+    }
+
+
+def build_threshold_cycle_ai_correction_report(
+    calibration_report: dict,
+    *,
+    ai_raw_response: Any | None = None,
+    cumulative_report: dict | None = None,
+    source_calibration_report_path: str | None = None,
+    ai_provider_status: dict | None = None,
+) -> dict:
+    target_date = str(calibration_report.get("date") or date.today().isoformat())
+    meta = calibration_report.get("meta") if isinstance(calibration_report.get("meta"), dict) else {}
+    run_phase = str(calibration_report.get("run_phase") or meta.get("calibration_run_phase") or "postclose")
+    candidates = calibration_report.get("calibration_candidates") or []
+    candidates = candidates if isinstance(candidates, list) else []
+    ai_status, proposals, parse_warnings = _parse_ai_correction_response(ai_raw_response)
+    proposals_by_family = {str(item.get("family")): item for item in proposals if isinstance(item, dict)}
+
+    items: list[dict] = []
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        family = str(candidate.get("family") or "")
+        proposal_item = proposals_by_family.get(family)
+        if proposal_item:
+            correction_proposal = proposal_item.get("correction_proposal") or {}
+            guard_decision = _guard_ai_correction_proposal(candidate, correction_proposal)
+            ai_review_state = proposal_item.get("ai_review_state") or "correction_proposed"
+            anomaly_type = proposal_item.get("anomaly_type") or "-"
+            correction_reason = proposal_item.get("correction_reason") or ""
+            required_evidence = proposal_item.get("required_evidence") or []
+            risk_flags = proposal_item.get("risk_flags") or []
+        else:
+            correction_proposal = {}
+            guard_decision = {
+                "guard_accepted": False,
+                "guard_reject_reason": "ai_unavailable" if ai_status == "unavailable" else "ai_proposal_missing_for_family",
+                "effective_state": candidate.get("calibration_state"),
+                "effective_value": candidate.get("current_value"),
+                "clamped": False,
+                "anomaly_route": None,
+                "route_action": "deterministic_only",
+                "runtime_change": False,
+            }
+            ai_review_state = "unavailable" if ai_status != "parsed" else "insufficient_context"
+            anomaly_type = "-"
+            correction_reason = ""
+            required_evidence = []
+            risk_flags = []
+
+        item = {
+            "family": family,
+            "threshold_version": candidate.get("threshold_version"),
+            "anomaly_type": anomaly_type,
+            "ai_review_state": ai_review_state,
+            "correction_proposal": {
+                "ai_proposed_value": correction_proposal.get("proposed_value"),
+                "ai_proposed_state": correction_proposal.get("proposed_state"),
+                "ai_anomaly_route": correction_proposal.get("anomaly_route"),
+                "ai_sample_window": correction_proposal.get("sample_window"),
+                "ai_required_evidence": required_evidence,
+            },
+            "correction_reason": correction_reason,
+            "required_evidence": required_evidence,
+            "risk_flags": risk_flags,
+            "guard_decision": guard_decision,
+            "guard_accepted": bool(guard_decision.get("guard_accepted")),
+            "guard_reject_reason": guard_decision.get("guard_reject_reason"),
+            "deterministic_state": candidate.get("calibration_state"),
+            "deterministic_value": candidate.get("recommended_value"),
+            "final_source_of_truth": "deterministic_calibration_guard",
+            "runtime_change": False,
+        }
+        items.append(item)
+
+    return {
+        "schema_version": THRESHOLD_AI_CORRECTION_SCHEMA_VERSION,
+        "report_type": "threshold_cycle_ai_correction",
+        "date": target_date,
+        "run_phase": run_phase,
+        "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "runtime_change": False,
+        "ai_status": ai_status,
+        "ai_provider_status": ai_provider_status or {"provider": "none", "status": "not_requested"},
+        "parse_warnings": parse_warnings,
+        "policy": {
+            "authority": "proposal_only",
+            "final_source_of_truth": "deterministic_calibration_guard",
+            "runtime_change": False,
+            "forbidden": [
+                "env/code/runtime direct change",
+                "intraday threshold mutation",
+                "safety guard bypass",
+                "safety_revert_required override",
+                "single-case live enable finalization",
+            ],
+        },
+        "prompt_contract": {
+            "input_sections": [
+                "calibration_candidates",
+                "calibration_source_bundle",
+                "threshold_cycle_cumulative",
+                "recent_anomaly_report",
+            ],
+            "output_schema": {
+                "schema_version": THRESHOLD_AI_CORRECTION_SCHEMA_VERSION,
+                "top_level_fields": ["schema_version", "corrections"],
+                "correction_fields": [
+                    "family",
+                    "anomaly_type",
+                    "ai_review_state",
+                    "correction_proposal",
+                    "correction_reason",
+                    "required_evidence",
+                    "risk_flags",
+                ],
+                "allowed_proposal_fields": ["proposed_state", "proposed_value", "anomaly_route", "sample_window"],
+            },
+        },
+        "ai_input_context": _build_ai_correction_input_context(calibration_report, cumulative_report),
+        "source_reports": {
+            "calibration_report": source_calibration_report_path or calibration_report.get("source_report"),
+            "cumulative_report": (cumulative_report or {}).get("report_path") if isinstance(cumulative_report, dict) else None,
+        },
+        "candidate_count": len(candidates),
+        "items": items,
+    }
+
+
+def render_threshold_cycle_ai_correction_markdown(report: dict) -> str:
+    lines = [
+        f"# Threshold Cycle AI Correction - {report.get('date')} {report.get('run_phase')}",
+        "",
+        f"- AI status: `{report.get('ai_status')}`",
+        "- Authority: proposal-only; deterministic calibration guard is the source of truth.",
+        "- Runtime change: `false`",
+        "",
+        "| family | ai_state | route | proposal | guard | reason |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for item in report.get("items") or []:
+        proposal = item.get("correction_proposal") or {}
+        guard = item.get("guard_decision") or {}
+        proposal_text = (
+            f"state={proposal.get('ai_proposed_state') or '-'}, "
+            f"value={_markdown_value(proposal.get('ai_proposed_value'))}, "
+            f"window={proposal.get('ai_sample_window') or '-'}"
+        )
+        guard_text = (
+            f"accepted={bool(guard.get('guard_accepted'))}, "
+            f"effective_state={guard.get('effective_state') or '-'}, "
+            f"effective_value={_markdown_value(guard.get('effective_value'))}, "
+            f"runtime_change={bool(guard.get('runtime_change'))}"
+        )
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _markdown_value(item.get("family")),
+                    _markdown_value(item.get("ai_review_state")),
+                    _markdown_value(proposal.get("ai_anomaly_route")),
+                    proposal_text,
+                    guard_text,
+                    _markdown_value(item.get("guard_reject_reason") or item.get("correction_reason")),
+                ]
+            )
+            + " |"
+        )
+    if report.get("parse_warnings"):
+        lines.extend(["", "## Parse Warnings", ""])
+        lines.extend(f"- {warning}" for warning in report.get("parse_warnings") or [])
+    lines.append("")
+    return "\n".join(lines)
+
+
+def save_threshold_cycle_ai_correction_report(report: dict) -> tuple[Path, Path]:
+    target_date = str(report.get("date") or date.today().isoformat())
+    run_phase = str(report.get("run_phase") or "postclose")
+    json_path, md_path = threshold_ai_review_paths(target_date, run_phase)
+    json_path.parent.mkdir(parents=True, exist_ok=True)
+    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    md_path.write_text(render_threshold_cycle_ai_correction_markdown(report), encoding="utf-8")
+    return json_path, md_path
 
 
 def _markdown_value(value: Any) -> str:
@@ -3519,6 +4240,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Save only the phase calibration artifact; do not overwrite canonical threshold cycle report.",
     )
+    parser.add_argument(
+        "--ai-correction-response-json",
+        help="Optional strict JSON AI correction response file. If omitted, AI correction artifact is saved as unavailable.",
+    )
+    parser.add_argument(
+        "--ai-correction-provider",
+        choices=["none", "gemini"],
+        default="none",
+        help="Optional AI provider for correction proposal generation. Default keeps deterministic calibration only.",
+    )
     args = parser.parse_args(argv)
 
     report = build_daily_threshold_cycle_report(
@@ -3526,7 +4257,23 @@ def main(argv: list[str] | None = None) -> int:
         skip_completed_rows=args.skip_db,
         calibration_run_phase=args.calibration_run_phase,
     )
-    save_threshold_calibration_report(report, run_phase=args.calibration_run_phase)
+    calibration_path = save_threshold_calibration_report(report, run_phase=args.calibration_run_phase)
+    ai_raw_response = None
+    ai_provider_status = {"provider": "none", "status": "not_requested"}
+    if args.ai_correction_response_json:
+        ai_raw_response = Path(args.ai_correction_response_json).read_text(encoding="utf-8")
+        ai_provider_status = {"provider": "file", "status": "loaded", "path": args.ai_correction_response_json}
+    elif args.ai_correction_provider == "gemini":
+        ai_raw_response, ai_provider_status = _call_gemini_threshold_ai_correction(
+            _build_ai_correction_input_context(report)
+        )
+    ai_correction_report = build_threshold_cycle_ai_correction_report(
+        report,
+        ai_raw_response=ai_raw_response,
+        source_calibration_report_path=str(calibration_path),
+        ai_provider_status=ai_provider_status,
+    )
+    save_threshold_cycle_ai_correction_report(ai_correction_report)
     if args.calibration_only:
         if args.print_stdout:
             print(json.dumps(report, ensure_ascii=False, indent=2))

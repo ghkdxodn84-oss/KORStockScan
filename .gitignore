@@ -58,6 +58,7 @@ logs/
 # ==========================================
 # bot_main.py의 재시작 감지용 플래그 파일
 restart.flag
+data/threshold_cycle/runtime_env/
 
 # ==========================================
 # 💻 OS 및 IDE 설정

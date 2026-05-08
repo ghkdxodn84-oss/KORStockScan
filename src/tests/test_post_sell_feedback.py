@@ -98,6 +98,9 @@ def test_record_and_evaluate_post_sell_feedback(monkeypatch, tmp_path):
     assert summary.evaluated_candidates == 2
     assert summary.outcome_counts.get("MISSED_UPSIDE", 0) == 1
     assert summary.outcome_counts.get("GOOD_EXIT", 0) == 1
+    evaluations = feedback_mod._load_jsonl(feedback_mod._evaluation_path("2026-04-08"))
+    assert "metrics_30m" in evaluations[0]
+    assert "metrics_60m" in evaluations[0]
 
     text = feedback_mod.format_post_sell_feedback_summary(summary)
     assert "MISSED_UPSIDE 1" in text
@@ -195,6 +198,8 @@ def test_soft_stop_forensics_report(monkeypatch, tmp_path):
     assert forensic["total_soft_stop"] == 2
     assert forensic["rebound_above_sell_rate"]["1m"] == 50.0
     assert forensic["rebound_above_buy_rate"]["3m"] == 50.0
+    assert forensic["rebound_above_sell_rate"]["30m"] == 50.0
+    assert forensic["rebound_above_buy_rate"]["60m"] == 50.0
     assert forensic["median_overshoot_pct"] == 0.4
     assert forensic["p95_overshoot_pct"] >= 0.66
     assert forensic["cooldown_would_block_rate"] == 100.0
@@ -242,6 +247,70 @@ def test_post_sell_candidate_dedup(monkeypatch, tmp_path):
     )
     assert first is not None
     assert second is None
+
+
+def test_evaluate_backfills_legacy_horizon_metrics(monkeypatch, tmp_path):
+    monkeypatch.setattr(feedback_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(
+        feedback_mod,
+        "TRADING_RULES",
+        SimpleNamespace(
+            POST_SELL_FEEDBACK_ENABLED=True,
+            POST_SELL_FEEDBACK_EVAL_ENABLED=True,
+            POST_SELL_FEEDBACK_MISSED_UPSIDE_MFE_PCT=0.8,
+            POST_SELL_FEEDBACK_MISSED_UPSIDE_CLOSE_PCT=0.3,
+            POST_SELL_FEEDBACK_GOOD_EXIT_MAE_PCT=-0.6,
+            POST_SELL_FEEDBACK_GOOD_EXIT_CLOSE_PCT=-0.2,
+        ),
+    )
+    feedback_mod._RECORDED_KEYS.clear()
+
+    candidate = feedback_mod.record_post_sell_candidate(
+        recommendation_id=71,
+        stock={"name": "레거시평가"},
+        code="771111",
+        sell_time="2026-04-08 10:00:30",
+        buy_price=10000,
+        sell_price=9900,
+        profit_rate=-1.0,
+        buy_qty=1,
+        exit_rule="scalp_soft_stop_pct",
+    )
+    assert candidate is not None
+    feedback_mod._append_jsonl(
+        feedback_mod._evaluation_path("2026-04-08"),
+        {
+            "post_sell_id": candidate["post_sell_id"],
+            "signal_date": "2026-04-08",
+            "stock_code": "771111",
+            "stock_name": "레거시평가",
+            "sell_time": "10:00:30",
+            "sell_price": 9900,
+            "buy_price": 10000,
+            "profit_rate": -1.0,
+            "outcome": "NEUTRAL",
+            "metrics_10m": {"mfe_pct": 0.0, "mae_pct": 0.0, "close_ret_pct": 0.0},
+        },
+    )
+
+    fake_kiwoom = types.SimpleNamespace(
+        get_kiwoom_token=lambda: "dummy",
+        get_minute_candles_ka10080=lambda _token, _code, limit=700: [
+            _make_candle("10:01:00", 10000, 9880, 9950),
+            _make_candle("10:30:00", 10100, 9900, 10050),
+            _make_candle("11:00:00", 10200, 9890, 10100),
+        ],
+    )
+    monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
+    monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)
+
+    summary = feedback_mod.evaluate_post_sell_candidates("2026-04-08", token="dummy")
+    assert summary.evaluated_candidates == 1
+    latest = feedback_mod._dedupe_latest_evaluations(
+        feedback_mod._load_jsonl(feedback_mod._evaluation_path("2026-04-08"))
+    )[0]
+    assert "metrics_30m" in latest
+    assert "metrics_60m" in latest
 
 
 def test_post_sell_ws_retain_window(monkeypatch, tmp_path):
@@ -389,6 +458,8 @@ def test_build_post_sell_feedback_report(monkeypatch, tmp_path):
     assert report["metrics"]["missed_upside_rate"] > 0.0
     assert report["metrics"]["good_exit_rate"] > 0.0
     assert report["metrics"]["estimated_extra_upside_10m_krw_sum"] > 0
+    assert report["metrics"]["estimated_extra_upside_30m_krw_sum"] > 0
+    assert report["meta"]["evaluation_horizons_min"] == [1, 3, 5, 10, 20, 30, 60]
     assert len(report["exit_rule_tuning"]) == 3
     assert len(report["tag_tuning"]) == 3
     assert report["priority_actions"]

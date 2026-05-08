@@ -161,6 +161,8 @@ def test_build_daily_threshold_cycle_report_generates_candidates_from_samples():
     assert whipsaw_candidate["safety_revert_required"] is False
     assert whipsaw_candidate["target_env_keys"]
     assert whipsaw_candidate["max_step_per_day"] is not None
+    assert whipsaw_candidate["sample_window"] == "rolling_10d_with_daily_guard"
+    assert whipsaw_candidate["window_policy"]["daily_only_allowed"] is False
     protect_trailing = report["threshold_snapshot"]["protect_trailing_smoothing"]
     assert protect_trailing["apply_ready"] is True
     assert protect_trailing["recommended"]["min_samples"] >= 3
@@ -197,6 +199,8 @@ def test_threshold_cycle_report_marks_calibration_sample_and_live_risk_states():
     assert candidates["scale_in_price_guard"]["calibration_state"] == "hold_sample"
     assert candidates["scale_in_price_guard"]["allowed_runtime_apply"] is False
     assert candidates["scale_in_price_guard"]["apply_mode"] == "report_only_calibration"
+    assert candidates["scale_in_price_guard"]["sample_window"] == "rolling_10d_or_cumulative_sparse"
+    assert candidates["holding_flow_ofi_smoothing"]["sample_window"] == "daily_intraday"
     assert report["post_apply_attribution"]["soft_stop_balanced_policy"]["perfect_win_rate_required"] is False
 
 
@@ -242,9 +246,238 @@ def test_threshold_cycle_calibration_uses_holding_exit_report_sources():
     candidates = {item["family"]: item for item in report["calibration_candidates"]}
     assert candidates["soft_stop_whipsaw_confirmation"]["source_sample_count"] == 20
     assert candidates["soft_stop_whipsaw_confirmation"]["sample_floor_status"] == "ready"
+    assert candidates["soft_stop_whipsaw_confirmation"]["window_policy"]["primary"] == "rolling_10d"
     assert candidates["soft_stop_whipsaw_confirmation"]["source_metrics"]["holding_exit_observation_whipsaw_signal"] is True
     assert candidates["holding_flow_ofi_smoothing"]["source_sample_count"] == 67
     assert candidates["holding_flow_ofi_smoothing"]["source_metrics"]["sentinel_primary"] == "HOLD_DEFER_DANGER"
+
+
+def test_soft_stop_calibration_holds_on_single_post_sell_source_sample():
+    report_sources = {
+        "schema_version": 1,
+        "target_date": "2026-05-08",
+        "sources": {
+            "post_sell_feedback": {"path": "data/report/monitor_snapshots/post_sell_feedback_2026-05-08.json", "exists": True},
+        },
+        "source_metrics": {
+            "soft_stop": {
+                "post_sell_soft_stop_total": 1,
+                "post_sell_rebound_above_sell_10m_rate": 100.0,
+                "post_sell_rebound_above_buy_10m_rate": 100.0,
+                "post_sell_rebound_above_sell_30m_rate": 100.0,
+                "post_sell_rebound_above_buy_30m_rate": 100.0,
+                "post_sell_rebound_above_sell_60m_rate": 100.0,
+                "post_sell_rebound_above_buy_60m_rate": 100.0,
+            },
+        },
+        "new_observation_axis_created": False,
+    }
+    pipeline_rows = [
+        {"stage": "soft_stop_micro_grace", "fields": {"profit_rate": "-1.82", "held_sec": "40"}}
+        for _ in range(13)
+    ]
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-08",
+        pipeline_loader=lambda target_date: pipeline_rows,
+        report_source_loader=lambda target_date: report_sources,
+        completed_rows_loader=lambda start_date, end_date: [],
+        calibration_run_phase="intraday",
+    )
+
+    candidate = next(
+        item for item in report["calibration_candidates"] if item["family"] == "soft_stop_whipsaw_confirmation"
+    )
+    assert candidate["source_sample_count"] == 1
+    assert candidate["calibration_state"] == "hold_sample"
+    assert candidate["sample_floor_status"] == "hold_sample"
+    assert candidate["runtime_change"] is False
+    assert candidate["source_metrics"]["post_sell_rebound_above_buy_30m_rate"] == 100.0
+
+
+def test_ai_correction_clamps_out_of_bounds_value_without_runtime_change():
+    calibration_report = {
+        "date": "2026-05-08",
+        "meta": {"calibration_run_phase": "intraday"},
+        "calibration_candidates": [
+            {
+                "family": "holding_flow_ofi_smoothing",
+                "threshold_version": "holding_flow_ofi_smoothing:manifest_only:ready",
+                "current_value": 90,
+                "recommended_value": 90,
+                "min_value": 30,
+                "max_value": 120,
+                "max_step_per_day": 15,
+                "sample_floor": 20,
+                "sample_count": 30,
+                "source_sample_count": 30,
+                "calibration_state": "hold",
+                "window_policy": {"primary": "daily_intraday", "secondary": ["rolling_5d"], "daily_only_allowed": True},
+                "allowed_runtime_apply": True,
+            }
+        ],
+    }
+    ai_response = {
+        "schema_version": 1,
+        "corrections": [
+            {
+                "family": "holding_flow_ofi_smoothing",
+                "anomaly_type": "defer_cost_spike",
+                "ai_review_state": "correction_proposed",
+                "correction_proposal": {
+                    "proposed_state": "adjust_up",
+                    "proposed_value": 200,
+                    "anomaly_route": "threshold_candidate",
+                    "sample_window": "daily_intraday",
+                },
+                "correction_reason": "defer cost deteriorated intraday",
+                "required_evidence": ["holding_exit_sentinel"],
+                "risk_flags": ["defer_cost"],
+            }
+        ],
+    }
+
+    review = report_mod.build_threshold_cycle_ai_correction_report(calibration_report, ai_raw_response=ai_response)
+
+    item = review["items"][0]
+    assert review["ai_status"] == "parsed"
+    assert item["guard_accepted"] is True
+    assert item["guard_decision"]["effective_value"] == 105
+    assert item["guard_decision"]["clamped"] is True
+    assert item["runtime_change"] is False
+    assert item["final_source_of_truth"] == "deterministic_calibration_guard"
+
+
+def test_ai_correction_keeps_soft_stop_single_sample_as_hold_sample():
+    report_sources = {
+        "schema_version": 1,
+        "target_date": "2026-05-08",
+        "sources": {"post_sell_feedback": {"path": "post_sell_feedback_2026-05-08.json", "exists": True}},
+        "source_metrics": {
+            "soft_stop": {
+                "post_sell_soft_stop_total": 1,
+                "post_sell_rebound_above_sell_30m_rate": 100.0,
+                "post_sell_rebound_above_buy_30m_rate": 100.0,
+            },
+        },
+        "new_observation_axis_created": False,
+    }
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-08",
+        pipeline_loader=lambda target_date: [
+            {"stage": "soft_stop_micro_grace", "fields": {"profit_rate": "-1.82", "held_sec": "40"}}
+            for _ in range(13)
+        ],
+        report_source_loader=lambda target_date: report_sources,
+        completed_rows_loader=lambda start_date, end_date: [],
+        calibration_run_phase="intraday",
+    )
+    ai_response = {
+        "schema_version": 1,
+        "corrections": [
+            {
+                "family": "soft_stop_whipsaw_confirmation",
+                "anomaly_type": "late_rebound",
+                "ai_review_state": "correction_proposed",
+                "correction_proposal": {
+                    "proposed_state": "adjust_up",
+                    "proposed_value": 80,
+                    "anomaly_route": "threshold_candidate",
+                    "sample_window": "rolling_10d",
+                },
+                "correction_reason": "single late rebound case",
+                "required_evidence": ["rolling soft-stop tail"],
+                "risk_flags": ["single_case"],
+            }
+        ],
+    }
+
+    review = report_mod.build_threshold_cycle_ai_correction_report(report, ai_raw_response=ai_response)
+    item = next(item for item in review["items"] if item["family"] == "soft_stop_whipsaw_confirmation")
+
+    assert item["guard_accepted"] is False
+    assert item["guard_decision"]["effective_state"] == "hold_sample"
+    assert "window_policy_blocks_single_case_live_candidate" in item["guard_reject_reason"]
+    deterministic = next(
+        candidate for candidate in report["calibration_candidates"] if candidate["family"] == "soft_stop_whipsaw_confirmation"
+    )
+    assert deterministic["calibration_state"] == "hold_sample"
+
+
+def test_ai_correction_instrumentation_gap_excludes_threshold_candidate_review():
+    calibration_report = {
+        "date": "2026-05-08",
+        "run_phase": "postclose",
+        "calibration_candidates": [
+            {
+                "family": "score65_74_recovery_probe",
+                "threshold_version": "score65_74_recovery_probe:ready",
+                "current_value": False,
+                "recommended_value": True,
+                "min_value": None,
+                "max_value": None,
+                "max_step_per_day": None,
+                "sample_floor": 20,
+                "sample_count": 50,
+                "source_sample_count": 50,
+                "calibration_state": "adjust_up",
+                "window_policy": {"primary": "daily_intraday", "secondary": ["rolling_5d"], "daily_only_allowed": True},
+                "allowed_runtime_apply": True,
+            }
+        ],
+    }
+    ai_response = {
+        "schema_version": 1,
+        "corrections": [
+            {
+                "family": "score65_74_recovery_probe",
+                "anomaly_type": "partial_sample_zero",
+                "ai_review_state": "correction_proposed",
+                "correction_proposal": {
+                    "proposed_state": "hold_sample",
+                    "anomaly_route": "instrumentation_gap",
+                    "sample_window": "daily_intraday",
+                },
+                "correction_reason": "partial fill provenance missing",
+                "required_evidence": ["full/partial split"],
+                "risk_flags": ["instrumentation_gap"],
+            }
+        ],
+    }
+
+    review = report_mod.build_threshold_cycle_ai_correction_report(calibration_report, ai_raw_response=ai_response)
+    decision = review["items"][0]["guard_decision"]
+
+    assert decision["guard_accepted"] is True
+    assert decision["route_action"] == "exclude_from_threshold_candidate_review"
+    assert decision["runtime_change"] is False
+
+
+def test_ai_correction_parse_failure_keeps_deterministic_report_available():
+    calibration_report = {
+        "date": "2026-05-08",
+        "run_phase": "intraday",
+        "calibration_candidates": [
+            {
+                "family": "holding_flow_ofi_smoothing",
+                "threshold_version": "holding_flow_ofi_smoothing:ready",
+                "current_value": 90,
+                "recommended_value": 90,
+                "calibration_state": "hold",
+                "allowed_runtime_apply": True,
+            }
+        ],
+    }
+
+    review = report_mod.build_threshold_cycle_ai_correction_report(
+        calibration_report,
+        ai_raw_response={"schema_version": 1, "corrections": [], "apply_now": True},
+    )
+
+    assert review["ai_status"] == "parse_rejected"
+    assert review["items"][0]["ai_review_state"] == "unavailable"
+    assert review["items"][0]["deterministic_state"] == "hold"
+    assert review["items"][0]["runtime_change"] is False
 
 
 def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates():

@@ -20,7 +20,9 @@ from src.utils.logger import log_error, log_info
 _WRITE_LOCK = threading.RLock()
 _RECORDED_KEYS: dict[tuple[str, str, str, str], float] = {}
 _WS_RETAIN_UNTIL: dict[str, float] = {}
-POST_SELL_REPORT_SCHEMA_VERSION = 2
+POST_SELL_REPORT_SCHEMA_VERSION = 3
+POST_SELL_FEEDBACK_HORIZONS_MIN = (1, 3, 5, 10, 20, 30, 60)
+POST_SELL_LONG_HORIZONS_MIN = (20, 30, 60)
 
 
 def _post_sell_dir() -> Path:
@@ -346,6 +348,20 @@ def _classify_candidate(metrics_10m: dict) -> str:
     return "NEUTRAL"
 
 
+def _evaluation_has_current_horizons(evaluation: dict) -> bool:
+    return all(isinstance(evaluation.get(f"metrics_{horizon}m"), dict) for horizon in POST_SELL_FEEDBACK_HORIZONS_MIN)
+
+
+def _dedupe_latest_evaluations(evaluations: list[dict]) -> list[dict]:
+    by_id: dict[str, dict] = {}
+    for item in evaluations or []:
+        post_sell_id = str(item.get("post_sell_id", "") or "")
+        if not post_sell_id:
+            continue
+        by_id[post_sell_id] = item
+    return list(by_id.values())
+
+
 @dataclass
 class PostSellFeedbackSummary:
     date: str
@@ -365,7 +381,11 @@ def evaluate_post_sell_candidates(target_date: str, token: str | None = None) ->
 
     candidates = _load_jsonl(_candidate_path(target_date))
     existing_evaluations = _load_jsonl(_evaluation_path(target_date))
-    evaluated_ids = {str(item.get("post_sell_id", "")) for item in existing_evaluations}
+    evaluated_ids = {
+        str(item.get("post_sell_id", ""))
+        for item in existing_evaluations
+        if _evaluation_has_current_horizons(item)
+    }
     summary = PostSellFeedbackSummary(date=target_date)
     summary.total_candidates = len(candidates)
 
@@ -402,11 +422,11 @@ def evaluate_post_sell_candidates(target_date: str, token: str | None = None) ->
                 candle_cache[code] = []
 
         candles = candle_cache.get(code, [])
-        metrics_1m = _compute_window_metrics(candidate, candles, 1)
-        metrics_3m = _compute_window_metrics(candidate, candles, 3)
-        metrics_5m = _compute_window_metrics(candidate, candles, 5)
-        metrics_10m = _compute_window_metrics(candidate, candles, 10)
-        metrics_20m = _compute_window_metrics(candidate, candles, 20)
+        metrics_by_horizon = {
+            horizon: _compute_window_metrics(candidate, candles, horizon)
+            for horizon in POST_SELL_FEEDBACK_HORIZONS_MIN
+        }
+        metrics_10m = metrics_by_horizon[10]
         outcome = _classify_candidate(metrics_10m)
 
         evaluation = {
@@ -434,11 +454,7 @@ def evaluate_post_sell_candidates(target_date: str, token: str | None = None) ->
                 candidate.get("same_symbol_soft_stop_cooldown_would_block", False)
             ),
             "outcome": outcome,
-            "metrics_1m": metrics_1m,
-            "metrics_3m": metrics_3m,
-            "metrics_5m": metrics_5m,
-            "metrics_10m": metrics_10m,
-            "metrics_20m": metrics_20m,
+            **{f"metrics_{horizon}m": metrics for horizon, metrics in metrics_by_horizon.items()},
         }
         new_evaluations.append(evaluation)
 
@@ -448,7 +464,7 @@ def evaluate_post_sell_candidates(target_date: str, token: str | None = None) ->
             for item in new_evaluations:
                 _append_jsonl(path, item)
 
-    all_evaluations = existing_evaluations + new_evaluations
+    all_evaluations = _dedupe_latest_evaluations(existing_evaluations + new_evaluations)
     summary.evaluated_candidates = len(all_evaluations)
 
     outcome_counts: dict[str, int] = {"MISSED_UPSIDE": 0, "GOOD_EXIT": 0, "NEUTRAL": 0}
@@ -512,6 +528,7 @@ def _build_summary_from_raw_rows(
     candidates: list[dict],
     evaluations: list[dict],
 ) -> PostSellFeedbackSummary:
+    evaluations = _dedupe_latest_evaluations(evaluations)
     summary = PostSellFeedbackSummary(date=target_date)
     summary.total_candidates = len(candidates)
     summary.evaluated_candidates = len(evaluations)
@@ -548,7 +565,11 @@ def _enrich_post_sell_rows(
     for item in evaluations:
         post_sell_id = str(item.get("post_sell_id", "") or "")
         candidate = candidate_by_id.get(post_sell_id, {})
-        metrics_10m = dict(item.get("metrics_10m") or {})
+        metrics_by_horizon = {
+            horizon: dict(item.get(f"metrics_{horizon}m") or {})
+            for horizon in POST_SELL_FEEDBACK_HORIZONS_MIN
+        }
+        metrics_10m = metrics_by_horizon[10]
         mfe_10m = _safe_float(metrics_10m.get("mfe_pct"), 0.0)
         mae_10m = _safe_float(metrics_10m.get("mae_pct"), 0.0)
         close_10m = _safe_float(metrics_10m.get("close_ret_pct"), 0.0)
@@ -568,9 +589,9 @@ def _enrich_post_sell_rows(
             if soft_stop_threshold_pct < 0.0
             else 0.0
         )
-        metrics_1m = dict(item.get("metrics_1m") or {})
-        metrics_3m = dict(item.get("metrics_3m") or {})
-        metrics_5m = dict(item.get("metrics_5m") or {})
+        metrics_1m = metrics_by_horizon[1]
+        metrics_3m = metrics_by_horizon[3]
+        metrics_5m = metrics_by_horizon[5]
         extra_upside_pct = max(0.0, mfe_10m)
         extra_upside_krw_est = int(round(sell_price * buy_qty * (extra_upside_pct / 100.0))) if sell_price > 0 and buy_qty > 0 else 0
         potential_peak_profit_rate = round(profit_rate + extra_upside_pct, 3)
@@ -579,56 +600,68 @@ def _enrich_post_sell_rows(
             if potential_peak_profit_rate > 0
             else 0.0
         )
-        rows.append(
-            {
-                "post_sell_id": post_sell_id,
-                "signal_date": str(item.get("signal_date") or candidate.get("signal_date") or ""),
-                "stock_code": str(item.get("stock_code") or candidate.get("stock_code") or ""),
-                "stock_name": str(item.get("stock_name") or candidate.get("stock_name") or ""),
-                "recommendation_id": _safe_int(item.get("recommendation_id", candidate.get("recommendation_id")), 0),
-                "strategy": str(item.get("strategy") or candidate.get("strategy") or ""),
-                "position_tag": str(item.get("position_tag") or candidate.get("position_tag") or ""),
-                "sell_time": str(item.get("sell_time") or candidate.get("sell_time") or ""),
-                "sell_bucket": str(item.get("sell_bucket") or candidate.get("sell_bucket") or ""),
-                "buy_price": int(round(buy_price)),
-                "sell_price": int(round(sell_price)),
-                "buy_qty": int(buy_qty),
-                "profit_rate": round(profit_rate, 3),
-                "peak_profit": round(peak_profit, 3),
-                "held_sec": int(held_sec),
-                "current_ai_score": round(current_ai_score, 1),
-                "exit_rule": str(item.get("exit_rule") or candidate.get("exit_rule") or "-"),
-                "revive": bool(item.get("revive", candidate.get("revive", False))),
-                "outcome": str(item.get("outcome") or "NEUTRAL").upper(),
-                "soft_stop_threshold_pct": round(soft_stop_threshold_pct, 3),
-                "soft_stop_overshoot_pct": float(soft_stop_overshoot_pct),
-                "same_symbol_soft_stop_cooldown_would_block": bool(
-                    item.get(
-                        "same_symbol_soft_stop_cooldown_would_block",
-                        candidate.get("same_symbol_soft_stop_cooldown_would_block", False),
-                    )
-                ),
-                "mfe_10m_pct": round(mfe_10m, 3),
-                "mae_10m_pct": round(mae_10m, 3),
-                "close_10m_pct": round(close_10m, 3),
-                "extra_upside_10m_pct": round(extra_upside_pct, 3),
-                "extra_upside_10m_krw_est": int(extra_upside_krw_est),
-                "potential_peak_profit_rate_10m": float(potential_peak_profit_rate),
-                "capture_efficiency_pct": float(capture_efficiency_pct),
-                "rebound_above_sell_1m": bool(metrics_1m.get("rebound_above_sell", False)),
-                "rebound_above_sell_3m": bool(metrics_3m.get("rebound_above_sell", False)),
-                "rebound_above_sell_5m": bool(metrics_5m.get("rebound_above_sell", False)),
-                "rebound_above_sell_10m": bool(metrics_10m.get("rebound_above_sell", False)),
-                "rebound_above_buy_1m": bool(metrics_1m.get("rebound_above_buy", False)),
-                "rebound_above_buy_3m": bool(metrics_3m.get("rebound_above_buy", False)),
-                "rebound_above_buy_5m": bool(metrics_5m.get("rebound_above_buy", False)),
-                "rebound_above_buy_10m": bool(metrics_10m.get("rebound_above_buy", False)),
-                "metrics_1m": metrics_1m,
-                "metrics_3m": metrics_3m,
-                "metrics_5m": metrics_5m,
-                "metrics_10m": metrics_10m,
-            }
-        )
+        row = {
+            "post_sell_id": post_sell_id,
+            "signal_date": str(item.get("signal_date") or candidate.get("signal_date") or ""),
+            "stock_code": str(item.get("stock_code") or candidate.get("stock_code") or ""),
+            "stock_name": str(item.get("stock_name") or candidate.get("stock_name") or ""),
+            "recommendation_id": _safe_int(item.get("recommendation_id", candidate.get("recommendation_id")), 0),
+            "strategy": str(item.get("strategy") or candidate.get("strategy") or ""),
+            "position_tag": str(item.get("position_tag") or candidate.get("position_tag") or ""),
+            "sell_time": str(item.get("sell_time") or candidate.get("sell_time") or ""),
+            "sell_bucket": str(item.get("sell_bucket") or candidate.get("sell_bucket") or ""),
+            "buy_price": int(round(buy_price)),
+            "sell_price": int(round(sell_price)),
+            "buy_qty": int(buy_qty),
+            "profit_rate": round(profit_rate, 3),
+            "peak_profit": round(peak_profit, 3),
+            "held_sec": int(held_sec),
+            "current_ai_score": round(current_ai_score, 1),
+            "exit_rule": str(item.get("exit_rule") or candidate.get("exit_rule") or "-"),
+            "revive": bool(item.get("revive", candidate.get("revive", False))),
+            "outcome": str(item.get("outcome") or "NEUTRAL").upper(),
+            "soft_stop_threshold_pct": round(soft_stop_threshold_pct, 3),
+            "soft_stop_overshoot_pct": float(soft_stop_overshoot_pct),
+            "same_symbol_soft_stop_cooldown_would_block": bool(
+                item.get(
+                    "same_symbol_soft_stop_cooldown_would_block",
+                    candidate.get("same_symbol_soft_stop_cooldown_would_block", False),
+                )
+            ),
+            "mfe_10m_pct": round(mfe_10m, 3),
+            "mae_10m_pct": round(mae_10m, 3),
+            "close_10m_pct": round(close_10m, 3),
+            "extra_upside_10m_pct": round(extra_upside_pct, 3),
+            "extra_upside_10m_krw_est": int(extra_upside_krw_est),
+            "potential_peak_profit_rate_10m": float(potential_peak_profit_rate),
+            "capture_efficiency_pct": float(capture_efficiency_pct),
+            "rebound_above_sell_1m": bool(metrics_1m.get("rebound_above_sell", False)),
+            "rebound_above_sell_3m": bool(metrics_3m.get("rebound_above_sell", False)),
+            "rebound_above_sell_5m": bool(metrics_5m.get("rebound_above_sell", False)),
+            "rebound_above_sell_10m": bool(metrics_10m.get("rebound_above_sell", False)),
+            "rebound_above_buy_1m": bool(metrics_1m.get("rebound_above_buy", False)),
+            "rebound_above_buy_3m": bool(metrics_3m.get("rebound_above_buy", False)),
+            "rebound_above_buy_5m": bool(metrics_5m.get("rebound_above_buy", False)),
+            "rebound_above_buy_10m": bool(metrics_10m.get("rebound_above_buy", False)),
+        }
+        for horizon, metrics in metrics_by_horizon.items():
+            row[f"metrics_{horizon}m"] = metrics
+            if horizon in POST_SELL_LONG_HORIZONS_MIN:
+                mfe_pct = _safe_float(metrics.get("mfe_pct"), 0.0)
+                mae_pct = _safe_float(metrics.get("mae_pct"), 0.0)
+                close_pct = _safe_float(metrics.get("close_ret_pct"), 0.0)
+                long_extra = max(0.0, mfe_pct)
+                row[f"mfe_{horizon}m_pct"] = round(mfe_pct, 3)
+                row[f"mae_{horizon}m_pct"] = round(mae_pct, 3)
+                row[f"close_{horizon}m_pct"] = round(close_pct, 3)
+                row[f"extra_upside_{horizon}m_pct"] = round(long_extra, 3)
+                row[f"extra_upside_{horizon}m_krw_est"] = (
+                    int(round(sell_price * buy_qty * (long_extra / 100.0))) if sell_price > 0 and buy_qty > 0 else 0
+                )
+                row[f"potential_peak_profit_rate_{horizon}m"] = round(profit_rate + long_extra, 3)
+                row[f"rebound_above_sell_{horizon}m"] = bool(metrics.get("rebound_above_sell", False))
+                row[f"rebound_above_buy_{horizon}m"] = bool(metrics.get("rebound_above_buy", False))
+        rows.append(row)
     return rows
 
 
@@ -659,8 +692,8 @@ def _build_soft_stop_forensics(rows: list[dict]) -> dict:
     if not soft_stop_rows:
         return {
             "total_soft_stop": 0,
-            "rebound_above_sell_rate": {"1m": 0.0, "3m": 0.0, "5m": 0.0, "10m": 0.0},
-            "rebound_above_buy_rate": {"1m": 0.0, "3m": 0.0, "5m": 0.0, "10m": 0.0},
+            "rebound_above_sell_rate": {f"{horizon}m": 0.0 for horizon in POST_SELL_FEEDBACK_HORIZONS_MIN},
+            "rebound_above_buy_rate": {f"{horizon}m": 0.0 for horizon in POST_SELL_FEEDBACK_HORIZONS_MIN},
             "median_overshoot_pct": 0.0,
             "p95_overshoot_pct": 0.0,
             "cooldown_would_block_rate": 0.0,
@@ -685,28 +718,37 @@ def _build_soft_stop_forensics(rows: list[dict]) -> dict:
             grouped[group_key_fn(row)].append(row)
         result: list[dict] = []
         for bucket, items in grouped.items():
-            result.append(
-                {
-                    "bucket": bucket,
-                    "trades": len(items),
-                    "rebound_above_sell_10m_rate": _ratio(sum(1 for item in items if bool(item.get("rebound_above_sell_10m"))), len(items)),
-                    "rebound_above_buy_10m_rate": _ratio(sum(1 for item in items if bool(item.get("rebound_above_buy_10m"))), len(items)),
-                    "avg_profit_rate": _avg([_safe_float(item.get("profit_rate"), 0.0) for item in items]),
-                    "avg_peak_profit": _avg([_safe_float(item.get("peak_profit"), 0.0) for item in items]),
-                    "median_overshoot_pct": _median([_safe_float(item.get("soft_stop_overshoot_pct"), 0.0) for item in items]),
-                    "cooldown_would_block_rate": _ratio(
-                        sum(1 for item in items if bool(item.get("same_symbol_soft_stop_cooldown_would_block"))),
-                        len(items),
-                    ),
-                }
-            )
+            bucket_row = {
+                "bucket": bucket,
+                "trades": len(items),
+                "avg_profit_rate": _avg([_safe_float(item.get("profit_rate"), 0.0) for item in items]),
+                "avg_peak_profit": _avg([_safe_float(item.get("peak_profit"), 0.0) for item in items]),
+                "median_overshoot_pct": _median([_safe_float(item.get("soft_stop_overshoot_pct"), 0.0) for item in items]),
+                "cooldown_would_block_rate": _ratio(
+                    sum(1 for item in items if bool(item.get("same_symbol_soft_stop_cooldown_would_block"))),
+                    len(items),
+                ),
+            }
+            for horizon in POST_SELL_FEEDBACK_HORIZONS_MIN:
+                bucket_row[f"rebound_above_sell_{horizon}m_rate"] = _ratio(
+                    sum(1 for item in items if bool(item.get(f"rebound_above_sell_{horizon}m"))),
+                    len(items),
+                )
+                bucket_row[f"rebound_above_buy_{horizon}m_rate"] = _ratio(
+                    sum(1 for item in items if bool(item.get(f"rebound_above_buy_{horizon}m"))),
+                    len(items),
+                )
+            result.append(bucket_row)
         return sorted(result, key=lambda item: (int(item.get("trades", 0) or 0), str(item.get("bucket") or "")), reverse=True)
 
     top_rebound_cases = sorted(
         soft_stop_rows,
         key=lambda row: (
             bool(row.get("rebound_above_buy_10m")),
+            bool(row.get("rebound_above_buy_30m")),
+            bool(row.get("rebound_above_buy_60m")),
             _safe_float((row.get("metrics_10m") or {}).get("mfe_vs_buy_pct"), 0.0),
+            _safe_float((row.get("metrics_60m") or {}).get("mfe_vs_buy_pct"), 0.0),
             _safe_float(row.get("soft_stop_overshoot_pct"), 0.0),
         ),
         reverse=True,
@@ -715,16 +757,12 @@ def _build_soft_stop_forensics(rows: list[dict]) -> dict:
     return {
         "total_soft_stop": len(soft_stop_rows),
         "rebound_above_sell_rate": {
-            "1m": _rate("rebound_above_sell_1m"),
-            "3m": _rate("rebound_above_sell_3m"),
-            "5m": _rate("rebound_above_sell_5m"),
-            "10m": _rate("rebound_above_sell_10m"),
+            f"{horizon}m": _rate(f"rebound_above_sell_{horizon}m")
+            for horizon in POST_SELL_FEEDBACK_HORIZONS_MIN
         },
         "rebound_above_buy_rate": {
-            "1m": _rate("rebound_above_buy_1m"),
-            "3m": _rate("rebound_above_buy_3m"),
-            "5m": _rate("rebound_above_buy_5m"),
-            "10m": _rate("rebound_above_buy_10m"),
+            f"{horizon}m": _rate(f"rebound_above_buy_{horizon}m")
+            for horizon in POST_SELL_FEEDBACK_HORIZONS_MIN
         },
         "median_overshoot_pct": _median(overshoot_values),
         "p95_overshoot_pct": _percentile(overshoot_values, 95.0),
@@ -747,6 +785,15 @@ def _build_soft_stop_forensics(rows: list[dict]) -> dict:
                 "rebound_above_buy_10m": bool(row.get("rebound_above_buy_10m")),
                 "rebound_above_sell_10m": bool(row.get("rebound_above_sell_10m")),
                 "mfe_vs_buy_10m_pct": round(_safe_float((row.get("metrics_10m") or {}).get("mfe_vs_buy_pct"), 0.0), 3),
+                "rebound_above_buy_20m": bool(row.get("rebound_above_buy_20m")),
+                "rebound_above_sell_20m": bool(row.get("rebound_above_sell_20m")),
+                "mfe_vs_buy_20m_pct": round(_safe_float((row.get("metrics_20m") or {}).get("mfe_vs_buy_pct"), 0.0), 3),
+                "rebound_above_buy_30m": bool(row.get("rebound_above_buy_30m")),
+                "rebound_above_sell_30m": bool(row.get("rebound_above_sell_30m")),
+                "mfe_vs_buy_30m_pct": round(_safe_float((row.get("metrics_30m") or {}).get("mfe_vs_buy_pct"), 0.0), 3),
+                "rebound_above_buy_60m": bool(row.get("rebound_above_buy_60m")),
+                "rebound_above_sell_60m": bool(row.get("rebound_above_sell_60m")),
+                "mfe_vs_buy_60m_pct": round(_safe_float((row.get("metrics_60m") or {}).get("mfe_vs_buy_pct"), 0.0), 3),
                 "same_symbol_soft_stop_cooldown_would_block": bool(
                     row.get("same_symbol_soft_stop_cooldown_would_block")
                 ),
@@ -904,7 +951,7 @@ def _build_priority_actions(exit_rule_rows: list[dict], limit: int = 3) -> list[
 
 
 def _case_view(row: dict) -> dict:
-    return {
+    result = {
         "post_sell_id": str(row.get("post_sell_id") or ""),
         "stock_code": str(row.get("stock_code") or ""),
         "stock_name": str(row.get("stock_name") or ""),
@@ -919,6 +966,18 @@ def _case_view(row: dict) -> dict:
         "extra_upside_10m_krw_est": int(_safe_int(row.get("extra_upside_10m_krw_est"), 0)),
         "capture_efficiency_pct": round(_safe_float(row.get("capture_efficiency_pct"), 0.0), 1),
     }
+    for horizon in POST_SELL_LONG_HORIZONS_MIN:
+        result[f"mfe_{horizon}m_pct"] = round(_safe_float(row.get(f"mfe_{horizon}m_pct"), 0.0), 3)
+        result[f"mae_{horizon}m_pct"] = round(_safe_float(row.get(f"mae_{horizon}m_pct"), 0.0), 3)
+        result[f"close_{horizon}m_pct"] = round(_safe_float(row.get(f"close_{horizon}m_pct"), 0.0), 3)
+        result[f"extra_upside_{horizon}m_pct"] = round(
+            _safe_float(row.get(f"extra_upside_{horizon}m_pct"), 0.0),
+            3,
+        )
+        result[f"extra_upside_{horizon}m_krw_est"] = int(
+            _safe_int(row.get(f"extra_upside_{horizon}m_krw_est"), 0)
+        )
+    return result
 
 
 def build_post_sell_feedback_report(
@@ -953,7 +1012,7 @@ def build_post_sell_feedback_report(
         )
 
     candidates = _load_jsonl(_candidate_path(safe_date))
-    evaluations = _load_jsonl(_evaluation_path(safe_date))
+    evaluations = _dedupe_latest_evaluations(_load_jsonl(_evaluation_path(safe_date)))
     rows = _enrich_post_sell_rows(candidates=candidates, evaluations=evaluations)
     evaluated_count = len(rows)
     top_limit = max(1, int(top_n or 10))
@@ -974,6 +1033,21 @@ def build_post_sell_feedback_report(
                 "capture_efficiency_avg_pct": 0.0,
                 "estimated_extra_upside_10m_krw_sum": 0,
                 "estimated_extra_upside_10m_krw_avg": 0,
+                "avg_extra_upside_20m_pct": 0.0,
+                "median_extra_upside_20m_pct": 0.0,
+                "avg_close_after_sell_20m_pct": 0.0,
+                "estimated_extra_upside_20m_krw_sum": 0,
+                "estimated_extra_upside_20m_krw_avg": 0,
+                "avg_extra_upside_30m_pct": 0.0,
+                "median_extra_upside_30m_pct": 0.0,
+                "avg_close_after_sell_30m_pct": 0.0,
+                "estimated_extra_upside_30m_krw_sum": 0,
+                "estimated_extra_upside_30m_krw_avg": 0,
+                "avg_extra_upside_60m_pct": 0.0,
+                "median_extra_upside_60m_pct": 0.0,
+                "avg_close_after_sell_60m_pct": 0.0,
+                "estimated_extra_upside_60m_krw_sum": 0,
+                "estimated_extra_upside_60m_krw_avg": 0,
                 "timing_tuning_pressure_score": 0.0,
             },
             "insight": {
@@ -990,6 +1064,7 @@ def build_post_sell_feedback_report(
                 "schema_version": POST_SELL_REPORT_SCHEMA_VERSION,
                 "generated_at": datetime.now().isoformat(),
                 "evaluation_mode": "post_sell_minute_forward",
+                "evaluation_horizons_min": list(POST_SELL_FEEDBACK_HORIZONS_MIN),
                 "thresholds": {
                     "missed_upside_mfe_pct": float(getattr(TRADING_RULES, "POST_SELL_FEEDBACK_MISSED_UPSIDE_MFE_PCT", 0.8) or 0.8),
                     "missed_upside_close_pct": float(getattr(TRADING_RULES, "POST_SELL_FEEDBACK_MISSED_UPSIDE_CLOSE_PCT", 0.3) or 0.3),
@@ -1013,6 +1088,24 @@ def build_post_sell_feedback_report(
     ])
     est_extra_krw_sum = int(sum(_safe_int(item.get("extra_upside_10m_krw_est"), 0) for item in rows))
     est_extra_krw_avg = int(round(est_extra_krw_sum / evaluated_count)) if evaluated_count > 0 else 0
+    long_horizon_metrics: dict[str, float | int] = {}
+    for horizon in POST_SELL_LONG_HORIZONS_MIN:
+        long_extra_values = [
+            _safe_float(item.get(f"extra_upside_{horizon}m_pct"), 0.0)
+            for item in rows
+        ]
+        long_close_values = [
+            _safe_float(item.get(f"close_{horizon}m_pct"), 0.0)
+            for item in rows
+        ]
+        long_sum = int(sum(_safe_int(item.get(f"extra_upside_{horizon}m_krw_est"), 0) for item in rows))
+        long_horizon_metrics[f"avg_extra_upside_{horizon}m_pct"] = _avg(long_extra_values)
+        long_horizon_metrics[f"median_extra_upside_{horizon}m_pct"] = _median(long_extra_values)
+        long_horizon_metrics[f"avg_close_after_sell_{horizon}m_pct"] = _avg(long_close_values)
+        long_horizon_metrics[f"estimated_extra_upside_{horizon}m_krw_sum"] = long_sum
+        long_horizon_metrics[f"estimated_extra_upside_{horizon}m_krw_avg"] = (
+            int(round(long_sum / evaluated_count)) if evaluated_count > 0 else 0
+        )
     timing_pressure = _clamp(
         (missed_rate * 0.65)
         + _clamp(max(avg_close_10m, 0.0) * 35.0, 0.0, 25.0)
@@ -1070,6 +1163,7 @@ def build_post_sell_feedback_report(
             "capture_efficiency_avg_pct": float(capture_avg),
             "estimated_extra_upside_10m_krw_sum": int(est_extra_krw_sum),
             "estimated_extra_upside_10m_krw_avg": int(est_extra_krw_avg),
+            **long_horizon_metrics,
             "timing_tuning_pressure_score": round(float(timing_pressure), 1),
         },
         "insight": {
@@ -1089,6 +1183,7 @@ def build_post_sell_feedback_report(
             "schema_version": POST_SELL_REPORT_SCHEMA_VERSION,
             "generated_at": datetime.now().isoformat(),
             "evaluation_mode": "post_sell_minute_forward",
+            "evaluation_horizons_min": list(POST_SELL_FEEDBACK_HORIZONS_MIN),
             "thresholds": {
                 "missed_upside_mfe_pct": float(getattr(TRADING_RULES, "POST_SELL_FEEDBACK_MISSED_UPSIDE_MFE_PCT", 0.8) or 0.8),
                 "missed_upside_close_pct": float(getattr(TRADING_RULES, "POST_SELL_FEEDBACK_MISSED_UPSIDE_CLOSE_PCT", 0.3) or 0.3),

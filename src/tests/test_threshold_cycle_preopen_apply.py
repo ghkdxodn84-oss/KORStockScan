@@ -87,9 +87,14 @@ def test_build_preopen_apply_manifest_accepts_calibrated_apply_candidate(tmp_pat
 def test_build_preopen_apply_manifest_accepts_efficient_tradeoff_candidate(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    ai_dir = report_dir / "threshold_cycle_ai_review"
     report_dir.mkdir(parents=True)
+    ai_dir.mkdir(parents=True)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "AI_REVIEW_DIR", ai_dir)
 
     (report_dir / "threshold_cycle_2026-05-07.json").write_text(
         json.dumps(
@@ -124,6 +129,165 @@ def test_build_preopen_apply_manifest_accepts_efficient_tradeoff_candidate(tmp_p
     assert manifest["runtime_change"] is False
     assert manifest["candidates"][0]["family"] == "score65_74_recovery_probe"
     assert manifest["calibration_policy"]["sample_shortfall_action"] == "cap_reduce_or_hold_sample_or_max_step_shrink"
+
+
+def test_auto_bounded_live_writes_runtime_env_with_ai_guard_and_stage_priority(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    ai_dir = report_dir / "threshold_cycle_ai_review"
+    report_dir.mkdir(parents=True)
+    ai_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "AI_REVIEW_DIR", ai_dir)
+
+    (report_dir / "threshold_cycle_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-08",
+                "apply_candidate_list": [],
+                "calibration_candidates": [
+                    {
+                        "family": "soft_stop_whipsaw_confirmation",
+                        "stage": "holding_exit",
+                        "priority": 1,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "adjust_up",
+                        "target_env_keys": [
+                            "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED",
+                            "SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC",
+                        ],
+                        "recommended_values": {"enabled": True, "confirm_sec": 45},
+                        "threshold_version": "soft_stop_whipsaw_confirmation:test",
+                    },
+                    {
+                        "family": "bad_entry_refined_canary",
+                        "stage": "holding_exit",
+                        "priority": 20,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "adjust_up",
+                        "target_env_keys": ["SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED"],
+                        "recommended_values": {"enabled": True},
+                    },
+                    {
+                        "family": "score65_74_recovery_probe",
+                        "stage": "entry",
+                        "priority": 10,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "adjust_up",
+                        "target_env_keys": [
+                            "AI_SCORE65_74_RECOVERY_PROBE_ENABLED",
+                            "AI_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE",
+                        ],
+                        "recommended_values": {"enabled": True, "min_buy_pressure": 65.0},
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ai_dir / "threshold_cycle_ai_review_2026-05-08_postclose.json").write_text(
+        json.dumps(
+            {
+                "ai_status": "parsed",
+                "ai_model": "tier2-plus",
+                "items": [
+                    {"family": "soft_stop_whipsaw_confirmation", "guard_accepted": True, "ai_anomaly_route": "threshold_candidate"},
+                    {"family": "bad_entry_refined_canary", "guard_accepted": True, "ai_anomaly_route": "threshold_candidate"},
+                    {"family": "score65_74_recovery_probe", "guard_accepted": True, "ai_anomaly_route": "threshold_candidate"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-11",
+        source_date="2026-05-08",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+    )
+
+    assert manifest["status"] == "auto_bounded_live_ready"
+    assert manifest["runtime_change"] is True
+    selected = {item["family"] for item in manifest["auto_apply_selected"]}
+    assert selected == {"soft_stop_whipsaw_confirmation", "score65_74_recovery_probe"}
+    blocked = [item for item in manifest["auto_apply_decisions"] if item["family"] == "bad_entry_refined_canary"][0]
+    assert blocked["selected"] is False
+    assert blocked["decision_reason"] == "same_stage_owner_conflict:soft_stop_whipsaw_confirmation"
+    env_text = (runtime_dir / "threshold_runtime_env_2026-05-11.env").read_text(encoding="utf-8")
+    assert "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED=true" in env_text
+    assert "KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_SEC=45" in env_text
+    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true" in env_text
+    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_MIN_BUY_PRESSURE=65" in env_text
+
+
+def test_auto_bounded_live_excludes_ai_instrumentation_gap(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    ai_dir = report_dir / "threshold_cycle_ai_review"
+    report_dir.mkdir(parents=True)
+    ai_dir.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "AI_REVIEW_DIR", ai_dir)
+
+    (report_dir / "threshold_cycle_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-08",
+                "calibration_candidates": [
+                    {
+                        "family": "score65_74_recovery_probe",
+                        "stage": "entry",
+                        "priority": 10,
+                        "allowed_runtime_apply": True,
+                        "safety_revert_required": False,
+                        "calibration_state": "adjust_up",
+                        "target_env_keys": ["AI_SCORE65_74_RECOVERY_PROBE_ENABLED"],
+                        "recommended_values": {"enabled": True},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ai_dir / "threshold_cycle_ai_review_2026-05-08_postclose.json").write_text(
+        json.dumps(
+            {
+                "ai_status": "parsed",
+                "items": [
+                    {
+                        "family": "score65_74_recovery_probe",
+                        "guard_accepted": True,
+                        "ai_anomaly_route": "instrumentation_gap",
+                        "route_action": "exclude_from_threshold_candidate_review",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-11",
+        source_date="2026-05-08",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+    )
+
+    assert manifest["status"] == "auto_bounded_live_blocked"
+    assert manifest["runtime_change"] is False
+    assert manifest["runtime_env_file"] is None
+    assert manifest["auto_apply_decisions"][0]["decision_reason"] == "ai_route_excluded_from_threshold_candidate"
+    assert not runtime_dir.exists()
 
 
 def test_build_preopen_apply_manifest_reports_missing_source(tmp_path, monkeypatch):

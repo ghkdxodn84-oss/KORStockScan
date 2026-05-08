@@ -6,17 +6,25 @@ PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="${VENV_PY:-$PROJECT_DIR/.venv/bin/python}"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
 SOURCE_DATE="${THRESHOLD_CYCLE_SOURCE_DATE:-}"
-APPLY_MODE="${THRESHOLD_CYCLE_APPLY_MODE:-manifest_only}"
+APPLY_MODE="${THRESHOLD_CYCLE_APPLY_MODE:-auto_bounded_live}"
+AUTO_APPLY="${THRESHOLD_CYCLE_AUTO_APPLY:-true}"
+REQUIRE_AI="${THRESHOLD_CYCLE_AUTO_APPLY_REQUIRE_AI:-true}"
 
 mkdir -p "$PROJECT_DIR/logs"
 cd "$PROJECT_DIR"
 
-echo "[threshold-cycle] preopen start target_date=$TARGET_DATE apply_mode=$APPLY_MODE"
+echo "[threshold-cycle] preopen start target_date=$TARGET_DATE apply_mode=$APPLY_MODE auto_apply=$AUTO_APPLY require_ai=$REQUIRE_AI"
 
 args=(--date "$TARGET_DATE" --apply-mode "$APPLY_MODE")
 if [ -n "$SOURCE_DATE" ]; then
   args+=(--source-date "$SOURCE_DATE")
 fi
+if [ "$AUTO_APPLY" = "true" ] || [ "$AUTO_APPLY" = "1" ]; then
+  args+=(--auto-apply)
+fi
+if [ "$REQUIRE_AI" = "false" ] || [ "$REQUIRE_AI" = "0" ]; then
+  args+=(--allow-deterministic-without-ai)
+fi
 
 PYTHONPATH=. "$VENV_PY" -m src.engine.threshold_cycle_preopen_apply "${args[@]}"
-echo "[threshold-cycle] preopen manifest complete target_date=$TARGET_DATE"
+echo "[threshold-cycle] preopen apply complete target_date=$TARGET_DATE"

@@ -15,7 +15,6 @@ COOLDOWN_STATE_FILE="${BUY_FUNNEL_SENTINEL_COOLDOWN_STATE_FILE:-$PROJECT_DIR/tmp
 COOLDOWN_SEC="${BUY_FUNNEL_SENTINEL_COOLDOWN_SEC:-240}"
 LOG_FILE="${BUY_FUNNEL_SENTINEL_LOG_FILE:-$PROJECT_DIR/logs/run_buy_funnel_sentinel.log}"
 DRY_RUN="${BUY_FUNNEL_SENTINEL_DRY_RUN:-0}"
-NOTIFY_ADMIN="${BUY_FUNNEL_SENTINEL_NOTIFY_ADMIN:-1}"
 IONICE_CLASS="${BUY_FUNNEL_SENTINEL_IONICE_CLASS:-2}"
 IONICE_LEVEL="${BUY_FUNNEL_SENTINEL_IONICE_LEVEL:-7}"
 NICE_LEVEL="${BUY_FUNNEL_SENTINEL_NICE_LEVEL:-12}"
@@ -59,8 +58,6 @@ fi
 cmd=(env PYTHONPATH=. "$VENV_PY" -m src.engine.buy_funnel_sentinel --date "$TARGET_DATE" --print-json "$@")
 if [[ "$DRY_RUN" == "1" ]]; then
   cmd+=(--dry-run)
-elif [[ "$NOTIFY_ADMIN" == "1" ]]; then
-  cmd+=(--notify-admin)
 fi
 
 if command -v ionice >/dev/null 2>&1 && [[ "$IONICE_CLASS" -ge 0 ]]; then

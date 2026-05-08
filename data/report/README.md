@@ -30,6 +30,9 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 | Server Comparison | `data/report/server_comparison/server_comparison_YYYY-MM-DD.md` | `src.engine.log_archive_service._save_server_comparison_artifacts` | full monitor snapshot에서 server comparison이 enabled일 때 | 정기 경로 존재. 최근 기본 wrapper는 `MONITOR_SNAPSHOT_SKIP_SERVER_COMPARISON=1`이라 자동 생성이 정책상 꺼질 수 있음 |
 | Statistical Action Weight | `data/report/statistical_action_weight/statistical_action_weight_YYYY-MM-DD.md` | `src.engine.daily_threshold_cycle_report` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | 2026-04-30, 2026-05-01 생성 확인 |
 | Holding/Exit Decision Matrix | `data/report/holding_exit_decision_matrix/holding_exit_decision_matrix_YYYY-MM-DD.md` | `src.engine.daily_threshold_cycle_report` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | 2026-04-30, 2026-05-01 생성 확인 |
+| Threshold Cycle AI Review | `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_{intraday,postclose}.md` | `src.engine.daily_threshold_cycle_report` | threshold-cycle intraday/postclose cron | AI correction proposal + deterministic guard 결과 |
+| Scalping Pattern Lab Automation | `data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_YYYY-MM-DD.md` | `src.engine.scalping_pattern_lab_automation` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | Gemini/Claude pattern lab의 improvement order/family candidate 요약. runtime/code 직접 변경 없음 |
+| Threshold Cycle Daily EV | `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.md` | `src.engine.threshold_cycle_ev_report` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | 무인 threshold apply 이후 제출 기준 리포트 |
 | Preclose Sell Target | `data/report/preclose_sell_target/preclose_sell_target_YYYY-MM-DD.md` | `src.scanners.preclose_sell_target_report` | `deploy/run_preclose_sell_target_report.sh YYYY-MM-DD --no-ai --no-telegram`로 1차 검증 후 정기화 판단 | canonical JSON과 같은 디렉터리에 생성하며 현재는 report-only. wrapper status는 `data/report/preclose_sell_target/status/`에 기록 |
 
 ## 비정기/legacy Markdown
@@ -57,6 +60,9 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 | Daily Report | `data/report/report_YYYY-MM-DD.json` | `src.engine.daily_report_service` | 없음 |
 | Threshold Cycle Report | `data/report/threshold_cycle_YYYY-MM-DD.json` | `src.engine.daily_threshold_cycle_report` | 없음. 단, 파생 Markdown 3종 생성 |
 | Threshold Cycle Calibration | `data/report/threshold_cycle_calibration/threshold_cycle_calibration_YYYY-MM-DD_{intraday,postclose}.json` | `src.engine.daily_threshold_cycle_report` | 없음. 장중/장후 2회 자동 calibration artifact |
+| Threshold Cycle AI Review | `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_{intraday,postclose}.json` | `src.engine.daily_threshold_cycle_report` | `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_{intraday,postclose}.md` |
+| Scalping Pattern Lab Automation | `data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_YYYY-MM-DD.json` | `src.engine.scalping_pattern_lab_automation` | `data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_YYYY-MM-DD.md` |
+| Threshold Cycle Daily EV | `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.json` | `src.engine.threshold_cycle_ev_report` | `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.md` |
 | Cumulative Threshold Cycle Report | `data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_YYYY-MM-DD.json` | `src.engine.daily_threshold_cycle_report` | `data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_YYYY-MM-DD.md` |
 | Preclose Sell Target | `data/report/preclose_sell_target/preclose_sell_target_YYYY-MM-DD.json` | `src.scanners.preclose_sell_target_report` | `data/report/preclose_sell_target/preclose_sell_target_YYYY-MM-DD.md` |
 | Threshold Compact Events | `data/threshold_cycle/date=YYYY-MM-DD/family=*/part-*.jsonl`, `data/threshold_cycle/threshold_events_YYYY-MM-DD.jsonl` | `src.engine.backfill_threshold_cycle_events` | 없음 |
@@ -133,6 +139,7 @@ calibration의 source는 `threshold_cycle` compact event만이 아니다. 아래
 - `postclose`는 canonical `threshold_cycle_YYYY-MM-DD.json`과 `threshold_cycle_calibration_YYYY-MM-DD_postclose.json`을 함께 생성한다.
 - 새 관찰축을 늘리지 않는다. 기존 report의 soft-stop tail, defer cost, trailing outcome, safety/provenance 요약을 calibration 입력으로 재사용한다.
 - BUY 병목은 partial sample `0`을 live 전면 차단으로 쓰지 않고, score65~74 EV/close_10m 우위와 submitted drought를 `score65_74_recovery_probe` 후보로 연결한다.
+- soft-stop/post-sell feedback은 10분 중심 분류를 유지하되 `1/3/5/10/20/30/60분` forward horizon을 함께 남겨 회복 지연, late rebound, defer cost calibration source로 쓴다.
 - ADM/SAW는 all `no_clear_edge`이면 `hold_no_edge`로 두고, non-`no_clear_edge` + `candidate_weight_source` bucket만 advisory canary 후보로 연결한다.
 - bad-entry는 naive hard block 재개가 아니라 `bad_entry_refined_candidate`의 soft-stop tail/defer cost 감소 후보만 calibration한다.
 - `preclose_sell_target`은 tuning/calibration source가 아니다. operator preclose review와 Telegram/cron acceptance 산출물로만 유지한다.

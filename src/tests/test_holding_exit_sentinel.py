@@ -154,77 +154,13 @@ def test_stale_with_active_holding_is_runtime_ops(monkeypatch, tmp_path):
     assert report["classification"]["primary"] == "RUNTIME_OPS"
 
 
-def test_notify_admin_skips_normal(monkeypatch, tmp_path):
+def test_policy_excludes_telegram_alert(monkeypatch, tmp_path):
     monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
-    called = []
-    report = {"target_date": "2026-05-06", "classification": {"primary": "NORMAL", "secondary": []}}
-    monkeypatch.setattr(sentinel, "_load_telegram_config", lambda: ("token", "admin"))
-    monkeypatch.setattr(sentinel, "_send_telegram", lambda *args: called.append(args))
+    _write_events(tmp_path, "2026-05-06", [_event("2026-05-06", "10:00:00", "holding_started")])
 
-    result = sentinel.maybe_notify_admin(report, {"markdown": "report.md"}, enabled=True)
+    report = sentinel.build_holding_exit_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:05:00"),
+    )
 
-    assert result == {"enabled": True, "status": "skipped", "reason": "normal"}
-    assert called == []
-
-
-def test_notify_admin_deduplicates_until_normal_reset(monkeypatch, tmp_path):
-    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
-    called = []
-    report = {
-        "target_date": "2026-05-06",
-        "as_of": "2026-05-06T10:05:00",
-        "classification": {"primary": "HOLD_DEFER_DANGER", "secondary": ["AI_HOLDING_OPS"]},
-        "current": {
-            "session": {
-                "stage_unique": {"exit_signal": 2, "sell_order_sent": 2, "sell_completed": 1},
-                "stage_events": {"holding_flow_override_defer_exit": 3},
-                "ratios": {"sell_sent_to_exit_signal_unique_pct": 100.0, "ai_cache_miss_pct": 95.0},
-            }
-        },
-        "observation": {"metrics": {}},
-    }
-    normal_report = {
-        "target_date": "2026-05-06",
-        "as_of": "2026-05-06T10:10:00",
-        "classification": {"primary": "NORMAL", "secondary": []},
-    }
-
-    monkeypatch.setattr(sentinel, "_load_telegram_config", lambda: ("token", "admin"))
-    monkeypatch.setattr(sentinel, "_send_telegram", lambda *args: called.append(args))
-
-    first = sentinel.maybe_notify_admin(report, {"markdown": "report.md"}, enabled=True)
-    duplicate = sentinel.maybe_notify_admin(report, {"markdown": "report.md"}, enabled=True)
-    normal = sentinel.maybe_notify_admin(normal_report, {"markdown": "report.md"}, enabled=True)
-    after_reset = sentinel.maybe_notify_admin(report, {"markdown": "report.md"}, enabled=True)
-
-    assert first == {"enabled": True, "status": "sent", "reason": ""}
-    assert duplicate == {"enabled": True, "status": "skipped", "reason": "duplicate_signature"}
-    assert normal == {"enabled": True, "status": "skipped", "reason": "normal"}
-    assert after_reset == {"enabled": True, "status": "sent", "reason": ""}
-    assert len(called) == 2
-
-
-def test_telegram_message_is_concise_korean_summary():
-    report = {
-        "as_of": "2026-05-06T10:05:00",
-        "classification": {"primary": "HOLD_DEFER_DANGER", "secondary": ["AI_HOLDING_OPS"]},
-        "current": {
-            "session": {
-                "stage_unique": {"exit_signal": 2, "sell_order_sent": 2, "sell_completed": 1},
-                "stage_events": {"holding_flow_override_defer_exit": 3},
-                "ratios": {"sell_sent_to_exit_signal_unique_pct": 100.0, "ai_cache_miss_pct": 95.0},
-            }
-        },
-        "observation": {
-            "metrics": {
-                "soft_stop_rebound_above_sell_10m_rate": 80.0,
-                "trailing_missed_upside_rate": 40.0,
-            }
-        },
-    }
-
-    message = sentinel.build_telegram_message(report, {"markdown": "report.md"})
-
-    assert "HOLD/EXIT 이상치" in message
-    assert "HOLD 유예 악화 + AI 보유감시 이상" in message
-    assert "자동조치: 없음" in message
+    assert report["policy"]["allowed_automations"] == ["json_report", "markdown_report", "action_recommendation"]
