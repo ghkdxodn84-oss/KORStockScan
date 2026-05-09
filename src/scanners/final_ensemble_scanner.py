@@ -260,14 +260,13 @@ def run_integrated_scanner():
         for stock in target_list:
             code = str(stock['Code']).strip().zfill(6)
             name = stock['Name']
-            
-            df = db.get_stock_data(code, limit=60)
-            if len(df) < 30: 
+            df_raw = db.get_stock_data(code, limit=60)
+            if len(df_raw) < 30:
                 drop_stats['short_data'] += 1
                 continue
 
             # 💡 [핵심 로직] 꺼내온 즉시 컬럼명을 AI용으로 갈아입힙니다.
-            df = df.rename(columns=REVERSE_MAPPING)
+            df = df_raw.rename(columns=REVERSE_MAPPING)
 
             df = df.sort_values('Date')
             current_price = df.iloc[-1]['Close']
@@ -294,26 +293,26 @@ def run_integrated_scanner():
 
             try:
                 # 추론을 ml_predictor에게 위임!
-                p_final = ml_predictor.predict_prob_for_df(df, models)
+                p_final = ml_predictor.predict_prob_for_df(df_raw, models)
 
                 if p_final < getattr(TRADING_RULES, 'PROB_RUNNER_PICK', 0.70):
-                    drop_stats['ai_prob'] += 1  
+                    drop_stats['ai_prob'] += 1
                     continue
 
                 # AI를 통과한 녀석들만 수급 필터를 위해 피처 계산
-                df_feat = calculate_all_features(df)
+                df_feat = calculate_all_features(df_raw)
                 latest_row = df_feat.iloc[[-1]]
 
-                f_roll5 = latest_row['Foreign_Net_Roll5'].values[0]
-                i_roll5 = latest_row['Inst_Net_Roll5'].values[0]
-                f_accel = latest_row['Foreign_Net_Accel'].values[0]
-                i_accel = latest_row['Inst_Net_Accel'].values[0]
+                f_roll5 = latest_row['foreign_net_roll5'].values[0]
+                i_roll5 = latest_row['inst_net_roll5'].values[0]
+                f_accel = latest_row['foreign_net_accel'].values[0]
+                i_accel = latest_row['inst_net_accel'].values[0]
 
                 if not ((f_roll5 > 0 and f_accel > 0) or (i_roll5 > 0 and i_accel > 0)):
                     drop_stats['supply'] += 1
                     continue
 
-                h60, l60 = df_feat['High'].tail(60).max(), df_feat['Low'].tail(60).min()
+                h60, l60 = df_feat['high'].tail(60).max(), df_feat['low'].tail(60).min()
                 pos_pct = (current_price - l60) / (h60 - l60 + 1e-9)
                 pos_tag = 'BREAKOUT' if pos_pct >= 0.8 else ('BOTTOM' if pos_pct <= 0.3 else 'MIDDLE')
 

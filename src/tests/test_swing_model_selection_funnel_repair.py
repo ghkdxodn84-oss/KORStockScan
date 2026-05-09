@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pandas as pd
 
+import src.engine.sniper_state_handlers as state_handlers
 from src.engine.swing_selection_funnel_report import (
     build_swing_selection_funnel_report,
     summarize_pipeline_events,
@@ -148,6 +149,40 @@ def test_swing_funnel_report_separates_raw_and_unique_event_counts():
             "fields": {
                 "strategy": "KOSPI_ML",
                 "actual_order_submitted": False,
+                "orderbook_micro_ready": True,
+                "orderbook_micro_state": "bullish",
+                "orderbook_micro_observer_healthy": True,
+                "swing_micro_advice": "SUPPORT_ENTRY",
+                "swing_micro_runtime_effect": False,
+            },
+        },
+        {
+            "stage": "swing_scale_in_micro_context_observed",
+            "stock_code": "000004",
+            "stock_name": "D",
+            "record_id": 4,
+            "fields": {
+                "strategy": "KOSPI_ML",
+                "orderbook_micro_ready": True,
+                "orderbook_micro_state": "bearish",
+                "orderbook_micro_observer_healthy": True,
+                "swing_micro_advice": "RISK_BEARISH",
+                "swing_micro_runtime_effect": False,
+            },
+        },
+        {
+            "stage": "holding_flow_ofi_smoothing_applied",
+            "stock_code": "000004",
+            "stock_name": "D",
+            "record_id": 4,
+            "fields": {
+                "strategy": "KOSPI_ML",
+                "smoothing_action": "NO_CHANGE",
+                "orderbook_micro_ready": False,
+                "orderbook_micro_state": "insufficient",
+                "orderbook_micro_observer_healthy": False,
+                "swing_micro_advice": "MISSING",
+                "swing_micro_runtime_effect": False,
             },
         },
     ]
@@ -159,6 +194,54 @@ def test_swing_funnel_report_separates_raw_and_unique_event_counts():
     assert summary["gatekeeper_actions"]["눌림 대기"] == 1
     assert summary["submitted_unique_records"] == 1
     assert summary["simulated_order_unique_records"] == 1
+    assert summary["ofi_qi_summary"]["entry_micro_state_counts"]["bullish"] == 1
+    assert summary["ofi_qi_summary"]["scale_in_micro_advice_counts"]["RISK_BEARISH"] == 1
+    assert summary["ofi_qi_summary"]["exit_smoothing_action_counts"]["NO_CHANGE"] == 1
+    assert summary["ofi_qi_summary"]["stale_missing_count"] == 1
+
+
+def test_swing_micro_context_advice_is_observe_only():
+    bullish = state_handlers._build_swing_micro_log_fields(
+        {
+            "ready": True,
+            "micro_state": "bullish",
+            "observer_healthy": True,
+            "snapshot_age_ms": 100,
+            "qi": 0.5,
+            "ofi_norm": 0.6,
+        },
+        phase="entry",
+    )
+    bearish_pyramid = state_handlers._build_swing_micro_log_fields(
+        {
+            "ready": True,
+            "micro_state": "bearish",
+            "observer_healthy": True,
+            "snapshot_age_ms": 100,
+        },
+        phase="scale_in",
+        add_type="PYRAMID",
+    )
+    missing = state_handlers._build_swing_micro_log_fields(None, phase="entry")
+    avg_down = state_handlers._build_swing_micro_log_fields(
+        {
+            "ready": True,
+            "micro_state": "bullish",
+            "observer_healthy": True,
+            "snapshot_age_ms": 100,
+        },
+        phase="scale_in",
+        add_type="AVG_DOWN",
+    )
+
+    assert bullish["swing_micro_advice"] == "SUPPORT_ENTRY"
+    assert bullish["swing_micro_runtime_effect"] is False
+    assert bullish["swing_micro_counterfactual_price_action"] == "ALLOW_EXISTING_PRICE"
+    assert bearish_pyramid["swing_micro_advice"] == "RISK_BEARISH"
+    assert bearish_pyramid["swing_micro_counterfactual_price_action"] == "WAIT_FOR_PULLBACK"
+    assert bearish_pyramid["swing_micro_micro_risk"] is True
+    assert missing["swing_micro_advice"] == "MISSING"
+    assert avg_down["swing_micro_recovery_support_observed"] is True
 
 
 def test_build_swing_selection_funnel_report_from_injected_sources():
@@ -323,6 +406,13 @@ def test_swing_lifecycle_audit_tracks_full_funnel_and_observation_axes():
                     "add_type": "PYRAMID",
                     "effective_qty": 2,
                     "actual_order_submitted": False,
+                    "orderbook_micro_ready": True,
+                    "orderbook_micro_state": "bearish",
+                    "orderbook_micro_observer_healthy": True,
+                    "swing_micro_advice": "RISK_BEARISH",
+                    "swing_micro_micro_risk": True,
+                    "swing_micro_risk": True,
+                    "swing_micro_runtime_effect": False,
                 },
             },
             {
@@ -335,6 +425,26 @@ def test_swing_lifecycle_audit_tracks_full_funnel_and_observation_axes():
                     "exit_source": "PRESET_TARGET",
                     "profit_rate": 1.5,
                     "actual_order_submitted": False,
+                    "orderbook_micro_ready": True,
+                    "orderbook_micro_state": "bullish",
+                    "orderbook_micro_observer_healthy": True,
+                    "swing_micro_advice": "SUPPORT_ENTRY",
+                    "swing_micro_runtime_effect": False,
+                },
+            },
+            {
+                "stage": "holding_flow_ofi_smoothing_applied",
+                "stock_code": "000003",
+                "stock_name": "C",
+                "record_id": 3,
+                "fields": {
+                    "strategy": "KOSPI_ML",
+                    "smoothing_action": "NO_CHANGE",
+                    "orderbook_micro_ready": True,
+                    "orderbook_micro_state": "neutral",
+                    "orderbook_micro_observer_healthy": True,
+                    "swing_micro_advice": "WAIT_FOR_PULLBACK",
+                    "swing_micro_runtime_effect": False,
                 },
             },
         ],
@@ -344,9 +454,16 @@ def test_swing_lifecycle_audit_tracks_full_funnel_and_observation_axes():
     assert report["lifecycle_events"]["unique_record_counts"]["blocked_swing_gap"] == 1
     assert report["lifecycle_events"]["gatekeeper_actions"]["눌림 대기"] == 1
     assert report["lifecycle_events"]["add_types"]["PYRAMID"] == 1
+    assert report["lifecycle_events"]["ofi_qi_summary"]["scale_in_micro_advice_counts"]["RISK_BEARISH"] == 1
+    assert report["lifecycle_events"]["ofi_qi_summary"]["exit_smoothing_action_counts"]["NO_CHANGE"] == 1
     assert report["db_lifecycle"]["completed_rows"] == 1
     axis_status = {axis["axis_id"]: axis["status"] for axis in report["observation_axes"]}
     assert axis_status["swing_scale_in_avg_down_pyramid"] == "ready"
+    assert axis_status["swing_scale_in_ofi_qi_confirmation"] == "ready"
+    families = {family["family"] for family in report["threshold_families"]}
+    assert "swing_entry_ofi_qi_execution_quality" in families
+    assert "swing_scale_in_ofi_qi_confirmation" in families
+    assert "swing_exit_ofi_qi_smoothing" in families
     json.dumps(report, ensure_ascii=False)
 
 
@@ -401,6 +518,20 @@ def test_swing_improvement_automation_emits_workorder_ready_orders():
                 "stock_name": "B",
                 "record_id": 2,
                 "fields": {"strategy": "KOSPI_ML", "action": "전량 회피"},
+            },
+            {
+                "stage": "swing_scale_in_micro_context_observed",
+                "stock_code": "000003",
+                "stock_name": "C",
+                "record_id": 3,
+                "fields": {
+                    "strategy": "KOSPI_ML",
+                    "orderbook_micro_ready": True,
+                    "orderbook_micro_state": "bearish",
+                    "orderbook_micro_observer_healthy": True,
+                    "swing_micro_advice": "RISK_BEARISH",
+                    "swing_micro_runtime_effect": False,
+                },
             }
         ],
     )
@@ -409,6 +540,7 @@ def test_swing_improvement_automation_emits_workorder_ready_orders():
 
     assert automation["report_type"] == "swing_improvement_automation"
     assert orders["order_swing_gatekeeper_reject_threshold_review"]["lifecycle_stage"] == "entry"
+    assert orders["order_swing_scale_in_ofi_qi_bearish_risk_review"]["threshold_family"] == "swing_scale_in_ofi_qi_confirmation"
     assert orders["order_swing_ai_contract_structured_output_eval"]["runtime_effect"] is False
     assert automation["auto_family_candidates"]
 

@@ -17,6 +17,7 @@ from src.engine.swing_selection_funnel_report import (
     SWING_EVENT_STAGES,
     SWING_STRATEGIES,
     load_recommendation_rows,
+    summarize_ofi_qi_events,
     summarize_pipeline_events,
     summarize_recommendation_rows,
 )
@@ -43,6 +44,7 @@ ENTRY_STAGES = {
     "blocked_gatekeeper_error",
     "market_regime_block",
     "market_regime_pass",
+    "swing_entry_micro_context_observed",
     "order_bundle_submitted",
     "order_submitted",
     "buy_order_submitted",
@@ -192,6 +194,57 @@ SWING_THRESHOLD_FAMILIES = [
         "sample_window": "rolling_10d",
         "rollback_guard": "defer_cost_or_safety_exit_delay",
         "source_metrics": ["flow_action", "defer_sec", "worsen_after_candidate"],
+    },
+    {
+        "family": "swing_entry_ofi_qi_execution_quality",
+        "lifecycle_stage": "entry",
+        "current_surface": "swing_entry_micro_context_observed and order submit provenance",
+        "bounds": None,
+        "max_step_per_day": None,
+        "sample_floor": 5,
+        "sample_window": "rolling_5d",
+        "rollback_guard": "stale_missing_or_bearish_supported_bad_entry",
+        "source_metrics": [
+            "entry_micro_state_counts",
+            "entry_micro_advice_counts",
+            "stale_missing_ratio",
+            "submitted_or_simulated_entry_quality",
+        ],
+    },
+    {
+        "family": "swing_scale_in_ofi_qi_confirmation",
+        "lifecycle_stage": "scale_in",
+        "current_surface": "PYRAMID/AVG_DOWN OFI/QI confirmation observe-only",
+        "bounds": None,
+        "max_step_per_day": None,
+        "sample_floor": 3,
+        "sample_window": "rolling_10d",
+        "rollback_guard": "post_add_mae_or_bearish_micro_risk_deterioration",
+        "source_metrics": [
+            "scale_in_micro_state_counts",
+            "scale_in_micro_advice_counts",
+            "swing_micro_support",
+            "swing_micro_risk",
+            "swing_micro_recovery_support_observed",
+        ],
+    },
+    {
+        "family": "swing_exit_ofi_qi_smoothing",
+        "lifecycle_stage": "holding_exit",
+        "current_surface": "holding_flow_ofi_smoothing_applied distribution",
+        "bounds": None,
+        "max_step_per_day": None,
+        "sample_floor": 5,
+        "sample_window": "rolling_10d",
+        "rollback_guard": "defer_cost_or_post_sell_rebound_deterioration",
+        "source_metrics": [
+            "exit_micro_state_counts",
+            "exit_smoothing_action_counts",
+            "DEBOUNCE_EXIT",
+            "CONFIRM_EXIT",
+            "NO_CHANGE",
+            "MISSING",
+        ],
     },
 ]
 
@@ -371,6 +424,7 @@ def summarize_db_lifecycle_rows(rows: Iterable[dict[str, Any]]) -> dict[str, Any
 
 
 def summarize_lifecycle_events(events: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    events = list(events)
     raw_by_stage = Counter()
     unique_by_stage: dict[str, set[tuple[str, str, str]]] = defaultdict(set)
     raw_by_group = Counter()
@@ -476,6 +530,7 @@ def summarize_lifecycle_events(events: Iterable[dict[str, Any]]) -> dict[str, An
             }
             for (record_id, code, name), events in list(by_record_timeline.items())[:10]
         ],
+        "ofi_qi_summary": summarize_ofi_qi_events(events),
     }
 
 
@@ -493,6 +548,7 @@ def build_observation_axes(
 ) -> list[dict[str, Any]]:
     raw_counts = lifecycle_events.get("raw_counts") or {}
     unique_counts = lifecycle_events.get("unique_record_counts") or {}
+    ofi_qi = lifecycle_events.get("ofi_qi_summary") or {}
 
     axes = [
         {
@@ -581,6 +637,66 @@ def build_observation_axes(
                 lifecycle_events, ["exit_source", "sell_reason", "profit_rate", "post_sell_rebound"]
             )
             + int(db_summary.get("valid_profit_rows", 0)),
+        },
+        {
+            "axis_id": "swing_entry_ofi_qi_execution_quality",
+            "lifecycle_stage": "entry",
+            "threshold_family": "swing_entry_ofi_qi_execution_quality",
+            "sample_count": int(
+                sum((ofi_qi.get("entry_micro_state_counts") or {}).values())
+            ),
+            "required_fields": [
+                "orderbook_micro_state",
+                "orderbook_micro_qi",
+                "orderbook_micro_ofi_norm",
+                "swing_micro_advice",
+            ],
+            "observed_field_count": _coverage_count(
+                lifecycle_events,
+                [
+                    "orderbook_micro_state",
+                    "orderbook_micro_qi",
+                    "orderbook_micro_ofi_norm",
+                    "swing_micro_advice",
+                ],
+            ),
+        },
+        {
+            "axis_id": "swing_scale_in_ofi_qi_confirmation",
+            "lifecycle_stage": "scale_in",
+            "threshold_family": "swing_scale_in_ofi_qi_confirmation",
+            "sample_count": int(
+                sum((ofi_qi.get("scale_in_micro_state_counts") or {}).values())
+            ),
+            "required_fields": [
+                "add_type",
+                "swing_micro_support",
+                "swing_micro_risk",
+                "swing_micro_recovery_support_observed",
+            ],
+            "observed_field_count": _coverage_count(
+                lifecycle_events,
+                [
+                    "add_type",
+                    "swing_micro_micro_support",
+                    "swing_micro_micro_risk",
+                    "swing_micro_recovery_support_observed",
+                ],
+            ),
+        },
+        {
+            "axis_id": "swing_exit_ofi_qi_smoothing",
+            "lifecycle_stage": "holding_exit",
+            "threshold_family": "swing_exit_ofi_qi_smoothing",
+            "sample_count": int(
+                sum((ofi_qi.get("exit_smoothing_action_counts") or {}).values())
+                or sum((ofi_qi.get("exit_micro_state_counts") or {}).values())
+            ),
+            "required_fields": ["smoothing_action", "holding_flow_ofi_regime", "swing_micro_advice"],
+            "observed_field_count": _coverage_count(
+                lifecycle_events,
+                ["smoothing_action", "holding_flow_ofi_regime", "swing_micro_advice"],
+            ),
         },
     ]
     for axis in axes:
@@ -726,6 +842,7 @@ def _family_metric_snapshot(audit_report: dict[str, Any], family: str) -> dict[s
     model = audit_report.get("model_selection") or {}
     csv = audit_report.get("recommendation_csv") or {}
     db = audit_report.get("db_lifecycle") or {}
+    ofi_qi = events.get("ofi_qi_summary") or {}
     if family == "swing_model_floor":
         return {
             "sample_count": int(model.get("selected_count") or 0),
@@ -777,6 +894,40 @@ def _family_metric_snapshot(audit_report: dict[str, Any], family: str) -> dict[s
                 key: (events.get("field_coverage") or {}).get(key, 0)
                 for key in ("flow_action", "defer_sec", "worsen_after_candidate")
             },
+        }
+    if family == "swing_entry_ofi_qi_execution_quality":
+        entry_states = ofi_qi.get("entry_micro_state_counts") or {}
+        return {
+            "sample_count": int(sum(entry_states.values())),
+            "entry_micro_state_counts": entry_states,
+            "entry_micro_advice_counts": ofi_qi.get("entry_micro_advice_counts"),
+            "stale_missing_ratio": ofi_qi.get("stale_missing_ratio"),
+            "submitted_unique_records": events.get("submitted_unique_records"),
+            "simulated_order_unique_records": events.get("simulated_order_unique_records"),
+        }
+    if family == "swing_scale_in_ofi_qi_confirmation":
+        scale_states = ofi_qi.get("scale_in_micro_state_counts") or {}
+        return {
+            "sample_count": int(sum(scale_states.values())),
+            "scale_in_micro_state_counts": scale_states,
+            "scale_in_micro_advice_counts": ofi_qi.get("scale_in_micro_advice_counts"),
+            "add_types": events.get("add_types"),
+            "field_coverage": {
+                key: (events.get("field_coverage") or {}).get(key, 0)
+                for key in (
+                    "swing_micro_support",
+                    "swing_micro_risk",
+                    "swing_micro_recovery_support_observed",
+                )
+            },
+        }
+    if family == "swing_exit_ofi_qi_smoothing":
+        exit_actions = ofi_qi.get("exit_smoothing_action_counts") or {}
+        return {
+            "sample_count": int(sum(exit_actions.values()) or sum((ofi_qi.get("exit_micro_state_counts") or {}).values())),
+            "exit_micro_state_counts": ofi_qi.get("exit_micro_state_counts"),
+            "exit_micro_advice_counts": ofi_qi.get("exit_micro_advice_counts"),
+            "exit_smoothing_action_counts": exit_actions,
         }
     return {"sample_count": 0}
 
@@ -1158,6 +1309,7 @@ def build_swing_improvement_automation_report(
     events = audit_report.get("lifecycle_events") or {}
     raw = events.get("raw_counts") or {}
     unique = events.get("unique_record_counts") or {}
+    ofi_qi = events.get("ofi_qi_summary") or {}
     axis_summary = audit_report.get("observation_axis_summary") or {}
 
     findings: list[dict[str, Any]] = []
@@ -1326,6 +1478,105 @@ def build_swing_improvement_automation_report(
             )
         )
 
+    if int(ofi_qi.get("stale_missing_count") or 0) > 0:
+        findings.append(
+            {
+                "finding_id": "swing_ofi_qi_stale_or_missing_context",
+                "title": "swing OFI/QI stale or missing context",
+                "confidence": "consensus",
+                "route": "existing_family",
+                "mapped_family": "swing_entry_ofi_qi_execution_quality",
+                "target_subsystem": "swing_orderbook_micro_context",
+                "lifecycle_stage": "entry",
+            }
+        )
+        orders.append(
+            _order(
+                order_id="order_swing_ofi_qi_stale_or_missing_context",
+                title="swing OFI/QI stale or missing context",
+                lifecycle_stage="entry",
+                target_subsystem="swing_orderbook_micro_context",
+                priority=4,
+                route="existing_family",
+                mapped_family="swing_entry_ofi_qi_execution_quality",
+                intent="Reduce missing/stale OFI/QI provenance before considering execution-quality runtime use.",
+                expected_ev_effect="stale_missing_ratio decreases while submitted/simulated entry quality remains attributable.",
+                files_likely_touched=[
+                    "src/engine/sniper_state_handlers.py",
+                    "src/engine/orderbook_stability.py",
+                    "src/engine/swing_lifecycle_audit.py",
+                ],
+                acceptance_tests=["pytest orderbook stability tests", "pytest swing lifecycle audit tests"],
+                evidence=[
+                    f"stale_missing_count={ofi_qi.get('stale_missing_count')}",
+                    f"stale_missing_ratio={ofi_qi.get('stale_missing_ratio')}",
+                ],
+                improvement_type="instrumentation",
+            )
+        )
+
+    scale_risk_count = int((ofi_qi.get("scale_in_micro_advice_counts") or {}).get("RISK_BEARISH", 0) or 0)
+    if scale_risk_count > 0:
+        findings.append(
+            {
+                "finding_id": "swing_scale_in_ofi_qi_bearish_risk",
+                "title": "swing scale-in OFI/QI bearish risk",
+                "confidence": "consensus",
+                "route": "existing_family",
+                "mapped_family": "swing_scale_in_ofi_qi_confirmation",
+                "target_subsystem": "swing_scale_in",
+                "lifecycle_stage": "scale_in",
+            }
+        )
+        orders.append(
+            _order(
+                order_id="order_swing_scale_in_ofi_qi_bearish_risk_review",
+                title="swing scale-in OFI/QI bearish risk review",
+                lifecycle_stage="scale_in",
+                target_subsystem="swing_scale_in",
+                priority=5,
+                route="existing_family",
+                mapped_family="swing_scale_in_ofi_qi_confirmation",
+                intent="Review PYRAMID/AVG_DOWN candidates where OFI/QI observed bearish risk without changing live quantity or price.",
+                expected_ev_effect="post-add outcome and micro_risk attribution are visible for future guarded threshold design.",
+                files_likely_touched=["src/engine/sniper_state_handlers.py", "src/engine/swing_lifecycle_audit.py"],
+                acceptance_tests=["pytest sniper scale-in tests", "pytest swing lifecycle audit tests"],
+                evidence=[f"scale_in_RISK_BEARISH={scale_risk_count}"],
+                improvement_type="lifecycle_logic_observation",
+            )
+        )
+
+    exit_smoothing_count = int(sum((ofi_qi.get("exit_smoothing_action_counts") or {}).values()))
+    if exit_smoothing_count > 0:
+        findings.append(
+            {
+                "finding_id": "swing_exit_ofi_qi_smoothing_distribution",
+                "title": "swing exit OFI/QI smoothing distribution",
+                "confidence": "consensus",
+                "route": "existing_family",
+                "mapped_family": "swing_exit_ofi_qi_smoothing",
+                "target_subsystem": "swing_holding_exit",
+                "lifecycle_stage": "holding_exit",
+            }
+        )
+        orders.append(
+            _order(
+                order_id="order_swing_exit_ofi_qi_smoothing_distribution",
+                title="swing exit OFI/QI smoothing distribution",
+                lifecycle_stage="holding_exit",
+                target_subsystem="swing_holding_exit",
+                priority=6,
+                route="existing_family",
+                mapped_family="swing_exit_ofi_qi_smoothing",
+                intent="Use DEBOUNCE_EXIT/CONFIRM_EXIT/NO_CHANGE distribution as proposal-only exit smoothing evidence.",
+                expected_ev_effect="exit smoothing action distribution and post-exit attribution are visible after close.",
+                files_likely_touched=["src/engine/sniper_state_handlers.py", "src/engine/swing_lifecycle_audit.py"],
+                acceptance_tests=["pytest OFI smoothing tests", "pytest swing lifecycle audit tests"],
+                evidence=[f"exit_smoothing_action_counts={ofi_qi.get('exit_smoothing_action_counts')}"],
+                improvement_type="threshold_family_input",
+            )
+        )
+
     findings.append(
         {
             "finding_id": "swing_ai_contract_structured_output_eval",
@@ -1472,6 +1723,21 @@ def render_swing_lifecycle_audit_markdown(report: dict[str, Any]) -> str:
     for stage in sorted(raw):
         if raw.get(stage, 0) or unique.get(stage, 0):
             lines.append(f"| `{stage}` | {raw.get(stage, 0)} | {unique.get(stage, 0)} |")
+
+    ofi_qi = events.get("ofi_qi_summary") or {}
+    lines.extend(
+        [
+            "",
+            "## OFI/QI Micro Context",
+            "",
+            f"- sample_count: `{ofi_qi.get('sample_count', 0)}`",
+            f"- stale_missing_ratio: `{ofi_qi.get('stale_missing_ratio', 0.0)}`",
+            f"- entry_micro_state_counts: `{ofi_qi.get('entry_micro_state_counts', {})}`",
+            f"- scale_in_micro_state_counts: `{ofi_qi.get('scale_in_micro_state_counts', {})}`",
+            f"- exit_micro_state_counts: `{ofi_qi.get('exit_micro_state_counts', {})}`",
+            f"- exit_smoothing_action_counts: `{ofi_qi.get('exit_smoothing_action_counts', {})}`",
+        ]
+    )
 
     lines.extend(["", "## Observation Axes", "", "| axis | stage | family | sample | status |", "| --- | --- | --- | ---: | --- |"])
     for axis in report.get("observation_axes") or []:

@@ -29,10 +29,14 @@ SWING_EVENT_STAGES = {
     "blocked_gatekeeper_error",
     "market_regime_block",
     "market_regime_pass",
+    "swing_entry_micro_context_observed",
     "swing_sim_buy_order_assumed_filled",
     "swing_sim_holding_started",
     "swing_sim_order_bundle_assumed_filled",
+    "swing_scale_in_micro_context_observed",
     "swing_sim_scale_in_order_assumed_filled",
+    "swing_exit_micro_context_observed",
+    "holding_flow_ofi_smoothing_applied",
     "swing_sim_sell_order_assumed_filled",
     "swing_sim_sell_blocked_zero_qty",
     "order_bundle_submitted",
@@ -46,6 +50,65 @@ SIMULATED_ORDER_STAGES = {
     "swing_sim_scale_in_order_assumed_filled",
     "swing_sim_sell_order_assumed_filled",
 }
+
+
+def _micro_group(stage: str) -> str:
+    lowered = stage.lower()
+    if "scale_in" in lowered or "pyramid" in lowered or "avg_down" in lowered:
+        return "scale_in"
+    if "sell" in lowered or "exit" in lowered or "holding_flow_ofi" in lowered:
+        return "exit"
+    return "entry"
+
+
+def _micro_summary_item(fields: dict) -> tuple[str, str, bool]:
+    state = str(fields.get("orderbook_micro_state") or fields.get("swing_micro_state") or "missing").lower()
+    advice = str(fields.get("swing_micro_advice") or "MISSING").upper()
+    ready = fields.get("orderbook_micro_ready")
+    ready_bool = ready is True or str(ready).strip().lower() in {"1", "true", "yes", "y"}
+    healthy = fields.get("orderbook_micro_observer_healthy")
+    healthy_bool = healthy is True or str(healthy).strip().lower() in {"1", "true", "yes", "y"}
+    stale = fields.get("swing_micro_stale")
+    stale_bool = stale is True or str(stale).strip().lower() in {"1", "true", "yes", "y"}
+    missing = advice == "MISSING" or state in {"", "missing", "insufficient"} or not ready_bool or not healthy_bool or stale_bool
+    return state, advice, missing
+
+
+def summarize_ofi_qi_events(events: Iterable[dict]) -> dict:
+    state_by_group: dict[str, Counter] = defaultdict(Counter)
+    advice_by_group: dict[str, Counter] = defaultdict(Counter)
+    exit_smoothing_actions = Counter()
+    sample_count = 0
+    stale_missing_count = 0
+
+    for event in events:
+        if not _is_swing_event(event):
+            continue
+        fields = _event_fields(event)
+        if not any(str(key).startswith(("orderbook_micro_", "swing_micro_")) for key in fields):
+            continue
+        stage = _event_stage(event)
+        group = _micro_group(stage)
+        state, advice, missing = _micro_summary_item(fields)
+        state_by_group[group][state] += 1
+        advice_by_group[group][advice] += 1
+        sample_count += 1
+        stale_missing_count += int(missing)
+        if stage == "holding_flow_ofi_smoothing_applied":
+            exit_smoothing_actions[str(fields.get("smoothing_action") or "MISSING").upper()] += 1
+
+    return {
+        "sample_count": int(sample_count),
+        "stale_missing_count": int(stale_missing_count),
+        "stale_missing_ratio": round(stale_missing_count / sample_count, 4) if sample_count else 0.0,
+        "entry_micro_state_counts": dict(state_by_group["entry"]),
+        "scale_in_micro_state_counts": dict(state_by_group["scale_in"]),
+        "exit_micro_state_counts": dict(state_by_group["exit"]),
+        "entry_micro_advice_counts": dict(advice_by_group["entry"]),
+        "scale_in_micro_advice_counts": dict(advice_by_group["scale_in"]),
+        "exit_micro_advice_counts": dict(advice_by_group["exit"]),
+        "exit_smoothing_action_counts": dict(exit_smoothing_actions),
+    }
 
 
 def _date_text(target_date: str | date | datetime) -> str:
@@ -109,6 +172,7 @@ def _is_swing_event(event: dict) -> bool:
 
 
 def summarize_pipeline_events(events: Iterable[dict]) -> dict:
+    events = list(events)
     raw_counts = Counter()
     unique_records = defaultdict(set)
     gatekeeper_actions = Counter()
@@ -160,6 +224,7 @@ def summarize_pipeline_events(events: Iterable[dict]) -> dict:
             if any(stage in unique_records for stage in SIMULATED_ORDER_STAGES)
             else 0
         ),
+        "ofi_qi_summary": summarize_ofi_qi_events(events),
     }
 
 
@@ -333,6 +398,19 @@ def render_markdown(report: dict) -> str:
         lines.append(
             f"- `{item.get('stage')}` {item.get('name')}({item.get('code')}): {item.get('raw_count')}"
         )
+    ofi_qi = events.get("ofi_qi_summary") or {}
+    lines.extend(
+        [
+            "",
+            "## OFI/QI Micro Context",
+            "",
+            f"- sample_count: `{ofi_qi.get('sample_count', 0)}`",
+            f"- stale_missing_ratio: `{ofi_qi.get('stale_missing_ratio', 0.0)}`",
+            f"- entry_micro_state_counts: `{ofi_qi.get('entry_micro_state_counts', {})}`",
+            f"- scale_in_micro_state_counts: `{ofi_qi.get('scale_in_micro_state_counts', {})}`",
+            f"- exit_smoothing_action_counts: `{ofi_qi.get('exit_smoothing_action_counts', {})}`",
+        ]
+    )
     lines.append("")
     return "\n".join(lines)
 

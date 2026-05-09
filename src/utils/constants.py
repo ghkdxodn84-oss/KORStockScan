@@ -86,6 +86,7 @@ class TradingConfig:
     SWING_PYRAMID_MIN_PROFIT_PCT: float = 4.0
     SWING_LIVE_ORDER_DRY_RUN_ENABLED: bool = True  # 스윙 live 로직은 동일 실행, 실제 주문 접수만 차단
     SWING_LIVE_ORDER_DRY_RUN_OWNER: str = "SwingLiveOrderDryRunSimulation0511"
+    SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED: bool = True  # 스윙 OFI/QI observe/proposal-only context
 
     # [매매 비중 설정] 전략별 주문 가능 현금 대비 1회 매수 투입 비율
     INVEST_RATIO_KOSPI: float = 0.25  # DEPRECATED: MIN/MAX 비중으로 대체됨
@@ -1132,6 +1133,9 @@ def _build_trading_rules() -> TradingConfig:
     env_swing_live_order_dry_run_enabled = _env_bool(
         "KORSTOCKSCAN_SWING_LIVE_ORDER_DRY_RUN_ENABLED"
     )
+    env_swing_orderbook_micro_context_enabled = _env_bool(
+        "KORSTOCKSCAN_SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED"
+    )
     env_stat_action_snapshot_enabled = _env_bool("KORSTOCKSCAN_STAT_ACTION_DECISION_SNAPSHOT_ENABLED")
     env_stat_action_snapshot_min_interval = _env_int("KORSTOCKSCAN_STAT_ACTION_DECISION_SNAPSHOT_MIN_INTERVAL_SEC")
     env_scalping_initial_entry_qty_cap_enabled = _env_bool(
@@ -1174,6 +1178,7 @@ def _build_trading_rules() -> TradingConfig:
         or env_swing_max_avg_down_count is not None
         or env_swing_max_pyramid_count is not None
         or env_swing_live_order_dry_run_enabled is not None
+        or env_swing_orderbook_micro_context_enabled is not None
         or env_stat_action_snapshot_enabled is not None
         or env_stat_action_snapshot_min_interval is not None
         or env_scalping_initial_entry_qty_cap_enabled is not None
@@ -1224,6 +1229,9 @@ def _build_trading_rules() -> TradingConfig:
             SWING_LIVE_ORDER_DRY_RUN_ENABLED=env_swing_live_order_dry_run_enabled
             if env_swing_live_order_dry_run_enabled is not None
             else config.SWING_LIVE_ORDER_DRY_RUN_ENABLED,
+            SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED=env_swing_orderbook_micro_context_enabled
+            if env_swing_orderbook_micro_context_enabled is not None
+            else config.SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED,
             STAT_ACTION_DECISION_SNAPSHOT_ENABLED=env_stat_action_snapshot_enabled
             if env_stat_action_snapshot_enabled is not None
             else config.STAT_ACTION_DECISION_SNAPSHOT_ENABLED,

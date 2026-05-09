@@ -212,6 +212,10 @@ def _is_swing_live_order_dry_run(strategy: str | None) -> bool:
     return _is_swing_strategy(strategy) and _rule_bool("SWING_LIVE_ORDER_DRY_RUN_ENABLED", True)
 
 
+def _is_swing_orderbook_micro_context_enabled(strategy: str | None) -> bool:
+    return _is_swing_strategy(strategy) and _rule_bool("SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED", True)
+
+
 def _swing_live_order_dry_run_owner() -> str:
     return str(_rule("SWING_LIVE_ORDER_DRY_RUN_OWNER", "SwingLiveOrderDryRunSimulation0511") or "")
 
@@ -2284,8 +2288,15 @@ def _build_entry_price_snapshot_fields(latency_gate, *, request_price, curr_pric
     }
 
 
-def _build_orderbook_micro_context(latency_gate, *, curr_price, best_bid, best_ask):
-    if not bool(_rule("SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_ENABLED", True)):
+def _build_orderbook_micro_context(
+    latency_gate,
+    *,
+    curr_price,
+    best_bid,
+    best_ask,
+    respect_scalping_flag: bool = True,
+):
+    if respect_scalping_flag and not bool(_rule("SCALPING_ENTRY_PRICE_ORDERBOOK_MICRO_ENABLED", True)):
         return None
     stability = (latency_gate or {}).get("orderbook_stability") or {}
     micro = stability.get("orderbook_micro") if isinstance(stability, dict) else None
@@ -2414,6 +2425,96 @@ def _build_orderbook_micro_log_fields(micro):
         if not str(key).startswith("wide_") or key == "wide_windows":
             continue
         fields[f"orderbook_micro_{key}"] = "-" if value is None else value
+    return fields
+
+
+def _build_swing_orderbook_micro_context(
+    code: str,
+    *,
+    curr_price: int,
+    latency_gate: dict | None = None,
+    best_bid: int = 0,
+    best_ask: int = 0,
+) -> dict | None:
+    if isinstance(latency_gate, dict):
+        micro = _build_orderbook_micro_context(
+            latency_gate,
+            curr_price=curr_price,
+            best_bid=best_bid,
+            best_ask=best_ask,
+            respect_scalping_flag=False,
+        )
+        if isinstance(micro, dict):
+            return micro
+    return _build_live_orderbook_micro_context(code, curr_price=curr_price)
+
+
+def _build_swing_micro_log_fields(
+    micro: dict | None,
+    *,
+    phase: str,
+    add_type: str | None = None,
+) -> dict:
+    fields = _build_orderbook_micro_log_fields(micro)
+    state = str(fields.get("orderbook_micro_state") or "missing").strip().lower()
+    ready = bool(fields.get("orderbook_micro_ready"))
+    observer_healthy = fields.get("orderbook_micro_observer_healthy")
+    if observer_healthy == "-":
+        observer_healthy = False
+    snapshot_age_ms = _safe_float(fields.get("orderbook_micro_snapshot_age_ms"), None)
+    stale_threshold_ms = max(1, _rule_int("OFI_AI_SMOOTHING_STALE_THRESHOLD_MS", 700))
+    is_stale = snapshot_age_ms is not None and snapshot_age_ms > stale_threshold_ms
+    missing = (
+        not isinstance(micro, dict)
+        or not ready
+        or state in {"", "missing", "insufficient"}
+        or observer_healthy is False
+        or is_stale
+    )
+    if missing:
+        advice = "MISSING"
+        price_action = "NO_CHANGE"
+        timeout_sec = 0
+        reason = "missing_stale_or_insufficient_orderbook_micro"
+    elif state == "bullish":
+        advice = "SUPPORT_ENTRY"
+        price_action = "ALLOW_EXISTING_PRICE"
+        timeout_sec = 0
+        reason = "ofi_qi_bullish_support_observed"
+    elif state == "bearish":
+        advice = "RISK_BEARISH"
+        price_action = "WAIT_FOR_PULLBACK"
+        timeout_sec = 30
+        reason = "ofi_qi_bearish_risk_observed"
+    else:
+        advice = "WAIT_FOR_PULLBACK"
+        price_action = "KEEP_EXISTING_PRICE"
+        timeout_sec = 0
+        reason = "ofi_qi_neutral_or_mixed_observed"
+
+    add_label = str(add_type or "").upper()
+    micro_support = add_label == "PYRAMID" and advice in {"SUPPORT_ENTRY", "WAIT_FOR_PULLBACK"}
+    micro_risk = add_label == "PYRAMID" and state == "bearish" and advice != "MISSING"
+    recovery_support_observed = add_label == "AVG_DOWN" and advice == "SUPPORT_ENTRY"
+    fields.update(
+        {
+            "swing_micro_phase": phase,
+            "swing_micro_advice": advice,
+            "swing_micro_counterfactual_price_action": price_action,
+            "swing_micro_counterfactual_timeout_sec": timeout_sec,
+            "swing_micro_counterfactual_reason": reason,
+            "swing_micro_runtime_effect": False,
+            "swing_micro_observe_only": True,
+            "swing_micro_state": state,
+            "swing_micro_stale": bool(is_stale),
+            "swing_micro_micro_support": bool(micro_support),
+            "swing_micro_micro_risk": bool(micro_risk),
+            "swing_micro_support": bool(micro_support),
+            "swing_micro_risk": bool(micro_risk),
+            "swing_micro_recovery_support_observed": bool(recovery_support_observed),
+            "recovery_support_observed": bool(recovery_support_observed),
+        }
+    )
     return fields
 
 
@@ -3348,6 +3449,16 @@ def _evaluate_holding_flow_override(
     ):
         if _rule_bool("HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED", True):
             orderbook_micro, ofi_state = _evaluate_holding_flow_ofi_state(stock, code, curr_price=curr_price)
+            swing_exit_micro_fields = (
+                _build_swing_micro_log_fields(orderbook_micro, phase="exit")
+                if _is_swing_orderbook_micro_context_enabled(strategy)
+                else {}
+            )
+            orderbook_micro_fields = (
+                swing_exit_micro_fields
+                if swing_exit_micro_fields
+                else _build_orderbook_micro_log_fields(orderbook_micro)
+            )
             bearish_confirm_worsen_pct = max(
                 0.0,
                 _rule_float("HOLDING_FLOW_OFI_BEARISH_CONFIRM_WORSEN_PCT", 0.30),
@@ -3367,7 +3478,7 @@ def _evaluate_holding_flow_override(
                     worsen_from_candidate=f"{worsen_from_candidate:.2f}",
                     bearish_confirm_worsen_pct=f"{bearish_confirm_worsen_pct:.2f}",
                     **ofi_smoothing_log_fields(ofi_state, prefix="holding_flow_ofi"),
-                    **_build_orderbook_micro_log_fields(orderbook_micro),
+                    **orderbook_micro_fields,
                 )
                 _log_holding_pipeline(
                     stock,
@@ -3399,6 +3510,14 @@ def _evaluate_holding_flow_override(
             min_review_sec=min_review_sec,
             max_review_sec=max_review_sec,
             price_trigger_pct=f"{price_trigger_pct:.2f}",
+            **(
+                _build_swing_micro_log_fields(
+                    _build_live_orderbook_micro_context(code, curr_price=curr_price),
+                    phase="exit",
+                )
+                if _is_swing_orderbook_micro_context_enabled(strategy)
+                else {}
+            ),
         )
         _emit_stat_action_decision_snapshot(
             stock=stock,
@@ -3507,6 +3626,29 @@ def _evaluate_holding_flow_override(
     )
     flow_action = str(flow_result.get("action", "EXIT") or "EXIT").upper()
     parse_failed = bool(flow_result.get("ai_parse_fail")) or flow_action not in {"HOLD", "TRIM", "EXIT"}
+    orderbook_micro = None
+    ofi_state = None
+    ofi_log_fields = {}
+    micro_log_fields = {}
+    swing_exit_micro_fields = {}
+    if _rule_bool("HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED", True):
+        orderbook_micro, ofi_state = _evaluate_holding_flow_ofi_state(stock, code, curr_price=curr_price)
+        ofi_log_fields = ofi_smoothing_log_fields(ofi_state, prefix="holding_flow_ofi")
+        micro_log_fields = _build_orderbook_micro_log_fields(orderbook_micro)
+    elif _is_swing_orderbook_micro_context_enabled(strategy):
+        orderbook_micro = _build_live_orderbook_micro_context(code, curr_price=curr_price)
+        micro_log_fields = _build_orderbook_micro_log_fields(orderbook_micro)
+    if _is_swing_orderbook_micro_context_enabled(strategy):
+        swing_exit_micro_fields = _build_swing_micro_log_fields(orderbook_micro, phase="exit")
+        _log_holding_pipeline(
+            stock,
+            code,
+            "swing_exit_micro_context_observed",
+            exit_rule=exit_rule,
+            raw_flow_action=flow_action,
+            **swing_exit_micro_fields,
+        )
+    micro_log_fields_for_smoothing = {} if swing_exit_micro_fields else micro_log_fields
     _log_holding_pipeline(
         stock,
         code,
@@ -3524,6 +3666,7 @@ def _evaluate_holding_flow_override(
         elapsed_sec=elapsed_sec,
         worsen_from_candidate=f"{worsen_from_candidate:.2f}",
         **_build_ai_ops_log_fields(flow_result),
+        **swing_exit_micro_fields,
     )
     if parse_failed:
         _log_holding_pipeline(
@@ -3535,12 +3678,7 @@ def _evaluate_holding_flow_override(
             profit_rate=f"{profit_rate:+.2f}",
         )
         return True
-    orderbook_micro = None
-    ofi_state = None
-    if _rule_bool("HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED", True):
-        orderbook_micro, ofi_state = _evaluate_holding_flow_ofi_state(stock, code, curr_price=curr_price)
-        ofi_log_fields = ofi_smoothing_log_fields(ofi_state, prefix="holding_flow_ofi")
-        micro_log_fields = _build_orderbook_micro_log_fields(orderbook_micro)
+    if _rule_bool("HOLDING_FLOW_OFI_SMOOTHING_OVERRIDE_ENABLED", True) and ofi_state is not None:
         bearish_confirm_worsen_pct = max(
             0.0,
             _rule_float("HOLDING_FLOW_OFI_BEARISH_CONFIRM_WORSEN_PCT", 0.30),
@@ -3561,7 +3699,8 @@ def _evaluate_holding_flow_override(
                 max_defer_sec=max_defer_sec,
                 worsen_pct=f"{worsen_pct:.2f}",
                 **ofi_log_fields,
-                **micro_log_fields,
+                **micro_log_fields_for_smoothing,
+                **swing_exit_micro_fields,
             )
             _log_holding_pipeline(
                 stock,
@@ -3579,6 +3718,7 @@ def _evaluate_holding_flow_override(
                 worsen_pct=f"{worsen_pct:.2f}",
                 elapsed_sec=elapsed_sec,
                 defer_reason="ofi_stable_bullish_debounce",
+                **swing_exit_micro_fields,
             )
             _emit_stat_action_decision_snapshot(
                 stock=stock,
@@ -3619,7 +3759,8 @@ def _evaluate_holding_flow_override(
                 worsen_from_candidate=f"{worsen_from_candidate:.2f}",
                 bearish_confirm_worsen_pct=f"{bearish_confirm_worsen_pct:.2f}",
                 **ofi_log_fields,
-                **micro_log_fields,
+                **micro_log_fields_for_smoothing,
+                **swing_exit_micro_fields,
             )
             _log_holding_pipeline(
                 stock,
@@ -3632,6 +3773,20 @@ def _evaluate_holding_flow_override(
                 confirm_reason="ofi_stable_bearish",
             )
             return True
+        _log_holding_pipeline(
+            stock,
+            code,
+            "holding_flow_ofi_smoothing_applied",
+            smoothing_action="NO_CHANGE",
+            exit_rule=exit_rule,
+            raw_flow_action=flow_action,
+            final_flow_action=flow_action,
+            source="holding_flow_review",
+            profit_rate=f"{profit_rate:+.2f}",
+            **ofi_log_fields,
+            **micro_log_fields_for_smoothing,
+            **swing_exit_micro_fields,
+        )
     if flow_action == "EXIT":
         _log_holding_pipeline(
             stock,
@@ -3659,6 +3814,7 @@ def _evaluate_holding_flow_override(
         candidate_profit=f"{candidate_profit:+.2f}",
         worsen_pct=f"{worsen_pct:.2f}",
         elapsed_sec=elapsed_sec,
+        **swing_exit_micro_fields,
     )
     _emit_stat_action_decision_snapshot(
         stock=stock,
@@ -4882,9 +5038,15 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                 return False
 
             blocked, block_reason = _should_block_swing_entry(stock.get('strategy', ''))
+            swing_regime_micro_fields = {}
+            if _is_swing_orderbook_micro_context_enabled(strategy):
+                swing_regime_micro_fields = _build_swing_micro_log_fields(
+                    _build_live_orderbook_micro_context(code, curr_price=curr_price),
+                    phase="entry",
+                )
             if blocked:
                 log_info(f"⛔ [시장환경필터] {stock['name']}({code}) 스윙 진입 보류 - {block_reason}")
-                _log_entry_pipeline(stock, code, "market_regime_block", strategy=strategy)
+                _log_entry_pipeline(stock, code, "market_regime_block", strategy=strategy, **swing_regime_micro_fields)
                 return False
 
             _log_entry_pipeline(
@@ -4895,6 +5057,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                 gatekeeper_packet_build_ms=stock.get('last_gatekeeper_packet_build_ms', 0),
                 gatekeeper_model_call_ms=stock.get('last_gatekeeper_model_call_ms', 0),
                 gatekeeper_total_internal_ms=stock.get('last_gatekeeper_total_internal_ms', 0),
+                **swing_regime_micro_fields,
             )
             score_weight = max(0.0, min(1.0, (float(score) - buy_threshold) / max(1.0, (100 - buy_threshold))))
             ratio = ratio_min + (score_weight * (ratio_max - ratio_min))
@@ -5019,6 +5182,35 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         latency_gate, request_price=latency_gate.get('order_price', 0), curr_price=curr_price,
         best_bid=best_bid_at_submit, best_ask=best_ask_at_submit,
     )
+    swing_entry_micro_fields = {}
+    if _is_swing_orderbook_micro_context_enabled(strategy):
+        swing_entry_micro = _build_swing_orderbook_micro_context(
+            code,
+            curr_price=curr_price,
+            latency_gate=latency_gate,
+            best_bid=best_bid_at_submit,
+            best_ask=best_ask_at_submit,
+        )
+        swing_entry_micro_fields = _build_swing_micro_log_fields(swing_entry_micro, phase="entry")
+        _log_entry_pipeline(
+            stock,
+            code,
+            "swing_entry_micro_context_observed",
+            strategy=strategy,
+            **swing_entry_micro_fields,
+        )
+    entry_orderbook_micro_fields = (
+        {}
+        if swing_entry_micro_fields
+        else _build_orderbook_micro_log_fields(
+            _build_orderbook_micro_context(
+                latency_gate,
+                curr_price=curr_price,
+                best_bid=best_bid_at_submit,
+                best_ask=best_ask_at_submit,
+            )
+        )
+    )
 
     entry_mode = latency_gate.get('mode', 'reject')
     log_info(
@@ -5053,6 +5245,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 threshold_profile=stock.get("entry_threshold_profile"), overbought_blocked=False,
                 blocked_stage="latency_block",
             ),
+            **swing_entry_micro_fields,
         )
         return False
 
@@ -5156,18 +5349,12 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         ai_entry_price_canary_eval_ms=int(latency_gate.get('ai_entry_price_canary_eval_ms', 0) or 0),
         **submit_revalidation_fields,
         **latency_price_snapshot,
-        **_build_orderbook_micro_log_fields(
-            _build_orderbook_micro_context(
-                latency_gate,
-                curr_price=curr_price,
-                best_bid=best_bid_at_submit,
-                best_ask=best_ask_at_submit,
-            )
-        ),
+        **entry_orderbook_micro_fields,
         **_build_ai_overlap_log_fields(
             stock=stock, ai_score=latency_signal_score, momentum_tag=stock.get("entry_momentum_tag"),
             threshold_profile=stock.get("entry_threshold_profile"), overbought_blocked=False, blocked_stage="-",
         ),
+        **swing_entry_micro_fields,
     )
 
     if is_buy_side_paused():
@@ -5233,6 +5420,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             counterfactual_order_price_1tick=int(latency_gate.get('counterfactual_order_price_1tick', 0) or 0),
             **submit_revalidation_fields,
             **price_snapshot,
+            **swing_entry_micro_fields,
         )
         if swing_order_dry_run:
             ord_no = _simulated_order_no("SIMBUY", code)
@@ -5262,6 +5450,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
                 would_submit_stage="order_leg_sent",
                 **submit_revalidation_fields,
                 **price_snapshot,
+                **swing_entry_micro_fields,
             )
             continue
         res = kiwoom_orders.send_buy_order(
@@ -5336,6 +5525,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             runtime_effect="in_memory_holding_only",
             **submit_revalidation_fields,
             **bundle_price_snapshot,
+            **swing_entry_micro_fields,
         )
         clear_signal_reference(stock)
         return False
@@ -5364,6 +5554,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         order_price=int(latency_gate.get('order_price', 0) or 0),
         **submit_revalidation_fields,
         **bundle_price_snapshot,
+        **swing_entry_micro_fields,
     )
 
     if strategy in ['SCALPING', 'SCALP']:
@@ -7779,6 +7970,14 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 f"[SWING_LIVE_ORDER_DRY_RUN] {stock.get('name')}({code}) "
                 f"sell skipped qty={buy_qty} assumed_price={curr_p} reason={sell_reason_type}"
             )
+            swing_sell_micro_fields = (
+                _build_swing_micro_log_fields(
+                    _build_live_orderbook_micro_context(code, curr_price=curr_p),
+                    phase="exit",
+                )
+                if _is_swing_orderbook_micro_context_enabled(strategy)
+                else {}
+            )
             _log_holding_pipeline(
                 stock,
                 code,
@@ -7793,6 +7992,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                 actual_order_submitted=False,
                 would_submit_stage="sell_order_sent",
                 runtime_effect="in_memory_completed_only",
+                **swing_sell_micro_fields,
             )
             return
 
@@ -8519,6 +8719,20 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
 
     raw_strategy = (stock.get('strategy') or 'KOSPI_ML').upper()
     strategy = 'SCALPING' if raw_strategy in ['SCALPING', 'SCALP'] else raw_strategy
+    swing_scale_micro_fields = {}
+    if _is_swing_orderbook_micro_context_enabled(strategy):
+        swing_scale_micro_fields = _build_swing_micro_log_fields(
+            _build_live_orderbook_micro_context(code, curr_price=curr_price),
+            phase="scale_in",
+            add_type=add_type,
+        )
+        _log_holding_pipeline(
+            stock,
+            code,
+            "swing_scale_in_micro_context_observed",
+            add_type=add_type,
+            **swing_scale_micro_fields,
+        )
     price_resolution = resolve_scale_in_order_price(
         stock=stock,
         ws_data=ws_data,
@@ -8543,6 +8757,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             curr_vs_micro_vwap_bp=f"{float(price_resolution.get('curr_vs_micro_vwap_bp') or 0):.2f}",
             max_micro_vwap_bps=f"{float(price_resolution.get('max_micro_vwap_bps') or 0):.2f}",
             price_source=price_resolution.get("price_source"),
+            **swing_scale_micro_fields,
         )
         log_info(
             f"[ADD_BLOCKED] {stock.get('name')}({code}) reason=scale_in_price_guard "
@@ -8583,6 +8798,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             effective_qty=effective_qty,
             cap_qty=cap_qty,
             floor_applied=floor_applied,
+            **swing_scale_micro_fields,
         )
         log_info(
             f"[ADD_BLOCKED] {stock.get('name')}({code}) "
@@ -8620,6 +8836,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         would_qty=would_qty,
         effective_qty=effective_qty,
         qty_reason=qty_reason,
+        **swing_scale_micro_fields,
     )
     _log_holding_pipeline(
         stock,
@@ -8633,6 +8850,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         resolved_price=resolved_price,
         price_source=price_resolution.get("price_source"),
         add_type=add_type,
+        **swing_scale_micro_fields,
     )
 
     if is_buy_side_paused():
@@ -8694,6 +8912,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             cap_qty=cap_qty,
             floor_applied=floor_applied,
             qty_reason=qty_reason,
+            **swing_scale_micro_fields,
         )
         return {
             "return_code": "0",

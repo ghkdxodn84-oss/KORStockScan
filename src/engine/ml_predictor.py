@@ -40,6 +40,54 @@ FEATURES_LGBM = [
     'inst_vol_ratio', 'margin_rate_change', 'margin_rate_roll5'
 ]
 
+LEGACY_INPUT_RENAME = {
+    'Date': 'date',
+    'Code': 'code',
+    'Name': 'name',
+    'Open': 'open',
+    'High': 'high',
+    'Low': 'low',
+    'Close': 'close',
+    'Volume': 'volume',
+    'Return': 'daily_return',
+    'VWAP': 'vwap',
+    'OBV': 'obv',
+    'ATR': 'atr',
+    'RSI': 'rsi',
+    'MACD': 'macd',
+    'MACD_Sig': 'macd_sig',
+    'MACD_Hist': 'macd_hist',
+    'BBB': 'bbb',
+    'BBP': 'bbp',
+    'Retail_Net': 'retail_net',
+    'Foreign_Net': 'foreign_net',
+    'Inst_Net': 'inst_net',
+    'Margin_Rate': 'margin_rate',
+}
+
+
+def normalize_model_input_frame(df: pd.DataFrame) -> pd.DataFrame:
+    """Accept DB snake_case and legacy scanner OHLCV frames with one model contract."""
+    normalized = df.copy()
+
+    for source, target in LEGACY_INPUT_RENAME.items():
+        if target not in normalized.columns and source in normalized.columns:
+            normalized[target] = normalized[source]
+
+    if (
+        'date' not in normalized.columns
+        and 'quote_date' not in normalized.columns
+        and isinstance(normalized.index, pd.DatetimeIndex)
+    ):
+        normalized['date'] = normalized.index
+    if 'code' not in normalized.columns and 'stock_code' not in normalized.columns:
+        normalized['code'] = '000000'
+    if 'name' not in normalized.columns and 'stock_name' not in normalized.columns:
+        normalized['name'] = ''
+
+    return normalized
+
+
 # ==========================================
 # 🚀 AI 추론 도구 (Inference Utilities)
 # ==========================================
@@ -71,6 +119,7 @@ def predict_prob_for_df(df: pd.DataFrame, models: tuple) -> float:
     # 이제 피처 계산, 이름 변경, 모델 추론 등 어디서 에러가 나든 무조건 0점을 반환합니다.
     try:
         m_xgb, m_lgbm, b_xgb, b_lgbm, meta_model = models
+        df = normalize_model_input_frame(df)
 
         # [절대 방어막] 대문자/소문자 상관없이 수급/신용 데이터 누락 시 강제 0 주입
         for col in ['Retail_Net', 'retail_net', 'Foreign_Net', 'foreign_net', 'Inst_Net', 'inst_net', 'Margin_Rate', 'margin_rate']:
@@ -93,9 +142,16 @@ def predict_prob_for_df(df: pd.DataFrame, models: tuple) -> float:
         
         # DataFrame에 존재하는 컬럼만 안전하게 이름 변경
         df = df.rename(columns={k: v for k, v in rename_map.items() if k in df.columns})
+        if 'daily_return' not in df.columns and 'return_1d' in df.columns:
+            df['daily_return'] = df['return_1d']
+        if 'vwap' not in df.columns and 'vwap20' in df.columns:
+            df['vwap'] = df['vwap20']
 
         # 3. 가장 최신 일자(오늘)의 데이터 한 줄만 추출
         latest_row = df.iloc[[-1]].replace([np.inf, -np.inf], np.nan).fillna(0)
+        for feature in set(FEATURES_XGB + FEATURES_LGBM):
+            if feature not in latest_row.columns:
+                latest_row[feature] = 0.0
 
         # 4. 4개의 개별 베이스 모델 예측
         preds = [

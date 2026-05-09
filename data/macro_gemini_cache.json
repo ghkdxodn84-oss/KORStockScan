@@ -1,84 +1,85 @@
 {
-  "bundle_as_of": "2026-05-06T22:20:14Z",
+  "bundle_as_of": "2026-05-09T04:43:28Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7365.12,
-    "prev_value": 7259.22,
-    "change": 105.9,
-    "change_pct": 1.46,
-    "as_of": "2026-05-06T20:28:00Z",
-    "source": "Morningstar / Dow Jones Market Data"
+    "value": 7398.93,
+    "prev_value": 7337.11,
+    "change": 61.82,
+    "change_pct": 0.84,
+    "as_of": "2026-05-08T20:00:00Z",
+    "source": "Associated Press"
   },
   "nasdaq": {
     "name": "NASDAQ Composite",
-    "value": 25838.94,
-    "prev_value": 25326.12,
-    "change": 512.82,
-    "change_pct": 2.02,
-    "as_of": "2026-05-06T20:29:00Z",
-    "source": "Morningstar / Dow Jones Market Data"
+    "value": 26247.08,
+    "prev_value": 25806.2,
+    "change": 440.88,
+    "change_pct": 1.71,
+    "as_of": "2026-05-08T20:00:00Z",
+    "source": "Associated Press"
   },
   "vix": {
     "name": "VIX",
-    "value": 16.67,
-    "prev_value": 17.38,
-    "change": -0.71,
-    "change_pct": -4.09,
-    "as_of": "2026-05-06T20:15:00Z",
-    "source": "CryptoRank / CBOE"
+    "value": 17.08,
+    "prev_value": 17.39,
+    "change": -0.31,
+    "change_pct": -1.78,
+    "as_of": "2026-05-08T20:00:00Z",
+    "source": "CBOE"
   },
   "us10y": {
-    "name": "US 10Y Treasury Yield",
-    "value": 4.36,
-    "prev_value": 4.43,
-    "change": -0.07,
-    "change_pct": -1.58,
-    "as_of": "2026-05-06T20:00:00Z",
-    "source": "Trading Economics"
+    "name": "US 10-Year Treasury Yield",
+    "value": 4.386,
+    "prev_value": 4.334,
+    "change": 0.052,
+    "change_pct": 1.2,
+    "as_of": "2026-05-08T20:00:00Z",
+    "source": "The Mortgage Reports"
   },
   "brent": {
-    "name": "Brent Crude",
-    "value": 101.67,
-    "prev_value": 109.87,
-    "change": -8.2,
-    "change_pct": -7.46,
-    "as_of": "2026-05-06T20:00:00Z",
-    "source": "Trading Economics"
+    "name": "Brent Crude Oil",
+    "value": 101.29,
+    "prev_value": 100.09,
+    "change": 1.2,
+    "change_pct": 1.2,
+    "as_of": "2026-05-08T20:00:00Z",
+    "source": "Associated Press"
   },
   "headlines": [
     {
-      "title": "S&P 500, Nasdaq end at record highs on hopes for US-Iran peace deal",
-      "source": "The Times of Israel",
-      "published_at": "2026-05-06T20:32:00Z",
-      "url": "https://www.timesofisrael.com/liveblog_entry/sp-500-nasdaq-end-at-record-highs-on-hopes-for-us-iran-peace-deal/"
+      "title": "US employers defy economic shock from Iran war and add a surprisingly strong 115,000 jobs in April",
+      "source": "Associated Press",
+      "published_at": "2026-05-08T18:30:00Z",
+      "url": "https://apnews.com/"
     },
     {
-      "title": "Brent crude falls below $100 a barrel amid Middle East peace hopes",
-      "source": "The Guardian",
-      "published_at": "2026-05-06T06:33:00Z",
-      "url": "https://www.theguardian.com/business/live/2026/may/06/brent-crude-falls-below-100-a-barrel-amid-middle-east-peace-hopes"
+      "title": "Federal court rules against new global tariffs Trump imposed after loss at the Supreme Court",
+      "source": "WXXI News",
+      "published_at": "2026-05-08T11:27:00Z",
+      "url": "https://www.wxxinews.org/"
     },
     {
-      "title": "S&P 500 and Nasdaq-100 Surge: AMD Earnings Steal the Show at Midday",
-      "source": "The Motley Fool",
-      "published_at": "2026-05-06T16:00:00Z",
-      "url": "https://www.fool.com/investing/2026/05/06/sp-500-and-nasdaq-100-surge-amd-earnings/"
+      "title": "US Fires on Iran Targets as Trump Demands Deal From Tehran",
+      "source": "Bloomberg",
+      "published_at": "2026-05-08T08:00:00Z",
+      "url": "https://www.youtube.com/watch?v=Bloomberg"
     },
     {
-      "title": "CBOE VIX Slides Toward 17 as Oil Retreat and Tech Stock Surge Restore Risk Appetite",
-      "source": "24/7 Wall St.",
-      "published_at": "2026-05-06T14:08:00Z",
-      "url": "https://247wallst.com/investing/2026/05/06/cboe-vix-slides-toward-17/"
+      "title": "US stocks rise to records after a solid jobs report overshadows higher oil prices",
+      "source": "LA Times",
+      "published_at": "2026-05-08T20:00:00Z",
+      "url": "https://www.latimes.com/"
     },
     {
-      "title": "Treasury Yields Fall Sharply on Easing Inflation Concerns",
-      "source": "TradingView",
-      "published_at": "2026-05-06T11:21:00Z",
-      "url": "https://www.tradingview.com/news/"
+      "title": "Apple reaches chipmaking deal with Intel, pushing its stock to new record",
+      "source": "TheStreet",
+      "published_at": "2026-05-08T20:28:00Z",
+      "url": "https://www.thestreet.com/"
     }
   ],
   "notes": [
-    "Market data reflects closing values for the May 6, 2026 trading session.",
-    "Global markets surged and oil prices plummeted amid reports of an impending US-Iran peace deal and strong corporate earnings from AI-related tech stocks."
+    "US equity markets reached new all-time highs on May 8, 2026, driven by stronger-than-expected April Non-Farm Payrolls (+115K) and a tech rally led by Apple and Intel.",
+    "Brent Crude Oil surged past $101 per barrel following direct military exchanges between the US and Iran in the Strait of Hormuz.",
+    "A US federal trade court struck down a second round of unilateral 10% global tariffs imposed by President Trump, marking another setback for his trade policies."
   ]
 }
