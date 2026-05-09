@@ -16,13 +16,20 @@
 
 ## 장전 체크리스트 (08:50~09:00)
 
-- 없음
+- 신규 수동 enable/hold 작업 없음.
+- Runbook 운영 확인은 [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md) `장전 확인 절차`와 `build_codex_daily_workorder --slot PREOPEN`의 `PreopenAutomationHealthCheckYYYYMMDD` 블록을 기준으로 본다.
+- 확인 범위: `threshold_cycle_preopen_cron.log`, apply plan, runtime env JSON, `src/run_bot.sh` runtime env source 여부, tmux `bot` 기동 상태. 실패 시 수동 env override가 아니라 blocked reason과 same-stage owner 충돌을 확인한다.
 
 ## 장중 체크리스트 (09:00~15:20)
 
-- 없음
+- 신규 수동 runtime 변경 작업 없음.
+- Runbook 운영 확인은 [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md) `장중 확인 절차`와 `build_codex_daily_workorder --slot INTRADAY`의 `IntradayAutomationHealthCheckYYYYMMDD` 블록을 기준으로 본다.
+- 확인 범위: BUY/HOLD-EXIT Sentinel, intraday calibration, pipeline/threshold event append, 스윙 dry-run provenance. Sentinel/calibration 결과로 당일 threshold, provider routing, 스윙 주문 guard를 변경하지 않는다.
 
 ## 장후 체크리스트 (16:00~18:30)
+
+- Runbook 운영 확인은 [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md) `장후 확인 절차`와 `build_codex_daily_workorder --slot POSTCLOSE`의 `PostcloseAutomationHealthCheckYYYYMMDD` 블록을 기준으로 본다.
+- 아래 체크박스는 runbook 반복 확인이 아니라 2026-05-11에 소유자가 필요한 구현/판정/재확인 작업만 남긴다.
 
 - [x] `[PositionSizingCapRemoval0509] 신규 BUY/REVERSAL_ADD/PYRAMID 1주 수량 cap 제거 반영` (`Due: 2026-05-09`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: ScalpingLogic`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py), [sniper_scale_in.py](/home/ubuntu/KORStockScan/src/engine/sniper_scale_in.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py)

@@ -457,6 +457,9 @@ def run_scalper(is_test_mode=False):
         now = datetime.now()
         now_time = now.time()
 
+        from src.engine.error_detectors.process_health import write_heartbeat as _sc_whb
+        _sc_whb("scalping_scanner")
+
         # 장 운영 시간 체크 (09:05 ~ 15:00) - 장 초반 감시 5분 후부터 장 마감 1시간 전까지 가동
         market_open = datetime.strptime("09:05:00", "%H:%M:%S").time()
         market_close = datetime.strptime("15:00:00", "%H:%M:%S").time()

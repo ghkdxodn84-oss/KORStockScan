@@ -1,17 +1,19 @@
 # Threshold Cycle Operations
 
-작성 기준: `2026-05-03 KST`
+작성 기준: `2026-05-09 KST`
 
 이 디렉토리는 threshold 후보 수집, 장중/장후 calibration, 장전 bounded runtime env apply, daily EV 리포트를 저장한다. 현재 원칙은 완전 무인 `auto_bounded_live` apply이며, 장중 runtime threshold 자동 변경은 계속 금지한다.
 
 report 기반 자동화의 전체 추적성은 [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)를 기준으로 본다. 이 문서는 산출물별 producer/consumer와 현재 apply 단계만 설명하고, 미래 작업 owner는 날짜별 checklist가 소유한다.
+
+적용 범위는 스캘핑 전용이 아니다. 이 README는 스캘핑과 스윙이 공통 threshold-cycle, daily EV, preopen runtime env, code-improvement workorder 체인에 들어오는 부분의 산출물 정의다. 다만 스윙 전용 `selection -> db_load -> entry -> holding -> scale_in -> exit -> attribution` lifecycle 산출물의 필드 의미와 운영 확인은 [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)의 스윙 dry-run/lifecycle 절차와 `swing_lifecycle_audit`/`swing_improvement_automation` artifact를 함께 기준으로 본다.
 
 ## 운영 흐름
 
 | 시점 | wrapper | 역할 | 산출물 |
 |---|---|---|---|
 | runtime | `src.utils.pipeline_event_logger` | threshold 후보 stage를 compact stream에 적재 | `threshold_events_YYYY-MM-DD.jsonl` |
-| POSTCLOSE 16:10 | `deploy/run_threshold_cycle_postclose.sh` | raw pipeline event를 family partition으로 backfill하고 장후 report, AI correction, pattern lab automation, daily EV report 생성 | `date=YYYY-MM-DD/family=*/part-*.jsonl`, `data/report/threshold_cycle_YYYY-MM-DD.json`, 파생 `statistical_action_weight`, `holding_exit_decision_matrix`, `threshold_cycle_cumulative` JSON/MD, `threshold_cycle_ai_review_YYYY-MM-DD_postclose.{json,md}`, `scalping_pattern_lab_automation_YYYY-MM-DD.{json,md}`, `threshold_cycle_ev_YYYY-MM-DD.{json,md}` |
+| POSTCLOSE 16:10 | `deploy/run_threshold_cycle_postclose.sh` | raw pipeline event를 family partition으로 backfill하고 장후 report, AI correction, scalping/swing automation, daily EV report 생성 | `date=YYYY-MM-DD/family=*/part-*.jsonl`, `data/report/threshold_cycle_YYYY-MM-DD.json`, 파생 `statistical_action_weight`, `holding_exit_decision_matrix`, `threshold_cycle_cumulative` JSON/MD, `threshold_cycle_ai_review_YYYY-MM-DD_postclose.{json,md}`, `scalping_pattern_lab_automation_YYYY-MM-DD.{json,md}`, `swing_improvement_automation_YYYY-MM-DD.{json,md}`, `swing_pattern_lab_automation_YYYY-MM-DD.{json,md}`, `threshold_cycle_ev_YYYY-MM-DD.{json,md}` |
 | INTRADAY 12:05 | `deploy/run_threshold_cycle_calibration.sh` | 기존 report source bundle을 읽어 장중 calibration 및 AI correction artifact 생성 | `data/report/threshold_cycle_calibration/threshold_cycle_calibration_YYYY-MM-DD_intraday.json`, `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_intraday.{json,md}` |
 | PREOPEN 07:35 | `deploy/run_threshold_cycle_preopen.sh` | 최신 threshold report와 AI correction guard를 읽어 auto bounded runtime env 생성 | `apply_plans/threshold_apply_YYYY-MM-DD.json`, `runtime_env/threshold_runtime_env_YYYY-MM-DD.{env,json}` |
 
@@ -44,6 +46,10 @@ report 기반 자동화의 전체 추적성은 [report-based-automation-traceabi
 | `data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_YYYY-MM-DD.{json,md}` | 누적/rolling cohort 기반 threshold cycle 파생 artifact |
 | `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_{intraday,postclose}.{json,md}` | AI correction proposal + deterministic guard 파생 artifact |
 | `data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_YYYY-MM-DD.{json,md}` | Gemini/Claude pattern lab 기반 improvement order 및 auto family 후보 artifact. runtime/code 직접 변경 없음 |
+| `data/report/swing_lifecycle_audit/swing_lifecycle_audit_YYYY-MM-DD.{json,md}` | 스윙 선정-DB 적재-진입-보유-추가매수-청산 lifecycle audit artifact. runtime/code 직접 변경 없음 |
+| `data/report/swing_threshold_ai_review/swing_threshold_ai_review_YYYY-MM-DD.{json,md}` | 스윙 threshold/logic proposal-only AI review artifact. deterministic guard와 수동 workorder가 최종 source of truth |
+| `data/report/swing_improvement_automation/swing_improvement_automation_YYYY-MM-DD.{json,md}` | 스윙 lifecycle 기반 improvement order 및 auto family 후보 artifact. 모든 order는 `runtime_effect=false`, family candidate는 `allowed_runtime_apply=false`로 시작 |
+| `data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_YYYY-MM-DD.{json,md}` | DeepSeek 스윙 pattern lab 기반 automation artifact. fresh single-day 조건 미충족 시 warning만 남기고 order로 승격하지 않음 |
 | `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.{json,md}` | 완전 무인 반영 이후 daily EV 성과 제출 artifact |
 
 ## 누적/rolling threshold cycle report
@@ -133,6 +139,8 @@ family별 기준 window는 다르게 적용한다.
 새 관찰축 추가는 기본 금지다. follow-up이 어려운 신규 observe/report axis를 늘리지 않고 BUY 쪽 `buy_funnel_sentinel`, `sentinel_followup`, `wait6579_ev_cohort`, `missed_entry_counterfactual`, 보유/청산 쪽 `holding_exit_observation`, `post_sell_feedback`, `holding_exit_sentinel`, `trade_review`, decision-support 쪽 `holding_exit_decision_matrix`, `statistical_action_weight`의 기존 source를 calibration 입력으로 재사용한다. `preclose_sell_target`은 operator preclose review 산출물이며 tuning/calibration source가 아니다.
 
 `gemini_scalping_pattern_lab`와 `claude_scalping_pattern_lab`는 신규 관찰축을 runtime에 직접 추가하지 않는다. postclose wrapper가 두 lab을 `ANALYSIS_START_DATE=2026-04-21`, `ANALYSIS_END_DATE=YYYY-MM-DD`로 실행하고, `scalping_pattern_lab_automation`이 결과를 기존 family 입력, `auto_family_candidate(allowed_runtime_apply=false)`, `code_improvement_order(runtime_effect=false)`로 분류한다. daily EV report에는 freshness/consensus/order 요약만 포함하고 상세는 별도 artifact를 참조한다.
+
+스윙은 `swing_lifecycle_audit`와 `swing_improvement_automation`이 lifecycle 관찰축과 proposal-only workorder를 만든다. `recommendation_db_load`, `scale_in_observation`, `ai_contract_metrics`, OFI/QI summary는 report-only이며, 스윙 dry-run 결과만으로 당일 주문 guard, market regime hard block, gap/protection guard, model floor를 완화하지 않는다. `swing_pattern_lab_automation`은 DeepSeek fresh single-day 조건이 닫힌 경우에만 `design_family_candidate` 또는 report-only order로 재진입하고, stale/range/malformed output은 daily EV warning으로만 남긴다.
 
 ## statistical_action_weight 적용 범위
 

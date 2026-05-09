@@ -38,6 +38,8 @@ from src.engine.daily_report_service import save_daily_report, build_daily_repor
 from src.engine.log_archive_service import archive_target_date_logs, save_monitor_snapshots_for_date
 from src.engine.strategy_position_performance_report import sync_trade_performance_for_date
 from src.utils.constants import RESTART_FLAG_PATH, TRADING_RULES
+from src.engine.error_detectors.process_health import write_heartbeat
+from src.engine.error_detector import ErrorDetectionEngine, REPORT_DIR as ERROR_REPORT_DIR
 
 # ==========================================
 # 📅 호출 상단 공용 날짜 helper
@@ -166,9 +168,52 @@ def crisis_monitor_loop():
         except Exception as e:
             from src.utils.logger import log_error
             log_error(f"위기 감지 스케줄러 에러: {e}")
-        
-        # 1시간 대기 (3600초)
+        write_heartbeat("crisis_monitor")
         time.sleep(3600)
+
+
+def error_detection_loop(interval: int, event_bus):
+    """60초 주기로 시스템 에러 탐지를 실행하는 데몬 루프."""
+    from src.utils.logger import log_error as ed_log_error
+    alert_state: dict[str, dict] = {}
+    ALERT_COOLDOWN_SEC = 600
+    while True:
+        try:
+            write_heartbeat("error_detection")
+            engine = ErrorDetectionEngine(dry_run=False, mode="full")
+            results = engine.run_all()
+            report = engine.build_report(results)
+            engine.write_report(report)
+            now_ts = time.time()
+            for r in results:
+                did = r.detector_id
+                prev = alert_state.get(did, {})
+                prev_severity = prev.get("severity", "pass")
+                prev_summary_hash = prev.get("summary_hash", "")
+                prev_ts = prev.get("ts", 0)
+                curr_summary_hash = str(hash(r.summary))
+
+                if r.severity == "fail":
+                    ed_log_error(f"[ERROR_DETECTION] {r.detector_id}: {r.summary}")
+                    is_transition = prev_severity != "fail"
+                    is_new_summary = curr_summary_hash != prev_summary_hash
+                    cooldown_ok = (now_ts - prev_ts) >= ALERT_COOLDOWN_SEC
+                    if is_transition or (is_new_summary and cooldown_ok):
+                        event_bus.publish(
+                            "SYSTEM_HEALTH_ALERT",
+                            {
+                                "message": f"{r.detector_id}: {r.summary}",
+                                "audience": "ADMIN_ONLY",
+                                "parse_mode": "HTML",
+                            },
+                        )
+                        alert_state[did] = {"severity": "fail", "summary_hash": curr_summary_hash, "ts": now_ts}
+                elif r.severity == "pass" and prev_severity == "fail":
+                    ed_log_error(f"[ERROR_DETECTION] {r.detector_id}: recovered to pass")
+                    alert_state[did] = {"severity": "pass", "summary_hash": "", "ts": now_ts}
+        except Exception as e:
+            ed_log_error(f"[ERROR_DETECTION] Daemon loop error: {e}")
+        time.sleep(interval)
 
 
 def generate_daily_report_job(target_date: str | None = None):
@@ -248,6 +293,24 @@ if __name__ == '__main__':
             {'message': pause_boot_msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'HTML'},
         )
 
+    # 💡 [신규] 에러 탐지 heartbeat initial write
+    write_heartbeat("main_loop")
+    write_heartbeat("telegram")
+    write_heartbeat("crisis_monitor")
+
+    # 💡 [신규] 에러 탐지 데몬 스레드
+    ed_enabled = bool(getattr(TRADING_RULES, "ERROR_DETECTOR_ENABLED", True))
+    ed_interval = int(getattr(TRADING_RULES, "ERROR_DETECTOR_DAEMON_INTERVAL_SEC", 60))
+    if ed_enabled:
+        write_heartbeat("error_detection")
+        error_detect_thread = threading.Thread(
+            target=error_detection_loop, args=(ed_interval, event_bus), daemon=True
+        )
+        error_detect_thread.start()
+        print(f"[시스템] 에러 탐지 데몬 ({ed_interval}초 주기) 가동 완료.")
+    else:
+        print("[시스템] 에러 탐지 데몬 DISABLED (TRADING_RULES.ERROR_DETECTOR_ENABLED=False)")
+
     # 💡 2. [신규 추가] 글로벌 위기 감지 모니터는 주말/휴일 상관없이 365일 돌아가야 합니다.
     crisis_thread = threading.Thread(target=crisis_monitor_loop, daemon=True)
     crisis_thread.start()
@@ -260,6 +323,7 @@ if __name__ == '__main__':
         # 💡 [아키텍처 포인트 3] 콜백(broadcast_alert) 파라미터 완전 제거!
         engine_thread = threading.Thread(target=kiwoom_sniper_v2.run_sniper, daemon=True)
         engine_thread.start()
+        write_heartbeat("sniper_engine")
         print("✅ [시스템] 정상거래일 - 스나이퍼 매매 엔진 가동 완료. 조건검색식 가동기간으로 코스닥 스캐너 가동 임시중단 합니다.")
 
         # 초단타 스캘핑 스캐너 가동 - 장초반/후반 2분, 그 외 3분 주기로
@@ -268,6 +332,7 @@ if __name__ == '__main__':
             import src.scanners.scalping_scanner as scalping_scanner
             scalper_thread = threading.Thread(target=scalping_scanner.run_scalper, daemon=True)
             scalper_thread.start()
+            write_heartbeat("scalping_scanner")
             print("⚡ [시스템] 정상거래일 - 초단타 스캘핑 스캐너 가동 완료.")
         except Exception as e:
             print(f"🚨 [시스템] 스캘핑 스캐너 가동 중 오류 발생 (혹은 모듈 없음): {e}")
@@ -293,9 +358,13 @@ if __name__ == '__main__':
     daily_report_sent = False
     monitor_archive_sent = False
 
+    heartbeat_counter = 0
     while True:
         try:
             now = datetime.now()
+            heartbeat_counter += 1
+            if heartbeat_counter % 5 == 0:
+                write_heartbeat("main_loop")
             
             # [스케줄러 1] 아침 08:50 종목 브로드캐스트 (딱 한 번만 실행되도록 플래그 사용)
             if now.hour == 8 and now.minute == 50 and not morning_report_sent:

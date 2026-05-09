@@ -1,0 +1,89 @@
+from __future__ import annotations
+
+import json
+import os
+import time
+from pathlib import Path
+from datetime import datetime
+
+import pytest
+
+from src.engine.error_detectors.process_health import (
+    ProcessHealthDetector,
+    write_heartbeat,
+    HEARTBEAT_PATH,
+)
+
+
+class TestProcessHealthDetector:
+    def setup_method(self):
+        if HEARTBEAT_PATH.exists():
+            HEARTBEAT_PATH.unlink()
+
+    def teardown_method(self):
+        if HEARTBEAT_PATH.exists():
+            HEARTBEAT_PATH.unlink()
+
+    def test_heartbeat_write_main_loop(self):
+        write_heartbeat("main_loop")
+        assert HEARTBEAT_PATH.exists()
+        data = json.loads(HEARTBEAT_PATH.read_text(encoding="utf-8"))
+        assert "main_loop" in data
+        assert "last_beat" in data["main_loop"]
+        assert data["main_loop"]["pid"] == os.getpid()
+
+    def test_heartbeat_write_thread(self):
+        write_heartbeat("telegram")
+        assert HEARTBEAT_PATH.exists()
+        data = json.loads(HEARTBEAT_PATH.read_text(encoding="utf-8"))
+        assert "threads" in data
+        assert "telegram" in data["threads"]
+        assert data["threads"]["telegram"]["alive"] is True
+
+    def test_heartbeat_append_thread(self):
+        write_heartbeat("main_loop")
+        write_heartbeat("crisis_monitor")
+        data = json.loads(HEARTBEAT_PATH.read_text(encoding="utf-8"))
+        assert "main_loop" in data
+        assert "crisis_monitor" in data["threads"]
+
+    def test_detector_pass_when_heartbeat_fresh(self):
+        write_heartbeat("main_loop")
+        write_heartbeat("telegram")
+        detector = ProcessHealthDetector()
+        result = detector.check()
+        assert result.severity == "pass"
+
+    def test_detector_fail_when_no_heartbeat(self):
+        if HEARTBEAT_PATH.exists():
+            HEARTBEAT_PATH.unlink()
+        detector = ProcessHealthDetector()
+        result = detector.check()
+        assert result.severity == "fail"
+        assert "not found" in result.summary.lower()
+
+    def test_detector_fail_when_main_loop_stale(self):
+        write_heartbeat("main_loop")
+        stale_data = {
+            "main_loop": {
+                "last_beat": "2000-01-01T00:00:00+00:00",
+                "pid": os.getpid(),
+            }
+        }
+        HEARTBEAT_PATH.write_text(json.dumps(stale_data), encoding="utf-8")
+        detector = ProcessHealthDetector()
+        result = detector.check()
+        assert result.severity == "fail"
+        assert "stale" in result.summary.lower()
+
+    def test_detector_warning_when_no_threads(self):
+        data = {
+            "main_loop": {
+                "last_beat": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "pid": os.getpid(),
+            }
+        }
+        HEARTBEAT_PATH.write_text(json.dumps(data), encoding="utf-8")
+        detector = ProcessHealthDetector()
+        result = detector.check()
+        assert result.severity == "warning"

@@ -114,3 +114,27 @@ def test_trading_rules_ai_cadence_env_override(monkeypatch):
     assert reloaded.TRADING_RULES.AI_HOLDING_CRITICAL_MIN_COOLDOWN == 30
     assert reloaded.TRADING_RULES.AI_HOLDING_CRITICAL_COOLDOWN == 75
     assert reloaded.TRADING_RULES.AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED is False
+
+
+def test_trading_rules_error_detector_env_override(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_ERROR_DETECTOR_ENABLED", "false")
+    monkeypatch.setenv("KORSTOCKSCAN_ERROR_DETECTOR_DAEMON_INTERVAL_SEC", "120")
+    monkeypatch.setenv("KORSTOCKSCAN_ERROR_DETECTOR_RESOURCE_MAX_SAMPLE_AGE_SEC", "900")
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.ERROR_DETECTOR_ENABLED is False
+    assert reloaded.TRADING_RULES.ERROR_DETECTOR_DAEMON_INTERVAL_SEC == 120
+    assert reloaded.TRADING_RULES.ERROR_DETECTOR_RESOURCE_MAX_SAMPLE_AGE_SEC == 900
+
+
+def test_trading_rules_stale_lock_env_override(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_ERROR_DETECTOR_STALE_LOCK_CLEANUP_ENABLED", "false")
+    monkeypatch.setenv("KORSTOCKSCAN_ERROR_DETECTOR_STALE_LOCK_MAX_AGE_SEC", "1800")
+    monkeypatch.setenv("KORSTOCKSCAN_ERROR_DETECTOR_DISK_LOG_ROTATE_ENABLED", "false")
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.ERROR_DETECTOR_STALE_LOCK_CLEANUP_ENABLED is False
+    assert reloaded.TRADING_RULES.ERROR_DETECTOR_STALE_LOCK_MAX_AGE_SEC == 1800
+    assert reloaded.TRADING_RULES.ERROR_DETECTOR_DISK_LOG_ROTATE_ENABLED is False

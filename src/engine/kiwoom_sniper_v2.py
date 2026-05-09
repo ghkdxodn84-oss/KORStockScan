@@ -1207,10 +1207,14 @@ def run_sniper(is_test_mode=False):
             current_market_regime = _current_market_regime_code()
             _ensure_state_handler_deps()
 
+            from src.engine.error_detectors.process_health import write_heartbeat as _sn_whb
+            _sn_whb("sniper_engine")
+
             if RESTART_FLAG_PATH.exists():
                 print("🔄 [우아한 종료] 재시작 깃발을 확인했습니다. 시스템을 안전하게 정지합니다.")
                 event_bus.publish('TELEGRAM_BROADCAST', {'message': "🛑 스나이퍼 엔진이 하던 작업을 마치고 우아하게 재시작됩니다."})
                 RESTART_FLAG_PATH.unlink()
+                _sn_whb("sniper_engine", alive=False)
                 break
 
             if not is_test_mode and now_t >= TIME_20_00:
@@ -1220,6 +1224,7 @@ def run_sniper(is_test_mode=False):
                 cooldowns.clear()
                 LAST_AI_CALL_TIMES.clear()
                 ACTIVE_TARGETS.clear()
+                _sn_whb("sniper_engine", alive=False)
                 break
 
             # =====================================================

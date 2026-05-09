@@ -530,6 +530,25 @@ class TradingConfig:
     PIPELINE_EVENT_JSONL_ENABLED: bool = True
     PIPELINE_EVENT_SCHEMA_VERSION: int = 1
 
+    # ==========================================
+    # 시스템 에러 탐지 설정
+    # ==========================================
+    ERROR_DETECTOR_ENABLED: bool = True
+    ERROR_DETECTOR_DAEMON_INTERVAL_SEC: int = 60
+    ERROR_DETECTOR_PROCESS_MAIN_LOOP_TIMEOUT_SEC: int = 15
+    ERROR_DETECTOR_PROCESS_THREAD_TIMEOUT_SEC: int = 7200
+    ERROR_DETECTOR_LOG_BURST_THRESHOLD: int = 4
+    ERROR_DETECTOR_LOG_SCAN_MAX_LINES: int = 2000
+    ERROR_DETECTOR_CPU_BUSY_MAX_PCT: float = 90.0
+    ERROR_DETECTOR_MEM_AVAILABLE_MIN_MB: float = 500.0
+    ERROR_DETECTOR_DISK_FREE_MIN_MB: float = 2048.0
+    ERROR_DETECTOR_SWAP_USED_MAX_PCT: float = 80.0
+    ERROR_DETECTOR_LOADAVG_15M_MAX: float = 8.0
+    ERROR_DETECTOR_RESOURCE_MAX_SAMPLE_AGE_SEC: int = 600
+    ERROR_DETECTOR_STALE_LOCK_CLEANUP_ENABLED: bool = True
+    ERROR_DETECTOR_STALE_LOCK_MAX_AGE_SEC: int = 3600
+    ERROR_DETECTOR_DISK_LOG_ROTATE_ENABLED: bool = True
+
 
 def _env_int(name: str) -> int | None:
     raw = os.getenv(name)
@@ -1413,6 +1432,42 @@ def _build_trading_rules() -> TradingConfig:
             HOLDING_FLOW_REVIEW_MAX_WS_AGE_SEC=env_holding_flow_max_ws_age
             if env_holding_flow_max_ws_age is not None
             else config.HOLDING_FLOW_REVIEW_MAX_WS_AGE_SEC,
+        )
+
+    env_ed_enabled = _env_bool("KORSTOCKSCAN_ERROR_DETECTOR_ENABLED")
+    env_ed_daemon_interval = _env_int("KORSTOCKSCAN_ERROR_DETECTOR_DAEMON_INTERVAL_SEC")
+    env_ed_resource_max_sample_age = _env_int("KORSTOCKSCAN_ERROR_DETECTOR_RESOURCE_MAX_SAMPLE_AGE_SEC")
+    env_ed_stale_lock_cleanup = _env_bool("KORSTOCKSCAN_ERROR_DETECTOR_STALE_LOCK_CLEANUP_ENABLED")
+    env_ed_stale_lock_max_age = _env_int("KORSTOCKSCAN_ERROR_DETECTOR_STALE_LOCK_MAX_AGE_SEC")
+    env_ed_disk_log_rotate = _env_bool("KORSTOCKSCAN_ERROR_DETECTOR_DISK_LOG_ROTATE_ENABLED")
+    if (
+        env_ed_enabled is not None
+        or env_ed_daemon_interval is not None
+        or env_ed_resource_max_sample_age is not None
+        or env_ed_stale_lock_cleanup is not None
+        or env_ed_stale_lock_max_age is not None
+        or env_ed_disk_log_rotate is not None
+    ):
+        config = replace(
+            config,
+            ERROR_DETECTOR_ENABLED=env_ed_enabled
+            if env_ed_enabled is not None
+            else config.ERROR_DETECTOR_ENABLED,
+            ERROR_DETECTOR_DAEMON_INTERVAL_SEC=env_ed_daemon_interval
+            if env_ed_daemon_interval is not None
+            else config.ERROR_DETECTOR_DAEMON_INTERVAL_SEC,
+            ERROR_DETECTOR_RESOURCE_MAX_SAMPLE_AGE_SEC=env_ed_resource_max_sample_age
+            if env_ed_resource_max_sample_age is not None
+            else config.ERROR_DETECTOR_RESOURCE_MAX_SAMPLE_AGE_SEC,
+            ERROR_DETECTOR_STALE_LOCK_CLEANUP_ENABLED=env_ed_stale_lock_cleanup
+            if env_ed_stale_lock_cleanup is not None
+            else config.ERROR_DETECTOR_STALE_LOCK_CLEANUP_ENABLED,
+            ERROR_DETECTOR_STALE_LOCK_MAX_AGE_SEC=env_ed_stale_lock_max_age
+            if env_ed_stale_lock_max_age is not None
+            else config.ERROR_DETECTOR_STALE_LOCK_MAX_AGE_SEC,
+            ERROR_DETECTOR_DISK_LOG_ROTATE_ENABLED=env_ed_disk_log_rotate
+            if env_ed_disk_log_rotate is not None
+            else config.ERROR_DETECTOR_DISK_LOG_ROTATE_ENABLED,
         )
     return config
 

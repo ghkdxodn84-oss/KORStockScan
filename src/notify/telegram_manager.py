@@ -241,9 +241,20 @@ def handle_admin_notify(event_data):
     if msg:
         _send_to_admin(msg, parse_mode='Markdown')
 
+def handle_system_health_alert(event_data):
+    message = event_data.get("message", "")
+    if not message:
+        return
+    import html as _html
+    safe_message = _html.escape(str(message))
+    formatted = f"🚨 <b>[ERROR DETECTION]</b>\n<code>{safe_message}</code>\n\n<i>report-only, no runtime mutation performed</i>"
+    _send_to_admin(formatted, parse_mode="HTML")
+
+
 # 🚀 모듈이 로드될 때 EventBus에 텔레그램 수신기를 등록합니다!
 event_bus.subscribe('TELEGRAM_BROADCAST', handle_telegram_event)
 event_bus.subscribe('TELEGRAM_ADMIN_NOTIFY', handle_admin_notify)
+event_bus.subscribe('SYSTEM_HEALTH_ALERT', handle_system_health_alert)
 # ==========================================
 # 6. 텔레그램 UI 및 헬퍼 함수
 # ==========================================
@@ -931,9 +942,20 @@ def start_telegram_bot():
     consecutive_failures = 0
     max_consecutive_failures = 10  # 재생성 임계값
 
+    import threading as _threading
+    import time as _time
+
+    def _telegram_heartbeat_sidecar():
+        from src.engine.error_detectors.process_health import write_heartbeat as _whb
+        while True:
+            _whb("telegram")
+            _time.sleep(30)
+
+    _sidecar_thread = _threading.Thread(target=_telegram_heartbeat_sidecar, daemon=True)
+    _sidecar_thread.start()
+
     while True:
         try:
-            # 💡 [핵심 최적화 1] 타임아웃을 넉넉하게 늘리고, 내부 에러 로그(CRITICAL)를 꺼서 화면을 깔끔하게 유지합니다.
             bot.infinity_polling(
                 timeout=30, 
                 long_polling_timeout=20, 

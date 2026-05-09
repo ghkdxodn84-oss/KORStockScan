@@ -549,16 +549,19 @@ def build_runbook_operational_checks(*, target_date: str | None, slots: list[str
                 source="docs/time-based-operations-runbook.md",
                 section="장전 확인 절차",
                 artifact_checks=(
+                    "logs/ensemble_scanner.log",
+                    "data/daily_recommendations_v2.csv",
+                    "data/daily_recommendations_v2_diagnostics.json",
                     "logs/threshold_cycle_preopen_cron.log",
                     f"data/threshold_cycle/apply_plans/threshold_apply_{date_text}.json",
                     f"data/threshold_cycle/runtime_env/threshold_runtime_env_{date_text}.json",
                     "tmux bot session / src/run_bot.sh runtime env source 여부",
                 ),
                 decision_rule=(
-                    "pass|warning|fail|not_yet_due 중 하나로 판정. apply plan selected/blocked family, "
-                    "AI guard, same-stage owner 충돌, runtime env 생성 여부 확인."
+                    "pass|warning|fail|not_yet_due 중 하나로 판정. final scanner 추천/empty/fallback diagnostic 분리, "
+                    "apply plan selected/blocked family, AI guard, same-stage owner 충돌, runtime env 생성 여부 확인."
                 ),
-                forbidden="실패해도 수동 env override나 장전 수동 enable/hold 판정 금지.",
+                forbidden="실패해도 수동 env override, 스윙 dry-run 해제, 장전 수동 enable/hold 판정 금지.",
             )
         )
     if include_all or "intraday" in selected:
@@ -574,13 +577,20 @@ def build_runbook_operational_checks(*, target_date: str | None, slots: list[str
                     "logs/run_buy_funnel_sentinel_cron.log",
                     "logs/run_holding_exit_sentinel_cron.log",
                     "logs/threshold_cycle_calibration_intraday_cron.log",
+                    f"data/pipeline_events/pipeline_events_{date_text}.jsonl",
+                    f"data/threshold_cycle/threshold_events_{date_text}.jsonl",
                     f"data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_{date_text}_intraday.md",
+                    f"data/report/error_detection/error_detection_{date_text}.json",
                 ),
                 decision_rule=(
                     "pass|warning|fail|not_yet_due 중 하나로 판정. Sentinel RUNTIME_OPS, "
-                    "intraday calibration 생성 여부, AI correction ai_status, runtime_change=false 유지 확인."
+                    "pipeline/threshold event append, intraday calibration 생성 여부, AI correction ai_status, "
+                    "스윙 dry-run provenance, runtime_change=false 유지 확인. "
+                    "SystemErrorDetector report의 summary_severity 및 fail detector 확인. "
+                    "fail이면 detector별 details을 읽고 운영장애/계측/incident로 분류."
                 ),
-                forbidden="장중 calibration이나 Sentinel 결과로 당일 runtime threshold 변경 금지.",
+                forbidden="장중 calibration이나 Sentinel 결과로 당일 runtime threshold 변경 금지. "
+                          "SystemErrorDetector 탐지 결과로 runtime threshold/spread/주문/재시작 변경 금지.",
             )
         )
     if include_all or "postclose" in selected:
@@ -595,14 +605,21 @@ def build_runbook_operational_checks(*, target_date: str | None, slots: list[str
                 artifact_checks=(
                     "logs/threshold_cycle_postclose_cron.log",
                     f"data/report/threshold_cycle_ev/threshold_cycle_ev_{date_text}.md",
+                    f"data/report/swing_selection_funnel/swing_selection_funnel_{date_text}.md",
+                    f"data/report/swing_lifecycle_audit/swing_lifecycle_audit_{date_text}.md",
+                    f"data/report/swing_threshold_ai_review/swing_threshold_ai_review_{date_text}.md",
+                    f"data/report/swing_improvement_automation/swing_improvement_automation_{date_text}.json",
                     f"data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_{date_text}.md",
                     f"docs/code-improvement-workorders/code_improvement_workorder_{date_text}.md",
+                    f"data/report/error_detection/error_detection_{date_text}.json",
                 ),
                 decision_rule=(
                     "pass|warning|fail|not_yet_due 중 하나로 판정. daily EV 제출물, postclose AI correction, "
-                    "pattern lab automation, code improvement workorder 생성 여부 확인."
+                    "swing lifecycle automation, pattern lab automation, code improvement workorder 생성 여부 확인. "
+                    "SystemErrorDetector 하루 누적 fail detector가 있으면 incident/playbook 분류."
                 ),
-                forbidden="postclose 실패 시 threshold 수동 변경이 아니라 같은 date wrapper 재실행/복구 우선.",
+                forbidden="postclose 실패 시 threshold 수동 변경이 아니라 같은 date wrapper 재실행/복구 우선. "
+                          "SystemErrorDetector 결과로 runtime threshold/spread/주문 변경 금지.",
             )
         )
     return checks

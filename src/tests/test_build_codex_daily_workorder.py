@@ -121,8 +121,19 @@ def test_build_runbook_operational_checks_for_slot():
 
     assert [check.check_id for check in checks] == ["PreopenAutomationHealthCheck20260511"]
     assert checks[0].slot == "PREOPEN"
+    assert "logs/ensemble_scanner.log" in checks[0].artifact_checks
+    assert "data/daily_recommendations_v2.csv" in checks[0].artifact_checks
     assert "threshold_apply_2026-05-11.json" in "\n".join(checks[0].artifact_checks)
     assert "수동 env override" in checks[0].forbidden
+    assert "스윙 dry-run 해제" in checks[0].forbidden
+
+    all_checks = build_runbook_operational_checks(target_date="2026-05-11", slots=None)
+    assert [check.slot for check in all_checks] == ["PREOPEN", "INTRADAY", "POSTCLOSE"]
+    postclose = next(check for check in all_checks if check.slot == "POSTCLOSE")
+    assert "swing_lifecycle_audit_2026-05-11.md" in "\n".join(postclose.artifact_checks)
+    assert "swing_improvement_automation_2026-05-11.json" in "\n".join(postclose.artifact_checks)
+    intraday = next(check for check in all_checks if check.slot == "INTRADAY")
+    assert "pipeline_events_2026-05-11.jsonl" in "\n".join(intraday.artifact_checks)
 
 
 def test_render_markdown_includes_runbook_operational_checks():
