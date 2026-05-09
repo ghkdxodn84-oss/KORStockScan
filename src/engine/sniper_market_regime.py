@@ -1,5 +1,8 @@
 """Market regime utilities for the sniper engine."""
 
+import os
+
+from src.utils.constants import TRADING_RULES
 from src.utils.logger import log_error
 
 
@@ -78,6 +81,11 @@ def should_block_swing_entry_by_market_regime(strategy: str):
         # 스윙 전략만 적용
         if normalized not in ["KOSPI_ML", "KOSDAQ_ML", "MAIN"]:
             return False, ""
+
+        sensitivity = str(os.getenv("KORSTOCKSCAN_SWING_MARKET_REGIME_SENSITIVITY", "") or "").strip().lower()
+        dry_run_enabled = bool(getattr(TRADING_RULES, "SWING_LIVE_ORDER_DRY_RUN_ENABLED", True))
+        if not snap.allow_swing_entry and sensitivity == "relaxed_entry_observe" and dry_run_enabled:
+            return False, "시장환경 dry-run approval relaxed_entry_observe"
 
         if not snap.allow_swing_entry:
             return True, _format_market_regime_block_reason(snap)

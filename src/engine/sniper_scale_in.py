@@ -1,6 +1,6 @@
 import statistics
 import math
-from datetime import datetime, time as dt_time
+from datetime import datetime, timedelta, time as dt_time
 
 from src.utils.constants import TRADING_RULES
 from src.utils import kiwoom_utils
@@ -97,11 +97,18 @@ def _ticks_down(price, ticks=1):
         return max(0, int(price) - (tick * max(1, int(ticks))))
 
 
+def _combine_time_with_current_session_date(raw_time, now_dt):
+    combined = datetime.combine(now_dt.date(), raw_time)
+    if combined > now_dt:
+        combined -= timedelta(days=1)
+    return combined
+
+
 def _resolve_buy_time_as_datetime(raw_buy_time, now_dt):
     if isinstance(raw_buy_time, datetime):
         return raw_buy_time
     if isinstance(raw_buy_time, dt_time):
-        return datetime.combine(now_dt.date(), raw_buy_time)
+        return _combine_time_with_current_session_date(raw_buy_time, now_dt)
     if isinstance(raw_buy_time, (int, float)):
         return datetime.fromtimestamp(float(raw_buy_time))
     if isinstance(raw_buy_time, str):
@@ -112,7 +119,7 @@ def _resolve_buy_time_as_datetime(raw_buy_time, now_dt):
             return datetime.fromisoformat(bt_str)
         except ValueError:
             try:
-                return datetime.combine(now_dt.date(), datetime.strptime(bt_str, '%H:%M:%S').time())
+                return _combine_time_with_current_session_date(datetime.strptime(bt_str, '%H:%M:%S').time(), now_dt)
             except ValueError:
                 return None
     return None

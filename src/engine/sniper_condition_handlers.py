@@ -134,6 +134,7 @@ def _has_active_target(code, strategy):
     identity = target_identity(code, strategy)
     return any(
         target_identity(t.get('code', ''), t.get('strategy', '')) == identity
+        and str((t or {}).get("simulation_book") or "") != "scalp_ai_buy_all"
         for t in (ACTIVE_TARGETS or [])
     )
 

@@ -219,6 +219,7 @@ def _ensure_runtime_target(record, *, buy_qty=None, buy_price=None):
         (
             t for t in (ACTIVE_TARGETS or [])
             if target_identity(t.get("code", ""), t.get("strategy", "")) == identity
+            and str((t or {}).get("simulation_book") or "") != "scalp_ai_buy_all"
         ),
         None,
     )

@@ -263,6 +263,62 @@ def _ratio(numerator: int, denominator: int) -> float:
     return round((numerator / denominator) * 100.0, 1) if denominator > 0 else 0.0
 
 
+def _completed_profit_values_summary(values: list[float]) -> dict:
+    clean_values = [float(value) for value in values if value is not None]
+    win_count = len([value for value in clean_values if value > 0])
+    loss_count = len([value for value in clean_values if value < 0])
+    return {
+        "completed_rows": len(clean_values),
+        "win_count": win_count,
+        "loss_count": loss_count,
+        "win_rate": _ratio(win_count, len(clean_values)),
+        "loss_rate": _ratio(loss_count, len(clean_values)),
+        "avg_profit_rate": round(sum(clean_values) / len(clean_values), 3) if clean_values else 0.0,
+    }
+
+
+def _scalp_sim_completed_profit_values(holding_events: list[PerfEvent]) -> list[float]:
+    return [
+        float(value)
+        for event in holding_events
+        if event.stage == "scalp_sim_sell_order_assumed_filled"
+        and (value := _safe_float(event.fields.get("profit_rate"))) is not None
+    ]
+
+
+def _build_scalp_simulator_summary(entry_events: list[PerfEvent], holding_events: list[PerfEvent]) -> dict:
+    events = [
+        event for event in (entry_events + holding_events)
+        if event.stage.startswith("scalp_sim_")
+        or str(event.fields.get("simulation_book") or "") == "scalp_ai_buy_all"
+    ]
+    stage_counts = Counter(event.stage for event in events)
+    profit_values = _scalp_sim_completed_profit_values(holding_events)
+    profit_summary = _completed_profit_values_summary(profit_values)
+    return {
+        "enabled_default": True,
+        "simulation_book": "scalp_ai_buy_all",
+        "fill_policy": "quote_based",
+        "calibration_authority": "equal_weight",
+        "event_count": int(len(events)),
+        "stage_counts": dict(stage_counts),
+        "entry_armed_events": int(stage_counts.get("scalp_sim_entry_armed", 0)),
+        "virtual_pending_events": int(stage_counts.get("scalp_sim_buy_order_virtual_pending", 0)),
+        "buy_filled_events": int(stage_counts.get("scalp_sim_buy_order_assumed_filled", 0)),
+        "holding_started_events": int(stage_counts.get("scalp_sim_holding_started", 0)),
+        "scale_in_filled_events": int(stage_counts.get("scalp_sim_scale_in_order_assumed_filled", 0)),
+        "sell_completed_events": int(stage_counts.get("scalp_sim_sell_order_assumed_filled", 0)),
+        "entry_expired_events": int(stage_counts.get("scalp_sim_entry_expired", 0)),
+        "entry_unpriced_events": int(stage_counts.get("scalp_sim_entry_unpriced", 0)),
+        "duplicate_buy_signal_events": int(stage_counts.get("scalp_sim_duplicate_buy_signal", 0)),
+        "completed_rows": profit_summary["completed_rows"],
+        "completed_avg_profit_rate": profit_summary["avg_profit_rate"],
+        "completed_win_rate": profit_summary["win_rate"],
+        "completed_loss_rate": profit_summary["loss_rate"],
+        "completed_profit_summary": profit_summary,
+    }
+
+
 def _metric_card(label: str, value: str, hint: str = "") -> dict:
     return {"label": label, "value": value, "hint": hint}
 
@@ -328,6 +384,17 @@ def _valid_completed_profit_values(rows: list[dict]) -> list[float]:
             continue
         values.append(float(profit_rate))
     return values
+
+
+def _build_completed_source_split(trade_rows: list[dict], holding_events: list[PerfEvent]) -> dict:
+    real_values = _valid_completed_profit_values(trade_rows)
+    sim_values = _scalp_sim_completed_profit_values(holding_events)
+    return {
+        "real": _completed_profit_values_summary(real_values),
+        "sim": _completed_profit_values_summary(sim_values),
+        "combined": _completed_profit_values_summary(real_values + sim_values),
+        "calibration_authority": "combined_equal_weight_no_sim_downweight",
+    }
 
 
 def _extract_gatekeeper_action(event: PerfEvent) -> str:
@@ -2066,7 +2133,21 @@ def build_performance_tuning_report(
         dual_persona_events=dual_persona_events,
     )
     ofi_micro = _build_ofi_orderbook_micro_summary(entry_events)
+    scalp_simulator = _build_scalp_simulator_summary(entry_events, holding_events)
+    completed_source_split = _build_completed_source_split(trade_rows, holding_events)
     metrics["ofi_orderbook_micro_samples"] = int(ofi_micro["sample_count"])
+    metrics.update(
+        {
+            "scalp_sim_entry_armed_events": scalp_simulator["entry_armed_events"],
+            "scalp_sim_buy_filled_events": scalp_simulator["buy_filled_events"],
+            "scalp_sim_sell_completed_events": scalp_simulator["sell_completed_events"],
+            "scalp_sim_completed_avg_profit_rate": scalp_simulator["completed_avg_profit_rate"],
+            "completed_real_rows": completed_source_split["real"]["completed_rows"],
+            "completed_sim_rows": completed_source_split["sim"]["completed_rows"],
+            "completed_combined_rows": completed_source_split["combined"]["completed_rows"],
+            "completed_combined_avg_profit_rate": completed_source_split["combined"]["avg_profit_rate"],
+        }
+    )
 
     top_holding_slow = sorted(
         [
@@ -2147,6 +2228,8 @@ def build_performance_tuning_report(
             ],
             "symbol_anomalies": ofi_micro["symbol_anomalies"],
         },
+        "scalp_simulator": scalp_simulator,
+        "completed_source_split": completed_source_split,
     }
     breakdowns = {
         "entry_terminal_blocker_breakdown": [

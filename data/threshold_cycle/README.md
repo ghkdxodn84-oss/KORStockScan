@@ -1,19 +1,19 @@
 # Threshold Cycle Operations
 
-작성 기준: `2026-05-09 KST`
+작성 기준: `2026-05-10 KST`
 
 이 디렉토리는 threshold 후보 수집, 장중/장후 calibration, 장전 bounded runtime env apply, daily EV 리포트를 저장한다. 현재 원칙은 완전 무인 `auto_bounded_live` apply이며, 장중 runtime threshold 자동 변경은 계속 금지한다.
 
 report 기반 자동화의 전체 추적성은 [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)를 기준으로 본다. 이 문서는 산출물별 producer/consumer와 현재 apply 단계만 설명하고, 미래 작업 owner는 날짜별 checklist가 소유한다.
 
-적용 범위는 스캘핑 전용이 아니다. 이 README는 스캘핑과 스윙이 공통 threshold-cycle, daily EV, preopen runtime env, code-improvement workorder 체인에 들어오는 부분의 산출물 정의다. 다만 스윙 전용 `selection -> db_load -> entry -> holding -> scale_in -> exit -> attribution` lifecycle 산출물의 필드 의미와 운영 확인은 [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)의 스윙 dry-run/lifecycle 절차와 `swing_lifecycle_audit`/`swing_improvement_automation` artifact를 함께 기준으로 본다.
+적용 범위는 스캘핑 전용이 아니다. 이 README는 스캘핑과 스윙이 공통 threshold-cycle, daily EV, preopen runtime env, code-improvement workorder 체인에 들어오는 부분의 산출물 정의다. 스캘핑 `scalp_ai_buy_all` live simulator는 `scalp_sim_*` pipeline event와 quote-based completed rows를 만들며, report는 `real`/`sim`/`combined`를 분리 표시하되 combined를 실매매 동급 calibration 입력으로 사용한다. 스윙 전용 `selection -> db_load -> entry -> holding -> scale_in -> exit -> attribution` lifecycle 산출물은 `swing_lifecycle_audit`/`swing_improvement_automation`/`swing_runtime_approval` artifact를 함께 기준으로 본다. 스윙 runtime 반영은 `approval_required` 요청만 자동 생성하고, 수동 approval artifact가 있어야 다음 장전 env에 반영한다. 반영 후에도 `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True`와 브로커 주문 차단은 유지된다. 다만 broker execution 품질 수집용 `swing_one_share_real_canary`는 별도 approval-required real-canary 축으로 정의하며, 승인된 phase0 후보만 1주 실제 BUY/SELL을 허용한다.
 
 ## 운영 흐름
 
 | 시점 | wrapper | 역할 | 산출물 |
 |---|---|---|---|
 | runtime | `src.utils.pipeline_event_logger` | threshold 후보 stage를 compact stream에 적재 | `threshold_events_YYYY-MM-DD.jsonl` |
-| POSTCLOSE 16:10 | `deploy/run_threshold_cycle_postclose.sh` | raw pipeline event를 family partition으로 backfill하고 장후 report, AI correction, scalping/swing automation, daily EV report 생성 | `date=YYYY-MM-DD/family=*/part-*.jsonl`, `data/report/threshold_cycle_YYYY-MM-DD.json`, 파생 `statistical_action_weight`, `holding_exit_decision_matrix`, `threshold_cycle_cumulative` JSON/MD, `threshold_cycle_ai_review_YYYY-MM-DD_postclose.{json,md}`, `scalping_pattern_lab_automation_YYYY-MM-DD.{json,md}`, `swing_improvement_automation_YYYY-MM-DD.{json,md}`, `swing_pattern_lab_automation_YYYY-MM-DD.{json,md}`, `threshold_cycle_ev_YYYY-MM-DD.{json,md}` |
+| POSTCLOSE 16:10 | `deploy/run_threshold_cycle_postclose.sh` | raw pipeline event를 family partition으로 backfill하고 장후 report, AI correction, scalping/swing automation, daily EV report 생성 | `date=YYYY-MM-DD/family=*/part-*.jsonl`, `data/report/threshold_cycle_YYYY-MM-DD.json`, 파생 `statistical_action_weight`, `holding_exit_decision_matrix`, `threshold_cycle_cumulative` JSON/MD, `threshold_cycle_ai_review_YYYY-MM-DD_postclose.{json,md}`, `scalping_pattern_lab_automation_YYYY-MM-DD.{json,md}`, `swing_improvement_automation_YYYY-MM-DD.{json,md}`, `swing_runtime_approval_YYYY-MM-DD.{json,md}`, `swing_pattern_lab_automation_YYYY-MM-DD.{json,md}`, `threshold_cycle_ev_YYYY-MM-DD.{json,md}` |
 | INTRADAY 12:05 | `deploy/run_threshold_cycle_calibration.sh` | 기존 report source bundle을 읽어 장중 calibration 및 AI correction artifact 생성 | `data/report/threshold_cycle_calibration/threshold_cycle_calibration_YYYY-MM-DD_intraday.json`, `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_intraday.{json,md}` |
 | PREOPEN 07:35 | `deploy/run_threshold_cycle_preopen.sh` | 최신 threshold report와 AI correction guard를 읽어 auto bounded runtime env 생성 | `apply_plans/threshold_apply_YYYY-MM-DD.json`, `runtime_env/threshold_runtime_env_YYYY-MM-DD.{env,json}` |
 
@@ -27,7 +27,7 @@ report 기반 자동화의 전체 추적성은 [report-based-automation-traceabi
 - `safety_revert_required=true`는 hard/protect/emergency stop 지연, 주문 실패, receipt/provenance 손상, same-stage owner 충돌, severe loss guard 초과에만 쓴다.
 - 실제 env 반영은 다음 장전 1회 bounded apply로 자동 수행한다. 코드 hot mutation은 하지 않고, `src/run_bot.sh`가 당일 `runtime_env/threshold_runtime_env_YYYY-MM-DD.env`를 기동 시 source한다.
 - calibration artifact는 매일 장중/장후 2회 생성한다. 장중 실행은 기존 보유/청산 report source를 요약하며 canonical postclose threshold report를 덮어쓰지 않는다.
-- postclose 제출물은 `threshold_cycle_ev_YYYY-MM-DD.{json,md}` daily EV 리포트로 통일한다. 수동 승인용 preopen review 항목은 기본 생성하지 않는다.
+- postclose 제출물은 `threshold_cycle_ev_YYYY-MM-DD.{json,md}` daily EV 리포트로 통일한다. 스윙은 예외적으로 `swing_runtime_approval`의 `approval_required` 요청을 daily EV와 preopen apply manifest에 노출하지만, 수동 approval artifact 없이는 env를 쓰지 않는다.
 
 ## 주요 경로
 
@@ -46,9 +46,12 @@ report 기반 자동화의 전체 추적성은 [report-based-automation-traceabi
 | `data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_YYYY-MM-DD.{json,md}` | 누적/rolling cohort 기반 threshold cycle 파생 artifact |
 | `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_{intraday,postclose}.{json,md}` | AI correction proposal + deterministic guard 파생 artifact |
 | `data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_YYYY-MM-DD.{json,md}` | Gemini/Claude pattern lab 기반 improvement order 및 auto family 후보 artifact. runtime/code 직접 변경 없음 |
+| `data/runtime/scalp_live_simulator_state.json` | 스캘핑 live simulator open sim 포지션 복원 상태. threshold report 입력은 이 파일이 아니라 `scalp_sim_*` pipeline events를 기준으로 한다 |
 | `data/report/swing_lifecycle_audit/swing_lifecycle_audit_YYYY-MM-DD.{json,md}` | 스윙 선정-DB 적재-진입-보유-추가매수-청산 lifecycle audit artifact. runtime/code 직접 변경 없음 |
 | `data/report/swing_threshold_ai_review/swing_threshold_ai_review_YYYY-MM-DD.{json,md}` | 스윙 threshold/logic proposal-only AI review artifact. deterministic guard와 수동 workorder가 최종 source of truth |
 | `data/report/swing_improvement_automation/swing_improvement_automation_YYYY-MM-DD.{json,md}` | 스윙 lifecycle 기반 improvement order 및 auto family 후보 artifact. 모든 order는 `runtime_effect=false`, family candidate는 `allowed_runtime_apply=false`로 시작 |
+| `data/report/swing_runtime_approval/swing_runtime_approval_YYYY-MM-DD.{json,md}` | 스윙 hard floor + EV trade-off score 기반 `approval_required` 요청과 blocked reason. 요청 자체는 runtime 변경이 아니다 |
+| `data/threshold_cycle/approvals/swing_runtime_approvals_YYYY-MM-DD.json` | 사용자가 승인한 스윙 approval artifact. 여기에 승인 id가 있어야 다음 장전 `threshold_cycle_preopen_apply`가 env override를 쓴다 |
 | `data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_YYYY-MM-DD.{json,md}` | DeepSeek 스윙 pattern lab 기반 automation artifact. fresh single-day 조건 미충족 시 warning만 남기고 order로 승격하지 않음 |
 | `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.{json,md}` | 완전 무인 반영 이후 daily EV 성과 제출 artifact |
 
@@ -140,7 +143,11 @@ family별 기준 window는 다르게 적용한다.
 
 `gemini_scalping_pattern_lab`와 `claude_scalping_pattern_lab`는 신규 관찰축을 runtime에 직접 추가하지 않는다. postclose wrapper가 두 lab을 `ANALYSIS_START_DATE=2026-04-21`, `ANALYSIS_END_DATE=YYYY-MM-DD`로 실행하고, `scalping_pattern_lab_automation`이 결과를 기존 family 입력, `auto_family_candidate(allowed_runtime_apply=false)`, `code_improvement_order(runtime_effect=false)`로 분류한다. daily EV report에는 freshness/consensus/order 요약만 포함하고 상세는 별도 artifact를 참조한다.
 
-스윙은 `swing_lifecycle_audit`와 `swing_improvement_automation`이 lifecycle 관찰축과 proposal-only workorder를 만든다. `recommendation_db_load`, `scale_in_observation`, `ai_contract_metrics`, OFI/QI summary는 report-only이며, 스윙 dry-run 결과만으로 당일 주문 guard, market regime hard block, gap/protection guard, model floor를 완화하지 않는다. `swing_pattern_lab_automation`은 DeepSeek fresh single-day 조건이 닫힌 경우에만 `design_family_candidate` 또는 report-only order로 재진입하고, stale/range/malformed output은 daily EV warning으로만 남긴다.
+`position_sizing_cap_release`는 1주 수량 cap 해제 승인요청 전용 family다. 완벽한 개별 threshold 동시 충족이 아니라 overall EV 중심 efficient trade-off score로 판단한다. 표본, EV floor, severe downside, 주문 실패율만 hard floor로 두고, win rate/full-fill/soft-stop tail/cap opportunity는 가중 점수에 반영한다. 기준이 충족되어도 `allowed_runtime_apply=false`를 유지하며, `calibration_candidates[].human_approval_required=true`, daily EV `approval_requests`, preopen apply `approval_requests`에만 노출한다. 사용자가 승인하기 전에는 신규 BUY, wait6579 probe, REVERSAL_ADD/PYRAMID 모두 1주 cap을 유지한다.
+
+스윙은 `swing_lifecycle_audit`와 `swing_improvement_automation`이 lifecycle 관찰축과 proposal/workorder를 만들고, `swing_runtime_approval`이 보수적 runtime 승인 요청만 만든다. hard floor는 family sample floor, critical instrumentation gap 없음, DB load gap 없음, fallback diagnostic contamination 없음, severe downside guard, same-stage owner 충돌 없음이다. 그 위에서 `overall_ev 45% + downside_tail 20% + participation/funnel 15% + regime_robustness 10% + attribution_quality 10%`의 `tradeoff_score >=0.68`이면 승인 요청을 생성한다. 완벽한 개별 threshold spot을 찾지 않고 전체 EV trade-off가 충분한 지점을 요청 기준으로 본다. 1차 env 적용 가능 family는 `swing_model_floor`, `swing_selection_top_k`, `swing_gatekeeper_reject_cooldown`, `swing_market_regime_sensitivity`이며, `AVG_DOWN`, `PYRAMID`, exit OFI/QI smoothing, AI contract 변경은 approval request까지만 허용한다.
+
+`swing_one_share_real_canary`는 위 dry-run approval과 별도의 broker execution 품질 수집축이다. 시작 조건은 `swing_runtime_approval` hard floor와 EV trade-off 통과, 사용자 real-canary approval artifact, 장전 preopen apply, DB load/instrumentation/fallback contamination/severe downside/same-stage conflict 없음이다. phase0 guard는 `qty=1`, `max_new_entries_per_day=1`, `max_open_positions=3`, `max_total_notional_krw=300000`, same-symbol active real canary 1개, AVG_DOWN/PYRAMID/scale-in 실주문 금지다. 이 canary의 realized PnL은 combined EV에 들어갈 수 있지만, broker receipt/order number binding/fill ratio/slippage/cancel/sell receipt는 real-only로만 판정한다. 통과해도 스윙 전체 실주문 전환은 별도 2차 계획/승인 없이는 금지한다.
 
 ## statistical_action_weight 적용 범위
 

@@ -95,6 +95,30 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
                 "status": "auto_bounded_live_ready",
                 "runtime_change": True,
                 "auto_apply_selected": [{"family": "score65_74_recovery_probe"}],
+                "swing_runtime_approval": {
+                    "request_report": "data/report/swing_runtime_approval/swing_runtime_approval_2026-05-08.json",
+                    "approval_artifact": None,
+                    "requested": 1,
+                    "approved": 0,
+                    "real_canary_policy": {
+                        "policy_id": "swing_one_share_real_canary_phase0",
+                        "real_order_allowed_actions": ["BUY_INITIAL", "SELL_CLOSE"],
+                        "sim_only_actions": ["AVG_DOWN", "PYRAMID", "SCALE_IN"],
+                    },
+                    "blocked": ["approval_artifact_missing"],
+                    "requests": [
+                        {
+                            "approval_id": "swing_runtime_approval:2026-05-08:swing_model_floor",
+                            "family": "swing_model_floor",
+                            "stage": "selection",
+                            "tradeoff_score": 0.72,
+                            "target_env_keys": ["SWING_FLOOR_BULL"],
+                            "recommended_values": {"floor_bull": 0.30},
+                        }
+                    ],
+                    "selected": [],
+                    "decisions": [],
+                },
             }
         ),
         encoding="utf-8",
@@ -156,11 +180,27 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
     assert report["daily_ev_summary"]["realized_pnl_krw"] == -282
     assert report["entry_funnel"]["budget_pass_to_submitted_rate_pct"] == 5.0
     assert report["pattern_lab_automation"]["consensus_count"] == 1
+    assert report["swing_runtime_approval"]["requested"] == 1
+    assert (
+        report["swing_runtime_approval"]["real_canary_policy"]["policy_id"]
+        == "swing_one_share_real_canary_phase0"
+    )
+    assert report["swing_runtime_approval"]["real_canary_policy"]["sim_only_actions"] == [
+        "AVG_DOWN",
+        "PYRAMID",
+        "SCALE_IN",
+    ]
+    assert report["swing_runtime_approval"]["requests"][0]["tradeoff_score"] == 0.72
     assert report["pattern_lab_automation"]["top_consensus_findings"][0]["mapped_family"] == "score65_74_recovery_probe"
     assert report["code_improvement_workorder"]["selected_order_count"] == 1
     assert report["code_improvement_workorder"]["top_orders"][0]["order_id"] == "order_ai_threshold"
     assert (ev_dir / "threshold_cycle_ev_2026-05-08.json").exists()
     assert (ev_dir / "threshold_cycle_ev_2026-05-08.md").exists()
+    markdown = (ev_dir / "threshold_cycle_ev_2026-05-08.md").read_text(encoding="utf-8")
+    assert "Swing Runtime Approval" in markdown
+    assert "swing_one_share_real_canary_phase0" in markdown
+    assert "AVG_DOWN, PYRAMID, SCALE_IN" in markdown
+    assert "swing_runtime_approval:2026-05-08:swing_model_floor" in markdown
 
 
 def test_build_threshold_cycle_ev_report_warns_when_pattern_lab_artifact_missing(tmp_path, monkeypatch):

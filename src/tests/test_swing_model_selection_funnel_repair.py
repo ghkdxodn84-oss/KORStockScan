@@ -17,6 +17,8 @@ from src.engine.swing_daily_simulation_report import (
 from src.engine.swing_lifecycle_audit import (
     build_swing_improvement_automation_report,
     build_swing_lifecycle_audit_report,
+    build_swing_runtime_approval_report,
+    build_swing_threshold_candidates,
     build_swing_threshold_ai_review_report,
     write_swing_lifecycle_outputs,
 )
@@ -567,6 +569,108 @@ def test_swing_threshold_ai_review_is_proposal_only_and_guarded():
     assert item["guard_decision"]["runtime_change"] is False
 
 
+def _approval_ready_audit(**overrides):
+    audit = {
+        "date": "2026-05-08",
+        "model_selection": {
+            "selected_count": 5,
+            "floor_bull": 0.35,
+            "floor_bear": 0.40,
+            "fallback_written_to_recommendations": False,
+        },
+        "recommendation_csv": {"csv_rows": 5, "selection_modes": {"SELECTED": 5}},
+        "recommendation_db_load": {
+            "db_load_gap": False,
+            "selection_modes": {"SELECTED": 5},
+        },
+        "db_lifecycle": {
+            "db_rows": 5,
+            "completed_rows": 8,
+            "valid_profit_rows": 8,
+            "avg_profit_rate": 1.1,
+        },
+        "observation_axis_summary": {
+            "instrumentation_gap_count": 0,
+            "hold_sample_count": 0,
+        },
+        "lifecycle_events": {
+            "raw_counts": {
+                "blocked_gatekeeper_reject": 5,
+                "market_regime_block": 0,
+                "market_regime_pass": 0,
+            },
+            "unique_record_counts": {
+                "blocked_gatekeeper_reject": 5,
+                "market_regime_block": 0,
+                "market_regime_pass": 0,
+            },
+            "group_unique_counts": {"entry": 5, "exit": 3, "holding": 0, "scale_in": 0},
+            "submitted_unique_records": 0,
+            "simulated_order_unique_records": 5,
+            "ofi_qi_summary": {},
+            "record_timeline_sample": [],
+        },
+    }
+    for key, value in overrides.items():
+        audit[key] = value
+    return audit
+
+
+def test_swing_runtime_approval_requires_tradeoff_score_not_perfect_metrics():
+    audit = _approval_ready_audit()
+
+    candidates = build_swing_threshold_candidates(audit)
+    cooldown = next(item for item in candidates if item["family"] == "swing_gatekeeper_reject_cooldown")
+
+    assert cooldown["calibration_state"] == "approval_required"
+    assert cooldown["human_approval_required"] is True
+    assert cooldown["tradeoff_score"] >= 0.68
+    assert cooldown["tradeoff_components"]["regime_robustness"] < 0.7
+    assert cooldown["target_env_keys"] == ["ML_GATEKEEPER_REJECT_COOLDOWN"]
+    assert cooldown["actual_order_submission_change"] is False
+    assert cooldown["dry_run_required"] is True
+
+
+def test_swing_runtime_approval_blocks_hard_floor_failures():
+    audit = _approval_ready_audit(
+        recommendation_db_load={"db_load_gap": True, "selection_modes": {"SELECTED": 5}},
+    )
+
+    candidates = build_swing_threshold_candidates(audit)
+    cooldown = next(item for item in candidates if item["family"] == "swing_gatekeeper_reject_cooldown")
+
+    assert cooldown["calibration_state"] == "freeze"
+    assert cooldown["human_approval_required"] is False
+    assert "db_load_gap" in cooldown["hard_floor_block_reasons"]
+
+
+def test_swing_runtime_approval_report_emits_machine_readable_requests():
+    report = build_swing_runtime_approval_report(_approval_ready_audit())
+
+    assert report["report_type"] == "swing_runtime_approval"
+    assert report["policy"]["perfect_spot_required"] is False
+    assert report["policy"]["ev_calibration_source"] == "combined_real_plus_sim"
+    assert report["policy"]["sim_authority"] == "equal_for_ev_calibration_when_sim_lifecycle_closed"
+    assert report["policy"]["execution_quality_source"] == "real_only"
+    assert report["real_canary_policy"]["policy_id"] == "swing_one_share_real_canary_phase0"
+    assert report["real_canary_policy"]["real_order_allowed_actions"] == ["BUY_INITIAL", "SELL_CLOSE"]
+    assert report["real_canary_policy"]["sim_only_actions"] == ["AVG_DOWN", "PYRAMID", "SCALE_IN"]
+    assert "phase0_scale_in_real_order_attempted" in report["real_canary_policy"]["rollback_triggers"]
+    assert report["approval_requests"]
+    request = report["approval_requests"][0]
+    assert request["approval_id"].startswith("swing_runtime_approval:2026-05-08:")
+    assert request["actual_order_submitted"] is False
+    assert request["combined_ev_authority"] is True
+    assert request["execution_quality_authority"] == "real_only"
+    assert request["real_canary_policy_ref"] == "swing_one_share_real_canary_phase0"
+    assert request["sim_only_actions"] == ["AVG_DOWN", "PYRAMID", "SCALE_IN"]
+    assert report["rolling_source_bundle"]["combined"]["avg_profit_rate"] == 1.1
+    assert (
+        report["rolling_source_bundle"]["source_authority"]["combined"]
+        == "primary_tradeoff_view_for_approval_request_generation"
+    )
+
+
 def test_swing_improvement_automation_emits_workorder_ready_orders():
     audit = build_swing_lifecycle_audit_report(
         "2026-05-08",
@@ -605,6 +709,7 @@ def test_swing_improvement_automation_emits_workorder_ready_orders():
     assert orders["order_swing_scale_in_ofi_qi_bearish_risk_review"]["threshold_family"] == "swing_scale_in_ofi_qi_confirmation"
     assert orders["order_swing_ai_contract_structured_output_eval"]["runtime_effect"] is False
     assert automation["auto_family_candidates"]
+    assert "approval_requests" in automation
 
 
 def test_write_swing_lifecycle_outputs_creates_all_artifacts(tmp_path):
@@ -621,3 +726,4 @@ def test_write_swing_lifecycle_outputs_creates_all_artifacts(tmp_path):
     for path in outputs["paths"].values():
         assert tmp_path in Path(path).parents
         assert Path(path).exists()
+    assert "runtime_approval" in outputs

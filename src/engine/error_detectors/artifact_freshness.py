@@ -156,6 +156,15 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "window_start": (15, 45),
         "window_end": (16, 5),
     },
+    {
+        "id": "swing_runtime_approval_report",
+        "path_template": "data/report/swing_runtime_approval/swing_runtime_approval_{date}.json",
+        "max_staleness_sec": 1800,
+        "critical": False,
+        "trading_day_only": True,
+        "window_start": (15, 45),
+        "window_end": (16, 5),
+    },
 ]
 
 

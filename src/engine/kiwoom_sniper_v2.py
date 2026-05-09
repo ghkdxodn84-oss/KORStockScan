@@ -1178,6 +1178,7 @@ def run_sniper(is_test_mode=False):
         t['strategy'] = normalize_strategy(t.get('strategy'))
         t['position_tag'] = normalize_position_tag(t['strategy'], t.get('position_tag'))
     _restore_holding_runtime_state(ACTIVE_TARGETS)
+    sniper_state_handlers.restore_scalp_simulator_targets(ACTIVE_TARGETS)
 
     targets = ACTIVE_TARGETS
     last_db_poll_time = time.time()
@@ -1238,7 +1239,11 @@ def run_sniper(is_test_mode=False):
                     dt['position_tag'] = normalize_position_tag(dt['strategy'], dt.get('position_tag'))
                     code = str(dt.get('code', '')).strip()[:6]
                     identity = target_identity(code, dt['strategy'])
-                    if not any(target_identity(t.get('code', ''), t.get('strategy', '')) == identity for t in targets):
+                    if not any(
+                        target_identity(t.get('code', ''), t.get('strategy', '')) == identity
+                        and not sniper_state_handlers._is_scalp_simulator_target(t)
+                        for t in targets
+                    ):
                         dt['added_time'] = now_ts
                         targets.append(dt)
                         event_bus.publish("COMMAND_WS_REG", {"codes": [code]})
@@ -1354,6 +1359,15 @@ def run_sniper(is_test_mode=False):
 
                 ws_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
                 if not ws_data or ws_data.get('curr', 0) == 0:
+                    continue
+
+                if sniper_state_handlers._is_scalp_simulator_target(stock) and status == sniper_state_handlers.SCALP_SIM_PENDING_STATUS:
+                    sniper_state_handlers.handle_scalp_simulator_pending_entry(
+                        stock,
+                        code,
+                        ws_data,
+                        now_ts=now_ts,
+                    )
                     continue
 
                 if status == 'WATCHING':

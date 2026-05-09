@@ -314,6 +314,28 @@ CALIBRATION_FAMILY_METADATA = {
         },
         "allowed_runtime_apply": False,
     },
+    "position_sizing_cap_release": {
+        "priority": 41,
+        "source_family": "position_sizing_cap_release",
+        "target_env_keys": [
+            "SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED",
+            "SCALPING_INITIAL_ENTRY_MAX_QTY",
+            "AI_WAIT6579_PROBE_CANARY_MAX_QTY",
+            "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP",
+        ],
+        "primary_key": "initial_entry_qty_cap_enabled",
+        "bounds": {},
+        "sample_floor": 30,
+        "sample_window": "rolling_10d_with_daily_guard",
+        "window_policy": {
+            "primary": "rolling_10d",
+            "secondary": ["daily", "cumulative_since_2026-04-21"],
+            "use": "1주 cap 해제는 완벽한 spot이 아니라 전체 EV가 충분하고 safety floor를 통과한 efficient trade-off 지점에서 사용자 승인 요청으로 승격한다.",
+            "daily_only_allowed": False,
+        },
+        "allowed_runtime_apply": False,
+        "human_approval_required": True,
+    },
 }
 
 
@@ -501,6 +523,8 @@ def save_threshold_calibration_report(report: dict, *, run_phase: str | None = N
         "runtime_change": False,
         "calibration_source_bundle": report.get("calibration_source_bundle") or {},
         "trade_lifecycle_attribution": report.get("trade_lifecycle_attribution") or {},
+        "completed_by_source": report.get("completed_by_source") or {},
+        "scalp_simulator": report.get("scalp_simulator") or {},
         "calibration_candidates": report.get("calibration_candidates") or [],
         "post_apply_attribution": report.get("post_apply_attribution") or {},
         "safety_guard_pack": report.get("safety_guard_pack") or [],
@@ -1761,6 +1785,88 @@ def _valid_profit_rows(rows: list[dict]) -> list[dict]:
     return [row for row in rows if _safe_float(row.get("profit_rate"), None) is not None]
 
 
+def _is_scalp_sim_event(event: dict) -> bool:
+    fields = _event_fields(event)
+    stage = str(event.get("stage") or "")
+    return (
+        stage.startswith("scalp_sim_")
+        or str(fields.get("simulation_book") or "") == "scalp_ai_buy_all"
+    )
+
+
+def _extract_scalp_sim_completed_rows(events: list[dict]) -> list[dict]:
+    rows: list[dict] = []
+    seen: set[str] = set()
+    for event in events or []:
+        if str(event.get("stage") or "") != "scalp_sim_sell_order_assumed_filled":
+            continue
+        fields = _event_fields(event)
+        profit_rate = _safe_float(fields.get("profit_rate"), None)
+        if profit_rate is None:
+            continue
+        sim_record_id = str(fields.get("sim_record_id") or event.get("record_id") or "").strip()
+        key = sim_record_id or f"{event.get('stock_code')}-{event.get('emitted_at')}"
+        if key in seen:
+            continue
+        seen.add(key)
+        rows.append(
+            {
+                "rec_date": str(event.get("emitted_date") or "")[:10],
+                "stock_code": str(event.get("stock_code") or "").strip()[:6],
+                "stock_name": event.get("stock_name"),
+                "status": "COMPLETED",
+                "strategy": "SCALPING",
+                "buy_price": _safe_float(fields.get("buy_price"), None),
+                "buy_qty": _safe_int(fields.get("qty"), 0) or 0,
+                "sell_price": _safe_float(fields.get("assumed_fill_price"), None),
+                "profit_rate": profit_rate,
+                "add_count": _safe_int(fields.get("add_count"), 0) or 0,
+                "avg_down_count": _safe_int(fields.get("avg_down_count"), 0) or 0,
+                "pyramid_count": _safe_int(fields.get("pyramid_count"), 0) or 0,
+                "last_add_type": fields.get("last_add_type"),
+                "source": "scalp_sim",
+                "cohort": "scalp_sim_equal_authority",
+                "simulation_book": "scalp_ai_buy_all",
+                "sim_record_id": sim_record_id,
+                "sim_parent_record_id": fields.get("sim_parent_record_id"),
+                "actual_order_submitted": False,
+            }
+        )
+    return rows
+
+
+def _completed_by_source_summary(real_rows: list[dict], sim_rows: list[dict]) -> dict:
+    combined = list(real_rows or []) + list(sim_rows or [])
+    return {
+        "real": _completed_profit_summary(real_rows or []),
+        "sim": _completed_profit_summary(sim_rows or []),
+        "combined": _completed_profit_summary(combined),
+        "calibration_authority": "sim_equal_weight",
+    }
+
+
+def _scalp_simulator_event_summary(events: list[dict], sim_completed_rows: list[dict] | None = None) -> dict:
+    sim_events = [event for event in events or [] if _is_scalp_sim_event(event)]
+    stage_counts = Counter(str(event.get("stage") or "-") for event in sim_events)
+    completed_rows = sim_completed_rows if sim_completed_rows is not None else _extract_scalp_sim_completed_rows(events)
+    return {
+        "enabled_default": True,
+        "simulation_book": "scalp_ai_buy_all",
+        "fill_policy": "quote_based",
+        "calibration_authority": "equal_weight",
+        "event_count": len(sim_events),
+        "stage_counts": dict(stage_counts),
+        "entry_armed": int(stage_counts.get("scalp_sim_entry_armed", 0)),
+        "buy_filled": int(stage_counts.get("scalp_sim_buy_order_assumed_filled", 0)),
+        "holding_started": int(stage_counts.get("scalp_sim_holding_started", 0)),
+        "sell_completed": int(stage_counts.get("scalp_sim_sell_order_assumed_filled", 0)),
+        "entry_expired": int(stage_counts.get("scalp_sim_entry_expired", 0)),
+        "entry_unpriced": int(stage_counts.get("scalp_sim_entry_unpriced", 0)),
+        "duplicate_buy_signal": int(stage_counts.get("scalp_sim_duplicate_buy_signal", 0)),
+        "completed_profit_summary": _completed_profit_summary(completed_rows or []),
+    }
+
+
 def _is_normal_only_row(row: dict) -> bool:
     markers = [
         row.get("strategy"),
@@ -1821,6 +1927,139 @@ def _completed_cohort_summary(rows: list[dict]) -> dict:
         ],
     }
     return {name: _completed_profit_summary(cohort_rows) for name, cohort_rows in cohorts.items()}
+
+
+def _field_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    return str(value).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _score_between(value: float | None, floor: float, target: float) -> float:
+    if value is None:
+        return 0.0
+    if target == floor:
+        return 1.0 if value >= target else 0.0
+    return round(_clamp((value - floor) / (target - floor), 0.0, 1.0), 4)
+
+
+def _build_position_sizing_cap_release_family(events: list[dict], completed_rows: list[dict]) -> dict:
+    cap_events = _events_for_stage(events, "initial_entry_qty_cap_applied")
+    cap_reduced = [event for event in cap_events if _field_bool(_event_fields(event).get("applied"))]
+    wait_probe_cap_events = _events_for_stage(events, "wait6579_probe_canary_applied")
+    scale_in_resolved = _events_for_stage(events, "scale_in_price_resolved")
+    scale_in_executed = _events_for_stage(events, "scale_in_executed")
+    submitted = _events_for_stage(events, "order_bundle_submitted")
+    full_fill = _events_for_stage(events, "full_fill")
+    partial_fill = _events_for_stage(events, "partial_fill")
+    order_failed = _events_for_stage(events, "order_bundle_failed") + _events_for_stage(events, "buy_order_failed")
+    soft_stop = _events_for_stage(events, "sell_completed")
+    soft_stop = [
+        event
+        for event in soft_stop
+        if "soft" in str(_event_fields(event).get("exit_rule") or _event_fields(event).get("sell_reason_type") or "").lower()
+    ]
+
+    normal_only_rows = [row for row in _valid_profit_rows(completed_rows) if _is_normal_only_row(row)]
+    initial_only_rows = [row for row in normal_only_rows if _is_initial_only_row(row)]
+    normal_summary = _completed_profit_summary(normal_only_rows)
+    initial_summary = _completed_profit_summary(initial_only_rows)
+
+    completed_sample = int(normal_summary.get("sample") or 0)
+    avg_profit = _safe_float(normal_summary.get("avg_profit_rate"), None)
+    win_rate = _safe_float(normal_summary.get("win_rate"), None)
+    downside_p10 = _safe_float(normal_summary.get("downside_p10_profit_rate"), None)
+    fill_total = len(full_fill) + len(partial_fill)
+    full_fill_rate = (len(full_fill) / fill_total) if fill_total > 0 else None
+    submitted_count = len(submitted)
+    order_failed_rate = (len(order_failed) / submitted_count) if submitted_count > 0 else 0.0
+    soft_stop_rate = (len(soft_stop) / completed_sample) if completed_sample > 0 else None
+
+    safety_floor = {
+        "normal_completed_sample": completed_sample >= 30,
+        "cap_reduced_sample": len(cap_reduced) >= 5,
+        "submitted_sample": submitted_count >= 15,
+        "overall_ev_floor": avg_profit is not None and avg_profit >= 0.10,
+        "severe_downside_floor": downside_p10 is not None and downside_p10 >= -2.00,
+        "order_failure_floor": order_failed_rate <= 0.10,
+    }
+    tradeoff_components = {
+        "overall_ev": _score_between(avg_profit, 0.10, 0.35),
+        "win_rate": _score_between(win_rate, 0.45, 0.55),
+        "full_fill_quality": _score_between(full_fill_rate, 0.60, 0.85),
+        "downside_tail": _score_between(downside_p10, -2.00, -1.20),
+        "order_failure": _score_between(0.10 - order_failed_rate, 0.0, 0.10),
+        "soft_stop_tail": _score_between(None if soft_stop_rate is None else 0.45 - soft_stop_rate, 0.0, 0.45),
+        "cap_opportunity": _score_between(float(len(cap_reduced)), 5.0, 15.0),
+    }
+    tradeoff_score = round(
+        (tradeoff_components["overall_ev"] * 0.40)
+        + (tradeoff_components["win_rate"] * 0.10)
+        + (tradeoff_components["full_fill_quality"] * 0.10)
+        + (tradeoff_components["downside_tail"] * 0.15)
+        + (tradeoff_components["order_failure"] * 0.10)
+        + (tradeoff_components["soft_stop_tail"] * 0.10)
+        + (tradeoff_components["cap_opportunity"] * 0.05),
+        4,
+    )
+    approval_ready = all(safety_floor.values()) and tradeoff_score >= 0.70
+    current = {
+        "initial_entry_qty_cap_enabled": bool(
+            getattr(TRADING_RULES, "SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED", True)
+        ),
+        "initial_entry_max_qty": int(getattr(TRADING_RULES, "SCALPING_INITIAL_ENTRY_MAX_QTY", 1)),
+        "wait6579_probe_max_qty": int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_QTY", 1)),
+        "scale_in_effective_qty_cap": int(getattr(TRADING_RULES, "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP", 1)),
+    }
+    recommended = dict(current)
+    if approval_ready:
+        recommended.update(
+            {
+                "initial_entry_qty_cap_enabled": False,
+                "initial_entry_max_qty": 0,
+                "wait6579_probe_max_qty": 0,
+                "scale_in_effective_qty_cap": 0,
+            }
+        )
+    return {
+        "family": "position_sizing_cap_release",
+        "stage": "position_sizing",
+        "sample": {
+            "normal_completed_valid": completed_sample,
+            "initial_only_completed_valid": int(initial_summary.get("sample") or 0),
+            "initial_entry_cap_events": len(cap_events),
+            "initial_entry_cap_reduced": len(cap_reduced),
+            "wait6579_probe_cap_events": len(wait_probe_cap_events),
+            "scale_in_resolved": len(scale_in_resolved),
+            "scale_in_executed": len(scale_in_executed),
+            "submitted": submitted_count,
+            "full_fill": len(full_fill),
+            "partial_fill": len(partial_fill),
+            "order_failed": len(order_failed),
+            "soft_stop_completed": len(soft_stop),
+            "full_fill_rate": round(full_fill_rate, 4) if full_fill_rate is not None else None,
+            "order_failed_rate": round(order_failed_rate, 4),
+            "soft_stop_rate": round(soft_stop_rate, 4) if soft_stop_rate is not None else None,
+            "normal_completed_summary": normal_summary,
+            "initial_only_completed_summary": initial_summary,
+            "safety_floor": safety_floor,
+            "tradeoff_components": tradeoff_components,
+            "tradeoff_score": tradeoff_score,
+            "tradeoff_score_required": 0.70,
+        },
+        "apply_ready": approval_ready,
+        "current": current,
+        "recommended": recommended,
+        "apply_mode": "manual_approval_required" if approval_ready else "observe_only",
+        "notes": [
+            "1주 cap 해제는 자동 runtime apply 대상이 아니라 사용자 승인 요청 대상이다.",
+            "완벽한 spot을 기다리지 않고 overall EV와 체결품질, 손실 tail, cap opportunity를 가중한 efficient trade-off score로 판단한다.",
+            "표본, overall EV floor, severe downside, 주문 실패율만 safety floor로 hard하게 본다.",
+            "승인 전에는 신규 BUY, wait6579 probe, REVERSAL_ADD/PYRAMID 모두 1주 cap을 유지한다.",
+        ],
+    }
 
 
 def _build_mechanical_entry_family(events: list[dict]) -> dict:
@@ -3025,6 +3264,7 @@ def _build_family_reports(
         _build_protect_trailing_smoothing_family(events),
         _build_holding_flow_ofi_smoothing_family(events),
         _build_scale_in_price_guard_family(events),
+        _build_position_sizing_cap_release_family(events, completed_rows),
         _build_statistical_action_weight_family(events, completed_rows, target_date=target_date),
     ]
 
@@ -3367,6 +3607,22 @@ def _calibration_state_for_family(
             "hold",
             "scale_in_price_guard는 별도 승인 전 report-only calibration으로만 산출하며 live apply는 금지한다.",
         )
+    if output_family == "position_sizing_cap_release":
+        sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+        safety_floor = sample.get("safety_floor") if isinstance(sample.get("safety_floor"), dict) else {}
+        tradeoff_score = _safe_float(sample.get("tradeoff_score"), 0.0) or 0.0
+        required_score = _safe_float(sample.get("tradeoff_score_required"), 0.70) or 0.70
+        if sample_count < sample_floor or not ready:
+            failed = [key for key, value in safety_floor.items() if not bool(value)]
+            suffix = f"; failed_safety_floor={','.join(failed)}" if failed else ""
+            return (
+                "hold_sample",
+                f"1주 cap 해제 trade-off 기준 미달({sample_count}/{sample_floor}, score={tradeoff_score:.2f}/{required_score:.2f}){suffix}",
+            )
+        return (
+            "approval_required",
+            f"1주 cap 해제 efficient trade-off 기준 충족(score={tradeoff_score:.2f}/{required_score:.2f}): 자동 적용하지 않고 사용자 승인 요청 artifact로만 승격한다.",
+        )
     if output_family == "soft_stop_whipsaw_confirmation":
         source_count = _source_sample_count_for_family(output_family, source_metrics)
         if 0 < source_count < sample_floor:
@@ -3463,6 +3719,8 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
             sample_floor_status = "direction_conflict_or_live_risk"
         if calibration_state == "hold_no_edge":
             sample_floor_status = "minimum_edge_missing"
+        if calibration_state == "approval_required":
+            sample_floor_status = "manual_approval_required"
         if calibration_state == "hold_sample":
             sample_floor_status = "hold_sample"
         confidence = round(min(1.0, sample_count / sample_floor), 4) if sample_floor > 0 else 0.0
@@ -3521,6 +3779,8 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
             if runtime_apply_candidate
             else "report_only_calibration",
             "allowed_runtime_apply": bool(metadata.get("allowed_runtime_apply")),
+            "human_approval_required": bool(metadata.get("human_approval_required"))
+            or calibration_state == "approval_required",
             "runtime_change": False,
             "runtime_change_reason": "장중 자동 mutation 금지; 다음 장전 승인된 family만 bounded apply 대상",
         }
@@ -4745,12 +5005,20 @@ def build_cumulative_threshold_cycle_report(
     else:
         ctx.warnings.append("completed trade 로드는 skip-db 옵션으로 생략됨")
 
+    real_completed_by_window: dict[str, list[dict]] = {}
+    sim_completed_by_window: dict[str, list[dict]] = {}
     completed_by_window: dict[str, list[dict]] = {}
     for label, dates in window_dates.items():
         if not dates:
+            real_completed_by_window[label] = []
+            sim_completed_by_window[label] = []
             completed_by_window[label] = []
             continue
-        completed_by_window[label] = _filter_completed_rows_by_date(completed_rows, dates[0], dates[-1])
+        real_rows = _filter_completed_rows_by_date(completed_rows, dates[0], dates[-1])
+        sim_rows = _extract_scalp_sim_completed_rows(events_by_window.get(label, []))
+        real_completed_by_window[label] = real_rows
+        sim_completed_by_window[label] = sim_rows
+        completed_by_window[label] = real_rows + sim_rows
 
     family_snapshots: dict[str, dict] = {}
     family_apply_candidates: dict[str, list[dict]] = {}
@@ -4768,9 +5036,24 @@ def build_cumulative_threshold_cycle_report(
         label: _completed_cohort_summary(rows)
         for label, rows in completed_by_window.items()
     }
+    completed_source_summary_by_window = {
+        label: _completed_by_source_summary(
+            real_completed_by_window.get(label, []),
+            sim_completed_by_window.get(label, []),
+        )
+        for label in completed_by_window
+    }
+    scalp_simulator_by_window = {
+        label: _scalp_simulator_event_summary(
+            events_by_window.get(label, []),
+            sim_completed_by_window.get(label, []),
+        )
+        for label in events_by_window
+    }
     event_count_by_window = {label: len(rows) for label, rows in events_by_window.items()}
     source_flags = {
-        "profit_basis": "COMPLETED + valid profit_rate only",
+        "profit_basis": "real COMPLETED + valid profit_rate plus scalp_sim completed quote-based rows",
+        "scalp_sim_calibration_authority": "equal_weight",
         "runtime_change": False,
         "application_mode": "report_only_cumulative_threshold_input",
         "live_threshold_mutation": False,
@@ -4794,6 +5077,8 @@ def build_cumulative_threshold_cycle_report(
             "rolling_windows": list(window_dates.keys()),
         },
         "completed_cohorts": completed_summary_by_window,
+        "completed_by_source": completed_source_summary_by_window,
+        "scalp_simulator": scalp_simulator_by_window,
         "threshold_snapshot_by_window": family_snapshots,
         "apply_candidate_list_by_window": family_apply_candidates,
         "source_flags": source_flags,
@@ -4843,6 +5128,35 @@ def render_cumulative_threshold_cycle_markdown(report: dict) -> str:
             )
             + " |"
         )
+    source_summary = report.get("completed_by_source") if isinstance(report.get("completed_by_source"), dict) else {}
+    if source_summary:
+        lines.extend(
+            [
+                "",
+                "## Real / Sim Source Summary",
+                "",
+                "| window | source | sample | avg_profit | win_rate |",
+                "| --- | --- | ---: | ---: | ---: |",
+            ]
+        )
+        for label, pack in source_summary.items():
+            if not isinstance(pack, dict):
+                continue
+            for source in ("real", "sim", "combined"):
+                summary = pack.get(source) if isinstance(pack.get(source), dict) else {}
+                lines.append(
+                    "| "
+                    + " | ".join(
+                        [
+                            _markdown_value(label),
+                            _markdown_value(source),
+                            _markdown_value(summary.get("sample")),
+                            _markdown_value(summary.get("avg_profit_rate")),
+                            _markdown_value(summary.get("win_rate")),
+                        ]
+                    )
+                    + " |"
+                )
     lines.extend(
         [
             "",
@@ -4989,9 +5303,14 @@ def build_daily_threshold_cycle_report(
         report_source_context = {}
         ctx.warnings.append("calibration source loader가 dict를 반환하지 않음")
 
-    families = _build_family_reports(event_windows["same_day"], completed_rows, target_date=target_date)
+    real_completed_rows = list(completed_rows)
+    sim_completed_rows = _extract_scalp_sim_completed_rows(event_windows["rolling_7d"])
+    same_day_sim_completed_rows = _extract_scalp_sim_completed_rows(event_windows["same_day"])
+    combined_completed_rows = real_completed_rows + sim_completed_rows
+
+    families = _build_family_reports(event_windows["same_day"], combined_completed_rows, target_date=target_date)
     families.extend(_build_report_source_families(report_source_context))
-    completed = _completed_summary(completed_rows)
+    completed = _completed_summary(combined_completed_rows)
     threshold_snapshot = {
         family["family"]: {
             "stage": family["stage"],
@@ -5035,8 +5354,12 @@ def build_daily_threshold_cycle_report(
         "summary": {
             "completed_valid_rolling_7d": completed["completed_valid"],
             "loss_count_rolling_7d": completed["loss_count"],
+            "real_completed_valid_rolling_7d": len(_valid_profit_rows(real_completed_rows)),
+            "sim_completed_valid_rolling_7d": len(_valid_profit_rows(sim_completed_rows)),
             "event_count_same_day": len(event_windows["same_day"]),
         },
+        "completed_by_source": _completed_by_source_summary(real_completed_rows, sim_completed_rows),
+        "scalp_simulator": _scalp_simulator_event_summary(event_windows["same_day"], same_day_sim_completed_rows),
         "threshold_snapshot": threshold_snapshot,
         "threshold_diff_report": threshold_diff_report,
         "trade_lifecycle_attribution": trade_lifecycle_attribution,

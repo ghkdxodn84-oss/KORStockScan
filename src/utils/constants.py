@@ -53,7 +53,7 @@ class TradingConfig:
     SCALP_PYRAMID_POST_ADD_TRAILING_GRACE_SEC: int = 180  # 불타기 체결 직후 trailing 조기청산 억제
     SCALPING_SCALE_IN_PRICE_RESOLVER_ENABLED: bool = True  # 추가매수 주문 직전 P1 지정가 resolver
     SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED: bool = True  # 추가매수 live 수량 safety 결정
-    SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP: int = 0  # 추가매수 수량 hard cap. 0 이하는 수량 cap 없음
+    SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP: int = 1  # 추가매수 수량 hard cap. 0 이하는 수량 cap 없음
     SCALPING_SCALE_IN_MAX_SPREAD_BPS: float = 80.0  # 추가매수 resolver 스프레드 상한(bp)
     SCALPING_PYRAMID_PRICE_GUARD_ENABLED: bool = True  # 불타기 추격 지정가 안전장치
     SCALPING_PYRAMID_MAX_SPREAD_BPS: float = 80.0  # 호환 alias: scale-in spread guard
@@ -87,6 +87,11 @@ class TradingConfig:
     SWING_LIVE_ORDER_DRY_RUN_ENABLED: bool = True  # 스윙 live 로직은 동일 실행, 실제 주문 접수만 차단
     SWING_LIVE_ORDER_DRY_RUN_OWNER: str = "SwingLiveOrderDryRunSimulation0511"
     SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED: bool = True  # 스윙 OFI/QI observe/proposal-only context
+    SCALP_LIVE_SIMULATOR_ENABLED: bool = True  # 스캘핑 AI BUY 전체 대상 live simulator 기본 ON
+    SCALP_LIVE_SIMULATOR_OWNER: str = "ScalpAiBuyAllLiveSimulator0511"
+    SCALP_LIVE_SIMULATOR_FILL_POLICY: str = "quote_based"
+    SCALP_LIVE_SIMULATOR_QTY: int = 1  # BUY 신호당 가상 진입 수량
+    SCALP_LIVE_SIMULATOR_ENTRY_TIMEOUT_SEC: int = 90  # quote touch 대기 만료
 
     # [매매 비중 설정] 전략별 주문 가능 현금 대비 1회 매수 투입 비율
     INVEST_RATIO_KOSPI: float = 0.25  # DEPRECATED: MIN/MAX 비중으로 대체됨
@@ -94,8 +99,8 @@ class TradingConfig:
     INVEST_RATIO_SCALPING_MIN: float = 0.07  # 2026-04-20 risk cut: 스캘핑 최소 투자 비율 (10% -> 7%)
     INVEST_RATIO_SCALPING_MAX: float = 0.22  # 2026-04-20 risk cut: 스캘핑 최대 투자 비율 (30% -> 22%)
     SCALPING_MAX_BUY_BUDGET_KRW: int = 1_200_000  # 2026-04-20 risk cut: 스캘핑 신규 진입 1회 절대 투자금 상한 (1,600,000 -> 1,200,000)
-    SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED: bool = False  # 신규 BUY 접수 수량 상한 적용. 기본 OFF
-    SCALPING_INITIAL_ENTRY_MAX_QTY: int = 0  # 0 이하는 신규 BUY 수량 cap 없음
+    SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED: bool = True  # 신규 BUY 접수 1주 cap 기본 ON
+    SCALPING_INITIAL_ENTRY_MAX_QTY: int = 1  # 0 이하는 신규 BUY 수량 cap 없음
 
     # 💡 [신규 추가] 스윙 AI 동적 비중 조절용 (Min~Max)
     INVEST_RATIO_KOSDAQ_MIN: float = 0.05  # 코스닥 AI 점수 60점일 때 (5%)
@@ -424,7 +429,7 @@ class TradingConfig:
     AI_WAIT6579_PROBE_CANARY_ENABLED: bool = False  # 2026-04-27: soft_stop live canary 관찰 중 entry probe OFF
     AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW: int = 50_000  # probe 최대 예산
     AI_WAIT6579_PROBE_CANARY_MIN_QTY: int = 1  # probe 최소 수량
-    AI_WAIT6579_PROBE_CANARY_MAX_QTY: int = 0  # probe 최대 수량. 0 이하는 수량 cap 없음
+    AI_WAIT6579_PROBE_CANARY_MAX_QTY: int = 1  # probe 최대 수량. 0 이하는 수량 cap 없음
     AI_SCORE65_74_RECOVERY_PROBE_ENABLED: bool = False  # 2026-05-06: score65~74 전용 신규 canary 기본 OFF
     AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE: int = 65
     AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE: int = 74
@@ -1149,12 +1154,18 @@ def _build_trading_rules() -> TradingConfig:
     env_swing_enable_pyramid = _env_bool("KORSTOCKSCAN_SWING_ENABLE_PYRAMID")
     env_swing_max_avg_down_count = _env_int("KORSTOCKSCAN_SWING_MAX_AVG_DOWN_COUNT")
     env_swing_max_pyramid_count = _env_int("KORSTOCKSCAN_SWING_MAX_PYRAMID_COUNT")
+    env_ml_gatekeeper_reject_cooldown = _env_int("KORSTOCKSCAN_ML_GATEKEEPER_REJECT_COOLDOWN")
     env_swing_live_order_dry_run_enabled = _env_bool(
         "KORSTOCKSCAN_SWING_LIVE_ORDER_DRY_RUN_ENABLED"
     )
     env_swing_orderbook_micro_context_enabled = _env_bool(
         "KORSTOCKSCAN_SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED"
     )
+    env_scalp_live_simulator_enabled = _env_bool("KORSTOCKSCAN_SCALP_LIVE_SIMULATOR_ENABLED")
+    env_scalp_live_simulator_owner = _env_str("KORSTOCKSCAN_SCALP_LIVE_SIMULATOR_OWNER")
+    env_scalp_live_simulator_fill_policy = _env_str("KORSTOCKSCAN_SCALP_LIVE_SIMULATOR_FILL_POLICY")
+    env_scalp_live_simulator_qty = _env_int("KORSTOCKSCAN_SCALP_LIVE_SIMULATOR_QTY")
+    env_scalp_live_simulator_timeout = _env_int("KORSTOCKSCAN_SCALP_LIVE_SIMULATOR_ENTRY_TIMEOUT_SEC")
     env_stat_action_snapshot_enabled = _env_bool("KORSTOCKSCAN_STAT_ACTION_DECISION_SNAPSHOT_ENABLED")
     env_stat_action_snapshot_min_interval = _env_int("KORSTOCKSCAN_STAT_ACTION_DECISION_SNAPSHOT_MIN_INTERVAL_SEC")
     env_scalping_initial_entry_qty_cap_enabled = _env_bool(
@@ -1196,8 +1207,14 @@ def _build_trading_rules() -> TradingConfig:
         or env_swing_enable_pyramid is not None
         or env_swing_max_avg_down_count is not None
         or env_swing_max_pyramid_count is not None
+        or env_ml_gatekeeper_reject_cooldown is not None
         or env_swing_live_order_dry_run_enabled is not None
         or env_swing_orderbook_micro_context_enabled is not None
+        or env_scalp_live_simulator_enabled is not None
+        or env_scalp_live_simulator_owner is not None
+        or env_scalp_live_simulator_fill_policy is not None
+        or env_scalp_live_simulator_qty is not None
+        or env_scalp_live_simulator_timeout is not None
         or env_stat_action_snapshot_enabled is not None
         or env_stat_action_snapshot_min_interval is not None
         or env_scalping_initial_entry_qty_cap_enabled is not None
@@ -1245,12 +1262,30 @@ def _build_trading_rules() -> TradingConfig:
             SWING_MAX_PYRAMID_COUNT=env_swing_max_pyramid_count
             if env_swing_max_pyramid_count is not None
             else config.SWING_MAX_PYRAMID_COUNT,
+            ML_GATEKEEPER_REJECT_COOLDOWN=env_ml_gatekeeper_reject_cooldown
+            if env_ml_gatekeeper_reject_cooldown is not None
+            else config.ML_GATEKEEPER_REJECT_COOLDOWN,
             SWING_LIVE_ORDER_DRY_RUN_ENABLED=env_swing_live_order_dry_run_enabled
             if env_swing_live_order_dry_run_enabled is not None
             else config.SWING_LIVE_ORDER_DRY_RUN_ENABLED,
             SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED=env_swing_orderbook_micro_context_enabled
             if env_swing_orderbook_micro_context_enabled is not None
             else config.SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED,
+            SCALP_LIVE_SIMULATOR_ENABLED=env_scalp_live_simulator_enabled
+            if env_scalp_live_simulator_enabled is not None
+            else config.SCALP_LIVE_SIMULATOR_ENABLED,
+            SCALP_LIVE_SIMULATOR_OWNER=env_scalp_live_simulator_owner
+            if env_scalp_live_simulator_owner is not None
+            else config.SCALP_LIVE_SIMULATOR_OWNER,
+            SCALP_LIVE_SIMULATOR_FILL_POLICY=env_scalp_live_simulator_fill_policy
+            if env_scalp_live_simulator_fill_policy is not None
+            else config.SCALP_LIVE_SIMULATOR_FILL_POLICY,
+            SCALP_LIVE_SIMULATOR_QTY=env_scalp_live_simulator_qty
+            if env_scalp_live_simulator_qty is not None
+            else config.SCALP_LIVE_SIMULATOR_QTY,
+            SCALP_LIVE_SIMULATOR_ENTRY_TIMEOUT_SEC=env_scalp_live_simulator_timeout
+            if env_scalp_live_simulator_timeout is not None
+            else config.SCALP_LIVE_SIMULATOR_ENTRY_TIMEOUT_SEC,
             STAT_ACTION_DECISION_SNAPSHOT_ENABLED=env_stat_action_snapshot_enabled
             if env_stat_action_snapshot_enabled is not None
             else config.STAT_ACTION_DECISION_SNAPSHOT_ENABLED,

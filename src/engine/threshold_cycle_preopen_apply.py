@@ -18,6 +18,8 @@ APPLY_PLAN_DIR = DATA_DIR / "threshold_cycle" / "apply_plans"
 RUNTIME_ENV_DIR = DATA_DIR / "threshold_cycle" / "runtime_env"
 AI_REVIEW_DIR = REPORT_DIR / "threshold_cycle_ai_review"
 CALIBRATION_REPORT_DIR = REPORT_DIR / "threshold_cycle_calibration"
+SWING_RUNTIME_APPROVAL_REPORT_DIR = DATA_DIR / "report" / "swing_runtime_approval"
+SWING_RUNTIME_APPROVAL_ARTIFACT_DIR = DATA_DIR / "threshold_cycle" / "approvals"
 
 AUTO_APPLY_MODES = {"auto_bounded_live"}
 AUTO_APPLY_ALLOWED_STATES = {"adjust_up", "adjust_down", "hold"}
@@ -49,6 +51,11 @@ TARGET_ENV_VALUE_KEYS = {
     "HOLDING_FLOW_OFI_BEARISH_CONFIRM_WORSEN_PCT": "holding_bearish_confirm_worsen_pct",
     "HOLDING_FLOW_OVERRIDE_MAX_DEFER_SEC": "max_defer_sec",
     "HOLDING_FLOW_OVERRIDE_WORSEN_PCT": "worsen_floor_pct",
+    "SWING_FLOOR_BULL": "floor_bull",
+    "SWING_FLOOR_BEAR": "floor_bear",
+    "SWING_SELECTION_TOP_K": "top_k",
+    "ML_GATEKEEPER_REJECT_COOLDOWN": "reject_cooldown_sec",
+    "SWING_MARKET_REGIME_SENSITIVITY": "regime_sensitivity",
 }
 
 
@@ -85,6 +92,14 @@ def runtime_env_path(target_date: str) -> Path:
 
 def runtime_env_manifest_path(target_date: str) -> Path:
     return RUNTIME_ENV_DIR / f"threshold_runtime_env_{target_date}.json"
+
+
+def swing_runtime_approval_report_path(source_date: str) -> Path:
+    return SWING_RUNTIME_APPROVAL_REPORT_DIR / f"swing_runtime_approval_{source_date}.json"
+
+
+def swing_runtime_approval_artifact_path(source_date: str) -> Path:
+    return SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_runtime_approvals_{source_date}.json"
 
 
 def _report_path_for_date(target_date: str) -> Path:
@@ -188,6 +203,101 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
     return overrides
 
 
+def _load_swing_runtime_approval_bundle(source_date: str | None) -> dict[str, Any]:
+    if not source_date:
+        return {
+            "request_report": None,
+            "approval_artifact": None,
+            "requests": [],
+            "approved_requests": [],
+            "blocked": ["missing_source_date"],
+        }
+    request_path = swing_runtime_approval_report_path(source_date)
+    artifact_path = swing_runtime_approval_artifact_path(source_date)
+    request_report = _load_json(request_path)
+    artifact = _load_json(artifact_path)
+    requests = request_report.get("approval_requests") if isinstance(request_report.get("approval_requests"), list) else []
+    real_canary_policy = (
+        request_report.get("real_canary_policy") if isinstance(request_report.get("real_canary_policy"), dict) else {}
+    )
+    approved_items = artifact.get("approved_requests") if isinstance(artifact.get("approved_requests"), list) else []
+    approved_ids = {
+        str(item.get("approval_id") or "")
+        for item in approved_items
+        if isinstance(item, dict) and bool(item.get("approved", True))
+    }
+    requests_by_id = {
+        str(item.get("approval_id") or ""): item
+        for item in requests
+        if isinstance(item, dict) and item.get("approval_id")
+    }
+    approved_requests = []
+    blocked: list[str] = []
+    if requests and not artifact:
+        blocked.append("approval_artifact_missing")
+    for approval_id in sorted(approved_ids):
+        request = requests_by_id.get(approval_id)
+        if not request:
+            blocked.append(f"approval_request_not_found:{approval_id}")
+            continue
+        approved_requests.append({**request, "approval_state": "approved_live"})
+    return {
+        "request_report": str(request_path) if request_path.exists() else None,
+        "approval_artifact": str(artifact_path) if artifact_path.exists() else None,
+        "requests": requests,
+        "approved_requests": approved_requests,
+        "blocked": blocked,
+        "artifact_payload": artifact,
+        "real_canary_policy": real_canary_policy,
+    }
+
+
+def _select_swing_approved_candidates(bundle: dict[str, Any]) -> tuple[list[dict[str, Any]], list[dict[str, Any]], dict[str, str]]:
+    selected: list[dict[str, Any]] = []
+    decisions: list[dict[str, Any]] = []
+    env_overrides: dict[str, str] = {}
+    selected_by_stage: dict[str, str] = {}
+    for item in bundle.get("approved_requests") or []:
+        if not isinstance(item, dict):
+            continue
+        family = str(item.get("family") or "")
+        stage = str(item.get("stage") or "unknown")
+        candidate = {
+            **item,
+            "calibration_state": "approved_live",
+            "allowed_runtime_apply": True,
+            "safety_revert_required": False,
+        }
+        overrides = _env_overrides_for_candidate(candidate)
+        reject_reason = ""
+        if bool(item.get("actual_order_submitted")):
+            reject_reason = "actual_order_submission_not_allowed"
+        elif not bool(item.get("dry_run_required", True)):
+            reject_reason = "dry_run_required_missing"
+        elif stage in selected_by_stage:
+            reject_reason = f"same_stage_owner_conflict:{selected_by_stage[stage]}"
+        elif not overrides:
+            reject_reason = "no_runtime_env_override"
+        decision = {
+            "approval_id": item.get("approval_id"),
+            "family": family,
+            "stage": stage,
+            "selected": not bool(reject_reason),
+            "decision_reason": reject_reason or "user_approval_artifact_accepted",
+            "env_overrides": overrides if not reject_reason else {},
+            "dry_run_required": True,
+        }
+        decisions.append(decision)
+        if reject_reason:
+            continue
+        selected_by_stage[stage] = family
+        selected.append(candidate)
+        env_overrides.update(overrides)
+    if env_overrides:
+        env_overrides["KORSTOCKSCAN_SWING_LIVE_ORDER_DRY_RUN_ENABLED"] = "true"
+    return selected, decisions, env_overrides
+
+
 def _ai_guard_allows_candidate(candidate: dict[str, Any], ai_review: dict[str, Any], *, require_ai: bool) -> tuple[bool, str]:
     items_by_family = ai_review.get("items_by_family") if isinstance(ai_review.get("items_by_family"), dict) else {}
     item = items_by_family.get(str(candidate.get("family") or ""))
@@ -275,7 +385,13 @@ def _write_runtime_env(target_date: str, manifest: dict[str, Any], env_overrides
                 "generated_at": manifest.get("generated_at"),
                 "env_file": str(runtime_env_path(target_date)),
                 "env_overrides": env_overrides,
-                "selected_families": [item.get("family") for item in manifest.get("auto_apply_selected") or []],
+                "selected_families": [
+                    item.get("family")
+                    for item in [
+                        *(manifest.get("auto_apply_selected") or []),
+                        *((manifest.get("swing_runtime_approval") or {}).get("selected") or []),
+                    ]
+                ],
             },
             ensure_ascii=False,
             indent=2,
@@ -311,15 +427,37 @@ def build_preopen_apply_manifest(
         calibration_candidates = (
             report.get("calibration_candidates") if isinstance(report.get("calibration_candidates"), list) else []
         )
+        approval_requests = [
+            {
+                "family": item.get("family"),
+                "stage": item.get("stage"),
+                "threshold_version": item.get("threshold_version"),
+                "calibration_state": item.get("calibration_state"),
+                "calibration_reason": item.get("calibration_reason"),
+                "current_values": item.get("current_values"),
+                "recommended_values": item.get("recommended_values"),
+                "sample_count": item.get("sample_count"),
+                "sample_floor": item.get("sample_floor"),
+                "source_reports": item.get("source_reports"),
+            }
+            for item in calibration_candidates
+            if isinstance(item, dict)
+            and bool(item.get("human_approval_required"))
+            and str(item.get("calibration_state") or "") == "approval_required"
+        ]
         auto_apply_requested = bool(auto_apply) or apply_mode in AUTO_APPLY_MODES
         ai_review = _load_ai_review(str(report.get("date") or source_date or ""))
         selected, decisions, env_overrides = ([], [], {})
+        swing_bundle = _load_swing_runtime_approval_bundle(str(report.get("date") or source_date or ""))
+        swing_selected, swing_decisions, swing_env_overrides = ([], [], {})
         if auto_apply_requested:
             selected, decisions, env_overrides = _select_auto_apply_candidates(
                 calibration_candidates,
                 ai_review=ai_review,
                 require_ai=require_ai,
             )
+            swing_selected, swing_decisions, swing_env_overrides = _select_swing_approved_candidates(swing_bundle)
+            env_overrides = {**env_overrides, **swing_env_overrides}
         runtime_change = bool(auto_apply_requested and env_overrides)
         status = (
             "auto_bounded_live_ready"
@@ -358,6 +496,20 @@ def build_preopen_apply_manifest(
             },
             "auto_apply_selected": selected,
             "auto_apply_decisions": decisions,
+            "approval_requests": approval_requests,
+            "swing_runtime_approval": {
+                "request_report": swing_bundle.get("request_report"),
+                "approval_artifact": swing_bundle.get("approval_artifact"),
+                "requested": len(swing_bundle.get("requests") or []),
+                "approved": len(swing_bundle.get("approved_requests") or []),
+                "blocked": swing_bundle.get("blocked") or [],
+                "requests": swing_bundle.get("requests") or [],
+                "approved_requests": swing_bundle.get("approved_requests") or [],
+                "real_canary_policy": swing_bundle.get("real_canary_policy") or {},
+                "selected": swing_selected,
+                "decisions": swing_decisions,
+                "dry_run_forced": bool(swing_env_overrides),
+            },
             "runtime_env_file": str(runtime_env_path(target_date)) if runtime_change else None,
             "runtime_env_overrides": env_overrides,
             "threshold_snapshot": report.get("threshold_snapshot") or {},
@@ -371,7 +523,7 @@ def build_preopen_apply_manifest(
                 "rollback_policy": "safety_breach_only",
                 "intraday_runtime_mutation": False,
                 "apply_frequency": "next_preopen_once",
-                "human_approval_required": False,
+                "human_approval_required": bool(approval_requests),
                 "ai_correction_required": bool(require_ai),
                 "same_stage_owner_rule": "one_selected_family_per_stage_by_priority",
                 "daily_ev_report_only": True,

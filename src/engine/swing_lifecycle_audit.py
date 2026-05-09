@@ -29,11 +29,62 @@ REPORT_TYPE = "swing_lifecycle_audit"
 SCHEMA_VERSION = 1
 AUTOMATION_SCHEMA_VERSION = 1
 THRESHOLD_REVIEW_SCHEMA_VERSION = 1
+RUNTIME_APPROVAL_SCHEMA_VERSION = 1
 
 SWING_LIFECYCLE_OWNER = "SwingFullLifecycleSelfImprovementChain"
+SWING_RUNTIME_APPROVAL_OWNER = "SwingRuntimeApprovalDryRunChain0511"
 SWING_LIFECYCLE_AUDIT_DIR = Path(DATA_DIR) / "report" / "swing_lifecycle_audit"
 SWING_THRESHOLD_AI_REVIEW_DIR = Path(DATA_DIR) / "report" / "swing_threshold_ai_review"
 SWING_IMPROVEMENT_AUTOMATION_DIR = Path(DATA_DIR) / "report" / "swing_improvement_automation"
+SWING_RUNTIME_APPROVAL_DIR = Path(DATA_DIR) / "report" / "swing_runtime_approval"
+SWING_TRADEOFF_SCORE_THRESHOLD = 0.68
+SWING_RUNTIME_APPROVAL_LIVE_FAMILIES = {
+    "swing_model_floor",
+    "swing_selection_top_k",
+    "swing_gatekeeper_reject_cooldown",
+    "swing_market_regime_sensitivity",
+}
+
+
+def swing_one_share_real_canary_phase0_policy() -> dict[str, Any]:
+    return {
+        "policy_id": "swing_one_share_real_canary_phase0",
+        "policy_state": "approval_required",
+        "runtime_apply_allowed": False,
+        "separate_user_approval_artifact_required": True,
+        "global_swing_dry_run_must_remain_enabled": True,
+        "broker_order_submission_scope": "approved_one_share_buy_and_closing_sell_only",
+        "max_order_qty": 1,
+        "max_new_entries_per_day": 1,
+        "max_open_positions": 3,
+        "max_total_notional_krw": 300000,
+        "same_symbol_active_limit": 1,
+        "real_order_allowed_actions": ["BUY_INITIAL", "SELL_CLOSE"],
+        "sim_only_actions": ["AVG_DOWN", "PYRAMID", "SCALE_IN"],
+        "blocked_real_order_actions": ["AVG_DOWN", "PYRAMID", "SCALE_IN"],
+        "execution_quality_source": "real_only",
+        "ev_calibration_source": "combined_real_plus_sim",
+        "required_provenance": {
+            "cohort": "swing_one_share_real_canary",
+            "actual_order_submitted": True,
+            "canary_qty_cap": 1,
+            "approval_id_required": True,
+            "simulation_book": None,
+        },
+        "rollback_triggers": [
+            "real_order_without_approval_artifact",
+            "order_qty_gt_1",
+            "global_swing_dry_run_disabled",
+            "receipt_order_number_mismatch",
+            "sell_failure",
+            "price_guard_breach",
+            "daily_new_entry_cap_exceeded",
+            "open_position_cap_exceeded",
+            "total_notional_cap_exceeded",
+            "actual_order_submitted_provenance_missing",
+            "phase0_scale_in_real_order_attempted",
+        ],
+    }
 
 ENTRY_STAGES = {
     "blocked_swing_gap",
@@ -1165,6 +1216,207 @@ def _family_metric_snapshot(audit_report: dict[str, Any], family: str) -> dict[s
     return {"sample_count": 0}
 
 
+def _clamp_float(value: float, lower: float = 0.0, upper: float = 1.0) -> float:
+    return max(lower, min(upper, float(value)))
+
+
+def _normalize_score(value: float, lower: float, upper: float) -> float:
+    if upper <= lower:
+        return 0.0
+    return _clamp_float((float(value) - lower) / (upper - lower))
+
+
+def _percentile(values: list[float], rank: float) -> float | None:
+    if not values:
+        return None
+    sorted_values = sorted(float(value) for value in values)
+    if len(sorted_values) == 1:
+        return sorted_values[0]
+    position = (len(sorted_values) - 1) * _clamp_float(rank)
+    lower = int(position)
+    upper = min(lower + 1, len(sorted_values) - 1)
+    weight = position - lower
+    return sorted_values[lower] * (1 - weight) + sorted_values[upper] * weight
+
+
+def _completed_profit_values(audit_report: dict[str, Any]) -> list[float]:
+    values: list[float] = []
+    db = audit_report.get("db_lifecycle") if isinstance(audit_report.get("db_lifecycle"), dict) else {}
+    avg = _safe_float(db.get("avg_profit_rate"), default=None)
+    valid_rows = _safe_int(db.get("valid_profit_rows"), 0)
+    if avg is not None and valid_rows > 0:
+        values.extend([float(avg)] * valid_rows)
+    for event in (audit_report.get("lifecycle_events") or {}).get("record_timeline_sample") or []:
+        if not isinstance(event, dict):
+            continue
+        for row in event.get("events") or []:
+            if not isinstance(row, dict):
+                continue
+            fields = row.get("fields") if isinstance(row.get("fields"), dict) else {}
+            profit_rate = _safe_float(fields.get("profit_rate"), default=None)
+            if profit_rate is not None:
+                values.append(float(profit_rate))
+    return values
+
+
+def _completed_ev_summary(audit_report: dict[str, Any]) -> dict[str, Any]:
+    values = _completed_profit_values(audit_report)
+    if not values:
+        return {
+            "sample_count": 0,
+            "avg_profit_rate": None,
+            "p10_profit_rate": None,
+            "downside_tail": None,
+            "source": "none",
+        }
+    avg = sum(values) / len(values)
+    p10 = _percentile(values, 0.10)
+    return {
+        "sample_count": len(values),
+        "avg_profit_rate": round(float(avg), 6),
+        "p10_profit_rate": round(float(p10), 6) if p10 is not None else None,
+        "downside_tail": round(float(p10), 6) if p10 is not None else None,
+        "source": "db_completed_plus_sim_events",
+    }
+
+
+def _target_env_plan_for_family(
+    audit_report: dict[str, Any],
+    family: str,
+    tradeoff: dict[str, Any],
+) -> dict[str, Any]:
+    model = audit_report.get("model_selection") if isinstance(audit_report.get("model_selection"), dict) else {}
+    csv = audit_report.get("recommendation_csv") if isinstance(audit_report.get("recommendation_csv"), dict) else {}
+    metrics = _family_metric_snapshot(audit_report, family)
+    avg_ev = _safe_float((tradeoff.get("ev_summary") or {}).get("avg_profit_rate"), default=0.0) or 0.0
+    participation = _safe_float((tradeoff.get("components") or {}).get("participation_funnel"), default=0.0) or 0.0
+
+    if family == "swing_model_floor":
+        current_bull = _safe_float(model.get("floor_bull"), default=0.35) or 0.35
+        current_bear = _safe_float(model.get("floor_bear"), default=0.40) or 0.40
+        step = -0.05 if avg_ev > 0.0 and participation < 0.85 else 0.05 if avg_ev < 0.0 else 0.0
+        return {
+            "target_env_keys": ["SWING_FLOOR_BULL", "SWING_FLOOR_BEAR"],
+            "current_values": {"floor_bull": current_bull, "floor_bear": current_bear},
+            "recommended_values": {
+                "floor_bull": round(_clamp_float(current_bull + step, 0.20, 0.70), 4),
+                "floor_bear": round(_clamp_float(current_bear + step, 0.20, 0.70), 4),
+            },
+        }
+    if family == "swing_selection_top_k":
+        current_top_k = _safe_int(metrics.get("current_top_k"), 3) or 3
+        csv_rows = _safe_int(csv.get("csv_rows"), 0)
+        direction = 1 if avg_ev > 0.0 and csv_rows <= current_top_k else -1 if avg_ev < 0.0 else 0
+        return {
+            "target_env_keys": ["SWING_SELECTION_TOP_K"],
+            "current_values": {"top_k": current_top_k},
+            "recommended_values": {"top_k": max(1, min(10, current_top_k + direction))},
+        }
+    if family == "swing_gatekeeper_reject_cooldown":
+        current_sec = _safe_int(metrics.get("cooldown_sec"), 7200) or 7200
+        direction = -600 if avg_ev > 0.0 else 600 if avg_ev < 0.0 else 0
+        return {
+            "target_env_keys": ["ML_GATEKEEPER_REJECT_COOLDOWN"],
+            "current_values": {"reject_cooldown_sec": current_sec},
+            "recommended_values": {"reject_cooldown_sec": max(300, min(7200, current_sec + direction))},
+        }
+    if family == "swing_market_regime_sensitivity":
+        return {
+            "target_env_keys": ["SWING_MARKET_REGIME_SENSITIVITY"],
+            "current_values": {"regime_sensitivity": "standard"},
+            "recommended_values": {
+                "regime_sensitivity": "relaxed_entry_observe"
+                if avg_ev > 0.0
+                else "strict_entry_observe"
+                if avg_ev < 0.0
+                else "standard"
+            },
+        }
+    return {"target_env_keys": [], "current_values": {}, "recommended_values": {}}
+
+
+def _tradeoff_components(audit_report: dict[str, Any], sample_count: int, sample_floor: int) -> dict[str, Any]:
+    ev_summary = _completed_ev_summary(audit_report)
+    avg_ev = _safe_float(ev_summary.get("avg_profit_rate"), default=0.0) or 0.0
+    p10 = _safe_float(ev_summary.get("p10_profit_rate"), default=None)
+    events = audit_report.get("lifecycle_events") if isinstance(audit_report.get("lifecycle_events"), dict) else {}
+    group_unique = events.get("group_unique_counts") if isinstance(events.get("group_unique_counts"), dict) else {}
+    axis_summary = (
+        audit_report.get("observation_axis_summary")
+        if isinstance(audit_report.get("observation_axis_summary"), dict)
+        else {}
+    )
+    raw = events.get("raw_counts") if isinstance(events.get("raw_counts"), dict) else {}
+    regime_samples = _safe_int(raw.get("market_regime_block"), 0) + _safe_int(raw.get("market_regime_pass"), 0)
+    coverage_gap = _safe_int(axis_summary.get("instrumentation_gap_count"), 0)
+
+    participation_base = sample_count / max(sample_floor, 1)
+    entry_sample = _safe_int(group_unique.get("entry"), 0)
+    exit_sample = _safe_int(group_unique.get("exit"), 0)
+    participation_score = _clamp_float((participation_base + min(entry_sample, 5) / 5 + min(exit_sample, 3) / 3) / 3)
+    attribution_score = 1.0 if coverage_gap <= 0 else max(0.0, 1.0 - 0.25 * coverage_gap)
+    regime_score = 0.70 if regime_samples > 0 else 0.55
+    if _safe_int(raw.get("market_regime_block"), 0) > 0 and _safe_int(raw.get("market_regime_pass"), 0) > 0:
+        regime_score = 0.85
+    components = {
+        "overall_ev": _normalize_score(avg_ev, -0.50, 1.20),
+        "downside_tail": _normalize_score(p10 if p10 is not None else avg_ev, -4.00, -0.50),
+        "participation_funnel": participation_score,
+        "regime_robustness": regime_score,
+        "attribution_quality": attribution_score,
+    }
+    score = (
+        components["overall_ev"] * 0.45
+        + components["downside_tail"] * 0.20
+        + components["participation_funnel"] * 0.15
+        + components["regime_robustness"] * 0.10
+        + components["attribution_quality"] * 0.10
+    )
+    return {
+        "tradeoff_score": round(float(score), 4),
+        "components": {key: round(float(value), 4) for key, value in components.items()},
+        "weights": {
+            "overall_ev": 0.45,
+            "downside_tail": 0.20,
+            "participation_funnel": 0.15,
+            "regime_robustness": 0.10,
+            "attribution_quality": 0.10,
+        },
+        "ev_summary": ev_summary,
+    }
+
+
+def _swing_hard_floor_blocks(audit_report: dict[str, Any], family: str, sample_count: int, sample_floor: int) -> list[str]:
+    blocks: list[str] = []
+    model = audit_report.get("model_selection") if isinstance(audit_report.get("model_selection"), dict) else {}
+    db_load = audit_report.get("recommendation_db_load") if isinstance(audit_report.get("recommendation_db_load"), dict) else {}
+    axis_summary = (
+        audit_report.get("observation_axis_summary")
+        if isinstance(audit_report.get("observation_axis_summary"), dict)
+        else {}
+    )
+    ev_summary = _completed_ev_summary(audit_report)
+    p10 = _safe_float(ev_summary.get("p10_profit_rate"), default=None)
+    if sample_count < sample_floor:
+        blocks.append("family_sample_floor_not_met")
+    if _safe_int(axis_summary.get("instrumentation_gap_count"), 0) > 0:
+        blocks.append("critical_instrumentation_gap")
+    if bool(db_load.get("db_load_gap")):
+        blocks.append("db_load_gap")
+    selection_modes = db_load.get("selection_modes") if isinstance(db_load.get("selection_modes"), dict) else {}
+    if bool(model.get("fallback_written_to_recommendations")) or "FALLBACK_DIAGNOSTIC" in selection_modes:
+        blocks.append("fallback_diagnostic_contamination")
+    if p10 is not None and p10 < -4.0:
+        blocks.append("severe_downside_guard")
+    if family not in SWING_RUNTIME_APPROVAL_LIVE_FAMILIES:
+        blocks.append("runtime_family_guard_missing")
+    return blocks
+
+
+def _approval_id(date_key: str, family: str) -> str:
+    return f"swing_runtime_approval:{date_key}:{family}"
+
+
 def build_swing_threshold_candidates(audit_report: dict[str, Any]) -> list[dict[str, Any]]:
     candidates: list[dict[str, Any]] = []
     for family_meta in SWING_THRESHOLD_FAMILIES:
@@ -1172,15 +1424,32 @@ def build_swing_threshold_candidates(audit_report: dict[str, Any]) -> list[dict[
         metrics = _family_metric_snapshot(audit_report, family)
         sample_count = int(metrics.get("sample_count") or 0)
         sample_floor = int(family_meta.get("sample_floor") or 0)
-        if sample_count < sample_floor:
+        hard_blocks = _swing_hard_floor_blocks(audit_report, family, sample_count, sample_floor)
+        tradeoff = _tradeoff_components(audit_report, sample_count, sample_floor)
+        env_plan = _target_env_plan_for_family(audit_report, family, tradeoff)
+        if "family_sample_floor_not_met" in hard_blocks:
             state = "hold_sample"
+        elif hard_blocks:
+            state = "freeze"
+        elif float(tradeoff.get("tradeoff_score") or 0.0) >= SWING_TRADEOFF_SCORE_THRESHOLD:
+            state = "approval_required"
         else:
-            state = "hold"
+            state = "hold_no_edge"
+        human_approval_required = state == "approval_required"
+        date_key = str(audit_report.get("date") or "")
         candidates.append(
             {
                 "family": family,
+                "stage": family_meta.get("lifecycle_stage"),
                 "lifecycle_stage": family_meta.get("lifecycle_stage"),
                 "calibration_state": state,
+                "calibration_reason": (
+                    "hard_floor_passed_tradeoff_score_met"
+                    if human_approval_required
+                    else ",".join(hard_blocks)
+                    if hard_blocks
+                    else "tradeoff_score_below_approval_threshold"
+                ),
                 "recommended_value": None,
                 "current_value": None,
                 "sample_count": sample_count,
@@ -1191,10 +1460,176 @@ def build_swing_threshold_candidates(audit_report: dict[str, Any]) -> list[dict[
                 "rollback_guard": family_meta.get("rollback_guard"),
                 "source_metrics": metrics,
                 "allowed_runtime_apply": False,
+                "human_approval_required": human_approval_required,
+                "approval_id": _approval_id(date_key, family) if human_approval_required else None,
+                "approval_reason": (
+                    "hard safety floor 통과 및 전체 EV trade-off score 기준 통과"
+                    if human_approval_required
+                    else None
+                ),
+                "tradeoff_score": tradeoff.get("tradeoff_score"),
+                "tradeoff_components": tradeoff.get("components"),
+                "tradeoff_weights": tradeoff.get("weights"),
+                "completed_ev": tradeoff.get("ev_summary"),
+                "hard_floor_passed": not hard_blocks,
+                "hard_floor_block_reasons": hard_blocks,
+                "target_env_keys": env_plan.get("target_env_keys") or [],
+                "current_values": env_plan.get("current_values") or {},
+                "recommended_values": env_plan.get("recommended_values") or {},
+                "actual_order_submission_change": False,
+                "dry_run_required": True,
                 "runtime_change": False,
             }
         )
+    selected_by_stage: dict[str, dict[str, Any]] = {}
+    for candidate in sorted(candidates, key=lambda item: (-float(item.get("tradeoff_score") or 0.0), item.get("family") or "")):
+        if str(candidate.get("calibration_state")) != "approval_required":
+            continue
+        stage = str(candidate.get("stage") or "unknown")
+        if stage in selected_by_stage:
+            winner = selected_by_stage[stage]
+            candidate["calibration_state"] = "freeze"
+            candidate["human_approval_required"] = False
+            candidate["approval_id"] = None
+            candidate["approval_reason"] = None
+            candidate["hard_floor_passed"] = False
+            candidate["hard_floor_block_reasons"] = [
+                *list(candidate.get("hard_floor_block_reasons") or []),
+                f"same_stage_owner_conflict:{winner.get('family')}",
+            ]
+            candidate["calibration_reason"] = f"same_stage_owner_conflict:{winner.get('family')}"
+            continue
+        selected_by_stage[stage] = candidate
     return candidates
+
+
+def build_swing_runtime_approval_report(
+    audit_report: dict[str, Any],
+    threshold_ai_review: dict[str, Any] | None = None,
+    automation_report: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    date_key = str(audit_report.get("date") or "")
+    candidates = build_swing_threshold_candidates(audit_report)
+    real_canary_policy = swing_one_share_real_canary_phase0_policy()
+    requests = [
+        {
+            "approval_id": item.get("approval_id"),
+            "family": item.get("family"),
+            "stage": item.get("stage"),
+            "calibration_state": item.get("calibration_state"),
+            "approval_reason": item.get("approval_reason"),
+            "tradeoff_score": item.get("tradeoff_score"),
+            "tradeoff_components": item.get("tradeoff_components"),
+            "sample_count": item.get("sample_count"),
+            "sample_floor": item.get("sample_floor"),
+            "target_env_keys": item.get("target_env_keys"),
+            "current_values": item.get("current_values"),
+            "recommended_values": item.get("recommended_values"),
+            "actual_order_submitted": False,
+            "dry_run_required": True,
+            "ev_calibration_source": "combined_real_plus_sim",
+            "combined_ev_authority": True,
+            "sim_authority": "equal_for_ev_calibration_when_sim_lifecycle_closed",
+            "execution_quality_authority": "real_only",
+            "broker_execution_quality_source": "real_only",
+            "hard_floor_sample_basis": "family_sample_floor_plus_combined_completed_or_sim_closed_ev",
+            "real_canary_policy_ref": real_canary_policy["policy_id"],
+            "real_order_allowed_actions": list(real_canary_policy["real_order_allowed_actions"]),
+            "sim_only_actions": list(real_canary_policy["sim_only_actions"]),
+            "blocked_real_order_actions": list(real_canary_policy["blocked_real_order_actions"]),
+        }
+        for item in candidates
+        if bool(item.get("human_approval_required"))
+    ]
+    blocked = [
+        {
+            "family": item.get("family"),
+            "stage": item.get("stage"),
+            "calibration_state": item.get("calibration_state"),
+            "tradeoff_score": item.get("tradeoff_score"),
+            "block_reasons": item.get("hard_floor_block_reasons") or [item.get("calibration_reason")],
+        }
+        for item in candidates
+        if not bool(item.get("human_approval_required"))
+    ]
+    db = audit_report.get("db_lifecycle") if isinstance(audit_report.get("db_lifecycle"), dict) else {}
+    events = audit_report.get("lifecycle_events") if isinstance(audit_report.get("lifecycle_events"), dict) else {}
+    return {
+        "schema_version": RUNTIME_APPROVAL_SCHEMA_VERSION,
+        "report_type": "swing_runtime_approval",
+        "date": date_key,
+        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "owner": SWING_RUNTIME_APPROVAL_OWNER,
+        "runtime_change": False,
+        "policy": {
+            "state_flow": "proposal -> approval_required -> approved_live_dry_run",
+            "live_meaning": "next_preopen_runtime_env_apply_inside_swing_dry_run",
+            "broker_order_submission": False,
+            "swing_live_order_dry_run_required": True,
+            "tradeoff_score_threshold": SWING_TRADEOFF_SCORE_THRESHOLD,
+            "perfect_spot_required": False,
+            "hard_floor_required": True,
+            "hard_floor_sample_basis": "family_sample_floor_plus_combined_completed_or_sim_closed_ev",
+            "ev_calibration_source": "combined_real_plus_sim",
+            "sim_authority": "equal_for_ev_calibration_when_sim_lifecycle_closed",
+            "combined_ev_authority": True,
+            "execution_quality_source": "real_only",
+            "broker_execution_quality_source": "real_only",
+            "runtime_apply_requires_user_approval_artifact": True,
+        },
+        "real_canary_policy": real_canary_policy,
+        "rolling_source_bundle": {
+            "source_authority": {
+                "real": "required_for_broker_execution_quality_and_order_receipt",
+                "sim": "equal_authority_for_ev_calibration_after_closed_lifecycle",
+                "combined": "primary_tradeoff_view_for_approval_request_generation",
+            },
+            "source_reports": {
+                "swing_lifecycle_audit": str(SWING_LIFECYCLE_AUDIT_DIR / f"swing_lifecycle_audit_{date_key}.json"),
+                "swing_threshold_ai_review": str(
+                    SWING_THRESHOLD_AI_REVIEW_DIR / f"swing_threshold_ai_review_{date_key}.json"
+                ),
+                "swing_improvement_automation": str(
+                    SWING_IMPROVEMENT_AUTOMATION_DIR / f"swing_improvement_automation_{date_key}.json"
+                ),
+            },
+            "threshold_ai_status": (threshold_ai_review or {}).get("ai_status"),
+            "automation_order_count": len((automation_report or {}).get("code_improvement_orders") or []),
+            "real": {
+                "completed_rows": db.get("completed_rows"),
+                "valid_profit_rows": db.get("valid_profit_rows"),
+                "avg_profit_rate": db.get("avg_profit_rate"),
+            },
+            "sim": {
+                "entered_records": events.get("simulated_order_unique_records"),
+                "sell_stage_count": (events.get("raw_counts") or {}).get("swing_sim_sell_order_assumed_filled", 0),
+            },
+            "combined": _completed_ev_summary(audit_report),
+            "funnel": {
+                "submitted_unique_records": events.get("submitted_unique_records"),
+                "simulated_order_unique_records": events.get("simulated_order_unique_records"),
+                "group_unique_counts": events.get("group_unique_counts"),
+            },
+            "safety_flags": {
+                "instrumentation_gap_count": (audit_report.get("observation_axis_summary") or {}).get(
+                    "instrumentation_gap_count"
+                ),
+                "db_load_gap": (audit_report.get("recommendation_db_load") or {}).get("db_load_gap"),
+                "fallback_written_to_recommendations": (audit_report.get("model_selection") or {}).get(
+                    "fallback_written_to_recommendations"
+                ),
+            },
+        },
+        "approval_requests": requests,
+        "blocked_requests": blocked,
+        "candidates": candidates,
+        "summary": {
+            "requested": len(requests),
+            "blocked": len(blocked),
+            "approved": 0,
+            "runtime_change": False,
+        },
+    }
 
 
 ALLOWED_AI_STATES = {"agree", "correction_proposed", "caution", "insufficient_context", "safety_concern", "unavailable"}
@@ -1900,6 +2335,11 @@ def build_swing_improvement_automation_report(
             )
         )
 
+    runtime_approval_preview = build_swing_runtime_approval_report(
+        audit_report,
+        threshold_ai_review=threshold_ai_review,
+        automation_report=None,
+    )
     return {
         "schema_version": AUTOMATION_SCHEMA_VERSION,
         "report_type": "swing_improvement_automation",
@@ -1911,6 +2351,8 @@ def build_swing_improvement_automation_report(
             "runtime_patch_automation": False,
             "user_intervention_point": "generated code improvement workorder is pasted into Codex manually",
             "threshold_ai_review_authority": "proposal_only",
+            "runtime_approval_authority": "approval_required_requests_only_until_user_approval_artifact",
+            "broker_order_submission": False,
         },
         "source_reports": {
             "swing_lifecycle_audit": str(SWING_LIFECYCLE_AUDIT_DIR / f"swing_lifecycle_audit_{date_key}.json"),
@@ -1933,6 +2375,8 @@ def build_swing_improvement_automation_report(
         "consensus_findings": [item for item in findings if item.get("confidence") != "solo"],
         "solo_findings": [item for item in findings if item.get("confidence") == "solo"],
         "auto_family_candidates": auto_family_candidates,
+        "approval_requests": runtime_approval_preview.get("approval_requests") or [],
+        "approval_request_summary": runtime_approval_preview.get("summary") or {},
         "code_improvement_orders": orders,
     }
 
@@ -2110,6 +2554,69 @@ def render_swing_improvement_automation_markdown(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def render_swing_runtime_approval_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    lines = [
+        f"# Swing Runtime Approval - {report.get('date')}",
+        "",
+        "- Runtime change: `false`",
+        "- Approval state: `proposal -> approval_required -> approved_live_dry_run`",
+        "- Broker order submission: `false`",
+        f"- tradeoff_score_threshold: `{(report.get('policy') or {}).get('tradeoff_score_threshold')}`",
+        f"- EV calibration source: `{(report.get('policy') or {}).get('ev_calibration_source')}`",
+        f"- sim authority: `{(report.get('policy') or {}).get('sim_authority')}`",
+        f"- execution quality source: `{(report.get('policy') or {}).get('execution_quality_source')}`",
+        f"- real canary policy: `{(report.get('real_canary_policy') or {}).get('policy_id')}`",
+        f"- real canary allowed actions: `{', '.join((report.get('real_canary_policy') or {}).get('real_order_allowed_actions') or [])}`",
+        f"- sim-only actions: `{', '.join((report.get('real_canary_policy') or {}).get('sim_only_actions') or [])}`",
+        f"- requested/blocked/approved: `{summary.get('requested')}` / `{summary.get('blocked')}` / `{summary.get('approved')}`",
+        "",
+        "## Approval Requests",
+        "",
+        "| approval_id | family | stage | score | sample | target_env_keys |",
+        "| --- | --- | --- | ---: | ---: | --- |",
+    ]
+    requests = report.get("approval_requests") if isinstance(report.get("approval_requests"), list) else []
+    if requests:
+        for item in requests:
+            if not isinstance(item, dict):
+                continue
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        f"`{item.get('approval_id')}`",
+                        f"`{item.get('family')}`",
+                        f"`{item.get('stage')}`",
+                        str(item.get("tradeoff_score")),
+                        f"{item.get('sample_count')}/{item.get('sample_floor')}",
+                        f"`{', '.join(item.get('target_env_keys') or [])}`",
+                    ]
+                )
+                + " |"
+            )
+    else:
+        lines.append("| `-` | `none` | `-` | 0 | 0/0 | `-` |")
+    lines.extend(["", "## Blocked", "", "| family | state | score | reasons |", "| --- | --- | ---: | --- |"])
+    for item in report.get("blocked_requests") or []:
+        if not isinstance(item, dict):
+            continue
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    f"`{item.get('family')}`",
+                    f"`{item.get('calibration_state')}`",
+                    str(item.get("tradeoff_score")),
+                    f"`{', '.join(str(reason) for reason in (item.get('block_reasons') or []))}`",
+                ]
+            )
+            + " |"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
 def write_swing_lifecycle_outputs(
     target_date: str | date | datetime,
     *,
@@ -2135,12 +2642,14 @@ def write_swing_lifecycle_outputs(
         ai_provider_status=provider_status,
     )
     automation = build_swing_improvement_automation_report(audit, threshold_review)
+    runtime_approval = build_swing_runtime_approval_report(audit, threshold_review, automation)
 
     root = Path(output_root) if output_root is not None else Path(DATA_DIR) / "report"
     audit_dir = root / "swing_lifecycle_audit"
     review_dir = root / "swing_threshold_ai_review"
     automation_dir = root / "swing_improvement_automation"
-    for directory in (audit_dir, review_dir, automation_dir):
+    approval_dir = root / "swing_runtime_approval"
+    for directory in (audit_dir, review_dir, automation_dir, approval_dir):
         directory.mkdir(parents=True, exist_ok=True)
 
     audit_json = audit_dir / f"swing_lifecycle_audit_{date_key}.json"
@@ -2149,6 +2658,8 @@ def write_swing_lifecycle_outputs(
     review_md = review_dir / f"swing_threshold_ai_review_{date_key}.md"
     automation_json = automation_dir / f"swing_improvement_automation_{date_key}.json"
     automation_md = automation_dir / f"swing_improvement_automation_{date_key}.md"
+    approval_json = approval_dir / f"swing_runtime_approval_{date_key}.json"
+    approval_md = approval_dir / f"swing_runtime_approval_{date_key}.md"
 
     audit_json.write_text(json.dumps(audit, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     audit_md.write_text(render_swing_lifecycle_audit_markdown(audit), encoding="utf-8")
@@ -2156,6 +2667,8 @@ def write_swing_lifecycle_outputs(
     review_md.write_text(render_swing_threshold_ai_review_markdown(threshold_review), encoding="utf-8")
     automation_json.write_text(json.dumps(automation, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
     automation_md.write_text(render_swing_improvement_automation_markdown(automation), encoding="utf-8")
+    approval_json.write_text(json.dumps(runtime_approval, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+    approval_md.write_text(render_swing_runtime_approval_markdown(runtime_approval), encoding="utf-8")
 
     paths = {
         "swing_lifecycle_audit_json": str(audit_json),
@@ -2164,11 +2677,20 @@ def write_swing_lifecycle_outputs(
         "swing_threshold_ai_review_markdown": str(review_md),
         "swing_improvement_automation_json": str(automation_json),
         "swing_improvement_automation_markdown": str(automation_md),
+        "swing_runtime_approval_json": str(approval_json),
+        "swing_runtime_approval_markdown": str(approval_md),
     }
     audit["paths"] = paths
     threshold_review["paths"] = paths
     automation["paths"] = paths
-    return {"audit": audit, "threshold_ai_review": threshold_review, "automation": automation, "paths": paths}
+    runtime_approval["paths"] = paths
+    return {
+        "audit": audit,
+        "threshold_ai_review": threshold_review,
+        "automation": automation,
+        "runtime_approval": runtime_approval,
+        "paths": paths,
+    }
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -61,11 +61,53 @@ def _calibration_path(target_date: str) -> Path:
 def _selected_families(apply_manifest: dict[str, Any]) -> list[str]:
     selected = apply_manifest.get("auto_apply_selected")
     if isinstance(selected, list) and selected:
-        return [str(item.get("family") or "") for item in selected if isinstance(item, dict) and item.get("family")]
+        families = [str(item.get("family") or "") for item in selected if isinstance(item, dict) and item.get("family")]
+        swing_selected = ((apply_manifest.get("swing_runtime_approval") or {}).get("selected") or [])
+        families.extend(
+            str(item.get("family") or "") for item in swing_selected if isinstance(item, dict) and item.get("family")
+        )
+        return families
+    swing_selected = ((apply_manifest.get("swing_runtime_approval") or {}).get("selected") or [])
+    if isinstance(swing_selected, list) and swing_selected:
+        return [str(item.get("family") or "") for item in swing_selected if isinstance(item, dict) and item.get("family")]
     env_manifest = apply_manifest.get("runtime_env_overrides")
     if isinstance(env_manifest, dict) and env_manifest:
         return ["runtime_env_override"]
     return []
+
+
+def _swing_runtime_approval_summary(apply_manifest: dict[str, Any]) -> dict[str, Any]:
+    swing = apply_manifest.get("swing_runtime_approval") if isinstance(apply_manifest.get("swing_runtime_approval"), dict) else {}
+    requests = swing.get("requests") if isinstance(swing.get("requests"), list) else []
+    approved = swing.get("approved_requests") if isinstance(swing.get("approved_requests"), list) else []
+    selected = swing.get("selected") if isinstance(swing.get("selected"), list) else []
+    decisions = swing.get("decisions") if isinstance(swing.get("decisions"), list) else []
+    real_canary_policy = (
+        swing.get("real_canary_policy") if isinstance(swing.get("real_canary_policy"), dict) else {}
+    )
+    return {
+        "request_report": swing.get("request_report"),
+        "approval_artifact": swing.get("approval_artifact"),
+        "requested": _safe_int(swing.get("requested"), len(requests)),
+        "approved": _safe_int(swing.get("approved"), len(approved)),
+        "selected_live_dry_run": len(selected),
+        "dry_run_forced": bool(swing.get("dry_run_forced")),
+        "real_canary_policy": real_canary_policy,
+        "blocked": list(swing.get("blocked") or []),
+        "requests": [
+            {
+                "approval_id": item.get("approval_id"),
+                "family": item.get("family"),
+                "stage": item.get("stage"),
+                "tradeoff_score": item.get("tradeoff_score"),
+                "target_env_keys": item.get("target_env_keys"),
+                "recommended_values": item.get("recommended_values"),
+            }
+            for item in requests
+            if isinstance(item, dict)
+        ],
+        "decisions": decisions,
+    }
 
 
 def _cohort_decisions(calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
@@ -104,6 +146,32 @@ def _cohort_decisions(calibration_report: dict[str, Any]) -> list[dict[str, Any]
         for item in candidates
         if isinstance(item, dict)
     ]
+
+
+def _approval_requests(calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates = calibration_report.get("calibration_candidates")
+    if not isinstance(candidates, list):
+        return []
+    requests: list[dict[str, Any]] = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            continue
+        if not bool(item.get("human_approval_required")):
+            continue
+        if str(item.get("calibration_state") or "") != "approval_required":
+            continue
+        requests.append(
+            {
+                "family": item.get("family"),
+                "stage": item.get("stage"),
+                "calibration_reason": item.get("calibration_reason"),
+                "current_values": item.get("current_values"),
+                "recommended_values": item.get("recommended_values"),
+                "sample_count": item.get("sample_count"),
+                "sample_floor": item.get("sample_floor"),
+            }
+        )
+    return requests
 
 
 def _pattern_lab_automation_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
@@ -264,10 +332,17 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     apply_manifest = _load_json(apply_path)
     trade_metrics = trade_review.get("metrics") if isinstance(trade_review.get("metrics"), dict) else {}
     perf_metrics = performance.get("metrics") if isinstance(performance.get("metrics"), dict) else {}
+    scalp_simulator = calibration.get("scalp_simulator") if isinstance(calibration.get("scalp_simulator"), dict) else {}
+    completed_by_source = (
+        calibration.get("completed_by_source")
+        if isinstance(calibration.get("completed_by_source"), dict)
+        else {}
+    )
     pattern_lab_summary, pattern_lab_path, pattern_lab_warnings = _pattern_lab_automation_summary(target_date)
     swing_lab_summary, swing_lab_path, swing_lab_warnings = _swing_pattern_lab_automation_summary(target_date)
     code_workorder_summary, code_workorder_path, code_workorder_warnings = _code_improvement_workorder_summary(target_date)
     selected_families = _selected_families(apply_manifest)
+    swing_runtime_approval = _swing_runtime_approval_summary(apply_manifest)
     completed = _safe_int(trade_metrics.get("completed_trades"), 0)
     win = _safe_int(trade_metrics.get("win_trades"), 0)
     loss = _safe_int(trade_metrics.get("loss_trades"), 0)
@@ -297,6 +372,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "avg_profit_rate_pct": round(_safe_float(trade_metrics.get("avg_profit_rate"), 0.0), 4),
             "realized_pnl_krw": _safe_int(trade_metrics.get("realized_pnl_krw"), 0),
             "full_fill_completed_avg_profit_rate_pct": round(full_fill_completed_avg, 4),
+            "source_split": completed_by_source,
         },
         "entry_funnel": {
             "budget_pass_events": budget_pass,
@@ -313,12 +389,15 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "holding_review_ms_p95": round(_safe_float(perf_metrics.get("holding_review_ms_p95"), 0.0), 2),
             "holding_ai_cache_hit_ratio": round(_safe_float(perf_metrics.get("holding_ai_cache_hit_ratio"), 0.0), 4),
         },
+        "scalp_simulator": scalp_simulator,
         "calibration_outcome": {
             "calibration_report": str(calibration_path) if calibration_path.exists() else None,
             "run_phase": calibration.get("run_phase"),
             "runtime_change": bool(calibration.get("runtime_change")),
             "decisions": _cohort_decisions(calibration),
         },
+        "approval_requests": _approval_requests(calibration),
+        "swing_runtime_approval": swing_runtime_approval,
         "pattern_lab_automation": pattern_lab_summary,
         "swing_pattern_lab_automation": swing_lab_summary,
         "code_improvement_workorder": code_workorder_summary,
@@ -356,10 +435,13 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
     ev = report.get("daily_ev_summary") if isinstance(report.get("daily_ev_summary"), dict) else {}
     funnel = report.get("entry_funnel") if isinstance(report.get("entry_funnel"), dict) else {}
     holding = report.get("holding_exit") if isinstance(report.get("holding_exit"), dict) else {}
+    scalp_sim = report.get("scalp_simulator") if isinstance(report.get("scalp_simulator"), dict) else {}
     runtime = report.get("runtime_apply") if isinstance(report.get("runtime_apply"), dict) else {}
     pattern_lab = report.get("pattern_lab_automation") if isinstance(report.get("pattern_lab_automation"), dict) else {}
     swing_lab = report.get("swing_pattern_lab_automation") if isinstance(report.get("swing_pattern_lab_automation"), dict) else {}
+    swing_runtime = report.get("swing_runtime_approval") if isinstance(report.get("swing_runtime_approval"), dict) else {}
     code_workorder = report.get("code_improvement_workorder") if isinstance(report.get("code_improvement_workorder"), dict) else {}
+    approval_requests = report.get("approval_requests") if isinstance(report.get("approval_requests"), list) else []
     decisions = ((report.get("calibration_outcome") or {}).get("decisions") or []) if isinstance(report.get("calibration_outcome"), dict) else []
     lines = [
         f"# Threshold Cycle Daily EV Report - {report.get('date')}",
@@ -386,6 +468,12 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- exit_signals: `{holding.get('exit_signals')}`",
         f"- holding_review_ms_p95: `{holding.get('holding_review_ms_p95')}`",
         "",
+        "## Scalp Simulator",
+        f"- authority: `{scalp_sim.get('calibration_authority') or '-'}` / fill_policy: `{scalp_sim.get('fill_policy') or '-'}`",
+        f"- armed/filled/sold: `{scalp_sim.get('entry_armed')}` / `{scalp_sim.get('buy_filled')}` / `{scalp_sim.get('sell_completed')}`",
+        f"- expired/unpriced/duplicate: `{scalp_sim.get('entry_expired')}` / `{scalp_sim.get('entry_unpriced')}` / `{scalp_sim.get('duplicate_buy_signal')}`",
+        f"- completed_profit_summary: `{scalp_sim.get('completed_profit_summary') or {}}`",
+        "",
         "## Pattern Lab Automation",
         f"- artifact: `{pattern_lab.get('artifact') or '-'}`",
         f"- fresh: gemini=`{pattern_lab.get('gemini_fresh')}` claude=`{pattern_lab.get('claude_fresh')}`",
@@ -399,14 +487,50 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- carryover_warnings: `{swing_lab.get('carryover_warning_count')}`",
         f"- population_split_available: `{swing_lab.get('population_split_available')}`",
         "",
+        "## Swing Runtime Approval",
+        f"- request_report: `{swing_runtime.get('request_report') or '-'}`",
+        f"- approval_artifact: `{swing_runtime.get('approval_artifact') or '-'}`",
+        f"- requested/approved/live_dry_run: `{swing_runtime.get('requested')}` / `{swing_runtime.get('approved')}` / `{swing_runtime.get('selected_live_dry_run')}`",
+        f"- dry_run_forced: `{swing_runtime.get('dry_run_forced')}`",
+        f"- real_canary_policy: `{((swing_runtime.get('real_canary_policy') or {}).get('policy_id')) or '-'}`",
+        f"- real_order_allowed_actions: `{', '.join((swing_runtime.get('real_canary_policy') or {}).get('real_order_allowed_actions') or [])}`",
+        f"- sim_only_actions: `{', '.join((swing_runtime.get('real_canary_policy') or {}).get('sim_only_actions') or [])}`",
+        f"- blocked: `{swing_runtime.get('blocked') or []}`",
+        "",
         "## Code Improvement Workorder",
         f"- artifact: `{code_workorder.get('artifact') or '-'}`",
         f"- markdown: `{code_workorder.get('markdown') or '-'}`",
         f"- selected_order_count: `{code_workorder.get('selected_order_count')}`",
         f"- decision_counts: `{code_workorder.get('decision_counts')}`",
         "",
-        "## Calibration Decisions",
+        "## Approval Requests",
     ]
+    if approval_requests:
+        for item in approval_requests:
+            if isinstance(item, dict):
+                lines.append(
+                    f"- `{item.get('family')}` sample=`{item.get('sample_count')}/{item.get('sample_floor')}` "
+                    f"reason=`{item.get('calibration_reason')}`"
+                )
+    else:
+        lines.append("- none")
+    swing_requests = swing_runtime.get("requests") if isinstance(swing_runtime.get("requests"), list) else []
+    lines.extend(["", "## Swing Approval Requests"])
+    if swing_requests:
+        for item in swing_requests:
+            if isinstance(item, dict):
+                lines.append(
+                    f"- `{item.get('family')}` approval_id=`{item.get('approval_id')}` "
+                    f"score=`{item.get('tradeoff_score')}` target_env_keys=`{item.get('target_env_keys')}`"
+                )
+    else:
+        lines.append("- none")
+    lines.extend(
+        [
+            "",
+            "## Calibration Decisions",
+        ]
+    )
     top_orders = code_workorder.get("top_orders") if isinstance(code_workorder.get("top_orders"), list) else []
     if top_orders:
         lines.extend(["## Code Improvement Top Orders"])

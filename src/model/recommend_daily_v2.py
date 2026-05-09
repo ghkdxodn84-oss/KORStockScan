@@ -7,7 +7,7 @@ try:
         HYBRID_XGB_PATH, HYBRID_LGBM_PATH, BULL_XGB_PATH, BULL_LGBM_PATH,
         META_MODEL_PATH, RECO_PATH, RECO_DIAGNOSTIC_PATH, RECO_DIAGNOSTIC_JSON_PATH,
         META_FEATURES, SWING_SELECTION_OWNER, SWING_FLOOR_BULL, SWING_FLOOR_BEAR,
-        SWING_FALLBACK_FLOOR_BULL,
+        SWING_FALLBACK_FLOOR_BULL, SWING_SELECTION_TOP_K,
         get_top_kospi_codes, get_latest_quote_date,
         build_meta_feature_frame, score_artifact,
         select_daily_candidates, daily_selection_stats, load_model_artifact
@@ -18,7 +18,7 @@ except ImportError:
         HYBRID_XGB_PATH, HYBRID_LGBM_PATH, BULL_XGB_PATH, BULL_LGBM_PATH,
         META_MODEL_PATH, RECO_PATH, RECO_DIAGNOSTIC_PATH, RECO_DIAGNOSTIC_JSON_PATH,
         META_FEATURES, SWING_SELECTION_OWNER, SWING_FLOOR_BULL, SWING_FLOOR_BEAR,
-        SWING_FALLBACK_FLOOR_BULL,
+        SWING_FALLBACK_FLOOR_BULL, SWING_SELECTION_TOP_K,
         get_top_kospi_codes, get_latest_quote_date,
         build_meta_feature_frame, score_artifact,
         select_daily_candidates, daily_selection_stats, load_model_artifact
@@ -95,6 +95,7 @@ def _save_recommendation_outputs(score_df, picks, stats_df, latest_date):
         'floor_bull': SWING_FLOOR_BULL,
         'floor_bear': SWING_FLOOR_BEAR,
         'fallback_floor_bull': SWING_FALLBACK_FLOOR_BULL,
+        'selection_top_k': SWING_SELECTION_TOP_K,
         'latest_stats': latest_stats,
         'score_distribution': {
             'hybrid_mean_max': float(score_df['hybrid_mean'].max()) if not score_df.empty else 0.0,
@@ -155,6 +156,8 @@ def recommend_daily_v2():
         floor_bull=SWING_FLOOR_BULL,
         floor_bear=SWING_FLOOR_BEAR,
         fallback_floor=SWING_FALLBACK_FLOOR_BULL,
+        top_k_bull=SWING_SELECTION_TOP_K,
+        top_k_bear=max(1, min(SWING_SELECTION_TOP_K, 2)),
     )
     stats_df = daily_selection_stats(
         score_df,

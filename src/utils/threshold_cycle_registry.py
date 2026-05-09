@@ -48,6 +48,17 @@ THRESHOLD_STAGE_FAMILY_MAP = {
     "sell_completed": "statistical_action_weight",
     "scale_in_executed": "statistical_action_weight",
     "stat_action_decision_snapshot": "statistical_action_weight",
+    "scalp_sim_entry_armed": "entry_mechanical_momentum",
+    "scalp_sim_buy_order_virtual_pending": "pre_submit_price_guard",
+    "scalp_sim_buy_order_assumed_filled": "pre_submit_price_guard",
+    "scalp_sim_holding_started": "statistical_action_weight",
+    "scalp_sim_scale_in_order_assumed_filled": "scale_in_price_guard",
+    "scalp_sim_scale_in_order_unfilled": "scale_in_price_guard",
+    "scalp_sim_sell_order_assumed_filled": "statistical_action_weight",
+    "scalp_sim_sell_blocked_zero_qty": "statistical_action_weight",
+    "scalp_sim_entry_unpriced": "pre_submit_price_guard",
+    "scalp_sim_entry_expired": "pre_submit_price_guard",
+    "scalp_sim_duplicate_buy_signal": "entry_mechanical_momentum",
 }
 
 TARGET_STAGES = frozenset(THRESHOLD_STAGE_FAMILY_MAP)

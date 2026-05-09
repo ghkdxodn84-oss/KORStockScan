@@ -36,9 +36,32 @@ RECO_DIAGNOSTIC_PATH = os.path.join(DATA_DIR, 'daily_recommendations_v2_diagnost
 RECO_DIAGNOSTIC_JSON_PATH = os.path.join(DATA_DIR, 'daily_recommendations_v2_diagnostics.json')
 
 SWING_SELECTION_OWNER = 'SwingModelSelectionFunnelRepair'
-SWING_FLOOR_BULL = 0.35
-SWING_FLOOR_BEAR = 0.40
-SWING_FALLBACK_FLOOR_BULL = 0.35
+
+
+def _env_float(name, default):
+    try:
+        raw = os.getenv(name)
+        if raw in (None, ''):
+            return default
+        return float(raw)
+    except (TypeError, ValueError):
+        return default
+
+
+def _env_int(name, default):
+    try:
+        raw = os.getenv(name)
+        if raw in (None, ''):
+            return default
+        return int(float(raw))
+    except (TypeError, ValueError):
+        return default
+
+
+SWING_FLOOR_BULL = _env_float('KORSTOCKSCAN_SWING_FLOOR_BULL', 0.35)
+SWING_FLOOR_BEAR = _env_float('KORSTOCKSCAN_SWING_FLOOR_BEAR', 0.40)
+SWING_FALLBACK_FLOOR_BULL = _env_float('KORSTOCKSCAN_SWING_FALLBACK_FLOOR_BULL', 0.35)
+SWING_SELECTION_TOP_K = _env_int('KORSTOCKSCAN_SWING_SELECTION_TOP_K', 3)
 
 # ==========================================
 # 학습 기간 설정

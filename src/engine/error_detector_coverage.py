@@ -40,6 +40,7 @@ REQUIRED_ARTIFACT_IDS: set[str] = {
     "swing_lifecycle_audit_report",
     "swing_threshold_ai_review_report",
     "swing_improvement_automation_report",
+    "swing_runtime_approval_report",
 }
 
 
