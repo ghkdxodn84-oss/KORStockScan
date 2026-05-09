@@ -22,7 +22,7 @@
 
 ## 1. 메인 루프 (`run_sniper`)
 
-**파일**: [`kiwoom_sniper_v2.py`](../src/engine/kiwoom_sniper_v2.py)
+**파일**: [`kiwoom_sniper_v2.py`](../../src/engine/kiwoom_sniper_v2.py)
 
 ### 1.1 `_ensure_state_handler_deps()` — 매 루프 중복 체크
 
@@ -94,7 +94,7 @@ targets[:] = [t for t in targets if t.get('status') not in ['COMPLETED', 'EXPIRE
 
 ## 2. 상태 핸들러 (`sniper_state_handlers.py`)
 
-**파일**: [`sniper_state_handlers.py`](../src/engine/sniper_state_handlers.py) — **5,389라인**, 전체 스나이퍼 코드베이스 중 28%
+**파일**: [`sniper_state_handlers.py`](../../src/engine/sniper_state_handlers.py) — **5,389라인**, 전체 스나이퍼 코드베이스 중 28%
 
 ### 2.1 `getattr(TRADING_RULES, ...)` 반복 호출
 
@@ -187,7 +187,7 @@ pos_tag = normalize_position_tag(strategy, stock.get('position_tag'))
 
 ## 3. 진입 latency 시스템 (`sniper_entry_latency.py`)
 
-**파일**: [`sniper_entry_latency.py`](../src/engine/sniper_entry_latency.py) — 641라인
+**파일**: [`sniper_entry_latency.py`](../../src/engine/sniper_entry_latency.py) — 641라인
 
 ### 3.1 `_CACHE_LOCK` 경합
 
@@ -219,7 +219,7 @@ policy = _ENTRY_POLICY.evaluate(...)       # EntryDecision enum + reason
 
 ## 4. Gatekeeper replay (`sniper_gatekeeper_replay.py`)
 
-**파일**: [`sniper_gatekeeper_replay.py`](../src/engine/sniper_gatekeeper_replay.py) — 262라인
+**파일**: [`sniper_gatekeeper_replay.py`](../../src/engine/sniper_gatekeeper_replay.py) — 262라인
 
 ### 4.1 동기 파일 I/O in hot path
 
@@ -249,7 +249,7 @@ _RECENT_SNAPSHOT_SIGNATURES: dict[str, float] = {}
 
 ## 5. 동적 임계값 (`sniper_dynamic_thresholds.py`)
 
-**파일**: [`sniper_dynamic_thresholds.py`](../src/engine/sniper_dynamic_thresholds.py) — 114라인. **경량 모듈, 큰 문제 없음.**
+**파일**: [`sniper_dynamic_thresholds.py`](../../src/engine/sniper_dynamic_thresholds.py) — 114라인. **경량 모듈, 큰 문제 없음.**
 
 ### 5.1 `classify_market_cap_bucket()` — marcap 기준 미세 중복
 
@@ -380,8 +380,8 @@ run_sniper()
 
 ### 즉시 조치 권장 (P1)
 
-1. **HOLDING AI 리뷰 → 별도 executor**: [`sniper_state_handlers.py:3583`](../src/engine/sniper_state_handlers.py:3583) `get_tick_history_ka10003()` + `analyze_target()`을 `ThreadPoolExecutor`로 오프로드. AI 리뷰 완료 전까지는 `last_ai_reviewed_at` 업데이트 연기.
-2. **`_ensure_state_handler_deps()` → 루프 시작 1회**: [`kiwoom_sniper_v2.py:309`](../src/engine/kiwoom_sniper_v2.py:309)를 `run_sniper()` 진입 1회 또는 루프 상단 1회로 이동하고, 각 래퍼에서는 생략.
+1. **HOLDING AI 리뷰 → 별도 executor**: [`sniper_state_handlers.py:3583`](../../src/engine/sniper_state_handlers.py:3583) `get_tick_history_ka10003()` + `analyze_target()`을 `ThreadPoolExecutor`로 오프로드. AI 리뷰 완료 전까지는 `last_ai_reviewed_at` 업데이트 연기.
+2. **`_ensure_state_handler_deps()` → 루프 시작 1회**: [`kiwoom_sniper_v2.py:309`](../../src/engine/kiwoom_sniper_v2.py:309)를 `run_sniper()` 진입 1회 또는 루프 상단 1회로 이동하고, 각 래퍼에서는 생략.
 
 ### 중기 권장 (P2)
 

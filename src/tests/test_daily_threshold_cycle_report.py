@@ -1156,7 +1156,7 @@ def test_scale_in_price_guard_family_generates_manifest_only_candidate():
     assert family["sample"]["p2_observe"] == 3
     assert family["sample"]["block_reason"]["spread_too_wide"] == 10
     assert family["current"]["max_spread_bps"] == 80.0
-    assert family["current"]["effective_qty_cap"] == 1
+    assert family["current"]["effective_qty_cap"] == 0
 
     manifest_families = {
         item["family"]

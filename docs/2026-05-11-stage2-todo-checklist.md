@@ -24,6 +24,49 @@
 
 ## 장후 체크리스트 (16:00~17:30)
 
+- [x] `[PositionSizingCapRemoval0509] 신규 BUY/REVERSAL_ADD/PYRAMID 1주 수량 cap 제거 반영` (`Due: 2026-05-09`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: ScalpingLogic`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py), [sniper_scale_in.py](/home/ubuntu/KORStockScan/src/engine/sniper_scale_in.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py)
+  - 실행 메모: 사용자 지시로 신규 BUY `SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED=False`, `SCALPING_INITIAL_ENTRY_MAX_QTY=0`을 기본값으로 전환하고, 추가매수 `SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP=0`과 wait6579 probe `AI_WAIT6579_PROBE_CANARY_MAX_QTY=0`을 수량 cap 없음으로 해석하도록 변경했다.
+  - 유지 가드: `SCALPING_MAX_BUY_BUDGET_KRW`, `MAX_POSITION_PCT`, scale-in P1 price resolver, pending/cooldown/protection guard, PYRAMID evidence gate는 유지한다. `ws_data.curr` 직접 지정가 제출 금지는 유지한다.
+  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_scale_in.py src/tests/test_daily_threshold_cycle_report.py src/tests/test_state_handler_fast_signatures.py` 대상으로 회귀 확인한다.
+
+- [x] `[SwingModelSelectionFunnelRepair0509] 스윙 모델 추천 생성 정상화 및 선정 funnel 진단 병합 구현` (`Due: 2026-05-09`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: ScalpingLogic`)
+  - Source: [recommend_daily_v2.py](/home/ubuntu/KORStockScan/src/model/recommend_daily_v2.py), [common_v2.py](/home/ubuntu/KORStockScan/src/model/common_v2.py), [final_ensemble_scanner.py](/home/ubuntu/KORStockScan/src/scanners/final_ensemble_scanner.py), [swing_selection_funnel_report.py](/home/ubuntu/KORStockScan/src/engine/swing_selection_funnel_report.py)
+  - 실행 메모: 운영 추천 floor를 상승장 `0.35`/하락장 `0.40`으로 명시하고, 후보 0건 시 `score top10`을 정식 추천 CSV로 저장하지 않도록 분리했다. 추천 CSV에는 `selection_mode`, `floor_used`, `safe_pool_count`, `score_rank`, `meta_score` provenance를 남긴다.
+  - 유지 가드: Gatekeeper, swing gap guard, market regime hard block, 예산/주문 safety는 완화하지 않았다. 스캐너는 `score`를 확률로 쓰지 않고 `hybrid_mean`을 `prob`로 적재한다.
+  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py`, `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_performance_tuning_report.py::test_swing_daily_summary_includes_market_regime_and_blockers src/tests/test_position_tag_normalization.py`, 임시 출력 경로 추천 재생성, 2026-05-08 pipeline raw/unique funnel 재집계로 확인했다.
+
+- [x] `[SwingModelTrainingSimulationReview0509] v2 학습모델 유지성 검토 및 스윙 일일 시뮬레이션 리포트 추가` (`Due: 2026-05-09`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: ScalpingLogic`)
+  - Source: [backtest_v2.py](/home/ubuntu/KORStockScan/src/model/backtest_v2.py), [swing_daily_simulation_report.py](/home/ubuntu/KORStockScan/src/engine/swing_daily_simulation_report.py), [run_swing_daily_simulation_report.sh](/home/ubuntu/KORStockScan/deploy/run_swing_daily_simulation_report.sh), [update_kospi.py](/home/ubuntu/KORStockScan/src/utils/update_kospi.py)
+  - 실행 메모: `backtest_v2`를 package/script 양쪽 실행에서 import 가능하게 정리하고, 추천 CSV의 실전 후보만 next-session open entry / TP·SL·TIME 기준으로 매일 시뮬레이션하는 JSON/Markdown 리포트를 추가했다. fallback/diagnostic 후보는 simulation book에서 제외한다.
+  - 판정 메모: 현재 코드 기준 재생성한 `data/backtest_trades_v2.csv`는 `2026-01-02~2026-03-16` 123건, win rate `47.15%`, 평균 net `+1.51%`, 누적 net `+185.32%`다. 다만 검증 구간이 3/16에서 끊겨 4~5월 활황 구간을 포함하지 않으므로, 현 모델은 후보 생성 canary로 유지하되 실전 확대 전 재학습/forward 검증 owner가 필요하다. 일일 리포트는 runtime 주문/threshold를 바꾸지 않는 `runtime_change=false` 산출물이다.
+  - 검증: 스윙 시뮬레이션 단위 테스트, `compileall`, 2026-05-08 추천/백테스트 재생성 및 리포트 생성으로 확인한다.
+
+- [x] `[SwingRuntimeDryRunSimulation0509] 스윙 추천 후 장중 매매로직 dry-run 시뮬레이션 보강` (`Due: 2026-05-09`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: ScalpingLogic`)
+  - Source: [swing_daily_simulation_report.py](/home/ubuntu/KORStockScan/src/engine/swing_daily_simulation_report.py), [test_swing_model_selection_funnel_repair.py](/home/ubuntu/KORStockScan/src/tests/test_swing_model_selection_funnel_repair.py)
+  - 실행 메모: 단순 next-open TP/SL 시뮬레이션을 `runtime_order_dry_run_daily_proxy`로 바꿔, 스윙 gap guard, bull regime block, runtime score proxy, 전략별 비중, `describe_buy_capacity` 수량 산출, 최유리지정가 `order_type_code=6`, 주문 미전송 `actual_order_submitted=false`, hard stop/target/trailing/time stop 청산 규칙을 리포트에 남기도록 했다.
+  - 유지 가드: 실제 브로커 주문은 전송하지 않는다. 과거 일봉만으로는 Gatekeeper AI/틱/호가/radar score를 완전 replay할 수 없으므로 `gatekeeper_mode=dry_run_assumed_pass`와 `entry_runtime_score_source=daily_proxy_from_hybrid_mean_score_rank` provenance를 명시한다.
+  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py`, `compileall`, `git diff --check`로 확인한다.
+
+- [x] `[SwingLiveOrderDryRunRuntime0511] 스윙 장중 live 로직 주문 미전송 관찰모드 구현` (`Due: 2026-05-11`, `Slot: PREOPEN`, `TimeWindow: 08:50~09:00`, `Track: ScalpingLogic`)
+  - Source: [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [swing_selection_funnel_report.py](/home/ubuntu/KORStockScan/src/engine/swing_selection_funnel_report.py), [test_swing_model_selection_funnel_repair.py](/home/ubuntu/KORStockScan/src/tests/test_swing_model_selection_funnel_repair.py)
+  - 실행 메모: 스윙 `WATCHING -> gatekeeper -> market regime -> budget -> latency/price guard -> order request` 로직은 그대로 실행하고, 브로커 `send_buy_order`/`send_smart_sell_order`/스윙 추가매수 전송만 `KORSTOCKSCAN_SWING_LIVE_ORDER_DRY_RUN_ENABLED` 기본 ON에서 차단한다. 런타임 상태는 in-memory `HOLDING/COMPLETED`로 진행해 매도 판단까지 관찰한다.
+  - 관찰 stage: `swing_sim_buy_order_assumed_filled`, `swing_sim_holding_started`, `swing_sim_order_bundle_assumed_filled`, `swing_sim_scale_in_order_assumed_filled`, `swing_sim_sell_order_assumed_filled`를 pipeline event로 남기고, 실제 제출 stage인 `order_bundle_submitted`/`sell_order_sent`와 분리한다.
+  - 유지 가드: gap guard, Gatekeeper, market regime hard block, 예수금/수량/latency/price/pause guard는 완화하지 않는다. 실제 주문 전송만 제외하며 이벤트에 `actual_order_submitted=false`, `simulation_owner=SwingLiveOrderDryRunSimulation0511`을 남긴다.
+  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py`, `compileall`, `git diff --check`로 확인한다.
+
+- [x] `[SwingLiveDryRunReportCron0511] 스윙 live 주문 dry-run 장후 보고서 자동 생성 cron 등록` (`Due: 2026-05-11`, `Slot: PREOPEN`, `TimeWindow: 08:50~09:00`, `Track: ScalpingLogic`)
+  - Source: [run_swing_live_dry_run_report.sh](/home/ubuntu/KORStockScan/deploy/run_swing_live_dry_run_report.sh), [install_swing_live_dry_run_cron.sh](/home/ubuntu/KORStockScan/deploy/install_swing_live_dry_run_cron.sh), [swing_selection_funnel_report.py](/home/ubuntu/KORStockScan/src/engine/swing_selection_funnel_report.py), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 실행 메모: 매 영업일 `15:45 KST`에 `SWING_LIVE_DRY_RUN_POSTCLOSE` cron이 `swing_selection_funnel_report`를 실행해 `data/report/swing_selection_funnel/swing_selection_funnel_YYYY-MM-DD.{json,md}`와 status JSON을 생성하도록 등록했다.
+  - 유지 가드: 자동 보고서는 report-only이며 runtime threshold, gatekeeper, gap guard, 주문 safety를 변경하지 않는다. 실제 주문 제출 stage와 simulation stage는 리포트에서 분리한다.
+  - 검증: `bash -n deploy/run_swing_live_dry_run_report.sh deploy/install_swing_live_dry_run_cron.sh`, wrapper smoke, crontab 등록, parser 검증으로 확인한다.
+
+- [x] `[SwingLifecycleSelfImprovementChain0511] 스윙 선정-진입-보유-추가매수-청산 자가개선 자동화체인 구현` (`Due: 2026-05-11`, `Slot: POSTCLOSE`, `TimeWindow: 15:45~16:10`, `Track: ScalpingLogic`)
+  - Source: [swing_lifecycle_audit.py](/home/ubuntu/KORStockScan/src/engine/swing_lifecycle_audit.py), [build_code_improvement_workorder.py](/home/ubuntu/KORStockScan/src/engine/build_code_improvement_workorder.py), [run_swing_live_dry_run_report.sh](/home/ubuntu/KORStockScan/deploy/run_swing_live_dry_run_report.sh), [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 실행 메모: 스윙 `selection -> db_load -> entry -> holding -> scale_in -> exit -> attribution` lifecycle audit, proposal-only swing threshold AI review, `swing_improvement_automation` order 생성을 추가했다. `build_code_improvement_workorder`는 scalping pattern lab order와 swing lifecycle order를 같은 Codex 작업지시서에 병합한다.
+  - 유지 가드: 스윙 gap/protection/market regime/예산/주문 safety는 완화하지 않는다. 생성 order는 `runtime_effect=false`이며 실제 live 변경은 사용자가 생성된 workorder를 Codex에 수동으로 넣어 별도 구현 요청할 때만 진행한다.
+  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py src/tests/test_build_code_improvement_workorder.py`, `bash -n deploy/run_swing_live_dry_run_report.sh deploy/run_threshold_cycle_postclose.sh`, parser 검증으로 확인한다.
+
 - [ ] `[ThresholdDailyEVReport0511] threshold-cycle 무인 반영 daily EV 성과 리포트 제출 확인` (`Due: 2026-05-11`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
   - Source: [README.md](/home/ubuntu/KORStockScan/data/threshold_cycle/README.md), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md), [threshold_cycle_ev_report.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_ev_report.py), [scalping_pattern_lab_automation.py](/home/ubuntu/KORStockScan/src/engine/scalping_pattern_lab_automation.py), [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py)
   - 판정 기준: `data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-11.{json,md}`가 생성되고, selected family/runtime_change, completed/open, win/loss, avg profit rate, realized PnL, submitted funnel, holding/exit latency, calibration decisions, pattern lab automation freshness/consensus/order 요약이 포함되어야 한다.

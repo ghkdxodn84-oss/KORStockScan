@@ -3,8 +3,12 @@ import pandas as pd
 import FinanceDataReader as fdr
 from sqlalchemy import text
 
-from common_v2 import engine, sql_code_tuple, normalize_codes
-from feature_engineering_v2 import calculate_all_features
+try:
+    from .common_v2 import engine, sql_code_tuple, normalize_codes
+    from .feature_engineering_v2 import calculate_all_features
+except ImportError:
+    from common_v2 import engine, sql_code_tuple, normalize_codes
+    from feature_engineering_v2 import calculate_all_features
 
 
 RAW_COLS = """

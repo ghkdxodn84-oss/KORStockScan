@@ -509,3 +509,36 @@ if __name__ == "__main__":
         subprocess.run([sys.executable, "src/model/recommend_daily_v2.py"], check=True)
     except subprocess.CalledProcessError as e:
         logger.error(f"❌ 추천 모델 실행 중 에러 발생: {e}")
+
+    # 4. 스윙 추천 시뮬레이션/선정 funnel 리포트 생성 (실패해도 데이터 갱신은 롤백하지 않음)
+    latest_report_date = datetime.now().strftime("%Y-%m-%d")
+    diagnostic_path = PROJECT_ROOT / "data" / "daily_recommendations_v2_diagnostics.json"
+    try:
+        if diagnostic_path.exists():
+            latest_report_date = str(json.loads(diagnostic_path.read_text(encoding="utf-8")).get("latest_date") or latest_report_date)
+    except Exception as e:
+        logger.warning(f"⚠️ 추천 진단 날짜 로드 실패, calendar date 사용: {e}")
+    logger.info("📈 스윙 일일 시뮬레이션 및 선정 funnel 리포트 생성 시작...")
+    try:
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "src.engine.swing_daily_simulation_report",
+                "--date",
+                latest_report_date,
+            ],
+            check=True,
+        )
+        subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "src.engine.swing_selection_funnel_report",
+                latest_report_date,
+            ],
+            check=True,
+        )
+        logger.info(f"✅ 스윙 일일 리포트 생성 완료: {latest_report_date}")
+    except subprocess.CalledProcessError as e:
+        logger.error(f"❌ 스윙 일일 리포트 생성 실패 (무시하고 진행): {e}")

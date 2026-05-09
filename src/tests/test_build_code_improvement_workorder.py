@@ -109,6 +109,7 @@ def test_build_code_improvement_workorder_classifies_and_renders(tmp_path, monke
     )
     (ev_dir / "threshold_cycle_ev_2026-05-08.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
@@ -146,6 +147,7 @@ def test_build_code_improvement_workorder_limits_selected_orders(tmp_path, monke
         encoding="utf-8",
     )
     monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", tmp_path / "report")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", tmp_path / "docs")
@@ -155,3 +157,81 @@ def test_build_code_improvement_workorder_limits_selected_orders(tmp_path, monke
     assert report["summary"]["source_order_count"] == 5
     assert report["summary"]["selected_order_count"] == 2
     assert report["deferred_or_rejected_count"] == 3
+
+
+def test_build_code_improvement_workorder_merges_swing_automation(tmp_path, monkeypatch):
+    scalping_dir = tmp_path / "scalping"
+    swing_dir = tmp_path / "swing"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    scalping_dir.mkdir()
+    swing_dir.mkdir()
+    (scalping_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-08",
+                "consensus_findings": [],
+                "solo_findings": [],
+                "auto_family_candidates": [],
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_scalping_instrumentation",
+                        "title": "scalping instrumentation",
+                        "target_subsystem": "runtime_instrumentation",
+                        "priority": 1,
+                        "runtime_effect": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (swing_dir / "swing_improvement_automation_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-08",
+                "ev_report_summary": {"threshold_ai_status": "parsed"},
+                "consensus_findings": [
+                    {
+                        "finding_id": "swing_gatekeeper_reject_threshold_review",
+                        "title": "swing gatekeeper reject threshold review",
+                        "confidence": "consensus",
+                        "route": "existing_family",
+                        "mapped_family": "swing_gatekeeper_accept_reject",
+                        "target_subsystem": "swing_entry",
+                    }
+                ],
+                "solo_findings": [],
+                "auto_family_candidates": [],
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_swing_gatekeeper_reject_threshold_review",
+                        "title": "swing gatekeeper reject threshold review",
+                        "lifecycle_stage": "entry",
+                        "target_subsystem": "swing_entry",
+                        "threshold_family": "swing_gatekeeper_accept_reject",
+                        "priority": 2,
+                        "runtime_effect": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", scalping_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", swing_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-08", max_orders=5)
+
+    decisions = {item["order_id"]: item["decision"] for item in report["orders"]}
+    assert report["summary"]["source_order_count"] == 2
+    assert report["summary"]["scalping_source_order_count"] == 1
+    assert report["summary"]["swing_source_order_count"] == 1
+    assert report["summary"]["swing_threshold_ai_status"] == "parsed"
+    assert decisions["order_swing_gatekeeper_reject_threshold_review"] == "attach_existing_family"
+    markdown = (doc_dir / "code_improvement_workorder_2026-05-08.md").read_text(encoding="utf-8")
+    assert "swing_improvement_automation" in markdown
+    assert "lifecycle_stage" in markdown

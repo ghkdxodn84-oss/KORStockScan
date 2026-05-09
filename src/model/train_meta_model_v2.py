@@ -1,24 +1,29 @@
 import joblib
-import numpy as np
 import pandas as pd
 from lightgbm import LGBMRanker, early_stopping, log_evaluation
 
-from common_v2 import (
-    META_START, META_END,
-    HYBRID_XGB_PATH, HYBRID_LGBM_PATH, BULL_XGB_PATH, BULL_LGBM_PATH,
-    META_MODEL_PATH, AI_PRED_PATH, META_FEATURES,
-    get_top_kospi_codes, split_by_unique_dates,
-    precision_at_k_by_day, build_meta_feature_frame,
-    score_artifact, select_daily_candidates,
-    PassThroughCalibrator  # 💡 여기 추가!
-)
-from dataset_builder_v2 import build_panel_dataset
-
-
-# Ranker의 Score는 0~1 사이 확률이 아닌 절대값 수치이므로 통과용 클래스 정의
-class PassThroughCalibrator:
-    def transform(self, x):
-        return np.asarray(x, dtype=float)
+try:
+    from .common_v2 import (
+        META_START, META_END,
+        HYBRID_XGB_PATH, HYBRID_LGBM_PATH, BULL_XGB_PATH, BULL_LGBM_PATH,
+        META_MODEL_PATH, AI_PRED_PATH, META_FEATURES,
+        get_top_kospi_codes, split_by_unique_dates,
+        precision_at_k_by_day, build_meta_feature_frame,
+        score_artifact, select_daily_candidates,
+        PassThroughCalibrator, load_model_artifact
+    )
+    from .dataset_builder_v2 import build_panel_dataset
+except ImportError:
+    from common_v2 import (
+        META_START, META_END,
+        HYBRID_XGB_PATH, HYBRID_LGBM_PATH, BULL_XGB_PATH, BULL_LGBM_PATH,
+        META_MODEL_PATH, AI_PRED_PATH, META_FEATURES,
+        get_top_kospi_codes, split_by_unique_dates,
+        precision_at_k_by_day, build_meta_feature_frame,
+        score_artifact, select_daily_candidates,
+        PassThroughCalibrator, load_model_artifact
+    )
+    from dataset_builder_v2 import build_panel_dataset
 
 
 def train_meta_model_v2():
@@ -45,10 +50,10 @@ def train_meta_model_v2():
     print(f"✅ 메타 패널 준비 완료: {len(panel)} rows")
 
     print("[2/5] Base model 로드 및 예측 피처 병합 중...")
-    hybrid_xgb = joblib.load(HYBRID_XGB_PATH)
-    hybrid_lgbm = joblib.load(HYBRID_LGBM_PATH)
-    bull_xgb = joblib.load(BULL_XGB_PATH)
-    bull_lgbm = joblib.load(BULL_LGBM_PATH)
+    hybrid_xgb = load_model_artifact(HYBRID_XGB_PATH)
+    hybrid_lgbm = load_model_artifact(HYBRID_LGBM_PATH)
+    bull_xgb = load_model_artifact(BULL_XGB_PATH)
+    bull_lgbm = load_model_artifact(BULL_LGBM_PATH)
 
     # atr_ratio를 함께 가져옵니다 (Risk-Adjusted Return 계산용)
     meta_df = panel[['date', 'code', 'name', 'bull_regime', 'idx_ret20', 'idx_atr_ratio',

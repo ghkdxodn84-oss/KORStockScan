@@ -14,6 +14,8 @@ AI_CORRECTION_PROVIDER="${THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER:-openai}"
 AI_CORRECTION_RESPONSE_JSON="${THRESHOLD_CYCLE_AI_CORRECTION_RESPONSE_JSON:-}"
 RUN_PATTERN_LABS="${THRESHOLD_CYCLE_RUN_PATTERN_LABS:-true}"
 PATTERN_LAB_START_DATE="${PATTERN_LAB_ANALYSIS_START_DATE:-2026-04-21}"
+RUN_SWING_LIFECYCLE_AUDIT="${THRESHOLD_CYCLE_RUN_SWING_LIFECYCLE_AUDIT:-true}"
+SWING_THRESHOLD_AI_REVIEW_PROVIDER="${SWING_THRESHOLD_AI_REVIEW_PROVIDER:-openai}"
 BUILD_CODE_IMPROVEMENT_WORKORDER="${THRESHOLD_CYCLE_BUILD_CODE_IMPROVEMENT_WORKORDER:-true}"
 CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS="${CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS:-12}"
 
@@ -84,6 +86,11 @@ fi
 PYTHONPATH=. "$VENV_PY" -m src.engine.daily_threshold_cycle_report \
   --calibration-run-phase postclose \
   "${report_args[@]}"
+if [ "$RUN_SWING_LIFECYCLE_AUDIT" = "true" ] || [ "$RUN_SWING_LIFECYCLE_AUDIT" = "1" ]; then
+  PYTHONPATH=. "$VENV_PY" -m src.engine.swing_lifecycle_audit \
+    --date "$TARGET_DATE" \
+    --ai-review-provider "$SWING_THRESHOLD_AI_REVIEW_PROVIDER"
+fi
 if [ "$RUN_PATTERN_LABS" = "true" ] || [ "$RUN_PATTERN_LABS" = "1" ]; then
   ANALYSIS_START_DATE="$PATTERN_LAB_START_DATE" ANALYSIS_END_DATE="$TARGET_DATE" \
     "$PROJECT_DIR/analysis/gemini_scalping_pattern_lab/run.sh"
@@ -97,4 +104,4 @@ if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMEN
     --max-orders "$CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS"
 fi
 PYTHONPATH=. "$VENV_PY" -m src.engine.threshold_cycle_ev_report --date "$TARGET_DATE"
-echo "[threshold-cycle] postclose report complete target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER pattern_labs=$RUN_PATTERN_LABS code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true"
+echo "[threshold-cycle] postclose report complete target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER pattern_labs=$RUN_PATTERN_LABS code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true"

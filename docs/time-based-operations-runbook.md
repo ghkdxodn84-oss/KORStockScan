@@ -32,7 +32,8 @@
 | `12:05` | cron | `deploy/run_threshold_cycle_calibration.sh` with `THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER=openai` | `data/report/threshold_cycle_calibration/threshold_cycle_calibration_YYYY-MM-DD_intraday.json`, `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_intraday.{json,md}`, `logs/threshold_cycle_calibration_intraday_cron.log` | `calibration_state`, `safety_revert_required`, `ai_status`, `guard_reject_reason` 확인 | 장중 calibration 결과를 당일 runtime에 적용 금지 |
 | `15:00` | cron | `deploy/run_preclose_sell_target_report.sh` | `data/report/preclose_sell_target/preclose_sell_target_YYYY-MM-DD.md`, `logs/preclose_sell_target_cron.log` | operator preclose review 산출 여부 확인 | tuning/calibration source로 사용 금지 |
 | `15:20~15:30` | runtime/cron | 오버나이트 flow, HOLD/EXIT sentinel final window | pipeline events, holding sentinel | `SELL_TODAY`, `HOLD_OVERNIGHT`, force-exit/safety 이벤트 확인 | flow `TRIM`을 부분청산 구현 없이 HOLD로 해석 금지 |
-| `16:10` | cron | `deploy/run_threshold_cycle_postclose.sh` with OpenAI correction | threshold partition, `threshold_cycle_YYYY-MM-DD.json`, `statistical_action_weight`, `holding_exit_decision_matrix`, `threshold_cycle_cumulative`, postclose AI review, pattern lab automation, code improvement workorder, daily EV report | `logs/threshold_cycle_postclose_cron.log`, `threshold_cycle_ev_YYYY-MM-DD.md`, `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md` 확인 | postclose 실패 시 다음 장전 auto apply 입력이 부정확하므로 먼저 재실행/복구 |
+| `15:45` | cron | `deploy/run_swing_live_dry_run_report.sh` | `data/report/swing_selection_funnel/swing_selection_funnel_YYYY-MM-DD.{json,md}`, `data/report/swing_lifecycle_audit/swing_lifecycle_audit_YYYY-MM-DD.{json,md}`, `data/report/swing_threshold_ai_review/swing_threshold_ai_review_YYYY-MM-DD.{json,md}`, `data/report/swing_improvement_automation/swing_improvement_automation_YYYY-MM-DD.{json,md}`, status JSON, `logs/swing_live_dry_run_cron.log` | `swing_sim_*` stage, `actual_order_submitted=false`, lifecycle axis coverage, swing threshold AI proposal-only status 확인 | 스윙 dry-run/lifecycle 리포트 결과로 당일 runtime guard 완화 금지 |
+| `16:10` | cron | `deploy/run_threshold_cycle_postclose.sh` with OpenAI correction | threshold partition, `threshold_cycle_YYYY-MM-DD.json`, `statistical_action_weight`, `holding_exit_decision_matrix`, `threshold_cycle_cumulative`, postclose AI review, swing lifecycle automation, pattern lab automation, code improvement workorder, daily EV report | `logs/threshold_cycle_postclose_cron.log`, `threshold_cycle_ev_YYYY-MM-DD.md`, `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md` 확인 | postclose 실패 시 다음 장전 auto apply 입력이 부정확하므로 먼저 재실행/복구 |
 | `18:00` | cron | `deploy/run_tuning_monitoring_postclose.sh` | Parquet/DuckDB refresh status, `data/report/tuning_monitoring/status/*` | `canonical_runner=THRESHOLD_CYCLE_POSTCLOSE`인지 확인 | pattern lab 중복 실행 금지 |
 | `21:00` | cron | `update_kospi.py` | `logs/update_kospi.log` | 데이터 업데이트 실패 여부 확인 | 매매 runtime과 무관한 데이터 갱신으로 취급 |
 | `22:30` | cron | `eod_analyzer.py` | `logs/eod_analyzer.log` | EOD 분석 실패 여부 확인 | threshold daily EV를 대체하지 않는다 |
@@ -83,8 +84,8 @@ ls -l data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_$(TZ=Asia/
 
 1. `threshold_cycle_postclose`가 완료됐는지 먼저 확인한다.
 2. 제출 기준은 `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.md`다.
-3. threshold 후보의 상세 원인은 `threshold_cycle_YYYY-MM-DD.json`, AI correction은 `threshold_cycle_ai_review_*_postclose.md`, lab order는 `scalping_pattern_lab_automation_YYYY-MM-DD.md`를 본다.
-4. 신규 code improvement order는 자동으로 작업지시서로 변환된다. 사용자는 `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md`를 Codex 세션에 넣고 구현을 요청한다.
+3. threshold 후보의 상세 원인은 `threshold_cycle_YYYY-MM-DD.json`, AI correction은 `threshold_cycle_ai_review_*_postclose.md`, lab order는 `scalping_pattern_lab_automation_YYYY-MM-DD.md`, 스윙 lifecycle order는 `swing_improvement_automation_YYYY-MM-DD.json`을 본다.
+4. 신규 code improvement order는 scalping/swing source를 병합해 자동으로 작업지시서로 변환된다. 사용자는 `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md`를 Codex 세션에 넣고 구현을 요청한다.
 5. 날짜별 checklist를 수정했다면 parser 검증 후 Project/Calendar 동기화 명령을 사용자에게 남긴다.
 6. OpenAI AI correction은 품질 우선 `gpt-5.5` 경로라 수 분 단위로 걸릴 수 있다. 2026-05-08 postclose 재측정 기준 `real 744.78s`가 소요됐고, `OPENAI_API_KEY_2`, `gpt-5.5`, `reasoning_effort=high`, `schema_name=threshold_ai_correction_v1`, `ai_status=parsed`로 완료됐다. cron timeout은 이보다 짧게 잡지 않는다.
 
@@ -93,6 +94,8 @@ ls -l data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_$(TZ=Asia/
 ```bash
 tail -n 120 logs/threshold_cycle_postclose_cron.log
 ls -l data/report/threshold_cycle_ev/threshold_cycle_ev_$(TZ=Asia/Seoul date +%F).md
+ls -l data/report/swing_lifecycle_audit/swing_lifecycle_audit_$(TZ=Asia/Seoul date +%F).md
+ls -l data/report/swing_improvement_automation/swing_improvement_automation_$(TZ=Asia/Seoul date +%F).json
 ls -l data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_$(TZ=Asia/Seoul date +%F).md
 ls -l docs/code-improvement-workorders/code_improvement_workorder_$(TZ=Asia/Seoul date +%F).md
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500
@@ -108,6 +111,9 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print
 
 - `data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_YYYY-MM-DD.json`
 - `data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_YYYY-MM-DD.md`
+- `data/report/swing_lifecycle_audit/swing_lifecycle_audit_YYYY-MM-DD.md`
+- `data/report/swing_threshold_ai_review/swing_threshold_ai_review_YYYY-MM-DD.md`
+- `data/report/swing_improvement_automation/swing_improvement_automation_YYYY-MM-DD.json`
 - `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.md`
 - `data/report/code_improvement_workorder/code_improvement_workorder_YYYY-MM-DD.json`
 - `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md`
@@ -118,6 +124,8 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print
 | --- | --- | --- |
 | `order_id` | 구현 작업 식별자 | checklist/commit/test 이름에 그대로 보존 |
 | `target_subsystem` | 영향 영역 | entry, holding_exit, runtime_instrumentation, report 등으로 owner 분리 |
+| `lifecycle_stage` | 스윙/스캘핑 생명주기 단계 | selection, db_load, entry, holding, scale_in, exit, ai_contract 등으로 구분 |
+| `threshold_family` | 연결 threshold family | existing family 입력 보강인지 new family 설계인지 판정 |
 | `intent` | 개선 목적 | EV 개선, 계측 보강, family 설계 중 무엇인지 분류 |
 | `evidence` | Gemini/Claude/EV 근거 | 단일 lab 단독 근거면 priority를 낮추고 runtime 후보 금지 |
 | `expected_ev_effect` | 기대 효과 | daily EV의 어떤 metric으로 확인할지 연결 |

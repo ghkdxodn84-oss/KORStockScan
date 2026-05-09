@@ -204,6 +204,73 @@ def _safe_int(value, default=0):
         return default
 
 
+def _is_swing_strategy(strategy: str | None) -> bool:
+    return str(strategy or "").strip().upper() in {"KOSPI_ML", "KOSDAQ_ML", "MAIN"}
+
+
+def _is_swing_live_order_dry_run(strategy: str | None) -> bool:
+    return _is_swing_strategy(strategy) and _rule_bool("SWING_LIVE_ORDER_DRY_RUN_ENABLED", True)
+
+
+def _swing_live_order_dry_run_owner() -> str:
+    return str(_rule("SWING_LIVE_ORDER_DRY_RUN_OWNER", "SwingLiveOrderDryRunSimulation0511") or "")
+
+
+def _is_swing_simulated_position(stock: dict | None, strategy: str | None = None) -> bool:
+    if not isinstance(stock, dict):
+        return False
+    resolved_strategy = strategy or stock.get("strategy")
+    return _is_swing_strategy(resolved_strategy) and bool(stock.get("swing_live_order_dry_run"))
+
+
+def _simulated_order_no(prefix: str, code: str) -> str:
+    return f"{prefix}-{code}-{int(time.time() * 1000)}-{uuid4().hex[:6]}"
+
+
+def _mark_swing_simulated_holding(stock, code, curr_price, requested_qty, entry_mode, entry_orders):
+    now_ts = time.time()
+    _mutate_stock_state(
+        stock,
+        set_fields={
+            "status": "HOLDING",
+            "entry_mode": entry_mode,
+            "order_time": now_ts,
+            "order_price": curr_price,
+            "requested_buy_qty": requested_qty,
+            "entry_requested_qty": requested_qty,
+            "entry_filled_qty": requested_qty,
+            "entry_fill_amount": int(curr_price * requested_qty),
+            "buy_price": curr_price,
+            "buy_qty": requested_qty,
+            "buy_time": now_ts,
+            "holding_started_at": now_ts,
+            "swing_live_order_dry_run": True,
+            "simulation_owner": _swing_live_order_dry_run_owner(),
+            "actual_order_submitted": False,
+            "simulated_entry_orders": entry_orders,
+        },
+        pop_fields=[
+            "pending_buy_msg",
+            "pending_entry_orders",
+            "odno",
+            "pending_add_order",
+        ],
+    )
+    _log_entry_pipeline(
+        stock,
+        code,
+        "swing_sim_holding_started",
+        strategy=stock.get("strategy"),
+        entry_mode=entry_mode,
+        requested_qty=requested_qty,
+        assumed_fill_price=curr_price,
+        legs=len(entry_orders or []),
+        simulation_owner=_swing_live_order_dry_run_owner(),
+        actual_order_submitted=False,
+        runtime_effect="in_memory_holding_only",
+    )
+
+
 def _coerce_optional_timestamp(value):
     """런타임/DB 경계 시각값을 epoch 초로 보수 변환한다.
 
@@ -1644,7 +1711,8 @@ def _apply_wait6579_probe_canary(
     safe_price = max(1, int(curr_price or 0))
     safe_budget = max(0, int(max_budget_krw or 0))
     safe_min_qty = max(1, int(min_qty or 1))
-    safe_max_qty = max(safe_min_qty, int(max_qty or safe_min_qty))
+    configured_max_qty = int(max_qty or 0)
+    safe_max_qty = configured_max_qty if configured_max_qty > 0 else 0
 
     updated_orders: list[dict] = []
     original_total = 0
@@ -1662,10 +1730,13 @@ def _apply_wait6579_probe_canary(
             updated_orders.append(item)
             continue
 
-        budget_qty_cap = (safe_budget // price) if safe_budget > 0 else safe_max_qty
+        budget_qty_cap = (safe_budget // price) if safe_budget > 0 else qty
         if budget_qty_cap <= 0:
             budget_qty_cap = safe_min_qty
-        scaled_qty = min(qty, safe_max_qty, budget_qty_cap)
+        qty_caps = [qty, budget_qty_cap]
+        if safe_max_qty > 0:
+            qty_caps.append(safe_max_qty)
+        scaled_qty = min(qty_caps)
         scaled_qty = max(1, scaled_qty)
         if scaled_qty != qty:
             applied = True
@@ -4995,7 +5066,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     if strategy == 'SCALPING' and wait6579_cap_enabled and bool(stock.get('wait6579_probe_canary_armed')):
         probe_max_budget = int(_rule("AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 50_000) or 50_000)
         probe_min_qty = int(_rule("AI_WAIT6579_PROBE_CANARY_MIN_QTY", 1) or 1)
-        probe_max_qty = int(_rule("AI_WAIT6579_PROBE_CANARY_MAX_QTY", 1) or 1)
+        probe_max_qty = int(_rule("AI_WAIT6579_PROBE_CANARY_MAX_QTY", 0) or 0)
         adjusted_orders, original_qty, scaled_qty, applied = _apply_wait6579_probe_canary(
             planned_orders, curr_price=curr_price, max_budget_krw=probe_max_budget,
             min_qty=probe_min_qty, max_qty=probe_max_qty,
@@ -5124,6 +5195,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     )
 
     successful_orders = []
+    swing_order_dry_run = _is_swing_live_order_dry_run(strategy)
     for planned_order in planned_orders:
         request = _resolve_live_entry_order_request(
             strategy=strategy, entry_mode=entry_mode, planned_order=planned_order,
@@ -5162,6 +5234,36 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             **submit_revalidation_fields,
             **price_snapshot,
         )
+        if swing_order_dry_run:
+            ord_no = _simulated_order_no("SIMBUY", code)
+            successful_orders.append({
+                'tag': request['tag'], 'qty': qty, 'price': price, 'ord_no': ord_no, 'tif': request['tif'],
+                'order_type': request['order_type_code'], 'status': 'FILLED_SIM', 'filled_qty': qty,
+                'sent_at': now_ts, 'filled_at': now_ts, 'simulated_order': True,
+                'entry_order_lifecycle': submit_revalidation_fields.get('entry_order_lifecycle', 'standard'),
+                'entry_passive_probe_applied': bool(submit_revalidation_fields.get('entry_passive_probe_applied')),
+                'best_bid_at_submit': price_snapshot.get('best_bid_at_submit'),
+                'best_ask_at_submit': price_snapshot.get('best_ask_at_submit'),
+                'price_below_bid_bps': price_snapshot.get('price_below_bid_bps'),
+                'price_decision_context_age_ms': submit_revalidation_fields.get('price_decision_context_age_ms'),
+                'quote_age_at_submit_ms': submit_revalidation_fields.get('quote_age_at_submit_ms'),
+            })
+            log_info(
+                f"[SWING_LIVE_ORDER_DRY_RUN] {stock.get('name')}({code}) "
+                f"buy skipped tag={request['tag']} qty={qty} price={price} type={request['order_type_code']} "
+                f"sim_ord_no={ord_no}"
+            )
+            _log_entry_pipeline(
+                stock, code, "swing_sim_buy_order_assumed_filled",
+                tag=request['tag'], ord_no=ord_no, qty=qty, price=price,
+                order_type=request['order_type_code'], tif=request['tif'],
+                simulation_owner=_swing_live_order_dry_run_owner(),
+                actual_order_submitted=False,
+                would_submit_stage="order_leg_sent",
+                **submit_revalidation_fields,
+                **price_snapshot,
+            )
+            continue
         res = kiwoom_orders.send_buy_order(
             code, qty, price, request['order_type_code'], token=KIWOOM_TOKEN,
             order_type_desc="매수" if strategy == 'SCALPING' else "최유리지정가", tif=request['tif'],
@@ -5202,6 +5304,40 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         log_info(f"❌ [{stock['name']}] 매수 주문 전송 실패 (성공 주문 없음)")
         clear_signal_reference(stock)
         _log_entry_pipeline(stock, code, "order_bundle_failed")
+        return False
+
+    if swing_order_dry_run:
+        _mark_swing_simulated_holding(
+            stock=stock,
+            code=code,
+            curr_price=curr_price,
+            requested_qty=requested_qty,
+            entry_mode=entry_mode,
+            entry_orders=successful_orders,
+        )
+        bundle_primary_price = successful_orders[0].get('price', latency_gate.get('order_price', 0))
+        bundle_price_snapshot = _build_entry_price_snapshot_fields(
+            latency_gate, request_price=bundle_primary_price, curr_price=curr_price,
+            best_bid=best_bid_at_submit, best_ask=best_ask_at_submit,
+        )
+        _log_entry_pipeline(
+            stock, code, "swing_sim_order_bundle_assumed_filled", entry_mode=entry_mode,
+            requested_qty=requested_qty, legs=len(successful_orders),
+            wait6579_probe_canary_applied=wait6579_probe_applied,
+            entry_price_guard=latency_gate.get('entry_price_guard'),
+            entry_price_defensive_ticks=int(latency_gate.get('entry_price_defensive_ticks', 0) or 0),
+            normal_defensive_order_price=int(latency_gate.get('normal_defensive_order_price', 0) or 0),
+            latency_guarded_order_price=int(latency_gate.get('latency_guarded_order_price', 0) or 0),
+            counterfactual_order_price_1tick=int(latency_gate.get('counterfactual_order_price_1tick', 0) or 0),
+            order_price=int(latency_gate.get('order_price', 0) or 0),
+            simulation_owner=_swing_live_order_dry_run_owner(),
+            actual_order_submitted=False,
+            would_submit_stage="order_bundle_submitted",
+            runtime_effect="in_memory_holding_only",
+            **submit_revalidation_fields,
+            **bundle_price_snapshot,
+        )
+        clear_signal_reference(stock)
         return False
 
     _mutate_stock_state(stock, set_fields={'entry_mode': entry_mode})
@@ -7606,8 +7742,58 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     "(다중 매매건 합산 수량일 수 있음)"
                 )
 
-        if not admin_id:
+        if not admin_id and not _is_swing_simulated_position(stock, strategy):
             log_error(f"🚨 [매도실패] {stock['name']}: 관리자 ID가 없습니다.")
+            return
+
+        if _is_swing_simulated_position(stock, strategy) and _is_swing_live_order_dry_run(strategy):
+            if buy_qty <= 0:
+                buy_qty = mem_buy_qty
+            if buy_qty <= 0:
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "swing_sim_sell_blocked_zero_qty",
+                    sell_reason_type=sell_reason_type,
+                    exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
+                    profit_rate=f"{profit_rate:+.2f}",
+                    simulation_owner=_swing_live_order_dry_run_owner(),
+                    actual_order_submitted=False,
+                )
+                return
+
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "status": "COMPLETED",
+                    "sell_price": curr_p,
+                    "sell_qty": buy_qty,
+                    "sell_time": now_ts,
+                    "simulated_sell_order": True,
+                    "actual_order_submitted": False,
+                },
+            )
+            with ENTRY_LOCK:
+                HIGHEST_PRICES.pop(code, None)
+            log_info(
+                f"[SWING_LIVE_ORDER_DRY_RUN] {stock.get('name')}({code}) "
+                f"sell skipped qty={buy_qty} assumed_price={curr_p} reason={sell_reason_type}"
+            )
+            _log_holding_pipeline(
+                stock,
+                code,
+                "swing_sim_sell_order_assumed_filled",
+                sell_reason_type=sell_reason_type,
+                exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
+                exit_decision_source=stock.get("last_exit_decision_source") or "MANUAL",
+                qty=buy_qty,
+                assumed_fill_price=curr_p,
+                profit_rate=f"{profit_rate:+.2f}",
+                simulation_owner=_swing_live_order_dry_run_owner(),
+                actual_order_submitted=False,
+                would_submit_stage="sell_order_sent",
+                runtime_effect="in_memory_completed_only",
+            )
             return
 
         if buy_qty <= 0:
@@ -8316,7 +8502,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
     - 성공 시 HOLDING 유지 + pending add 메타 저장
     - 실패 시 pending 메타 저장하지 않음
     """
-    if not admin_id:
+    if not admin_id and not _is_swing_simulated_position(stock, stock.get("strategy")):
         log_error(f"⚠️ [추가매수보류] {stock.get('name')}: 관리자 ID가 없습니다.")
         log_info(f"[ADD_BLOCKED] {stock.get('name')}({code}) reason=no_admin")
         return None
@@ -8456,6 +8642,65 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             f"state={get_pause_state_label()}"
         )
         return None
+
+    if _is_swing_simulated_position(stock, strategy) and _is_swing_live_order_dry_run(strategy):
+        ord_no = _simulated_order_no("SIMADD", code)
+        now_ts = time.time()
+        prev_qty = _safe_int(stock.get("buy_qty"), 0)
+        prev_price = _safe_int(stock.get("buy_price"), curr_price)
+        assumed_price = curr_price if final_price <= 0 else final_price
+        new_qty = prev_qty + qty
+        new_avg_price = (
+            int(round(((prev_price * prev_qty) + (assumed_price * qty)) / new_qty))
+            if new_qty > 0
+            else assumed_price
+        )
+        _mutate_stock_state(
+            stock,
+            set_fields={
+                "buy_qty": new_qty,
+                "buy_price": new_avg_price,
+                "add_order_time": now_ts,
+                "last_simulated_add_type": add_type,
+                "last_simulated_add_qty": qty,
+                "last_simulated_add_price": assumed_price,
+                "last_simulated_add_ord_no": ord_no,
+                "actual_order_submitted": False,
+            },
+        )
+        log_info(
+            f"[SWING_LIVE_ORDER_DRY_RUN] {stock.get('name')}({code}) "
+            f"add buy skipped type={add_type} qty={qty} assumed_price={assumed_price} sim_ord_no={ord_no}"
+        )
+        _log_holding_pipeline(
+            stock,
+            code,
+            "swing_sim_scale_in_order_assumed_filled",
+            add_type=add_type,
+            qty=qty,
+            ord_no=ord_no,
+            assumed_fill_price=assumed_price,
+            prev_buy_qty=prev_qty,
+            new_buy_qty=new_qty,
+            prev_buy_price=prev_price,
+            new_buy_price=new_avg_price,
+            order_type=order_type_code,
+            would_submit_stage="add_order_sent",
+            simulation_owner=_swing_live_order_dry_run_owner(),
+            actual_order_submitted=False,
+            template_qty=template_qty,
+            would_qty=would_qty,
+            effective_qty=effective_qty,
+            cap_qty=cap_qty,
+            floor_applied=floor_applied,
+            qty_reason=qty_reason,
+        )
+        return {
+            "return_code": "0",
+            "ord_no": ord_no,
+            "simulated_order": True,
+            "actual_order_submitted": False,
+        }
 
     res = kiwoom_orders.send_buy_order(
         code,

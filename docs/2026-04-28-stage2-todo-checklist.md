@@ -434,7 +434,7 @@
     - `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/sniper_entry_latency.py src/engine/sniper_execution_receipts.py src/trading/entry/entry_orchestrator.py src/trading/entry/entry_policy.py`
 
 - [x] `[FallbackSplit0428] 감리/보고 반영` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 17:40~18:00`, `Track: Plan`)
-  - Source: [audit-reports/2026-04-27-entry-latency-single-axis-tuning-audit.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-27-entry-latency-single-axis-tuning-audit.md), [personal-decision-flow-notes.md](/home/ubuntu/KORStockScan/docs/personal-decision-flow-notes.md)
+  - Source: [audit-reports/2026-04-27-entry-latency-single-axis-tuning-audit.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-27-entry-latency-single-axis-tuning-audit.md), [personal-decision-flow-notes.md](/home/ubuntu/KORStockScan/docs/personal/personal-decision-flow-notes.md)
   - 판정 기준: `왜 제거되는지`, `무엇이 historical-only로 남는지`, `다음 관측포인트는 무엇인지`를 checklist와 audit 기준으로 고정한다.
   - why: 개인문서 단독 근거 사용 금지 원칙 때문에 최종 근거는 checklist/audit에 남아야 한다.
 

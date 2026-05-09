@@ -1,21 +1,112 @@
-import joblib
+import json
 import pandas as pd
-import numpy as np
+from datetime import datetime
 
-# --- Pickle 로드 에러 방지용 더미 클래스 ---
-class PassThroughCalibrator:
-    def transform(self, x):
-        return np.asarray(x, dtype=float)
-# ----------------------------------------
+try:
+    from .common_v2 import (
+        HYBRID_XGB_PATH, HYBRID_LGBM_PATH, BULL_XGB_PATH, BULL_LGBM_PATH,
+        META_MODEL_PATH, RECO_PATH, RECO_DIAGNOSTIC_PATH, RECO_DIAGNOSTIC_JSON_PATH,
+        META_FEATURES, SWING_SELECTION_OWNER, SWING_FLOOR_BULL, SWING_FLOOR_BEAR,
+        SWING_FALLBACK_FLOOR_BULL,
+        get_top_kospi_codes, get_latest_quote_date,
+        build_meta_feature_frame, score_artifact,
+        select_daily_candidates, daily_selection_stats, load_model_artifact
+    )
+    from .dataset_builder_v2 import build_panel_dataset
+except ImportError:
+    from common_v2 import (
+        HYBRID_XGB_PATH, HYBRID_LGBM_PATH, BULL_XGB_PATH, BULL_LGBM_PATH,
+        META_MODEL_PATH, RECO_PATH, RECO_DIAGNOSTIC_PATH, RECO_DIAGNOSTIC_JSON_PATH,
+        META_FEATURES, SWING_SELECTION_OWNER, SWING_FLOOR_BULL, SWING_FLOOR_BEAR,
+        SWING_FALLBACK_FLOOR_BULL,
+        get_top_kospi_codes, get_latest_quote_date,
+        build_meta_feature_frame, score_artifact,
+        select_daily_candidates, daily_selection_stats, load_model_artifact
+    )
+    from dataset_builder_v2 import build_panel_dataset
 
-from common_v2 import (
-    HYBRID_XGB_PATH, HYBRID_LGBM_PATH, BULL_XGB_PATH, BULL_LGBM_PATH,
-    META_MODEL_PATH, RECO_PATH, META_FEATURES,
-    get_top_kospi_codes, get_latest_quote_date,
-    build_meta_feature_frame, score_artifact, apply_calibrator,
-    select_daily_candidates
-)
-from dataset_builder_v2 import build_panel_dataset
+
+def _attach_recommendation_provenance(score_df, stats_df):
+    out = score_df.copy()
+    out['meta_score'] = out['score']
+    out['score_rank'] = (
+        out.groupby('date')['meta_score']
+        .rank(method='first', ascending=False)
+        .astype(int)
+    )
+
+    if not stats_df.empty:
+        merge_cols = ['date', 'floor_used', 'safe_pool_count', 'candidate_count']
+        out = out.merge(stats_df[merge_cols], on='date', how='left')
+    else:
+        out['floor_used'] = 0.0
+        out['safe_pool_count'] = 0
+        out['candidate_count'] = len(out)
+
+    out['selection_owner'] = SWING_SELECTION_OWNER
+    out['generated_at'] = datetime.now().isoformat(timespec='seconds')
+    return out
+
+
+def _save_recommendation_outputs(score_df, picks, stats_df, latest_date):
+    score_df = _attach_recommendation_provenance(score_df, stats_df)
+    selected_keys = set()
+    if not picks.empty:
+        selected_keys = set(zip(picks['date'], picks['code']))
+
+    diagnostic = score_df.copy()
+    diagnostic['selection_mode'] = diagnostic.apply(
+        lambda row: 'SELECTED' if (row['date'], row['code']) in selected_keys else 'DIAGNOSTIC_ONLY',
+        axis=1,
+    )
+
+    if picks.empty:
+        diagnostic = diagnostic.sort_values('meta_score', ascending=False).head(10).copy()
+        diagnostic['selection_mode'] = 'FALLBACK_DIAGNOSTIC'
+        empty_reco = score_df.iloc[0:0].copy()
+        empty_reco['selection_mode'] = pd.Series(dtype='object')
+        empty_reco.to_csv(RECO_PATH, index=False, encoding='utf-8-sig')
+        selection_mode = 'EMPTY'
+    else:
+        pick_df = score_df[
+            score_df.apply(lambda row: (row['date'], row['code']) in selected_keys, axis=1)
+        ].copy()
+        pick_df['selection_mode'] = 'SELECTED'
+        pick_df = pick_df.sort_values('meta_score', ascending=False).reset_index(drop=True)
+        pick_df.to_csv(RECO_PATH, index=False, encoding='utf-8-sig')
+        selection_mode = 'SELECTED'
+
+    diagnostic = diagnostic.sort_values(['date', 'meta_score'], ascending=[True, False]).reset_index(drop=True)
+    diagnostic.to_csv(RECO_DIAGNOSTIC_PATH, index=False, encoding='utf-8-sig')
+
+    latest_stats = {}
+    if not stats_df.empty:
+        latest_stats = stats_df.iloc[-1].to_dict()
+    summary = {
+        'owner': SWING_SELECTION_OWNER,
+        'generated_at': datetime.now().isoformat(timespec='seconds'),
+        'latest_date': str(pd.to_datetime(latest_date).date()),
+        'selection_mode': selection_mode,
+        'recommendation_path': RECO_PATH,
+        'diagnostic_path': RECO_DIAGNOSTIC_PATH,
+        'fallback_written_to_recommendations': False,
+        'selected_count': int(len(picks)),
+        'diagnostic_count': int(len(diagnostic)),
+        'floor_bull': SWING_FLOOR_BULL,
+        'floor_bear': SWING_FLOOR_BEAR,
+        'fallback_floor_bull': SWING_FALLBACK_FLOOR_BULL,
+        'latest_stats': latest_stats,
+        'score_distribution': {
+            'hybrid_mean_max': float(score_df['hybrid_mean'].max()) if not score_df.empty else 0.0,
+            'hybrid_mean_p95': float(score_df['hybrid_mean'].quantile(0.95)) if not score_df.empty else 0.0,
+            'meta_score_max': float(score_df['meta_score'].max()) if not score_df.empty else 0.0,
+            'meta_score_p95': float(score_df['meta_score'].quantile(0.95)) if not score_df.empty else 0.0,
+        },
+    }
+    with open(RECO_DIAGNOSTIC_JSON_PATH, 'w', encoding='utf-8') as f:
+        json.dump(summary, f, ensure_ascii=False, indent=2, default=str)
+
+    return summary
 
 
 def recommend_daily_v2():
@@ -36,13 +127,13 @@ def recommend_daily_v2():
         return
 
     print("[2/4] 모델 로드 및 base score 생성 중...")
-    hybrid_xgb = joblib.load(HYBRID_XGB_PATH)
-    hybrid_lgbm = joblib.load(HYBRID_LGBM_PATH)
-    bull_xgb = joblib.load(BULL_XGB_PATH)
-    bull_lgbm = joblib.load(BULL_LGBM_PATH)
-    meta_artifact = joblib.load(META_MODEL_PATH)
+    hybrid_xgb = load_model_artifact(HYBRID_XGB_PATH)
+    hybrid_lgbm = load_model_artifact(HYBRID_LGBM_PATH)
+    bull_xgb = load_model_artifact(BULL_XGB_PATH)
+    bull_lgbm = load_model_artifact(BULL_LGBM_PATH)
+    meta_artifact = load_model_artifact(META_MODEL_PATH)
 
-    score_df = latest_rows[['date', 'code', 'name', 'bull_regime', 'idx_ret20', 'idx_atr_ratio']].copy()
+    score_df = latest_rows[['date', 'code', 'name', 'close', 'bull_regime', 'idx_ret20', 'idx_atr_ratio']].copy()
     score_df['hx'] = score_artifact(hybrid_xgb, latest_rows)
     score_df['hl'] = score_artifact(hybrid_lgbm, latest_rows)
     score_df['bx'] = score_artifact(bull_xgb, latest_rows)
@@ -60,22 +151,31 @@ def recommend_daily_v2():
     picks = select_daily_candidates(
         score_df, 
         score_col='score', 
-        prob_col='hybrid_mean'
+        prob_col='hybrid_mean',
+        floor_bull=SWING_FLOOR_BULL,
+        floor_bear=SWING_FLOOR_BEAR,
+        fallback_floor=SWING_FALLBACK_FLOOR_BULL,
     )
+    stats_df = daily_selection_stats(
+        score_df,
+        prob_col='hybrid_mean',
+        floor_bull=SWING_FLOOR_BULL,
+        floor_bear=SWING_FLOOR_BEAR,
+        fallback_floor=SWING_FALLBACK_FLOOR_BULL,
+    )
+    summary = _save_recommendation_outputs(score_df, picks, stats_df, latest_date)
 
     if picks.empty:
         print("⚠️ 오늘 추천 종목이 없습니다 (안전망 통과 종목 0건).")
-        # 안전망 상관없이 단순 랭킹 상위 10개만이라도 백업 저장
-        score_df.sort_values('score', ascending=False).head(10).to_csv(RECO_PATH, index=False, encoding='utf-8-sig')
-        print(f"대신 단순 상위 스코어 10개 임시 저장: {RECO_PATH}")
+        print(f"진단용 fallback만 저장: {RECO_DIAGNOSTIC_PATH}")
+        print(f"정식 추천 CSV는 빈 상태로 저장: {RECO_PATH}")
         return
 
     picks = picks.sort_values('score', ascending=False).reset_index(drop=True)
-    picks.to_csv(RECO_PATH, index=False, encoding='utf-8-sig')
 
     print("[4/4] 오늘의 추천 종목")
     print(picks[['date', 'code', 'name', 'score', 'hx', 'hl', 'bx', 'bl', 'bull_regime']].to_string(index=False))
-    print(f"\n✅ 저장 완료: {RECO_PATH}")
+    print(f"\n✅ 저장 완료: {RECO_PATH} (selected={summary['selected_count']}, floor={summary['latest_stats'].get('floor_used')})")
 
 
 if __name__ == "__main__":

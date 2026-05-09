@@ -1,4 +1,5 @@
 import os
+import sys
 import warnings
 import joblib
 import numpy as np
@@ -31,6 +32,13 @@ META_MODEL_PATH = os.path.join(DATA_DIR, 'stacking_meta_v2.pkl')
 
 AI_PRED_PATH = os.path.join(DATA_DIR, 'ai_predictions_v2.csv')
 RECO_PATH = os.path.join(DATA_DIR, 'daily_recommendations_v2.csv')
+RECO_DIAGNOSTIC_PATH = os.path.join(DATA_DIR, 'daily_recommendations_v2_diagnostics.csv')
+RECO_DIAGNOSTIC_JSON_PATH = os.path.join(DATA_DIR, 'daily_recommendations_v2_diagnostics.json')
+
+SWING_SELECTION_OWNER = 'SwingModelSelectionFunnelRepair'
+SWING_FLOOR_BULL = 0.35
+SWING_FLOOR_BEAR = 0.40
+SWING_FALLBACK_FLOOR_BULL = 0.35
 
 # ==========================================
 # 학습 기간 설정
@@ -81,6 +89,18 @@ class PassThroughCalibrator:
     """LGBMRanker 등 확률 캘리브레이션이 필요 없는 모델을 위한 패스스루 클래스"""
     def transform(self, x):
         return np.asarray(x, dtype=float)
+
+
+def ensure_pickle_compat():
+    """Load legacy artifacts that pickled PassThroughCalibrator from __main__."""
+    main_mod = sys.modules.get('__main__')
+    if main_mod is not None and not hasattr(main_mod, 'PassThroughCalibrator'):
+        setattr(main_mod, 'PassThroughCalibrator', PassThroughCalibrator)
+
+
+def load_model_artifact(path):
+    ensure_pickle_compat()
+    return joblib.load(path)
 
 def fit_calibrator(raw_prob, y_true):
     raw_prob = np.asarray(raw_prob, dtype=float)
@@ -303,3 +323,53 @@ def select_daily_candidates(
 
     result = pd.concat(picks, axis=0).reset_index(drop=True)
     return result
+
+
+def daily_selection_stats(
+    scored_df,
+    *,
+    prob_col='hybrid_mean',
+    date_col='date',
+    floor_bull=SWING_FLOOR_BULL,
+    floor_bear=SWING_FLOOR_BEAR,
+    fallback_floor=SWING_FALLBACK_FLOOR_BULL,
+):
+    """Return per-date floor/provenance stats used by the live recommendation job."""
+    if scored_df.empty:
+        return pd.DataFrame(
+            columns=[
+                date_col, 'bull_regime', 'floor_used', 'primary_floor',
+                'fallback_floor', 'safe_pool_count', 'candidate_count',
+                'selection_mode',
+            ]
+        )
+
+    rows = []
+    for dt, g in scored_df.groupby(date_col):
+        bull = int(g['bull_regime'].iloc[0]) if 'bull_regime' in g.columns else 0
+        primary_floor = floor_bull if bull == 1 else floor_bear
+        floor_used = primary_floor
+
+        if prob_col in g.columns:
+            safe_pool_count = int((g[prob_col] >= primary_floor).sum())
+        else:
+            safe_pool_count = int(len(g))
+
+        if safe_pool_count == 0 and bull == 1 and prob_col in g.columns:
+            fallback_count = int((g[prob_col] >= fallback_floor).sum())
+            if fallback_count > 0:
+                safe_pool_count = fallback_count
+                floor_used = fallback_floor
+
+        rows.append({
+            date_col: dt,
+            'bull_regime': bull,
+            'floor_used': float(floor_used),
+            'primary_floor': float(primary_floor),
+            'fallback_floor': float(fallback_floor),
+            'safe_pool_count': safe_pool_count,
+            'candidate_count': int(len(g)),
+            'selection_mode': 'SELECTED' if safe_pool_count > 0 else 'EMPTY',
+        })
+
+    return pd.DataFrame(rows)

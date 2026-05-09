@@ -25,8 +25,8 @@ GITHUB_GRAPHQL_URL = "https://api.github.com/graphql"
 
 DOC_PLAN = Path("docs/plan-korStockScanPerformanceOptimization.prompt.md")
 DOC_CHECKLIST = Path("docs/2026-04-13-stage2-todo-checklist.md")
-DOC_SCALPING = Path("docs/2026-04-10-scalping-ai-coding-instructions.md")
-DOC_PROMPT = Path("docs/2026-04-11-scalping-ai-prompt-coding-instructions.md")
+DOC_SCALPING = Path("docs/reference/2026-04-10-scalping-ai-coding-instructions.md")
+DOC_PROMPT = Path("docs/reference/2026-04-11-scalping-ai-prompt-coding-instructions.md")
 
 
 @dataclass(frozen=True)

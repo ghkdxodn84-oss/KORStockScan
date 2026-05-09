@@ -56,6 +56,55 @@ import src.notify.telegram_manager as telegram_manager
 
 warnings.filterwarnings('ignore')
 
+
+def _safe_float(value, default=0.0):
+    try:
+        if pd.isna(value):
+            return default
+        return float(value)
+    except Exception:
+        return default
+
+
+def classify_v2_csv_pick(row):
+    """Classify model-v2 rows without treating ranker score as probability."""
+    selection_mode = str(row.get('selection_mode', 'LEGACY') or 'LEGACY').strip().upper()
+    if selection_mode in {'EMPTY', 'FALLBACK_DIAGNOSTIC'}:
+        return {
+            'should_save': False,
+            'pick_type': 'EMPTY',
+            'position_tag': 'EMPTY',
+            'star_icon': '·',
+            'prob': 0.0,
+            'meta_score': _safe_float(row.get('meta_score', row.get('score', 0.0))),
+            'hybrid_mean': _safe_float(row.get('hybrid_mean', 0.0)),
+            'selection_mode': selection_mode,
+        }
+
+    hybrid_mean = _safe_float(row.get('hybrid_mean', row.get('prob', 0.0)))
+    meta_score = _safe_float(row.get('meta_score', row.get('score', 0.0)))
+    prob = hybrid_mean if hybrid_mean > 0 else _safe_float(row.get('prob', 0.0))
+
+    if selection_mode == 'SELECTED' or hybrid_mean >= 0.35:
+        pick_type = 'MAIN'
+        position_tag = 'META_V2'
+        star_icon = "🌟"
+    else:
+        pick_type = 'RUNNER'
+        position_tag = 'META_FALLBACK'
+        star_icon = "🥈"
+
+    return {
+        'should_save': True,
+        'pick_type': pick_type,
+        'position_tag': position_tag,
+        'star_icon': star_icon,
+        'prob': prob,
+        'meta_score': meta_score,
+        'hybrid_mean': hybrid_mean,
+        'selection_mode': selection_mode,
+    }
+
 # --- [1. 성과 복기 엔진] ---
 def get_performance_report(db):
     """전일 추천 종목의 성과를 계산하여 반환합니다. (DB 스키마 변경 완벽 대응)"""
@@ -281,6 +330,7 @@ def run_integrated_scanner():
         # ==========================================
         csv_path = os.path.join(DATA_DIR, 'daily_recommendations_v2.csv')
         csv_count = 0
+        csv_skipped_count = 0
         csv_picks = []  # 텔레그램 아침 브리핑에 합류시킬 임시 리스트
         
         if os.path.exists(csv_path):
@@ -290,20 +340,15 @@ def run_integrated_scanner():
                     csv_code = str(row['code']).replace('.0', '').strip().zfill(6)
                     csv_name = row.get('name', 'Unknown')
                     csv_price = int(row.get('close', 0)) if 'close' in df_csv.columns else 0
-                    csv_prob = float(row.get('score', 0.99))
-                    
-                    # 💡 [핵심] Base 모델의 절대 확률을 읽어옵니다. (없으면 1.0으로 간주)
-                    hybrid_mean = float(row.get('hybrid_mean', 1.0))
-                    
-                    # 🛡️ 깐깐한 동적 할당 로직: 안전망(0.35)을 통과하지 못한 임시 10개 종목은 RUNNER로 강등!
-                    if hybrid_mean < 0.35:
-                        pick_type = 'RUNNER'
-                        position_tag = 'META_FALLBACK'  # 텔레그램에서 쉽게 구분하기 위한 태그
-                        star_icon = "🥈"                 # 임시 종목은 은메달 아이콘
-                    else:
-                        pick_type = 'MAIN'
-                        position_tag = 'META_V2'
-                        star_icon = "🌟"                 # 확실한 종목은 빛나는 별 아이콘
+                    classified = classify_v2_csv_pick(row)
+                    if not classified['should_save']:
+                        csv_skipped_count += 1
+                        continue
+
+                    csv_prob = classified['prob']
+                    pick_type = classified['pick_type']
+                    position_tag = classified['position_tag']
+                    star_icon = classified['star_icon']
 
                     # 1. DB 우선 적재 (MAIN 또는 RUNNER 동적 할당)
                     db.save_recommendation(
@@ -320,13 +365,16 @@ def run_integrated_scanner():
                     # 2. 리포트 결합용 데이터 보관
                     csv_picks.append({
                         'Code': csv_code,
-                        'Name': f"{star_icon}{csv_name}", 
+                        'Name': f"{star_icon}{csv_name}",
                         'Price': csv_price,
                         'Prob': csv_prob,
-                        'Position': position_tag
+                        'Position': position_tag,
+                        'MetaScore': classified['meta_score'],
+                        'HybridMean': classified['hybrid_mean'],
+                        'SelectionMode': classified['selection_mode'],
                     })
                     csv_count += 1
-                print(f"✅ V2 CSV에서 {csv_count}개 종목 우선 적재 완료")
+                print(f"✅ V2 CSV에서 {csv_count}개 종목 우선 적재 완료 (skip={csv_skipped_count})")
             except Exception as e:
                 print(f"⚠️ V2 CSV 적재 실패: {e}")
         else:
@@ -341,7 +389,7 @@ def run_integrated_scanner():
         debug_msg = (
             f"🛑 *[AI 스캐너 필터링 결과]*\n"
             f"총 {len(target_list)}개 중 *{len(all_results)}개 생존 (실시간)*\n"
-            f"🌟 *V2 앙상블 (CSV) 추가 적재: {csv_count}개*\n\n"
+            f"🌟 *V2 앙상블 (CSV) 추가 적재: {csv_count}개 / skip {csv_skipped_count}개*\n\n"
             f"📉 *탈락 사유 통계 (실시간)*\n"
             f" • 데이터 부족: {drop_stats['short_data']}개\n"
             f" • ETF/동전주: {drop_stats['invalid_type'] + drop_stats['low_price']}개\n"

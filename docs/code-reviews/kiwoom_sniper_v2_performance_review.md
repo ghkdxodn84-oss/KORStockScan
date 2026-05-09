@@ -1,7 +1,7 @@
 # KiwoomSniperV2 성능 검토 보고서
 
-> **검토 대상:** [`src/engine/kiwoom_sniper_v2.py`](../src/engine/kiwoom_sniper_v2.py) — 메인 스나이퍼 엔진  
-> **종속 모듈:** [`sniper_state_handlers.py`](../src/engine/sniper_state_handlers.py) (5374 lines), [`db_manager.py`](../src/database/db_manager.py) (738 lines), [`kiwoom_websocket.py`](../src/engine/kiwoom_websocket.py) (1030 lines)  
+> **검토 대상:** [`src/engine/kiwoom_sniper_v2.py`](../../src/engine/kiwoom_sniper_v2.py) — 메인 스나이퍼 엔진  
+> **종속 모듈:** [`sniper_state_handlers.py`](../../src/engine/sniper_state_handlers.py) (5374 lines), [`db_manager.py`](../../src/database/db_manager.py) (738 lines), [`kiwoom_websocket.py`](../../src/engine/kiwoom_websocket.py) (1030 lines)  
 > **작성일:** 2026-04-25  
 > **분석 범위:** 메인 루프 구조, 상태 핸들러 호출 체인, DB/API 동기 호출 패턴, 자료구조 사용, 스레드 관리
 
@@ -21,7 +21,7 @@
 
 ## 2. 🚨 크리티컬 병목 (Critical Bottlenecks)
 
-### 2.1 고정 Sleep 기반 폴링 주기 — [`time.sleep(1)`](src/engine/kiwoom_sniper_v2.py:1344)
+### 2.1 고정 Sleep 기반 폴링 주기 — [`time.sleep(1)`](../../src/engine/kiwoom_sniper_v2.py:1344)
 
 ```python
 # line 1340-1344
@@ -46,7 +46,7 @@ time.sleep(1)   # <-- 최대 1초 Latency
 
 ### 2.2 동기 DB 호출에 의한 루프 블로킹
 
-#### 2.2.1 [`_resolve_stock_marcap()`](src/engine/kiwoom_sniper_v2.py:192) → [`DB.get_latest_marcap()`](src/database/db_manager.py:556)
+#### 2.2.1 [`_resolve_stock_marcap()`](../../src/engine/kiwoom_sniper_v2.py:192) → [`DB.get_latest_marcap()`](../../src/database/db_manager.py:556)
 
 ```python
 def _resolve_stock_marcap(stock, code) -> int:
@@ -66,7 +66,7 @@ def _resolve_stock_marcap(stock, code) -> int:
 - 메인 루프는 항상 메모리 캐시(Dictionary)만 참조
 - 캐시 미스 시 `return 0` 처리 후 EventBus로 백그라운드 조회 요청
 
-#### 2.2.2 [`DB.get_active_targets()`](src/database/db_manager.py:445) 5초 주기 Polling
+#### 2.2.2 [`DB.get_active_targets()`](../../src/database/db_manager.py:445) 5초 주기 Polling
 
 ```python
 # line 1201-1212 (kiwoom_sniper_v2.py)
@@ -88,7 +88,7 @@ if time.time() - last_db_poll_time > 5:
 
 #### 2.3.1 AI API 동기 호출
 
-[`handle_watching_state()`](src/engine/sniper_state_handlers.py:2239):
+[`handle_watching_state()`](../../src/engine/sniper_state_handlers.py:2239):
 ```python
 ai_decision = ai_engine.analyze_target(
     stock['name'], ws_data, recent_ticks, recent_candles,
@@ -96,7 +96,7 @@ ai_decision = ai_engine.analyze_target(
 )
 ```
 
-[`handle_holding_state()`](src/engine/sniper_state_handlers.py:3562) 및 (sniper_state_handlers.py:3804):
+[`handle_holding_state()`](../../src/engine/sniper_state_handlers.py:3562) 및 (sniper_state_handlers.py:3804):
 ```python
 ai_decision = ai_engine.analyze_target(
     stock['name'], ws_data, recent_ticks, recent_candles,
@@ -137,7 +137,7 @@ res = kiwoom_orders.send_sell_order_market(code=code, qty=buy_qty, token=KIWOOM_
 
 ## 3. ⚠️ 중간 위험도 최적화 포인트 (Moderate Issues)
 
-### 3.1 리스트 재생성 — [`targets[:] = [...]`](src/engine/kiwoom_sniper_v2.py:1340)
+### 3.1 리스트 재생성 — [`targets[:] = [...]`](../../src/engine/kiwoom_sniper_v2.py:1340)
 
 ```python
 targets[:] = [t for t in targets if t.get('status') not in ['COMPLETED', 'EXPIRED']]
@@ -153,7 +153,7 @@ targets[:] = [t for t in targets if t.get('status') not in ['COMPLETED', 'EXPIRE
 - 삭제 조건 항목만 `dict.pop()` 처리
 - 또는 약한 참조(WeakRef) 자료구조 검토
 
-### 3.2 [`datetime.now()`](src/engine/kiwoom_sniper_v2.py:1184) 및 [`time.time()`](src/engine/kiwoom_sniper_v2.py:1184) 중복 호출
+### 3.2 [`datetime.now()`](../../src/engine/kiwoom_sniper_v2.py:1184) 및 [`time.time()`](../../src/engine/kiwoom_sniper_v2.py:1184) 중복 호출
 
 **메인 루프:**  
 - `line 1184`: `now = datetime.now()` — 루프당 1회  
@@ -175,7 +175,7 @@ targets[:] = [t for t in targets if t.get('status') not in ['COMPLETED', 'EXPIRE
 - 메인 루프 최상단에서 `current_time = time.time()`, `current_dt = datetime.now()` 1회 선언
 - 모든 핸들러/평가 함수에 인자로 전달하여 재사용
 
-### 3.3 무한 스레드 생성 — [`threading.Thread(target=periodic_account_sync, daemon=True).start()`](src/engine/kiwoom_sniper_v2.py:1268)
+### 3.3 무한 스레드 생성 — [`threading.Thread(target=periodic_account_sync, daemon=True).start()`](../../src/engine/kiwoom_sniper_v2.py:1268)
 
 ```python
 if time.time() - getattr(run_sniper, 'last_account_sync_time', 0) > 90:
@@ -192,7 +192,7 @@ if time.time() - getattr(run_sniper, 'last_account_sync_time', 0) > 90:
 - `ThreadPoolExecutor`로 워커 재사용
 - 또는 시작 시 1개의 전용 백그라운드 스레드 + Queue/Timer 패턴
 
-### 3.4 [`handle_watching_state()`](src/engine/sniper_state_handlers.py:1815) 함수 길이
+### 3.4 [`handle_watching_state()`](../../src/engine/sniper_state_handlers.py:1815) 함수 길이
 
 **5374 라인 중 약 700라인**(1815~2500+) 차지:
 
@@ -261,23 +261,23 @@ if time.time() - getattr(run_sniper, 'last_account_sync_time', 0) > 90:
 
 | 설명 | 파일 | 라인 |
 |------|------|------|
-| 메인 루프 진입 | [`kiwoom_sniper_v2.py`](../src/engine/kiwoom_sniper_v2.py) | 1177 |
-| 1초 sleep | [`kiwoom_sniper_v2.py`](../src/engine/kiwoom_sniper_v2.py) | 1344 |
-| 2초 부팅 sleep | [`kiwoom_sniper_v2.py`](../src/engine/kiwoom_sniper_v2.py) | 1029 |
-| DB 활성 타겟 Polling | [`kiwoom_sniper_v2.py`](../src/engine/kiwoom_sniper_v2.py) | 1201-1212 |
-| 시가총액 DB 조회 (메인) | [`kiwoom_sniper_v2.py`](../src/engine/kiwoom_sniper_v2.py) | 200 |
-| 시가총액 DB 조회 (핸들러) | [`sniper_state_handlers.py`](../src/engine/sniper_state_handlers.py) | 888 |
-| AI WATCHING 분석 | [`sniper_state_handlers.py`](../src/engine/sniper_state_handlers.py) | 2239 |
-| AI HOLDING 분석 (TP) | [`sniper_state_handlers.py`](../src/engine/sniper_state_handlers.py) | 3562 |
-| AI HOLDING 분석 (일반) | [`sniper_state_handlers.py`](../src/engine/sniper_state_handlers.py) | 3804 |
-| 주문 취소 (동기) | [`sniper_state_handlers.py`](../src/engine/sniper_state_handlers.py) | 1588 |
-| 시장가 매도 (동기) | [`sniper_state_handlers.py`](../src/engine/sniper_state_handlers.py) | 1745 |
-| 계좌 동기화 스레드 생성 | [`kiwoom_sniper_v2.py`](../src/engine/kiwoom_sniper_v2.py) | 1268 |
-| 리스트 재생성 | [`kiwoom_sniper_v2.py`](../src/engine/kiwoom_sniper_v2.py) | 1340 |
-| `datetime.now()` 중복 (핸들러) | [`sniper_state_handlers.py`](../src/engine/sniper_state_handlers.py) | 1875, 3647 |
-| DB get_active_targets() SQL | [`db_manager.py`](../src/database/db_manager.py) | 445-548 |
-| DB get_latest_marcap() SQL | [`db_manager.py`](../src/database/db_manager.py) | 556-573 |
-| WS 폴링 sleep 50ms | [`kiwoom_websocket.py`](../src/engine/kiwoom_websocket.py) | 277 |
+| 메인 루프 진입 | [`kiwoom_sniper_v2.py`](../../src/engine/kiwoom_sniper_v2.py) | 1177 |
+| 1초 sleep | [`kiwoom_sniper_v2.py`](../../src/engine/kiwoom_sniper_v2.py) | 1344 |
+| 2초 부팅 sleep | [`kiwoom_sniper_v2.py`](../../src/engine/kiwoom_sniper_v2.py) | 1029 |
+| DB 활성 타겟 Polling | [`kiwoom_sniper_v2.py`](../../src/engine/kiwoom_sniper_v2.py) | 1201-1212 |
+| 시가총액 DB 조회 (메인) | [`kiwoom_sniper_v2.py`](../../src/engine/kiwoom_sniper_v2.py) | 200 |
+| 시가총액 DB 조회 (핸들러) | [`sniper_state_handlers.py`](../../src/engine/sniper_state_handlers.py) | 888 |
+| AI WATCHING 분석 | [`sniper_state_handlers.py`](../../src/engine/sniper_state_handlers.py) | 2239 |
+| AI HOLDING 분석 (TP) | [`sniper_state_handlers.py`](../../src/engine/sniper_state_handlers.py) | 3562 |
+| AI HOLDING 분석 (일반) | [`sniper_state_handlers.py`](../../src/engine/sniper_state_handlers.py) | 3804 |
+| 주문 취소 (동기) | [`sniper_state_handlers.py`](../../src/engine/sniper_state_handlers.py) | 1588 |
+| 시장가 매도 (동기) | [`sniper_state_handlers.py`](../../src/engine/sniper_state_handlers.py) | 1745 |
+| 계좌 동기화 스레드 생성 | [`kiwoom_sniper_v2.py`](../../src/engine/kiwoom_sniper_v2.py) | 1268 |
+| 리스트 재생성 | [`kiwoom_sniper_v2.py`](../../src/engine/kiwoom_sniper_v2.py) | 1340 |
+| `datetime.now()` 중복 (핸들러) | [`sniper_state_handlers.py`](../../src/engine/sniper_state_handlers.py) | 1875, 3647 |
+| DB get_active_targets() SQL | [`db_manager.py`](../../src/database/db_manager.py) | 445-548 |
+| DB get_latest_marcap() SQL | [`db_manager.py`](../../src/database/db_manager.py) | 556-573 |
+| WS 폴링 sleep 50ms | [`kiwoom_websocket.py`](../../src/engine/kiwoom_websocket.py) | 277 |
 
 ---
 

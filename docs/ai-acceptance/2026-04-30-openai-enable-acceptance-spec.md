@@ -1,7 +1,7 @@
 # 2026-04-30 OpenAI Enable Acceptance / Transport Parity Spec
 
 작성일: `2026-04-30 KST`  
-Source: [2026-04-30-openai-parity-responses-ws-review-report.md](/home/ubuntu/KORStockScan/docs/2026-04-30-openai-parity-responses-ws-review-report.md), [2026-04-29-gemini-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/2026-04-29-gemini-enable-acceptance-spec.md), [2026-04-29-deepseek-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/2026-04-29-deepseek-enable-acceptance-spec.md)  
+Source: [2026-04-30-openai-parity-responses-ws-review-report.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-30-openai-parity-responses-ws-review-report.md), [2026-04-29-gemini-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-29-gemini-enable-acceptance-spec.md), [2026-04-29-deepseek-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-29-deepseek-enable-acceptance-spec.md)  
 대상 코드: [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py), [ai_response_contracts.py](/home/ubuntu/KORStockScan/src/engine/ai_response_contracts.py), [test_ai_engine_openai_transport.py](/home/ubuntu/KORStockScan/src/tests/test_ai_engine_openai_transport.py), [test_ai_engine_api_config.py](/home/ubuntu/KORStockScan/src/tests/test_ai_engine_api_config.py)
 
 ## 1. 판정

@@ -39,7 +39,7 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 | `soft_stop_micro_grace` | ON, exit active-canary | `SCALP_SOFT_STOP_MICRO_GRACE_ENABLED=True`, `20초`, emergency `-2.0%` | hard stop 전환, 미체결, same-symbol 손실이 늘면 OFF. 반등 포착 개선이 유지되면 baseline-promote 후보 |
 | `REVERSAL_ADD` | ON, exit active-canary | `REVERSAL_ADD_ENABLED=True` | executed가 계속 0이면 parking 금지. `pnl/hold/supply/qty/position_cap/cooldown/pending/protection` blocker를 좁혀 실행요건을 찾는다 |
 | `bad_entry_refined_canary` | ON, exit active-canary | `SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=True` | naive block 금지. `GOOD_EXIT/MISSED_UPSIDE` 제거가 늘거나 canary cohort 손익이 비적용 후보보다 악화되면 OFF |
-| `initial_entry_qty_cap_1share` | ON, size guard | `SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED=True`, `SCALPING_INITIAL_ENTRY_MAX_QTY=1` | initial/pyramid 원인귀속과 tail 제한이 닫힐 때까지 유지. 확대는 별도 단일축 승인 필요 |
+| `initial_entry_qty_cap_1share` | OFF, size guard retired | `SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED=False`, `SCALPING_INITIAL_ENTRY_MAX_QTY=0` | 2026-05-09 사용자 지시로 신규 BUY 1주 수량 cap을 해제했다. 예산/position/protection/order safety guard는 유지한다 |
 | `pre_submit_price_guard` | ON, entry guard | `SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED=True` | 비정상 저가 지정가 차단. false block이 확인될 때만 threshold 조정 |
 | `dynamic_entry_price_resolver_p1` | ON, entry baseline-promote 후보 | `SCALPING_ENTRY_PRICE_RESOLVER_ENABLED=True`, `SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS=80` | `target_buy_price`는 reference로만 쓰고 실주문가는 strategy-aware resolver가 결정한다. 일반 스캘핑 `90초`, `BREAKOUT 120초`, `PULLBACK 600초`, `RESERVE 1200초` timeout 분리와 함께 본다 |
 | `dynamic_entry_ai_price_canary_p2` | ON, entry active-canary | `SCALPING_ENTRY_AI_PRICE_CANARY_ENABLED=True`, `entry_price_v1`, min confidence `60`, skip min `80` | submitted 직전 Tier2 AI가 `USE_DEFENSIVE | USE_REFERENCE | IMPROVE_LIMIT | SKIP` 중 하나를 고른다. AI 실패/parse fail/guard 위반은 P1 resolver로 fail-closed하고, best ask 초과나 미체결 방치가 보이면 OFF |
@@ -297,12 +297,12 @@ cohort 분류 공통 규칙은 아래로 고정한다.
 | `hard_stop_whipsaw_aux` | `observe-only` | severe-loss guard 보조 관찰 | 하드스탑을 보조 관찰로만 둔다는 원칙이 유지되는 동안 유지. `MISSED_UPSIDE/GOOD_EXIT/NEUTRAL`과 반등 지표가 독립 판단가치를 잃거나 hard stop 완화 의제가 공식 폐기되면 제거 | `Plan Rebase`, `2026-04-27 checklist` |
 | `same_symbol_reentry` | `observe-only` | 동일종목 재진입 손실/guard 필요성 관찰 | `same_symbol_reentry_loss_count`가 독립 guard 후보성을 잃거나, soft stop/position context 축에 완전히 흡수되어 별도 재진입 cohort가 필요 없을 때 제거 | `holding_exit_observation`, `2026-04-27 checklist` |
 | `trailing_continuation` | `observe-only` | upside capture 개선 후보 관찰 | `MISSED_UPSIDE rate >= 60%`, `GOOD_EXIT rate <= 30%`로 2순위 live 후보 요건을 충족해 canary로 승격되거나, 반대로 upside 개선 후보성이 약해져 후순위 폐기가 확정되면 제거/재분류 | `holding_exit_observation`, `2026-04-27 checklist` |
-| `initial-only` | `observe-only` | 신규 진입만의 체결/손익/청산 품질 분리 | `1주 cap` 회귀 이후 initial-only 손익/soft stop tail과 추가매수 후보의 zero_qty 왜곡이 충분히 닫히고 initial/pyramid가 더 이상 다른 EV를 보이지 않아 분리 해석 가치가 사라질 때만 제거 | `2026-04-29`, `2026-04-30 checklist` |
-| `pyramid-activated` | `observe-only` | 추가매수 활성 표본 분리 | `1주 cap` 회귀 이후 pyramid zero_qty/activated 표본과 손익/청산 품질이 충분히 닫히고 별도 특성이 없다고 확인될 때만 제거 | `2026-04-29`, `2026-04-30 checklist` |
+| `initial-only` | `observe-only` | 신규 진입만의 체결/손익/청산 품질 분리 | 1주 cap 해제 이후 initial-only 손익/soft stop tail과 추가매수 후보의 수량 확대 영향이 충분히 닫히고 initial/pyramid가 더 이상 다른 EV를 보이지 않아 분리 해석 가치가 사라질 때만 제거 | `2026-04-29`, `2026-04-30 checklist`, `2026-05-11 checklist` |
+| `pyramid-activated` | `observe-only` | 추가매수 활성 표본 분리 | 1주 cap 해제 이후 pyramid activated 표본과 손익/청산 품질이 충분히 닫히고 별도 특성이 없다고 확인될 때만 제거 | `2026-04-29`, `2026-04-30 checklist`, `2026-05-11 checklist` |
 | `full_fill` | `observe-only` | 체결 품질 우수 표본 분리 | `partial_fill`과 EV/청산 품질 차이가 더 이상 의사결정 의미를 잃지 않는 한 유지. full/partial 합산 허용 정책으로 바뀌기 전에는 제거 금지 | `Plan Rebase`, performance/report/checklist |
 | `partial_fill` | `observe-only` | partial 전용 손익/재베이스/soft-stop 악화 관찰 | partial 악화 여부가 더 이상 독립 리스크가 아니라고 확인되기 전까지 유지. full/partial 합산 정책 변경 전에는 제거 금지 | `Plan Rebase`, performance/report/checklist |
-| `initial_entry_qty_cap_1share` | `active-canary-decision` | 신규 BUY 초기 수량 tail 제한과 holding/exit 원인귀속 보존 | `initial_entry_qty_cap_applied cap_qty=1`, `zero_qty`, `pyramid_activated`, `soft_stop`, `COMPLETED + valid profit_rate`로 1주 cap 유지/해제를 닫을 때까지 유지 | `2026-04-30 checklist` |
-| `initial_entry_qty_cap_3share_candidate` | `observe-only` | 3주 cap 전환 승인조건 관찰 | `1주 cap` baseline이 안정화되고 2주 historical reference보다 3주 후보의 EV 근거가 별도 승인될 때만 active 후보로 승격 | `2026-04-30 checklist` |
+| `initial_entry_qty_cap_1share` | `retired-off` | 신규 BUY 초기 수량 tail 제한과 holding/exit 원인귀속 보존 | 2026-05-09 사용자 지시로 기본 OFF 전환. 이후 `initial-only`, `pyramid_activated`, `soft_stop`, `COMPLETED + valid profit_rate`, 예산/position/protection guard로 확대 영향을 본다 | `2026-04-30 checklist`, `2026-05-11 checklist` |
+| `initial_entry_qty_cap_3share_candidate` | `historical-reference` | 3주 cap 전환 승인조건 관찰 | 2026-05-09 수량 cap 해제 이후 승격 후보가 아니라 cap 제거 이전 비교 근거로만 유지한다 | `2026-04-30 checklist`, `2026-05-11 checklist` |
 | `statistical_action_weight` | `observe-only` | 가격대/거래량/시간대별 `exit_only`/`avg_down_wait`/`pyramid_wait` 성과 비교 | sample-ready가 되면 threshold weight 입력으로 연결하되, 직접 live owner로 승격하지 않는다. 단순 평균이 아니라 `confidence_adjusted_score`와 `policy_hint`로만 해석하고, live 적용은 별도 단일축 canary와 rollback guard가 생길 때만 가능 | `threshold_cycle`, `2026-05-06 checklist` |
 | `ai_cache_hit_miss` | `observe-only` | gatekeeper/holding AI cache hit vs miss 영향도 관찰 | structured join 필드가 `submitted/full/partial/COMPLETED`와 안정적으로 연결될 때까지 live go/no-go 입력 금지 | `2026-04-29 checklist` |
 | `execution_receipt_binding_quality` | `observe-only` | WS 실제체결과 active order binding 정합성 관찰 | BUY/SELL `EXEC_IGNORED` 원인이 order number race인지 visibility 문제인지 닫힐 때까지 EV 판정 전제 품질축으로 유지 | `2026-04-29`, `2026-04-30 checklist` |
@@ -347,7 +347,7 @@ inventory 운영 규칙은 아래로 고정한다.
 | `mechanical_momentum_latency_relief` | `operating-override` | `limited-live` | current entry live replacement operating override. `submitted` 전은 병목, 이후는 fill quality + BUY signal quality observation |
 | `soft_stop_expert_defense` | `observe-only` | `guarded-off` | 2026-04-30 same-day v2 수집 종료. 다음 재승인 전 live 유예/청산 변경 없음 |
 | `initial_entry_qty_cap_1share` | `active-canary` | `limited-live` | current initial entry size guard. 2주/3주 확대는 별도 승인 전 observe-only |
-| `reversal_add` | `active-canary` | `limited-live` | valid-entry early pullback recovery. 1주 cap에서도 1주 floor로 소형 canary. current owner is blocker narrowing (`pnl -> hold -> gate`) |
+| `reversal_add` | `active-canary` | `limited-live` | valid-entry early pullback recovery. 2026-05-09부터 1주 cap은 OFF이며, 최소 1주 floor는 ratio 계산이 0주일 때만 적용한다. current owner is blocker narrowing (`pnl -> hold -> gate`) |
 | `bad_entry_block` | `observe-only` | `none` | never-green/AI fade 후보 분류. 표본 부족이 아니라 precision/GOOD_EXIT 예외 설계가 병목이었고, refined canary의 비교군으로 유지 |
 | `bad_entry_refined_canary` | `active-canary` | `limited-live` | v2 OFF 이후 다음 보유/청산 신규 owner. `scalp_bad_entry_refined_canary`는 soft stop 전 never-green tail을 줄이는 단일축 canary |
 | `statistical_action_weight` | `observe-only` | `none` | completed trade와 `exit_signal`/`sell_completed`/`scale_in_executed` compact stage를 묶는 장후 행동가중치 리포트. live runtime mutation 없음 |
@@ -531,7 +531,7 @@ inventory 운영 규칙은 아래로 고정한다.
 - 향후 재개 가능성: `High`
 - 근거:
   1. 기존 `evaluate_scalping_reversal_add()`는 AI 회복, 저점 미갱신, 매수압/틱가속/micro VWAP 조건을 이미 갖고 있어 새 진입축이 아니라 보유 중 회수축으로 제한할 수 있다.
-  2. 1주 cap 환경에서는 `REVERSAL_ADD_SIZE_RATIO=0.33`이 0주가 될 수 있으므로 `REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED=True`로 1주 소형 canary를 허용한다.
+  2. `REVERSAL_ADD_SIZE_RATIO=0.33`이 0주가 될 수 있으므로 `REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED=True`로 최소 1주 floor를 허용한다.
   3. 추가매수 체결 후에는 `soft_stop_micro_grace` 상태를 초기화해 기존 손절 유예 상태가 새 평단 판단을 오염시키지 않게 한다.
 - 다음 액션:
   1. `reversal_add_candidate`, `reversal_add_blocked_reason`, `scale_in_executed add_type=AVG_DOWN`, `reversal_add_used`, 후속 `soft_stop/trailing/COMPLETED`를 분리한다.
@@ -871,12 +871,12 @@ inventory 운영 규칙은 아래로 고정한다.
 
 ### 4.9A-5 `initial_entry_qty_cap_1share` / `initial_entry_qty_cap_2share_historical` / `initial_entry_qty_cap_3share_candidate`
 
-- 판정: `1share=active-canary-decision`, `2share=historical-reference`, `3share=observe-only`
-- live 영향도: `1share=limited-live`, `2share=none`, `3share=none`
+- 판정: `1share=retired-off`, `2share=historical-reference`, `3share=historical-reference`
+- live 영향도: `1share=none`, `2share=none`, `3share=none`
 - 튜닝 모니터링 가치: `High`
-  - 이유: `2026-04-30` 장후 기준 현재 수량 가드는 `1주 cap`이다. `2주 cap`은 `buy_qty=1 -> pyramid template_qty=0` 왜곡을 줄이기 위한 historical canary였고, `3주 cap`은 exposure와 soft stop tail을 직접 키우는 후보라 별도 cohort로 분리해야 한다.
-  - 상향 조건: `1주 cap` baseline에서 soft stop tail이 안정화되고, zero_qty 왜곡이 EV 개선 기회를 지속적으로 막는다는 근거가 닫힐 때
-  - 하향 조건: 2주/3주 후보가 entry live 축과 충돌하거나, 수량 확대 상태에서 soft stop/partial/order_failed가 악화될 때
+  - 이유: `2026-05-09` 사용자 지시로 신규 BUY, REVERSAL_ADD/AVG_DOWN, PYRAMID의 1주 수량 cap은 기본 OFF가 됐다. `2주/3주 cap`은 더 이상 승격 후보가 아니라 cap 제거 이전 historical reference로만 유지한다.
+  - 상향 조건: 없음. 수량 제한 재도입은 새 사용자 지시 또는 별도 rollback guard 초과가 있을 때 새 workorder로 연다.
+  - 하향 조건: 수량 확대 상태에서 soft stop/partial/order_failed/protection 지연이 악화될 때 새 수량 가드 workorder를 연다.
 - EV 판정 기여도: `High`
 - 대체 가능성: `Low`
 - 운영 부하/지연 비용: `Low`
@@ -884,10 +884,10 @@ inventory 운영 규칙은 아래로 고정한다.
 - 향후 재개 가능성: `High`
 - 근거:
   1. `2026-04-29` full-day 기준 `initial_entry_qty_cap_applied=38`, `ADD_BLOCKED reason=zero_qty=0`, `completed_valid_count=17`, `completed_valid_avg_profit_rate=+0.0535%`, `pyramid_activated=3`이 확인됐다.
-  2. `2026-04-30` 장후 사용자 지시로 현재 기본값은 `KORSTOCKSCAN_SCALPING_INITIAL_ENTRY_MAX_QTY=1`이다. `2주/3주 cap`은 상수 또는 env override로 가능하지만, 현재 `mechanical_momentum_latency_relief`와 같은 entry 단계 변경이므로 별도 승인 없이 병행 live 대상이 아니다.
+  2. `2026-05-09` 사용자 지시로 현재 기본값은 `KORSTOCKSCAN_SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED=False`, `KORSTOCKSCAN_SCALPING_INITIAL_ENTRY_MAX_QTY=0`이다.
 - 다음 액션:
   1. `initial-only`, `pyramid-activated`, `full_fill`, `partial_fill`, `soft_stop`, `order_failed`를 계속 분리한다.
-  2. `2주/3주 cap`은 별도 승인조건이 닫히기 전까지 historical/observe-only 후보로만 유지한다.
+  2. 수량 제한 재도입은 기존 `2주/3주 cap` 후보 승격이 아니라 새 guard workorder로만 검토한다.
 
 ### 4.9A-6 `ai_cache_hit_miss`
 

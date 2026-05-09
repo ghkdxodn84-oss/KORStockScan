@@ -178,9 +178,9 @@ def test_describe_buy_capacity_respects_absolute_budget_cap():
     assert used_ratio == 0.95
 
 
-def test_scalping_initial_entry_qty_cap_config_defaults_to_one_share():
-    assert CONFIG.SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED is True
-    assert CONFIG.SCALPING_INITIAL_ENTRY_MAX_QTY == 1
+def test_scalping_initial_entry_qty_cap_config_defaults_to_unlimited():
+    assert CONFIG.SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED is False
+    assert CONFIG.SCALPING_INITIAL_ENTRY_MAX_QTY == 0
     assert CONFIG.SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED is True
 
 
@@ -573,7 +573,7 @@ def test_execute_scalping_pyramid_blocks_wide_spread_price_guard(monkeypatch):
     assert stock.get("pending_add_order") is None
 
 
-def test_execute_scalping_pyramid_sends_resolved_best_bid_one_share(monkeypatch):
+def test_execute_scalping_pyramid_sends_resolved_best_bid_without_one_share_cap(monkeypatch):
     rules = replace(CONFIG, MAX_POSITION_PCT=1.0)
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
     monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
@@ -628,7 +628,7 @@ def test_execute_scalping_pyramid_sends_resolved_best_bid_one_share(monkeypatch)
         admin_id=1,
     )
 
-    assert sent_orders == [("123456", 1, 9_990, "00")]
+    assert sent_orders == [("123456", 5, 9_990, "00")]
     assert history[0]["request_price"] == 9_990
     assert any(stage == "scale_in_price_resolved" for stage, _ in logs)
     assert any(stage == "scale_in_price_p2_observe" for stage, _ in logs)
@@ -765,7 +765,7 @@ def test_p2_observe_skip_does_not_change_live_order(monkeypatch):
         admin_id=1,
     )
 
-    assert sent_orders == [("123456", 1, 9_990, "00")]
+    assert sent_orders == [("123456", 5, 9_990, "00")]
     p2_logs = [fields for stage, fields in logs if stage == "scale_in_price_p2_observe"]
     assert p2_logs
     assert p2_logs[0]["live_runtime_effect"] is False

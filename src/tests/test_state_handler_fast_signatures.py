@@ -427,6 +427,25 @@ def test_apply_wait6579_probe_canary_caps_qty_and_budget():
     assert adjusted[0]["qty"] == 1
 
 
+def test_apply_wait6579_probe_canary_allows_unlimited_qty_cap():
+    orders = [
+        {"tag": "normal", "qty": 12, "price": 10100, "order_type": "00", "tif": "IOC"},
+    ]
+
+    adjusted, original, scaled, applied = _apply_wait6579_probe_canary(
+        orders,
+        curr_price=10100,
+        max_budget_krw=50_000,
+        min_qty=1,
+        max_qty=0,
+    )
+
+    assert original == 12
+    assert scaled == 4
+    assert applied is True
+    assert adjusted[0]["qty"] == 4
+
+
 def test_soft_stop_whipsaw_confirmation_respects_emergency_and_one_time_cap(monkeypatch):
     rules = replace(
         TRADING_RULES,

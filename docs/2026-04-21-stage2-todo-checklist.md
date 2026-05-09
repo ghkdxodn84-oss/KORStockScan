@@ -115,13 +115,13 @@
   - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_wait6579_ev_cohort_report.py src/tests/test_log_archive_service.py src/tests/test_state_handler_fast_signatures.py` 결과 `16 passed`.
   - 다음 액션: 장후 판정에서 `approval_gate.min_sample_gate_passed`를 1차 통과조건으로 잠그고, 통과 후 `ev_directional_check_passed`로 임계값 하향 승인 여부를 결정한다.
 - [x] `[AIPrompt0421] Gemini 라우팅 누락 보정(OpenAI v2 피처 parity) 즉시 반영` (`Due: 2026-04-21`, `Slot: INTRADAY`, `TimeWindow: 14:00~14:20`, `Track: AIPrompt`) (`실행: 2026-04-21 14:34 KST`)
-  - Source: [2026-04-11-scalping-ai-prompt-coding-instructions.md](/home/ubuntu/KORStockScan/docs/2026-04-11-scalping-ai-prompt-coding-instructions.md)
+  - Source: [2026-04-11-scalping-ai-prompt-coding-instructions.md](/home/ubuntu/KORStockScan/docs/reference/2026-04-11-scalping-ai-prompt-coding-instructions.md)
   - 판정 기준: Gemini 엔진 경로에서 `_extract_scalping_features` 누락을 보정하고, 프롬프트 입력 정량 피처를 OpenAI v2 수준으로 확장한다.
   - 판정: 완료. [ai_engine.py](/home/ubuntu/KORStockScan/src/engine/ai_engine.py)에 `_extract_scalping_features`를 추가해 `extract_scalping_feature_packet`을 직접 반환하도록 반영했고, `[정량형 수급 피처]` 블록에 `spread/top-depth/microprice_edge/curr_vs_micro_vwap_bp/curr_vs_ma5_bp/volume_ratio` 등 누락 필드를 확장했다.
   - 기대효과: `wait65_79` probe 피처가 0으로 고정되는 문제를 제거해 `buy_recovery_canary` 승격 후보 표본이 정상 수집된다.
   - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_scalping_feature_packet.py src/tests/test_wait6579_ev_cohort_report.py src/tests/test_log_archive_service.py src/tests/test_ai_engine_openai_v2_audit_fields.py` 결과 `12 passed, 1 warning`.
 - [x] `[AIPrompt0421] Gemini 프롬프트 프로파일/액션 분리 스키마 전면 이식` (`Due: 2026-04-21`, `Slot: INTRADAY`, `TimeWindow: 14:40~15:00`, `Track: AIPrompt`) (`실행: 2026-04-21 14:49 KST`)
-  - Source: [2026-04-11-scalping-ai-prompt-coding-instructions.md](/home/ubuntu/KORStockScan/docs/2026-04-11-scalping-ai-prompt-coding-instructions.md)
+  - Source: [2026-04-11-scalping-ai-prompt-coding-instructions.md](/home/ubuntu/KORStockScan/docs/reference/2026-04-11-scalping-ai-prompt-coding-instructions.md)
   - 판정 기준: Gemini analyze 경로에 `watching/holding/exit/shared` 프로파일 분기를 모두 반영하고, 보유/청산 액션을 `HOLD/TRIM/EXIT` 스키마로 분리한다.
   - 판정: 완료. [ai_engine.py](/home/ubuntu/KORStockScan/src/engine/ai_engine.py)의 `_resolve_scalping_prompt()`에 `exit` 프로파일을 추가하고 prompt_type을 `scalping_entry/scalping_holding/scalping_exit/scalping_shared`로 정렬했다. `_normalize_scalping_action_schema()`를 추가해 `action_v2`(신규 스키마)와 `action`(legacy 호환)을 동시 제공한다.
   - 호환 규칙: `HOLD->WAIT`, `TRIM->SELL`, `EXIT->DROP`.
@@ -211,7 +211,7 @@
 
 - [2026-04-19-stage2-todo-checklist.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-19-stage2-todo-checklist.md)
 - [2026-04-17-midterm-tuning-performance-report.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-17-midterm-tuning-performance-report.md)
-- [2026-04-11-scalping-ai-prompt-coding-instructions.md](./2026-04-11-scalping-ai-prompt-coding-instructions.md)
+- [2026-04-11-scalping-ai-prompt-coding-instructions.md](./reference/2026-04-11-scalping-ai-prompt-coding-instructions.md)
 - [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)
 - [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)
 - [plan-korStockScanPerformanceOptimization.performance-report.md](./plan-korStockScanPerformanceOptimization.performance-report.md)

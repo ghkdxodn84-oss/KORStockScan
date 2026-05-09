@@ -244,7 +244,7 @@
     - 위 4개 중 1개라도 비면 `실전 enable 미승인`으로 본다.
   - why: 이 항목은 엔진 설계/acceptance 정리라 종가 데이터가 필요하지 않다. 12시 운영 판정 후 바로 정리해도 된다.
   - 산출물: `Gemini enable acceptance 메모 1건`, `6 endpoint schema/fallback/test matrix 초안 1건`, `다음 change set 범위(main observe-only vs canary-only) 1건`
-  - 실행 메모 (`2026-04-29 13:32 KST`): [2026-04-29-gemini-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/2026-04-29-gemini-enable-acceptance-spec.md)를 작성해 `main` Gemini live 변경 범위를 다시 잠갔다. [ai_engine.py](/home/ubuntu/KORStockScan/src/engine/ai_engine.py:1193) 기준 `GEMINI_SYSTEM_INSTRUCTION_JSON_ENABLED`, `GEMINI_JSON_DETERMINISTIC_CONFIG_ENABLED`는 이미 `require_json=True` 경로에서만 분기하지만, `response_schema` registry ingress와 endpoint별 fallback/test 묶음은 아직 코드/테스트에 없다.
+  - 실행 메모 (`2026-04-29 13:32 KST`): [2026-04-29-gemini-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-29-gemini-enable-acceptance-spec.md)를 작성해 `main` Gemini live 변경 범위를 다시 잠갔다. [ai_engine.py](/home/ubuntu/KORStockScan/src/engine/ai_engine.py:1193) 기준 `GEMINI_SYSTEM_INSTRUCTION_JSON_ENABLED`, `GEMINI_JSON_DETERMINISTIC_CONFIG_ENABLED`는 이미 `require_json=True` 경로에서만 분기하지만, `response_schema` registry ingress와 endpoint별 fallback/test 묶음은 아직 코드/테스트에 없다.
   - 판정 결과: `완료 / P1은 flag-off observe-only 승인, P2 schema registry는 실전 미승인`
   - 근거: Gemini는 `main` 실전 엔진이라 P1/P2를 같은 날 live change로 열면 BUY/WAIT/DROP, HOLD/TRIM/EXIT, condition/eod 분포와 parse_fail 축이 동시에 흔들린다. 현재는 6 endpoint (`entry/holding_exit/overnight/condition_entry/condition_exit/eod_top5`)별 schema ingress, fallback owner, contract test matrix가 같은 change set으로 잠기지 않아 실전 enable acceptance를 충족하지 못한다.
   - 테스트/검증:
@@ -256,10 +256,10 @@
 - [x] `[GeminiSchemaBuild0429-1320] Gemini 6 endpoint schema registry/fallback/test matrix 초안 작성` (`Due: 2026-04-29`, `Slot: INTRADAY`, `TimeWindow: 13:20~13:45`, `Track: ScalpingLogic`)
   - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_gemini_engine_review.md)
   - Owner: `Codex`
-  - 결과서: [2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md](/home/ubuntu/KORStockScan/docs/2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md)
+  - 결과서: [2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md)
   - 판정 기준: `entry_v1`, `holding_exit_v1`, `overnight_v1`, `condition_entry_v1`, `condition_exit_v1`, `eod_top5_v1` 각각에 대해 `schema scope`, `fallback path`, `required tests`, `observe fields`, `rollback point`가 표 형태로 초안화된다.
   - why: “없어서 보류”를 반복하지 않으려면 schema registry의 실제 설계 산출물을 먼저 만들어야 하며, 이 작업은 장후 데이터가 필요하지 않다.
-  - 실행 메모 (`2026-04-29 13:36 KST`): [2026-04-29-gemini-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/2026-04-29-gemini-enable-acceptance-spec.md)에 6 endpoint matrix를 추가했다. `entry/watch`, `holding/exit`, `overnight`, `condition_entry`, `condition_exit`, `eod_top5` 각각에 대해 `next schema name`, `fallback owner`, `required tests`, `status=observe-only`를 표로 고정했다.
+  - 실행 메모 (`2026-04-29 13:36 KST`): [2026-04-29-gemini-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-29-gemini-enable-acceptance-spec.md)에 6 endpoint matrix를 추가했다. `entry/watch`, `holding/exit`, `overnight`, `condition_entry`, `condition_exit`, `eod_top5` 각각에 대해 `next schema name`, `fallback owner`, `required tests`, `status=observe-only`를 표로 고정했다.
   - 실행 메모 (`2026-04-29 14:10 KST`): [ai_engine.py](/home/ubuntu/KORStockScan/src/engine/ai_engine.py:28)에 `GEMINI_RESPONSE_SCHEMA_REGISTRY`, [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py:326)에 `GEMINI_RESPONSE_SCHEMA_REGISTRY_ENABLED=False`, `_call_gemini_safe(schema_name=...)` 인입점을 추가했다. 6 endpoint 호출부에는 `schema_name`을 연결했지만 flag 기본값이 OFF라 live 응답 분포는 바꾸지 않는다.
   - 판정 결과: `완료 / flag-off schema registry 묶음 반영`
   - 근거: 현재 묶음은 실전 enable이 아니라 `main` Gemini의 endpoint별 response schema를 켤 수 있는 인입점과 fallback 유지 테스트를 만든 것이다. `GEMINI_RESPONSE_SCHEMA_REGISTRY_ENABLED`를 켜기 전까지는 기존 `json.loads -> regex fallback` 동작이 유지된다.
@@ -282,7 +282,7 @@
     - 위 조건이 안 맞으면 `remote 실전 enable 미승인` 또는 `backlog 유지`로 닫는다.
   - why: 04-28 판정 기준 DeepSeek 잔여축은 전부 실전 acceptance 또는 설계/backlog 범위이고, 장후 데이터가 필요한 항목이 아니다.
   - 산출물: `DeepSeek enable acceptance 메모 1건`, `backoff acceptance 표 1건`, `gatekeeper structured-output 설계 전제 1건`, `holding cache/Tool Calling backlog 결론 1건`
-  - 실행 메모 (`2026-04-29 13:42 KST`): [2026-04-29-deepseek-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/2026-04-29-deepseek-enable-acceptance-spec.md)를 작성해 `context-aware backoff`, `gatekeeper structured-output`, `holding cache`, `Tool Calling`의 carry-over 결론을 고정했다. [ai_engine_deepseek.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_deepseek.py:534) 기준 P1 guard는 준비돼 있지만 `api_call_lock` 관찰과 retry acceptance 메모가 아직 없다.
+  - 실행 메모 (`2026-04-29 13:42 KST`): [2026-04-29-deepseek-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-29-deepseek-enable-acceptance-spec.md)를 작성해 `context-aware backoff`, `gatekeeper structured-output`, `holding cache`, `Tool Calling`의 carry-over 결론을 고정했다. [ai_engine_deepseek.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_deepseek.py:534) 기준 P1 guard는 준비돼 있지만 `api_call_lock` 관찰과 retry acceptance 메모가 아직 없다.
   - 판정 결과: `완료 / P1은 flag-off 운영 승인 유지, P2/P3는 backlog 유지`
   - 근거: DeepSeek는 `remote` 경로라 same-day live-sensitive sleep 증가가 곧 미진입 기회비용이 된다. gatekeeper structured-output은 shared text report 경로를 같이 건드리므로 `flag-off + text fallback + contract test` 없이는 승격할 수 없고, holding cache/Tool Calling도 EV 근거보다 설계 복잡도가 먼저 크다.
   - 테스트/검증:
@@ -294,7 +294,7 @@
 - [x] `[DeepSeekAcceptanceBuild0429-1400] DeepSeek 실전 enable acceptance/spec 메모 작성` (`Due: 2026-04-29`, `Slot: INTRADAY`, `TimeWindow: 14:00~14:20`, `Track: Plan`)
   - Source: [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_deepseek_engine_review.md)
   - Owner: `Codex`
-  - 결과서: [2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md](/home/ubuntu/KORStockScan/docs/2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md)
+  - 결과서: [2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md)
   - 판정 기준: `context-aware backoff`, `gatekeeper structured-output`, `holding cache`, `Tool Calling` 각각에 대해 `enable acceptance`, `not now reason`, `required proof`, `next implementation slot`이 문서화된다.
   - why: DeepSeek 잔여축은 코드보다 운영 acceptance가 먼저라, 설계/승인 메모를 장후까지 미루지 않고 고정해야 더 이상 공회전하지 않는다.
   - 실행 메모 (`2026-04-29 13:47 KST`): acceptance spec 문서에 `axis / enable acceptance / not now reason / required proof / next slot` 표를 작성했다. `context-aware backoff`와 `gatekeeper structured-output`은 `2026-04-30 POSTCLOSE` 설계 슬롯으로, `holding cache bucket reduction`과 `Tool Calling`은 backlog 유지로 분리했다.
@@ -302,7 +302,7 @@
   - 판정 결과: `완료 / acceptance spec + retry 관찰 묶음 반영`
   - 근거: 이번 산출물은 same-day 실전 승격이 아니라, enable 전에 확인해야 할 관찰필드를 코드 로그와 테스트로 고정한 것이다. `DEEPSEEK_CONTEXT_AWARE_BACKOFF_ENABLED` 기본값은 여전히 OFF라 remote sleep 정책은 바뀌지 않는다.
   - 테스트/검증:
-    - [2026-04-29-deepseek-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/2026-04-29-deepseek-enable-acceptance-spec.md)
+    - [2026-04-29-deepseek-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-29-deepseek-enable-acceptance-spec.md)
     - `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_ai_engine_api_config.py src/tests/test_ai_engine_cache.py` -> `23 passed`
   - 다음 액션: `2026-04-30`에는 구현/비구현 배치가 아니라 retry acceptance log field와 gatekeeper option path 관찰만 확인한다.
 

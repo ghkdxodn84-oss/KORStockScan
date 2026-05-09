@@ -1,8 +1,8 @@
 # KORStockScan 문서 구조
 
-작성 기준: 2026-05-03 KST
+작성 기준: 2026-05-09 KST
 
-이 디렉터리는 Plan Rebase 이후의 운영 의사결정, 날짜별 실행 체크리스트, 감리/리포트 증적을 관리한다. 현재 판단의 원본은 루트 문서와 날짜별 checklist이고, 과거 전환 증적은 `archive/`에 보존한다.
+이 디렉터리는 Plan Rebase 이후의 운영 의사결정, 날짜별 실행 체크리스트, 감리/리포트 증적을 관리한다. 현재 판단의 원본은 루트 기준 문서와 날짜별 checklist이고, 과거 전환 증적은 `archive/`에 보존한다.
 
 ## 먼저 볼 문서
 
@@ -11,9 +11,9 @@
 - `plan-korStockScanPerformanceOptimization.execution-delta.md`: 원 계획 대비 실행 차이와 보정 기록.
 - `plan-korStockScanPerformanceOptimization.performance-report.md`: Plan Rebase 성과 판정과 반복 성과 기준.
 - `stage2-todo-checklist-template.md`: 날짜별 checklist 작성 형식.
-- `2026-05-04-stage2-todo-checklist.md` 이후 날짜별 checklist: 실제 실행 작업항목의 소유 문서.
+- `2026-05-04-stage2-todo-checklist.md` 이후 날짜별 checklist: 실제 실행 작업항목의 소유 문서. 최신 미래 실행표는 `2026-05-11-stage2-todo-checklist.md`다.
 
-작업 시작 시에는 `plan-korStockScanPerformanceOptimization.rebase.md`의 상단 원칙과 당일 checklist의 `오늘 목적`, `오늘 강제 규칙`을 먼저 확인한다.
+작업 시작 시에는 `plan-korStockScanPerformanceOptimization.rebase.md` §1~§8과 당일 checklist의 `오늘 목적`, `오늘 강제 규칙`을 먼저 확인한다. 당일 checklist가 없으면 Plan Rebase §7~§8과 최신 실행표의 상단 요약을 같이 확인한다.
 
 ## 현재 루트 유지 기준
 
@@ -21,16 +21,26 @@
 
 - 현재 또는 미래 작업을 소유하는 날짜별 checklist.
 - Plan Rebase, prompt, execution delta, performance report처럼 반복 참조되는 기준 문서.
-- 현재 checklist 또는 Plan Rebase가 직접 참조하는 workorder, 코드리뷰, 운영 제안서.
-- 최근 감리 대응, acceptance spec, runtime owner 판정에 필요한 증적 문서.
+- 현재 checklist 또는 Plan Rebase가 직접 참조하는 workorder와 운영 runbook.
+- 날짜별 checklist parser가 읽어야 하는 작업항목 소유 문서.
 
-과거 판단 근거이지만 현재 작업항목을 직접 소유하지 않는 문서는 `archive/`로 이동한다. 이동 시 기존 링크는 새 위치로 보정하고 parser 검증을 수행한다.
+과거 판단 근거이지만 현재 작업항목을 직접 소유하지 않는 문서는 성격별 하위 디렉터리 또는 `archive/`로 이동한다. 이동 시 기존 링크는 새 위치로 보정하고 parser 검증을 수행한다.
 
 ## 날짜별 Checklist
 
-- `2026-05-04-stage2-todo-checklist.md`부터 `2026-05-08-stage2-todo-checklist.md`: 현재 Plan Rebase 흐름의 장전/장중/장후 작업 소유 문서.
+- `2026-05-04-stage2-todo-checklist.md`부터 `2026-05-11-stage2-todo-checklist.md`: 현재 Plan Rebase 흐름의 장전/장중/장후 작업 소유 문서.
 - `2026-04-20-stage2-todo-checklist.md`부터 `2026-05-02-stage2-todo-checklist.md`: 과거 실행 증적. 현재 문서에서 직접 참조되는 동안 루트에 유지한다.
 - 완료된 checklist의 `[x]` 항목은 증적이며 현재 OPEN owner로 보지 않는다. 현재 owner는 Plan Rebase와 최신 checklist에서 확인한다.
+
+## 하위 디렉터리
+
+- `ai-acceptance/`: Gemini, DeepSeek, OpenAI flag-off acceptance spec, parity review, bundle result.
+- `audit-reports/`: Plan Rebase, OFI/QI, hotfix, 운영 감리 보고서.
+- `code-improvement-workorders/`: 코드 개선 전용 workorder.
+- `code-reviews/`: 스나이퍼 엔진 코드리뷰, 성능 감사, holding flow override 리뷰.
+- `proposals/`: 스캐너 개선, preclose sell target 등 운영 제안서.
+- `personal/`: 개인 보조 메모. 실행 판정의 `Source`로 쓰지 않는다.
+- `reference/`: API 문서, AI coding instruction 등 일반 참조 문서.
 
 ## Report/Threshold 운영문서
 
@@ -41,13 +51,14 @@
 ## 감사/감리 문서
 
 - `audit-reports/`: OFI/QI, Plan Rebase, 운영 감리 대응처럼 현재 또는 최근 감리 결과를 보존한다.
-- 루트의 `2026-05-03-order-flow-imbalance-application-audit-report.md`는 OFI/QI 적용 현황의 기존 루트 증적이다.
+- `audit-reports/2026-05-03-order-flow-imbalance-application-audit-report.md`는 OFI/QI 적용 현황의 기존 증적이다.
 - 감리 지적이 실행 작업으로 전환되면 날짜별 checklist에 자동 파싱 가능한 `- [ ]` 항목으로 남긴다.
 
 ## Workorder/Review 문서
 
 - `workorder-*.md`: 현재 또는 최근 checklist가 직접 참조하는 작업 지시, 실행 로그, 결과 문서.
-- `code-review-20260430-sniper-engine.md`, `sniper-codebase-performance-audit.md`, `kiwoom_sniper_v2_performance_review.md`, `scalping-scanner-improvement-proposal.md`: 현재 개선축에서 참조되는 코드리뷰/제안 증적.
+- `code-reviews/`: 현재 개선축에서 참조되는 코드리뷰/성능 감사 증적.
+- `proposals/`: 현재 개선축에서 참조되는 운영 제안 증적.
 - 완료되어 후속 checklist와 Plan Rebase에서 직접 참조하지 않는 workorder는 `archive/legacy-workorders/`로 이동한다.
 
 ## Archive
@@ -62,8 +73,8 @@
 
 ## 개인 문서
 
-- `personal-decision-flow-notes.md`
-- `personal-gemini-ai-prompt-usage-guide.md`
+- `personal/personal-decision-flow-notes.md`
+- `personal/personal-gemini-ai-prompt-usage-guide.md`
 
 개인 문서는 보조 메모로만 유지한다. checklist, report, Plan Rebase의 `Source` 또는 판정 근거 링크로 사용하지 않는다.
 

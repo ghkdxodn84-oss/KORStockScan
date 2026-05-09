@@ -147,7 +147,7 @@
   - 판정: 로깅 보강 완료. live 판단, cache TTL, prompt, model routing, 주문/청산 판단은 변경하지 않았다. 런타임 반영 후 `15:10 KST` 1차 / `17:45 KST` 최종 판정은 위 기준대로 수행한다.
 
 - [x] `[PrecloseSellTargetRevival0506-Intraday] preclose sell target report-only 재개 dry-run 및 정기화 판정` (`Due: 2026-05-06`, `Slot: INTRADAY`, `TimeWindow: 14:50~15:10`, `Track: Plan`)
-  - Source: [preclose-sell-target-revival-plan.md](/home/ubuntu/KORStockScan/docs/preclose-sell-target-revival-plan.md), [preclose_sell_target_report.py](/home/ubuntu/KORStockScan/src/scanners/preclose_sell_target_report.py), [data/report/README.md](/home/ubuntu/KORStockScan/data/report/README.md), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - Source: [preclose-sell-target-revival-plan.md](/home/ubuntu/KORStockScan/docs/proposals/preclose-sell-target-revival-plan.md), [preclose_sell_target_report.py](/home/ubuntu/KORStockScan/src/scanners/preclose_sell_target_report.py), [data/report/README.md](/home/ubuntu/KORStockScan/data/report/README.md), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
   - 판정 기준: `deploy/run_preclose_sell_target_report.sh 2026-05-06 --no-ai --no-telegram`로 `data/report/preclose_sell_target/preclose_sell_target_2026-05-06.{json,md}`가 생성되고, JSON에 `policy_status=report_only`, `live_runtime_effect=false`, `automation_stage=R1_daily_report`가 들어가는지 확인한다. 기존 루트 Markdown은 호환성 산출물로만 본다.
   - why: 2026-04-15 단발 `preclose_sell_target`는 cron 미등록/legacy archive로 중단됐지만, 15:00 기준 보유/오버나이트/스윙 후보를 구조화하면 향후 threshold/ADM/swing trailing 개선의 입력 품질을 높일 수 있다. 즉시 live 주문이나 threshold mutation에 연결하면 원인귀속이 깨지므로 report-only 재개부터 닫는다.
   - 다음 액션: dry-run이 통과하면 `AI/Telegram acceptance`, `cron 등록`, `threshold/ADM consumer 연결`을 각각 별도 checklist owner로 분리한다. 실패하면 DB 후보 조회, T-1 ML score freshness, schema write, Telegram/AI 의존성 중 어느 축에서 막혔는지 분리하고 cron 등록은 보류한다.
@@ -159,7 +159,7 @@
 ## 장후 체크리스트 (16:00~23:59)
 
 - [x] `[ScalpingScannerTxnBoundary0506] DB/WS 경계 재설계와 rollback guard 확정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 16:00~16:20`, `Track: ScalpingLogic`)
-  - Source: [2026-04-28-scalping-scanner-enhancement-proposal.md](/home/ubuntu/KORStockScan/docs/2026-04-28-scalping-scanner-enhancement-proposal.md), [scalping_scanner.py](/home/ubuntu/KORStockScan/src/scanners/scalping_scanner.py:281)
+  - Source: [2026-04-28-scalping-scanner-enhancement-proposal.md](/home/ubuntu/KORStockScan/docs/proposals/2026-04-28-scalping-scanner-enhancement-proposal.md), [scalping_scanner.py](/home/ubuntu/KORStockScan/src/scanners/scalping_scanner.py:281)
   - 판정 기준: `DB 저장 -> recent_picks 기억 -> COMMAND_WS_REG 발행` 경계에서 발생할 수 있는 부분 커밋/미발행 불일치 케이스를 `failure matrix`, `rollback guard`, `canary-only 적용 범위`로 문서화하고, `일괄 커밋`, `후행 WS 발행`, `outbox`, `observe-only 계측` 중 다음 change set 1개만 고른다.
   - why: 현재 구조는 런타임 중단 위험은 줄였지만 완전한 정합성 보장은 없다. 이 경계를 먼저 잠그지 않으면 후속 구조 변경의 원인귀속이 흐려진다.
   - 다음 액션: 선택한 경계 재설계안이 `same-day code/test/restart` 가능하면 `2026-05-07 PREOPEN` carry-over로 넘기고, 아니면 막힌 조건과 단일 조작점을 같은 항목에 남긴다.
@@ -168,25 +168,25 @@
   - 다음 액션: `scanner_promote_outbox_observe` 로그 후보를 추가해 `db_commit_ok`, `ws_command_enqueued`, `ws_command_published`, `recent_picks_updated`, `rollback_reason`을 기록한다. rollback guard는 `db_commit_ok=True AND ws_command_published=False` 또는 같은 종목 중복 publish 누적이다.
 
 - [x] `[ScalpingScannerStageSplit0506] candidate_pool/enrich/promoted_watchlist 3단 구조 분해` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 16:20~16:40`, `Track: ScalpingLogic`)
-  - Source: [2026-04-28-scalping-scanner-enhancement-proposal.md](/home/ubuntu/KORStockScan/docs/2026-04-28-scalping-scanner-enhancement-proposal.md), [scalping_scanner.py](/home/ubuntu/KORStockScan/src/scanners/scalping_scanner.py:214)
+  - Source: [2026-04-28-scalping-scanner-enhancement-proposal.md](/home/ubuntu/KORStockScan/docs/proposals/2026-04-28-scalping-scanner-enhancement-proposal.md), [scalping_scanner.py](/home/ubuntu/KORStockScan/src/scanners/scalping_scanner.py:214)
   - 판정 기준: `발굴(source)`, `정제(enrich)`, `승격(promote)` 단계별 데이터 구조, 함수 ownership, 저장 경계, `recent_picks`/`promoted_watchlist` 책임, 테스트 분리를 표로 고정한다.
   - why: `찾은 종목 = 바로 WS 등록 후보` 구조를 그대로 두면 소스 확장과 품질 정제를 더할수록 WS 부하와 승격 기준이 함께 엉킨다.
   - 다음 액션: 단계 분해안이 잠기면 `2026-05-07` 이후 구현 change set을 `1) stage split`, `2) enrich`, `3) gate tuning` 순으로 배치한다.
 
 - [x] `[ScalpingScannerEnrich0506] ka10095 일괄 정제와 승격 gate 정량 기준 확정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 16:40~17:00`, `Track: ScalpingLogic`)
-  - Source: [2026-04-28-scalping-scanner-enhancement-proposal.md](/home/ubuntu/KORStockScan/docs/2026-04-28-scalping-scanner-enhancement-proposal.md:219), [scalping-scanner-improvement-proposal.md](/home/ubuntu/KORStockScan/docs/scalping-scanner-improvement-proposal.md:41)
+  - Source: [2026-04-28-scalping-scanner-enhancement-proposal.md](/home/ubuntu/KORStockScan/docs/proposals/2026-04-28-scalping-scanner-enhancement-proposal.md:219), [scalping-scanner-improvement-proposal.md](/home/ubuntu/KORStockScan/docs/proposals/scalping-scanner-improvement-proposal.md:41)
   - 판정 기준: 후보 상위 `N`개에 대한 `ka10095` 일괄 정제 호출 시점, rate-limit budget, 실패 fallback, 그리고 승격 gate에 넣을 `TradeValue`, `RankJump`, `VIReleaseTime freshness`, `CntrStr acceleration` 필드를 확정한다.
   - why: 거래대금 정보가 점수에만 약하게 반영된 상태로는 기대값 관점의 유동성 검증이 부족하다. 승격 gate를 먼저 잠가야 full/partial 체결 품질과 missed upside를 같이 볼 수 있다.
   - 다음 액션: gate 기준이 잠기면 `observe-only enrich log` 또는 `canary-only hard gate` 중 하나만 다음 슬롯에 올리고, 둘을 같은 날 동시에 열지 않는다.
 
 - [x] `[ScalpingScannerReentrySource0506] 신호 기반 재포착과 시간대별 소스 분기 규칙 확정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: ScalpingLogic`)
-  - Source: [2026-04-28-scalping-scanner-enhancement-proposal.md](/home/ubuntu/KORStockScan/docs/2026-04-28-scalping-scanner-enhancement-proposal.md:345), [scalping-scanner-improvement-proposal.md](/home/ubuntu/KORStockScan/docs/scalping-scanner-improvement-proposal.md:202)
+  - Source: [2026-04-28-scalping-scanner-enhancement-proposal.md](/home/ubuntu/KORStockScan/docs/proposals/2026-04-28-scalping-scanner-enhancement-proposal.md:345), [scalping-scanner-improvement-proposal.md](/home/ubuntu/KORStockScan/docs/proposals/scalping-scanner-improvement-proposal.md:202)
   - 판정 기준: 고정 `25분 cooldown`을 대체할 `reentry predicates`와 `09:05~09:30`, `09:30~14:00`, `14:00~15:00` 시간대별 활성 소스 세트를 정의하고, `latency guard miss`, `liquidity gate miss`, `AI threshold miss`, `overbought gate miss`와의 충돌 없이 분리되는지 확인한다.
   - why: 재포착 규칙과 소스 분기를 같이 설계하되, 실전 반영은 별개 축으로 분리해야 missed opportunity와 WS 중복 부하를 동시에 관리할 수 있다.
   - 다음 액션: source split과 reentry 중 먼저 적용할 1축을 고르고, 나머지는 `observe-only`로 유지한다.
 
 - [x] `[ScalpingScannerCompositeScore0506] composite score 표준화와 canary 적용 순서 확정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:30`, `Track: ScalpingLogic`)
-  - Source: [scalping-scanner-improvement-proposal.md](/home/ubuntu/KORStockScan/docs/scalping-scanner-improvement-proposal.md:173), [2026-04-28-scalping-scanner-enhancement-proposal.md](/home/ubuntu/KORStockScan/docs/2026-04-28-scalping-scanner-enhancement-proposal.md)
+  - Source: [scalping-scanner-improvement-proposal.md](/home/ubuntu/KORStockScan/docs/proposals/scalping-scanner-improvement-proposal.md:173), [2026-04-28-scalping-scanner-enhancement-proposal.md](/home/ubuntu/KORStockScan/docs/proposals/2026-04-28-scalping-scanner-enhancement-proposal.md)
   - 판정 기준: 기존 `_freshness_score` 대비 `z-score` 또는 동등한 standardized composite score의 입력 필드, 시장 분포 기준, observe-only 계측 기간, pass/fail 기준, full/partial 분리 평가 규칙을 문서화한다.
   - why: 점수 체계를 바꾸면 승격 순서 전체가 바뀌므로 source/gate 변경과 같은 날 겹치면 기대값 개선 원인귀속이 깨진다.
   - 다음 액션: composite score는 source/gate 변경 이후 독립 canary로만 올리고, 표준화 분포가 비어 있으면 `observe-only 분포 계측`부터 연다.
@@ -245,7 +245,7 @@
   - 다음 액션: 매도 측 정책 변경이 필요하면 진입가 v1 재튜닝과 별도 축으로 분리하고, 같은 날 한 축 canary 원칙을 유지한다.
 
 - [x] `[NaNCastGuard0506HolidayCarry] NaN cast runtime 안정화 후속계획 확정` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 19:35~19:55`, `Track: RuntimeStability`)
-  - Source: [2026-05-05-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-05-stage2-todo-checklist.md), [2026-04-28-nan-cast-guard-hotfix-report.md](/home/ubuntu/KORStockScan/docs/2026-04-28-nan-cast-guard-hotfix-report.md)
+  - Source: [2026-05-05-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-05-stage2-todo-checklist.md), [2026-04-28-nan-cast-guard-hotfix-report.md](/home/ubuntu/KORStockScan/docs/audit-reports/2026-04-28-nan-cast-guard-hotfix-report.md)
   - 판정 기준: 원격과 동일 patch set 복제 여부가 아니라 메인 코드베이스 기준 `NaN/inf` 안전 캐스팅 최소 범위, 재발건수, 상태전이 실패 경로, upstream source 후보(`buy_qty/buy_price/target_buy_price/marcap/preset_tp_*`, websocket `curr/ask_tot/bid_tot`, 체결 `price/qty`)를 확정한다.
   - why: `NaN cast`는 루프 중단과 체결 후 상태전이 실패를 만들어 기대값과 미진입/미청산 기회비용을 직접 훼손한다. 휴장일 이월 후에도 메인 기준 수정범위와 재발 방지 계획을 비워두지 않는다.
   - 다음 액션: 메인 기준 최소 safe cast patch 범위와 테스트(`pytest`/`py_compile`)를 잠그고, 재발이 있으면 source 추적 작업을 다음 거래일 PREOPEN/POSTCLOSE checklist로 승격한다.
@@ -275,7 +275,7 @@
   - 다음 액션: gate가 잠기면 `LatencyEntryPriceGuardV2`와 분리된 독립 change set으로 resolver 검증축을 연다.
 
 - [x] `[ExecutionReceiptsThreadSafety0506] receipt lock/snapshot 경계 재설계` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 20:55~21:10`, `Track: RuntimeStability`)
-  - Source: [code-review-20260430-sniper-engine.md](/home/ubuntu/KORStockScan/docs/code-review-20260430-sniper-engine.md), [sniper_execution_receipts.py](/home/ubuntu/KORStockScan/src/engine/sniper_execution_receipts.py:38), [sniper_execution_receipts.py](/home/ubuntu/KORStockScan/src/engine/sniper_execution_receipts.py:1046)
+  - Source: [code-review-20260430-sniper-engine.md](/home/ubuntu/KORStockScan/docs/code-reviews/code-review-20260430-sniper-engine.md), [sniper_execution_receipts.py](/home/ubuntu/KORStockScan/src/engine/sniper_execution_receipts.py:38), [sniper_execution_receipts.py](/home/ubuntu/KORStockScan/src/engine/sniper_execution_receipts.py:1046)
   - 판정 기준: 1차 반영된 `RECEIPT_LOCK` 분리, `state_lock` 주입, `snapshot` 인자화 이후에도 `active order binding`, `BUY/ADD/SELL` 체결, `BROKER_RECOVER` 보정 경로에서 race 또는 truth drift가 없는지 점검한다. `weighted_avg_price` vs `_weighted_avg` canonical 단일화는 `2026-04-30`에 receipt 모듈 정밀 평균가 고정으로 닫혔고, `_find_execution_target` 매칭 우선순위도 `bundle -> terminal -> BUY_ORDERED exact -> pending_add exact -> single candidate` 테스트로 고정됐다. 남은 결정사항은 `RECEIPT_LOCK`/`ENTRY_LOCK` 운영상 ownership guide와 residual race review다.
   - why: 설계 여부 자체는 이미 일부 코드로 굳었다. 이제 남은 리스크는 `락을 왜 나눴는지`, `어떤 경로가 어느 락을 소유하는지`, `주석/테스트로 고정한 규칙과 실제 장중 event order가 어긋나는지`를 운영 기준으로 재검토하지 않은 점이다. 실전 체결 truth 품질이 흔들리면 entry/holding 개선의 원인귀속이 깨진다.
   - 5/4 anchor 보강: [2026-05-04 checklist](./2026-05-04-stage2-todo-checklist.md) `G2PowerReceiptMismatch0504-Postclose`의 `지투파워(388050)` `ID 4988`은 신규 `holding_started/ENTRY_FILL` 없이 `exit_signal/sell_order_sent`만 발생했고 DB에는 `COMPLETED -0.23%`가 남은 `receipt_mismatch_zero_sellable` excluded cohort다. `ID 4799` 정상 lifecycle과 같은 종목 revive row를 비교해 active order binding과 completed truth drift를 재현 anchor로 둔다.
@@ -414,13 +414,13 @@
   - 다음 액션: schema가 잠기면 `2026-05-07`에 `ADM-2 shadow prompt injection`을 열고, matrix context가 AI 응답을 어떻게 바꾸는지 action drift를 먼저 본다.
 
 - [x] `[AIEngineFlagOffBacklog0506] Gemini/DeepSeek/OpenAI flag-off 잔여축 재점검 및 live enable 금지선 확인` (`Due: 2026-05-06`, `Slot: POSTCLOSE`, `TimeWindow: 23:50~23:59`, `Track: AIPrompt`)
-  - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_gemini_engine_review.md), [2026-04-29-gemini-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/2026-04-29-gemini-enable-acceptance-spec.md), [2026-04-29-deepseek-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/2026-04-29-deepseek-enable-acceptance-spec.md), [2026-04-30-openai-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/2026-04-30-openai-enable-acceptance-spec.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_gemini_engine_review.md), [2026-04-29-gemini-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-29-gemini-enable-acceptance-spec.md), [2026-04-29-deepseek-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-29-deepseek-enable-acceptance-spec.md), [2026-04-30-openai-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-30-openai-enable-acceptance-spec.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
   - 판정 기준: Gemini `system_instruction`/deterministic config/schema registry, DeepSeek retry/gatekeeper structured-output/holding cache/Tool Calling, OpenAI schema/deterministic/Responses WS/live routing을 `done`, `flag-off observe`, `backlog`, `new checklist required` 중 하나로 재분류한다. 추가로 `2026-05-02` live 보정된 prompt별 model tier routing과 호출 interval이 실제 로그의 `ai_prompt_type`, `ai_model`, `ai_response_ms`, `ai_result_source`로 추적되는지 확인한다.
   - OpenAI 후반 owner 명시: `2026-05-04` 점검 기준 현재 `main` 스캘핑 live routing은 Gemini이며 `ai_engine_openai.py`는 runtime owner가 아니다. 따라서 OpenAI는 `transport/schema readiness backlog`로만 재검토하고, `HTTP baseline live` 표현은 쓰지 않는다. 후반 판정에서는 `1) route가 실제로 열려 있는지`, `2) diagnostic/shadow 메트릭이 있는지`, `3) 없다면 backlog only로 유지할지`, `4) live routing 검토가 필요하면 새 checklist가 필요한지`를 분리한다.
   - 추가 점검: 스캘핑 AI engine 공통 policy 중 cooldown 일원화, `ai_disabled` 자동 복구 probe, provider protocol 추출, shadow 전용 lock/cache 격리는 active canary cadence를 바꾸지 않는 범위에서만 재분류한다.
   - why: AI 엔진 후속은 여러 문서에 분산돼 있어, 실전 enable 미승인 항목이 누락되거나 active entry/holding canary와 같은 날 섞이면 원인귀속이 깨진다.
   - 금지: 이 항목에서 Gemini/OpenAI/DeepSeek live routing, response schema live enable, deterministic config live enable을 켜지 않는다.
-  - prompt cleanup 재분류: `SCALPING_SYSTEM_PROMPT(shared)`, `SCALPING_SYSTEM_PROMPT_75_CANARY`, `SCALPING_BUY_RECOVERY_CANARY_PROMPT`, 미사용 `SCALPING_EXIT_SYSTEM_PROMPT`, 비JSON `EOD_TOMORROW_LEADER_PROMPT`를 `live 유지`, `legacy fallback`, `archive/delete`, `new checklist required` 중 하나로 닫는다. `prompt_profile` 추적 공백은 [2026-04-11-scalping-ai-prompt-coding-instructions.md](/home/ubuntu/KORStockScan/docs/2026-04-11-scalping-ai-prompt-coding-instructions.md)의 `2026-05-02 KST Plan Rebase live 보정` 섹션과 대조한다.
+  - prompt cleanup 재분류: `SCALPING_SYSTEM_PROMPT(shared)`, `SCALPING_SYSTEM_PROMPT_75_CANARY`, `SCALPING_BUY_RECOVERY_CANARY_PROMPT`, 미사용 `SCALPING_EXIT_SYSTEM_PROMPT`, 비JSON `EOD_TOMORROW_LEADER_PROMPT`를 `live 유지`, `legacy fallback`, `archive/delete`, `new checklist required` 중 하나로 닫는다. `prompt_profile` 추적 공백은 [2026-04-11-scalping-ai-prompt-coding-instructions.md](/home/ubuntu/KORStockScan/docs/reference/2026-04-11-scalping-ai-prompt-coding-instructions.md)의 `2026-05-02 KST Plan Rebase live 보정` 섹션과 대조한다.
   - Tier1 prompt 문자열 경량화 판정: `flash-lite`/`nano` hot path인 `SCALPING_WATCHING_SYSTEM_PROMPT`, `SCALPING_HOLDING_SYSTEM_PROMPT`, legacy `SCALPING_SYSTEM_PROMPT`에서 `상위 1%`, `프랍 트레이더`, `극강 공격적`, `전설적인`, 장황한 해석 역할극 문구를 제거하거나 Tier2/3 전용으로 격리한다. Tier1은 역할극이 아니라 `입력 핵심 필드 -> enum action -> score/confidence -> reason 1줄` 중심의 짧은 판정 규칙으로 재작성하고, 기대값 판단은 `BUY/WAIT/DROP` 또는 `HOLD/TRIM/EXIT` contract를 깨지 않는 범위에서만 남긴다.
   - 다음 액션: `new checklist required`가 있으면 다음 KRX 운영일 checklist에 `Due`, `Slot`, `TimeWindow`, rollback owner, cohort를 포함한 단일 항목으로만 올린다. 근거가 없으면 backlog로 유지하고, rebase에는 active/open으로 올리지 않는다.
 

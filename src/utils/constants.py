@@ -52,15 +52,15 @@ class TradingConfig:
     ADD_JUDGMENT_LOCK_SEC: int = 20  # 추가매수 판단 락(스팸 판단 방지)
     SCALP_PYRAMID_POST_ADD_TRAILING_GRACE_SEC: int = 180  # 불타기 체결 직후 trailing 조기청산 억제
     SCALPING_SCALE_IN_PRICE_RESOLVER_ENABLED: bool = True  # 추가매수 주문 직전 P1 지정가 resolver
-    SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED: bool = True  # 추가매수 live 수량 0/1 동적 결정
-    SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP: int = 1  # 추가매수 수량 hard cap(현재 1주 유지)
+    SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED: bool = True  # 추가매수 live 수량 safety 결정
+    SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP: int = 0  # 추가매수 수량 hard cap. 0 이하는 수량 cap 없음
     SCALPING_SCALE_IN_MAX_SPREAD_BPS: float = 80.0  # 추가매수 resolver 스프레드 상한(bp)
     SCALPING_PYRAMID_PRICE_GUARD_ENABLED: bool = True  # 불타기 추격 지정가 안전장치
     SCALPING_PYRAMID_MAX_SPREAD_BPS: float = 80.0  # 호환 alias: scale-in spread guard
     SCALPING_PYRAMID_MAX_MICRO_VWAP_BPS: float = 60.0  # micro-VWAP 대비 과열 추격 상한(bp)
-    SCALPING_PYRAMID_MIN_AI_SCORE: int = 70  # PYRAMID 1주 허용 AI 최소점수
-    SCALPING_PYRAMID_MIN_BUY_PRESSURE: float = 60.0  # PYRAMID 1주 허용 매수압 최소값
-    SCALPING_PYRAMID_MIN_TICK_ACCEL: float = 0.5  # PYRAMID 1주 허용 틱 가속 최소값
+    SCALPING_PYRAMID_MIN_AI_SCORE: int = 70  # PYRAMID 허용 AI 최소점수
+    SCALPING_PYRAMID_MIN_BUY_PRESSURE: float = 60.0  # PYRAMID 허용 매수압 최소값
+    SCALPING_PYRAMID_MIN_TICK_ACCEL: float = 0.5  # PYRAMID 허용 틱 가속 최소값
     STAT_ACTION_DECISION_SNAPSHOT_ENABLED: bool = True  # 행동가중치용 HOLDING decision snapshot observe-only
     STAT_ACTION_DECISION_SNAPSHOT_MIN_INTERVAL_SEC: int = 30  # IO guard: 종목별 snapshot 최소 간격
 
@@ -71,7 +71,7 @@ class TradingConfig:
     SCALPING_MAX_AVG_DOWN_COUNT: int = 0  # DEPRECATED: reversal_add/AVG_DOWN receipt attribution only
     SCALPING_MAX_PYRAMID_COUNT: int = 0  # DEPRECATED: runtime count gate removed; counter remains for attribution
     SCALPING_PYRAMID_MIN_PROFIT_PCT: float = 1.5
-    SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED: bool = True  # 1주 cap에서도 PYRAMID 1주 소형 canary 허용
+    SCALPING_PYRAMID_ZERO_QTY_STAGE1_ENABLED: bool = True  # buy_qty*ratio가 0일 때 최소 1주 floor 허용
     SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_ENABLED: bool = True  # 손실 청산 후 동일종목 신규 BUY 재시도 차단
     SCALP_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC: int = 3600  # soft/protect/refined 손실 후 60분 재진입 금지
     SCALP_SOFT_STOP_SAME_SYMBOL_COOLDOWN_SHADOW_ENABLED: bool = False  # live loss reentry cooldown 전환 후 shadow 기본 OFF
@@ -84,6 +84,8 @@ class TradingConfig:
     SWING_MAX_AVG_DOWN_COUNT: int = 0  # DEPRECATED: historical AVG_DOWN receipt attribution only
     SWING_MAX_PYRAMID_COUNT: int = 0  # DEPRECATED: runtime count gate removed; counter remains for attribution
     SWING_PYRAMID_MIN_PROFIT_PCT: float = 4.0
+    SWING_LIVE_ORDER_DRY_RUN_ENABLED: bool = True  # 스윙 live 로직은 동일 실행, 실제 주문 접수만 차단
+    SWING_LIVE_ORDER_DRY_RUN_OWNER: str = "SwingLiveOrderDryRunSimulation0511"
 
     # [매매 비중 설정] 전략별 주문 가능 현금 대비 1회 매수 투입 비율
     INVEST_RATIO_KOSPI: float = 0.25  # DEPRECATED: MIN/MAX 비중으로 대체됨
@@ -91,8 +93,8 @@ class TradingConfig:
     INVEST_RATIO_SCALPING_MIN: float = 0.07  # 2026-04-20 risk cut: 스캘핑 최소 투자 비율 (10% -> 7%)
     INVEST_RATIO_SCALPING_MAX: float = 0.22  # 2026-04-20 risk cut: 스캘핑 최대 투자 비율 (30% -> 22%)
     SCALPING_MAX_BUY_BUDGET_KRW: int = 1_200_000  # 2026-04-20 risk cut: 스캘핑 신규 진입 1회 절대 투자금 상한 (1,600,000 -> 1,200,000)
-    SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED: bool = True  # 임시 운영가드: 신규 BUY 접수 수량 상한 적용
-    SCALPING_INITIAL_ENTRY_MAX_QTY: int = 1  # 임시 운영가드 기본값: 신규 BUY는 1주로 제한
+    SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED: bool = False  # 신규 BUY 접수 수량 상한 적용. 기본 OFF
+    SCALPING_INITIAL_ENTRY_MAX_QTY: int = 0  # 0 이하는 신규 BUY 수량 cap 없음
 
     # 💡 [신규 추가] 스윙 AI 동적 비중 조절용 (Min~Max)
     INVEST_RATIO_KOSDAQ_MIN: float = 0.05  # 코스닥 AI 점수 60점일 때 (5%)
@@ -307,7 +309,7 @@ class TradingConfig:
     REVERSAL_ADD_MIN_TICK_ACCEL: float = 0.95      # 최소 틱 가속도 비율
     REVERSAL_ADD_VWAP_BP_MIN: float = -5.0         # 최소 Micro-VWAP 대비 (bp)
     REVERSAL_ADD_SIZE_RATIO: float = 0.33          # 추가매수 수량 비율 (기존 보유 대비)
-    REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED: bool = True  # 1주 cap에서도 reversal_add 1주 소형 canary 허용
+    REVERSAL_ADD_MIN_QTY_FLOOR_ENABLED: bool = True  # buy_qty*ratio가 0일 때 reversal_add 최소 1주 floor 허용
     REVERSAL_ADD_POST_EVAL_SEC: int = 25           # POST_ADD_EVAL 감시 시간(초)
     REVERSAL_ADD_SESSION_CUTOFF: str = "14:30"     # 허용 시간대 상한
     REVERSAL_ADD_BOX_RANGE_MAX_PCT: float = 0.20   # 박스 폭 허용 최대치 (%p)
@@ -421,7 +423,7 @@ class TradingConfig:
     AI_WAIT6579_PROBE_CANARY_ENABLED: bool = False  # 2026-04-27: soft_stop live canary 관찰 중 entry probe OFF
     AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW: int = 50_000  # probe 최대 예산
     AI_WAIT6579_PROBE_CANARY_MIN_QTY: int = 1  # probe 최소 수량
-    AI_WAIT6579_PROBE_CANARY_MAX_QTY: int = 1  # probe 최대 수량
+    AI_WAIT6579_PROBE_CANARY_MAX_QTY: int = 0  # probe 최대 수량. 0 이하는 수량 cap 없음
     AI_SCORE65_74_RECOVERY_PROBE_ENABLED: bool = False  # 2026-05-06: score65~74 전용 신규 canary 기본 OFF
     AI_SCORE65_74_RECOVERY_PROBE_MIN_SCORE: int = 65
     AI_SCORE65_74_RECOVERY_PROBE_MAX_SCORE: int = 74
@@ -1127,6 +1129,9 @@ def _build_trading_rules() -> TradingConfig:
     env_swing_enable_pyramid = _env_bool("KORSTOCKSCAN_SWING_ENABLE_PYRAMID")
     env_swing_max_avg_down_count = _env_int("KORSTOCKSCAN_SWING_MAX_AVG_DOWN_COUNT")
     env_swing_max_pyramid_count = _env_int("KORSTOCKSCAN_SWING_MAX_PYRAMID_COUNT")
+    env_swing_live_order_dry_run_enabled = _env_bool(
+        "KORSTOCKSCAN_SWING_LIVE_ORDER_DRY_RUN_ENABLED"
+    )
     env_stat_action_snapshot_enabled = _env_bool("KORSTOCKSCAN_STAT_ACTION_DECISION_SNAPSHOT_ENABLED")
     env_stat_action_snapshot_min_interval = _env_int("KORSTOCKSCAN_STAT_ACTION_DECISION_SNAPSHOT_MIN_INTERVAL_SEC")
     env_scalping_initial_entry_qty_cap_enabled = _env_bool(
@@ -1168,6 +1173,7 @@ def _build_trading_rules() -> TradingConfig:
         or env_swing_enable_pyramid is not None
         or env_swing_max_avg_down_count is not None
         or env_swing_max_pyramid_count is not None
+        or env_swing_live_order_dry_run_enabled is not None
         or env_stat_action_snapshot_enabled is not None
         or env_stat_action_snapshot_min_interval is not None
         or env_scalping_initial_entry_qty_cap_enabled is not None
@@ -1215,6 +1221,9 @@ def _build_trading_rules() -> TradingConfig:
             SWING_MAX_PYRAMID_COUNT=env_swing_max_pyramid_count
             if env_swing_max_pyramid_count is not None
             else config.SWING_MAX_PYRAMID_COUNT,
+            SWING_LIVE_ORDER_DRY_RUN_ENABLED=env_swing_live_order_dry_run_enabled
+            if env_swing_live_order_dry_run_enabled is not None
+            else config.SWING_LIVE_ORDER_DRY_RUN_ENABLED,
             STAT_ACTION_DECISION_SNAPSHOT_ENABLED=env_stat_action_snapshot_enabled
             if env_stat_action_snapshot_enabled is not None
             else config.STAT_ACTION_DECISION_SNAPSHOT_ENABLED,

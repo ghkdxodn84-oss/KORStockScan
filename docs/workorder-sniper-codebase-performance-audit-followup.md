@@ -4,7 +4,7 @@
 대상: DeepSeek 구현 담당  
 기준 문서:
 
-1. [sniper-codebase-performance-audit.md](/home/ubuntu/KORStockScan/docs/sniper-codebase-performance-audit.md)
+1. [sniper-codebase-performance-audit.md](/home/ubuntu/KORStockScan/docs/code-reviews/sniper-codebase-performance-audit.md)
 2. [workorder-kiwoom-sniper-v2-loop-performance-improvement.md](/home/ubuntu/KORStockScan/docs/workorder-kiwoom-sniper-v2-loop-performance-improvement.md)
 
 이 문서는 체크리스트/Project/Calendar 자동관리 대상이 아닌 DeepSeek 구현 지시용 독립 workorder다.

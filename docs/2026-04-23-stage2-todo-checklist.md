@@ -254,7 +254,7 @@
 ## 참고 문서
 
 - [2026-04-22-stage2-todo-checklist.md](./2026-04-22-stage2-todo-checklist.md)
-- [2026-04-11-scalping-ai-prompt-coding-instructions.md](./2026-04-11-scalping-ai-prompt-coding-instructions.md)
+- [2026-04-11-scalping-ai-prompt-coding-instructions.md](./reference/2026-04-11-scalping-ai-prompt-coding-instructions.md)
 - [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)
 - [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)
 - [plan-korStockScanPerformanceOptimization.performance-report.md](./plan-korStockScanPerformanceOptimization.performance-report.md)

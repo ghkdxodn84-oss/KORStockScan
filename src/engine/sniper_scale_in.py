@@ -614,7 +614,7 @@ def describe_dynamic_scale_in_qty(
     price_resolution=None,
     action=None,
 ):
-    """SCALPING 추가매수 live 수량을 0/1로 결정한다."""
+    """SCALPING 추가매수 live 수량을 safety guard와 position cap 안에서 결정한다."""
     legacy = describe_scale_in_qty(
         stock=stock,
         curr_price=resolved_price,
@@ -630,7 +630,7 @@ def describe_dynamic_scale_in_qty(
             "effective_qty": int(legacy.get("qty", 0) or 0),
             "qty_reason": "legacy_template",
             "dynamic_enabled": bool(getattr(TRADING_RULES, "SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED", True)),
-            "effective_qty_cap": int(getattr(TRADING_RULES, "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP", 1) or 1),
+            "effective_qty_cap": int(getattr(TRADING_RULES, "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP", 0) or 0),
         }
     )
 
@@ -641,7 +641,8 @@ def describe_dynamic_scale_in_qty(
         return details
 
     cap_qty = int(details.get("cap_qty", 0) or 0)
-    effective_cap = max(0, min(details["effective_qty_cap"], 1))
+    configured_effective_cap = int(details.get("effective_qty_cap", 0) or 0)
+    effective_cap = configured_effective_cap if configured_effective_cap > 0 else cap_qty
     if resolved_price <= 0 or deposit <= 0:
         details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "invalid_price_or_deposit"})
         return details
@@ -708,12 +709,13 @@ def describe_dynamic_scale_in_qty(
         return details
 
     effective_qty = max(0, min(would_qty, cap_qty, effective_cap))
+    qty_reason = "dynamic_allowed" if configured_effective_cap <= 0 else "dynamic_capped_allowed"
     details.update(
         {
             "would_qty": would_qty,
             "effective_qty": effective_qty,
             "qty": effective_qty,
-            "qty_reason": "dynamic_0_1_allowed" if effective_qty > 0 else "effective_qty_cap_zero",
+            "qty_reason": qty_reason if effective_qty > 0 else "effective_qty_cap_zero",
         }
     )
     return details

@@ -302,7 +302,7 @@ CALIBRATION_FAMILY_METADATA = {
             "pyramid_min_ai_score": {"min": 65, "max": 80, "max_step_per_day": 2},
             "pyramid_min_buy_pressure": {"min": 55.0, "max": 75.0, "max_step_per_day": 2.5},
             "pyramid_min_tick_accel": {"min": 0.3, "max": 1.0, "max_step_per_day": 0.1},
-            "effective_qty_cap": {"min": 1, "max": 1, "max_step_per_day": 0},
+            "effective_qty_cap": {"min": 0, "max": 0, "max_step_per_day": 0},
         },
         "sample_floor": 20,
         "sample_window": "rolling_10d_or_cumulative_sparse",
@@ -1889,7 +1889,7 @@ def _build_score65_74_recovery_probe_family(events: list[dict]) -> dict:
             getattr(TRADING_RULES, "AI_SCORE65_74_RECOVERY_PROBE_MIN_MICRO_VWAP_BP", 0.0) or 0.0
         ),
         "max_budget_krw": int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 50_000) or 50_000),
-        "max_qty": int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_QTY", 1) or 1),
+        "max_qty": int(getattr(TRADING_RULES, "AI_WAIT6579_PROBE_CANARY_MAX_QTY", 0) or 0),
     }
     wait_candidates = [
         event
@@ -1927,9 +1927,9 @@ def _build_score65_74_recovery_probe_family(events: list[dict]) -> dict:
         "recommended": recommended,
         "apply_mode": "efficient_tradeoff_canary_candidate" if sample_ready else "observe_only",
         "notes": [
-            "broad score threshold 완화가 아니라 score65~74 전용 1주/5만원 bounded canary 후보만 만든다.",
+            "broad score threshold 완화가 아니라 score65~74 전용 예산 bounded canary 후보만 만든다.",
             "partial sample 0은 live 전면 차단이 아니라 post-apply calibration target으로 남긴다.",
-            "latency DANGER 제외, 수급/가속/micro-VWAP gate와 1주 cap은 유지한다.",
+            "latency DANGER 제외, 수급/가속/micro-VWAP gate와 예산/position/protection guard는 유지한다.",
         ],
     }
 
@@ -2734,7 +2734,7 @@ def _build_scale_in_price_guard_family(events: list[dict]) -> dict:
         "pyramid_min_tick_accel": float(
             getattr(TRADING_RULES, "SCALPING_PYRAMID_MIN_TICK_ACCEL", 0.5) or 0.5
         ),
-        "effective_qty_cap": int(getattr(TRADING_RULES, "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP", 1) or 1),
+        "effective_qty_cap": int(getattr(TRADING_RULES, "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP", 0) or 0),
     }
     recommended = dict(current)
     if spread_values:
@@ -3362,7 +3362,7 @@ def _calibration_state_for_family(
                 "물타기/불타기 resolved/executed cohort가 없어 가격·수량 guard 값은 유지하고 다음 장후 재산정",
             )
         if sample_count < sample_floor or not ready:
-            return ("hold_sample", f"scale-in sample floor 미달({sample_count}/{sample_floor}); 1주 cap과 가격가드 유지")
+            return ("hold_sample", f"scale-in sample floor 미달({sample_count}/{sample_floor}); 수량/가격 가드 유지")
         return (
             "hold",
             "scale_in_price_guard는 별도 승인 전 report-only calibration으로만 산출하며 live apply는 금지한다.",

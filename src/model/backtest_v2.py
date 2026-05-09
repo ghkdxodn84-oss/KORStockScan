@@ -1,7 +1,10 @@
 import pandas as pd
 from sqlalchemy import text
 
-from common_v2 import engine, AI_PRED_PATH, select_daily_candidates
+try:
+    from .common_v2 import engine, AI_PRED_PATH, select_daily_candidates
+except ImportError:
+    from common_v2 import engine, AI_PRED_PATH, select_daily_candidates
 
 def resolve_exit_price(open_p, high_p, low_p, close_p, tp_price, sl_price, hold_day, max_hold=3):
     # 갭 우선 처리 (실전 슬리피지 반영)
@@ -32,7 +35,9 @@ def run_backtest_v2(
     roundtrip_fee_rate=0.0023, 
     tp=0.055,               # 4.5% -> 5.5% (익절 폭 확대)
     sl_bull=0.040,          # 4.5% -> 4.0% (손절 폭 소폭 축소)
-    sl_bear=0.035           # 💡 (수정) 0.025 -> 0.035: 하락장 손절폭 완화
+    sl_bear=0.035,          # 💡 (수정) 0.025 -> 0.035: 하락장 손절폭 완화
+    output_path=None,
+    save=True,
 ):
     print("🚀 실전 정밀 Backtest 시작 (파라미터 튜닝 V2)")
 
@@ -54,7 +59,7 @@ def run_backtest_v2(
 
     if picks.empty:
         print("❌ 선택된 시그널이 없습니다.")
-        return
+        return pd.DataFrame()
 
     print(f"✅ 필터링된 최종 시그널 수: {len(picks)}")
 
@@ -75,7 +80,7 @@ def run_backtest_v2(
 
     if px.empty:
         print("❌ DB에서 미래 가격 데이터를 불러오지 못했습니다.")
-        return
+        return pd.DataFrame()
 
     px['quote_date'] = pd.to_datetime(px['quote_date']).dt.normalize()
     px['stock_code'] = px['stock_code'].astype(str).str.replace(r'\.0$', '', regex=True).str.strip().str.zfill(6)
@@ -141,7 +146,7 @@ def run_backtest_v2(
     res = pd.DataFrame(results)
     if res.empty:
         print("❌ 체결 결과가 없습니다.")
-        return
+        return res
 
     win_rate = (res['net_ret'] > 0).mean()
     avg_ret = res['net_ret'].mean()
@@ -161,9 +166,11 @@ def run_backtest_v2(
     print(res['exit_reason'].value_counts().to_string())
     print("=============================================\n")
 
-    save_path = AI_PRED_PATH.replace('ai_predictions_v2.csv', 'backtest_trades_v2.csv')
-    res.to_csv(save_path, index=False, encoding='utf-8-sig')
-    print(f"✅ 거래 내역 저장 완료: {save_path}")
+    if save:
+        save_path = output_path or AI_PRED_PATH.replace('ai_predictions_v2.csv', 'backtest_trades_v2.csv')
+        res.to_csv(save_path, index=False, encoding='utf-8-sig')
+        print(f"✅ 거래 내역 저장 완료: {save_path}")
+    return res
 
 if __name__ == "__main__":
     run_backtest_v2()

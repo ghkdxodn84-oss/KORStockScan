@@ -108,7 +108,7 @@
   - 검증: `PYTHONPATH=. .venv/bin/python -m src.engine.daily_threshold_cycle_report --date 2026-05-07` 통과.
 
 - [x] `[PrecloseSellTargetAITelegram0507] preclose sell target AI/Telegram acceptance 분리 검증` (`Due: 2026-05-07`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:20`, `Track: Plan`)
-  - Source: [preclose-sell-target-revival-plan.md](/home/ubuntu/KORStockScan/docs/preclose-sell-target-revival-plan.md), [2026-05-06-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-06-stage2-todo-checklist.md), [preclose_sell_target_report.py](/home/ubuntu/KORStockScan/src/scanners/preclose_sell_target_report.py)
+  - Source: [preclose-sell-target-revival-plan.md](/home/ubuntu/KORStockScan/docs/proposals/preclose-sell-target-revival-plan.md), [2026-05-06-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-06-stage2-todo-checklist.md), [preclose_sell_target_report.py](/home/ubuntu/KORStockScan/src/scanners/preclose_sell_target_report.py)
   - 판정 기준: 5/6 P1 산출물의 `policy_status=report_only`, `live_runtime_effect=false`, `automation_stage=R1_daily_report`를 유지한 채 AI 호출 가능성, 응답 JSON contract, Telegram 전송 대상을 각각 분리 검증한다. 실패 시 AI key/SDK, schema parse, Telegram publish 중 어느 축인지 분리하고 cron 등록은 보류한다.
   - 다음 액션: AI/Telegram acceptance가 통과하면 cron 등록 검토로 넘기되, 자동 주문/threshold mutation과 연결하지 않는다.
   - 판정: AI 재수행 성공 후 실제 Telegram 전송까지 실행했다. 다만 이 리포트의 정책 상태는 계속 `report_only`이며 자동 주문/threshold mutation 연결은 없다.
@@ -117,7 +117,7 @@
   - 검증: `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_preclose_sell_target_report.py -q` 통과. `logs/preclose_sell_target/preclose_sell_target_2026-05-07.log`에 Telegram init 후 완료 로그가 남았다.
 
 - [x] `[PrecloseSellTargetCron0507] preclose sell target report-only cron 등록 여부 판정` (`Due: 2026-05-07`, `Slot: POSTCLOSE`, `TimeWindow: 17:20~17:35`, `Track: RuntimeStability`)
-  - Source: [preclose-sell-target-revival-plan.md](/home/ubuntu/KORStockScan/docs/preclose-sell-target-revival-plan.md), [data/report/README.md](/home/ubuntu/KORStockScan/data/report/README.md), [deploy/run_preclose_sell_target_report.sh](/home/ubuntu/KORStockScan/deploy/run_preclose_sell_target_report.sh)
+  - Source: [preclose-sell-target-revival-plan.md](/home/ubuntu/KORStockScan/docs/proposals/preclose-sell-target-revival-plan.md), [data/report/README.md](/home/ubuntu/KORStockScan/data/report/README.md), [deploy/run_preclose_sell_target_report.sh](/home/ubuntu/KORStockScan/deploy/run_preclose_sell_target_report.sh)
   - 판정 기준: cron 등록은 `--no-ai --no-telegram` report-only 또는 AI/Telegram acceptance 후 별도 profile 중 하나로만 승인한다. 실행 시간, lock/cooldown 필요 여부, 로그 경로, 실패 알림, holiday skip을 문서화한다.
   - 다음 액션: 승인 시 deploy/cron 문서와 wrapper를 같은 change set으로 맞추고, 미승인 시 수동 실행 명령만 유지한다.
   - 판정: cron 등록 승인 및 반영 완료. 다만 등록된 작업도 `report_only` 산출물 생성/전송용이며 runtime threshold/order 행동은 바꾸지 않는다.
@@ -126,7 +126,7 @@
   - 검증: `bash -n deploy/run_preclose_sell_target_report.sh`, `crontab -l | rg "PRECLOSE_SELL_TARGET_1500"` 통과.
 
 - [x] `[PrecloseSellTargetConsumer0507] preclose sell target threshold/ADM consumer 연결 범위 확정` (`Due: 2026-05-07`, `Slot: POSTCLOSE`, `TimeWindow: 17:35~17:50`, `Track: Plan`)
-  - Source: [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md), [data/report/README.md](/home/ubuntu/KORStockScan/data/report/README.md), [preclose-sell-target-revival-plan.md](/home/ubuntu/KORStockScan/docs/preclose-sell-target-revival-plan.md)
+  - Source: [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md), [data/report/README.md](/home/ubuntu/KORStockScan/data/report/README.md), [preclose-sell-target-revival-plan.md](/home/ubuntu/KORStockScan/docs/proposals/preclose-sell-target-revival-plan.md)
   - 판정 기준: `data/report/preclose_sell_target/preclose_sell_target_YYYY-MM-DD.json`을 threshold/ADM/swing trailing에서 어떤 단계(`operator review`, `shadow context`, `manifest_only`)까지 소비할지 고정한다. R5 live threshold apply, 자동 주문, bot restart는 금지한다.
   - 다음 액션: consumer가 필요하면 schema field와 consumer owner를 추가 checklist로 분리하고, 필요 없으면 report-only 운영자 검토 산출물로 유지한다.
   - 판정: 5/7 소비 범위는 `operator_preclose_review`까지만 승인한다. threshold/ADM/swing trailing 자동 소비는 후보로만 유지하고 연결하지 않는다.
