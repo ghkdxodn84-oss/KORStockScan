@@ -23,6 +23,8 @@ venv/
 temp/
 tmp/
 .venv/
+.kilo/
+.github/
 env/
 build/
 dist/
