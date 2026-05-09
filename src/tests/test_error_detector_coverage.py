@@ -1,0 +1,29 @@
+from __future__ import annotations
+
+from src.engine.error_detector_coverage import (
+    DETECTOR_COVERAGE_EXEMPTIONS,
+    REQUIRED_ARTIFACT_IDS,
+    REQUIRED_CRON_JOB_IDS,
+    REQUIRED_HEARTBEAT_COMPONENTS,
+    validate_detector_coverage,
+)
+from src.engine.error_detectors.artifact_freshness import ARTIFACT_REGISTRY
+from src.engine.error_detectors.cron_completion import CRON_JOB_REGISTRY
+
+
+def test_required_detector_coverage_registry_is_complete():
+    gaps = validate_detector_coverage(CRON_JOB_REGISTRY, ARTIFACT_REGISTRY)
+    assert gaps == {
+        "missing_cron_jobs": [],
+        "missing_artifacts": [],
+        "missing_heartbeat_components": [],
+    }
+
+
+def test_new_operational_feature_must_declare_detector_coverage():
+    assert "error_detection_full" in REQUIRED_CRON_JOB_IDS
+    assert "system_metric_sampler" in REQUIRED_CRON_JOB_IDS
+    assert "swing_lifecycle_audit_report" in REQUIRED_ARTIFACT_IDS
+    assert "swing_improvement_automation_report" in REQUIRED_ARTIFACT_IDS
+    assert "main_loop" in REQUIRED_HEARTBEAT_COMPONENTS
+    assert DETECTOR_COVERAGE_EXEMPTIONS["install_*"].startswith("installer/")

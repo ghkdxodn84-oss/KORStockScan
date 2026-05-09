@@ -74,6 +74,29 @@
 
 System Error Detector는 전략 튜닝 도구가 아니라 운영 감시 도구다. 사용 목적은 봇/cron/log/artifact/resource/lock 상태를 조기에 발견하고 `pass`, `warning`, `fail`로 분류하는 것이다. 탐지 결과는 incident, instrumentation gap, runtime ops 확인으로 라우팅하며, score threshold, spread cap, 주문 guard, provider routing, bot restart를 자동 변경하지 않는다.
 
+### 신규 기능 detector coverage 의무
+
+새 recurring runtime, cron wrapper, 장중/장후 report, 장기 실행 thread/daemon을 추가하거나 runbook 시간표에 새 행을 추가하면 같은 변경 세트에서 detector coverage를 반드시 선언한다. coverage 선언 없이 운영 기능만 추가하는 변경은 미완료로 본다.
+
+필수 등록 기준:
+
+| 신규 기능 유형 | 필수 조치 | 검증 기준 |
+| --- | --- | --- |
+| cron/wrapper/정기 실행 job | [cron_completion.py](/home/ubuntu/KORStockScan/src/engine/error_detectors/cron_completion.py)의 `CRON_JOB_REGISTRY`와 [error_detector_coverage.py](/home/ubuntu/KORStockScan/src/engine/error_detector_coverage.py)의 `REQUIRED_CRON_JOB_IDS`에 같은 `id` 등록 | `src/tests/test_error_detector_coverage.py` 통과 |
+| report/artifact 생성 기능 | [artifact_freshness.py](/home/ubuntu/KORStockScan/src/engine/error_detectors/artifact_freshness.py)의 `ARTIFACT_REGISTRY`와 `REQUIRED_ARTIFACT_IDS`에 같은 `id` 등록 | artifact path, window, critical 여부가 runbook 실행시각과 일치 |
+| 장기 실행 thread/daemon | [process_health.py](/home/ubuntu/KORStockScan/src/engine/error_detectors/process_health.py)의 `write_heartbeat(component=...)` 호출 추가, `REQUIRED_HEARTBEAT_COMPONENTS` 반영 | heartbeat file에 component가 남고 process health dry-run이 fail하지 않음 |
+| 새 health domain | `src/engine/error_detectors/*.py`에 `@register_detector` detector 추가, [error_detector.py](/home/ubuntu/KORStockScan/src/engine/error_detector.py)에서 import | `--mode full --dry-run` 결과에 detector 포함 |
+| 감시 제외 대상 | `DETECTOR_COVERAGE_EXEMPTIONS`에 제외 사유 등록 | installer/one-off/manual replay처럼 반복 운영 대상이 아님이 명확해야 함 |
+
+필수 검증 명령:
+
+```bash
+PYTHONPATH=. .venv/bin/pytest -q src/tests/test_error_detector_coverage.py
+PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode full --dry-run
+```
+
+이 검증은 운영 감시 coverage만 확인한다. 통과하더라도 새 기능의 live 적용, threshold 변경, 주문 guard 완화가 승인된 것은 아니다.
+
 ### 실행 경로
 
 | 경로 | 용도 | 명령/트리거 | 결과 |
@@ -107,6 +130,47 @@ ls -l data/report/error_detection/error_detection_$(TZ=Asia/Seoul date +%F).json
 | `artifact_freshness` | 시간창 기준 필수 report/artifact stale 또는 누락 | window, trading_day skip, upstream cron 실패 확인 | 누락 artifact를 수동 값으로 대체 |
 | `resource_usage` | CPU/memory/swap/load/disk threshold 위반, sampler stale | resource pressure 원인 확인. disk-low면 log rotate 결과와 cooldown state 확인 | 전략 runtime parameter 변경 |
 | `stale_lock` | 오래된 lock 발견 또는 cleanup 실패 | active lock인지 확인. 반복되면 wrapper lock lifecycle 보강 | 실행 중인 process lock 강제 삭제 |
+
+### 코드수정 필요 에러 처리 절차
+
+`summary_severity=fail` 또는 반복 `warning`이 코드 결함, instrumentation gap, wrapper 계약 불일치로 보이면 사람이 Codex에 수정 작업을 지시한다. detector 결과만으로 live threshold, spread cap, 주문 guard, provider routing, bot restart를 임의 변경하지 않는다.
+
+1. 최신 detector report를 연다.
+
+   ```bash
+   ls -l data/report/error_detection/error_detection_$(TZ=Asia/Seoul date +%F).json
+   ```
+
+2. 실패 항목의 `detector_id`, `summary`, `details`, `recommended_action`과 관련 log tail을 확인한다.
+
+   ```bash
+   PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode full --dry-run
+   tail -n 160 logs/run_error_detection.log
+   ```
+
+3. 원인을 `운영 장애`, `instrumentation gap`, `code bug`, `normal drift` 중 하나로 분류한다. 분류가 불명확하면 artifact/log 정합성부터 확인한다.
+
+4. 코드 수정이 필요하면 Codex에 아래 형식으로 지시한다.
+
+   ```text
+   data/report/error_detection/error_detection_YYYY-MM-DD.json 기준으로
+   detector_id=...
+   summary=...
+   details=...
+   관련 로그=...
+   원인 진단 후 코드 수정, 테스트, runbook/checklist 필요시 업데이트, 결과 보고 바람.
+   단, runtime threshold/spread/order guard/provider routing 변경 금지.
+   ```
+
+5. 수정 후 최소 검증은 관련 단위 테스트, detector coverage 테스트, full dry-run, `git diff --check`다.
+
+   ```bash
+   PYTHONPATH=. .venv/bin/pytest -q src/tests/test_error_detector_coverage.py
+   PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode full --dry-run
+   git diff --check
+   ```
+
+6. detector 자체 장애로 bot 기동을 방해할 때만 `KORSTOCKSCAN_ERROR_DETECTOR_ENABLED=false`를 임시 사용한다. 적용 시 날짜별 checklist 또는 운영 메모에 사유, 복구 기준, 재활성화 확인 명령을 남긴다.
 
 ### 허용된 filesystem maintenance
 

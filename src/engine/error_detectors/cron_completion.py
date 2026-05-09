@@ -17,7 +17,7 @@ from src.engine.error_detectors.base import (
 
 
 def _today_kst() -> str:
-    return datetime.now().astimezone().isoformat(timespec="seconds")[:10]
+    return date.today().isoformat()
 
 
 def _now_kst_ts() -> float:
@@ -152,6 +152,24 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "window_start": (23, 20),
         "window_end": (23, 30),
         "mode": "once",
+        "critical": False,
+    },
+    {
+        "id": "system_metric_sampler",
+        "log": "logs/system_metric_sampler_cron.log",
+        "window_start": (0, 0),
+        "window_end": (23, 59),
+        "mode": "recurring",
+        "interval_min": 1,
+        "critical": False,
+    },
+    {
+        "id": "error_detection_full",
+        "log": "logs/run_error_detection.log",
+        "window_start": (0, 0),
+        "window_end": (23, 59),
+        "mode": "recurring",
+        "interval_min": 5,
         "critical": False,
     },
 ]
