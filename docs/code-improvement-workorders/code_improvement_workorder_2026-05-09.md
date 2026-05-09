@@ -3,7 +3,7 @@
 ## 목적
 
 - Postclose 자동화가 생성한 `code_improvement_order`를 Codex 실행용 작업지시서로 변환한다.
-- 입력은 scalping pattern lab automation과 swing lifecycle improvement automation을 함께 포함할 수 있다.
+- 입력은 scalping pattern lab automation, swing lifecycle improvement automation, swing pattern lab automation을 함께 포함할 수 있다.
 - 이 문서는 repo/runtime을 직접 변경하지 않는다. 사용자가 이 문서를 Codex 세션에 넣고 구현을 요청하는 지점만 사람 개입으로 남긴다.
 - 구현 후 자동화체인 재투입은 다음 postclose report, threshold calibration, daily EV report가 담당한다.
 
@@ -11,8 +11,9 @@
 
 - pattern_lab_automation: `/home/ubuntu/KORStockScan/data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_2026-05-09.json`
 - swing_improvement_automation: `/home/ubuntu/KORStockScan/data/report/swing_improvement_automation/swing_improvement_automation_2026-05-09.json`
-- threshold_cycle_ev: `-`
-- generated_at: `2026-05-09T13:33:36+09:00`
+- swing_pattern_lab_automation: `/home/ubuntu/KORStockScan/data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_2026-05-09.json`
+- threshold_cycle_ev: `/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-09.json`
+- generated_at: `2026-05-09T17:10:20+09:00`
 
 ## 운영 원칙
 
@@ -27,13 +28,16 @@
 - source_order_count: `4`
 - scalping_source_order_count: `0`
 - swing_source_order_count: `4`
+- swing_lab_source_order_count: `0`
 - selected_order_count: `4`
 - decision_counts: `{'implement_now': 2, 'design_family_candidate': 2}`
 - gemini_fresh: `None`
 - claude_fresh: `None`
 - swing_lifecycle_audit_available: `True`
+- swing_pattern_lab_automation_available: `True`
+- swing_pattern_lab_fresh: `False`
 - swing_threshold_ai_status: `unavailable`
-- daily_ev_available: `False`
+- daily_ev_available: `True`
 
 ## Codex 실행 지시
 

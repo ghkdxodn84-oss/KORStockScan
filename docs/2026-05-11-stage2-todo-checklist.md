@@ -22,7 +22,7 @@
 
 - 없음
 
-## 장후 체크리스트 (16:00~17:30)
+## 장후 체크리스트 (16:00~18:30)
 
 - [x] `[PositionSizingCapRemoval0509] 신규 BUY/REVERSAL_ADD/PYRAMID 1주 수량 cap 제거 반영` (`Due: 2026-05-09`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: ScalpingLogic`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py), [sniper_scale_in.py](/home/ubuntu/KORStockScan/src/engine/sniper_scale_in.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py)
@@ -90,3 +90,23 @@
   - 판정 기준: 5/8 `OFIQExpansionLadder0508`에서 확정한 1순위 후속이다. `performance_tuning_YYYY-MM-DD.md`에 OFI/QI sample, state, threshold source, bucket, warning, symbol anomaly, `entry_ai_price_skip_policy`를 노출하고 2영업일 연속 표본 0 또는 핵심 필드 누락이면 `stale_context` warning을 출력한다.
   - 자동화체인 연결: 이 항목은 사람이 읽는 Markdown 보강만이 아니라 `performance_tuning`의 OFI/QI freshness와 stale warning을 daily EV 및 threshold-cycle source bundle이 소비할 수 있게 만드는 입력 품질 작업이다. prompt contract 변경, standalone OFI BUY/EXIT hard gate, bucket calibration ON은 열지 않는다.
   - 다음 액션: OFI/QI stale guard가 생성되면 `pre_submit_price_guard`, `score65_74_recovery_probe`, `holding_flow_ofi_smoothing`의 source metrics와 daily EV warning에 반영한다. 새 수동 workorder 대신 pattern lab order 또는 threshold-cycle candidate로만 다음 조치를 생성한다.
+
+- [x] `[SwingPatternLabPhase3P1Instrumentation0511] 스윙 lifecycle 관찰축 및 추천-DB 적재 gap 보강` (`Due: 2026-05-11`, `Slot: POSTCLOSE`, `TimeWindow: 17:30~17:55`, `Track: ScalpingLogic`)
+  - Source: [workorder-deepseek-swing-pattern-lab-phase3-remaining.md](/home/ubuntu/KORStockScan/docs/workorder-deepseek-swing-pattern-lab-phase3-remaining.md), [swing_lifecycle_audit.py](/home/ubuntu/KORStockScan/src/engine/swing_lifecycle_audit.py), [final_ensemble_scanner.py](/home/ubuntu/KORStockScan/src/scanners/final_ensemble_scanner.py), [swing_selection_funnel_report.py](/home/ubuntu/KORStockScan/src/engine/swing_selection_funnel_report.py)
+  - 판정 기준: Phase3 workorder §3.2~§3.3의 P1 범위만 처리한다. stage별 raw/unique count, `instrumentation_gap`, simulation stage와 실제 주문 stage 분리, 추천 CSV row와 DB inserted count divergence reason을 추가한다.
+  - 범위: 스윙 live 주문, Gatekeeper, market regime hard block, gap/protection guard, 예산/주문 safety, model floor, threshold runtime 값은 변경하지 않는다. DB load gap은 선정-적재 병목 진단 근거로만 쓴다.
+  - 완료 메모: `swing_lifecycle_audit`와 `swing_selection_funnel_report`에 `recommendation_db_load.db_load_gap`, `db_load_skip_reason`, `db_load_error`, selection mode provenance를 추가했다. `swing_improvement_automation` DB gap order evidence와 EV summary에도 같은 사유가 전파된다.
+  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py`, `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_build_code_improvement_workorder.py src/tests/test_threshold_cycle_ev_report.py`, `PYTHONPATH=. .venv/bin/python -m compileall -q src/engine`, `git diff --check`.
+
+- [x] `[SwingPatternLabPhase3P2ReportOnlyFamily0511] 스윙 AI contract 및 AVG_DOWN/PYRAMID report-only family 설계` (`Due: 2026-05-11`, `Slot: POSTCLOSE`, `TimeWindow: 17:55~18:15`, `Track: ScalpingLogic`)
+  - Source: [workorder-deepseek-swing-pattern-lab-phase3-remaining.md](/home/ubuntu/KORStockScan/docs/workorder-deepseek-swing-pattern-lab-phase3-remaining.md), [ai_engine.py](/home/ubuntu/KORStockScan/src/engine/ai_engine.py), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py), [ai_response_contracts.py](/home/ubuntu/KORStockScan/src/engine/ai_response_contracts.py), [sniper_scale_in.py](/home/ubuntu/KORStockScan/src/engine/sniper_scale_in.py)
+  - 판정 기준: Phase3 workorder §3.4~§3.5의 P2 범위만 처리한다. AI prompt/입출력 inventory, schema valid rate, disagreement, latency/cost, `AVG_DOWN/PYRAMID/NONE`, add trigger/price policy/ratio/post-add outcome을 report-only로 남긴다.
+  - 범위: OpenAI/DeepSeek/Gemini live routing, prompt 실제 교체, 주문 여부, 수량, 가격, threshold runtime 값은 변경하지 않는다. 모든 신규 family 후보는 `runtime_effect=false`, `allowed_runtime_apply=false`다.
+  - 완료 메모: lifecycle event 요약에 `ai_contract_metrics`와 `scale_in_observation`을 추가했다. `schema_valid_rate`, parse fail, disagreement, latency/cost, prompt/model 분포와 `AVG_DOWN/PYRAMID/NONE`, add trigger, price policy, add ratio, post-add outcome, zero-sample reason이 report-only로 남는다.
+  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py`, `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_deepseek_swing_pattern_lab.py`.
+
+- [ ] `[SwingPatternLabPhase3P3FreshDeepSeekReentry0511] fresh single-day DeepSeek re-entry 조건 확인` (`Due: 2026-05-11`, `Slot: POSTCLOSE`, `TimeWindow: 18:15~18:30`, `Track: ScalpingLogic`)
+  - Source: [workorder-deepseek-swing-pattern-lab-phase3-remaining.md](/home/ubuntu/KORStockScan/docs/workorder-deepseek-swing-pattern-lab-phase3-remaining.md), [run_all.sh](/home/ubuntu/KORStockScan/analysis/deepseek_swing_pattern_lab/run_all.sh), [swing_pattern_lab_automation.py](/home/ubuntu/KORStockScan/src/engine/swing_pattern_lab_automation.py), [build_code_improvement_workorder.py](/home/ubuntu/KORStockScan/src/engine/build_code_improvement_workorder.py), [threshold_cycle_ev_report.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_ev_report.py)
+  - 판정 기준: `run_manifest.json`의 `analysis_window.start == target_date == end`와 필수 output 3종 JSON/schema 유효성을 확인한다. fresh 조건 미충족 시 `deepseek_lab_available=false`, `swing_lab_source_order_count=0`, `code_improvement_order_count=0`이어야 한다.
+  - 범위: DeepSeek finding은 fresh single-day 조건이 닫힌 경우에만 `design_family_candidate` 또는 report-only order로 재진입한다. stale/range/malformed output은 warning만 남기고 workorder order로 승격하지 않는다.
+  - 다음 액션: fresh 조건이 닫히면 다음 `code_improvement_workorder_YYYY-MM-DD.md`에 source/stage/family가 보존되는지 확인한다. fresh가 아니면 warning과 artifact link만 daily EV에 남긴다.

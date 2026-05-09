@@ -235,3 +235,104 @@ def test_build_code_improvement_workorder_merges_swing_automation(tmp_path, monk
     markdown = (doc_dir / "code_improvement_workorder_2026-05-08.md").read_text(encoding="utf-8")
     assert "swing_improvement_automation" in markdown
     assert "lifecycle_stage" in markdown
+
+
+def test_build_code_improvement_workorder_dedupes_duplicate_orders(tmp_path, monkeypatch):
+    scalping_dir = tmp_path / "scalping"
+    swing_dir = tmp_path / "swing"
+    swing_lab_dir = tmp_path / "swing_lab"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    for d in (scalping_dir, swing_dir, swing_lab_dir):
+        d.mkdir()
+    (scalping_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-08",
+                "consensus_findings": [],
+                "solo_findings": [],
+                "auto_family_candidates": [],
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_shared_instrumentation",
+                        "title": "shared instrumentation",
+                        "lifecycle_stage": "both",
+                        "target_subsystem": "runtime_instrumentation",
+                        "priority": 1,
+                        "runtime_effect": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (swing_dir / "swing_improvement_automation_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-08",
+                "consensus_findings": [],
+                "solo_findings": [],
+                "auto_family_candidates": [],
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_swing_only",
+                        "title": "swing only",
+                        "lifecycle_stage": "entry",
+                        "target_subsystem": "swing_entry",
+                        "priority": 2,
+                        "runtime_effect": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (swing_lab_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-08",
+                "consensus_findings": [],
+                "solo_findings": [],
+                "auto_family_candidates": [],
+                "ev_report_summary": {"deepseek_lab_available": True},
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_swing_only",
+                        "title": "swing only",
+                        "lifecycle_stage": "entry",
+                        "target_subsystem": "swing_entry",
+                        "priority": 3,
+                        "runtime_effect": False,
+                    },
+                    {
+                        "order_id": "order_swing_only",
+                        "title": "swing only duplicate",
+                        "lifecycle_stage": "entry",
+                        "target_subsystem": "swing_entry",
+                        "priority": 4,
+                        "runtime_effect": False,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", scalping_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", swing_dir)
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", swing_lab_dir)
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-08", max_orders=5)
+
+    assert report["summary"]["source_order_count"] == 3
+    assert report["summary"]["scalping_source_order_count"] == 1
+    assert report["summary"]["swing_source_order_count"] == 1
+    assert report["summary"]["swing_lab_source_order_count"] == 2
+    dup_warnings = report["summary"].get("duplicate_order_warnings") or []
+    assert len(dup_warnings) == 1
+    assert "order_swing_only" in dup_warnings[0]
+    assert "swing_pattern_lab_automation" in dup_warnings[0]
+    markdown = (doc_dir / "code_improvement_workorder_2026-05-08.md").read_text(encoding="utf-8")
+    assert "Duplicate Order Collisions" in markdown

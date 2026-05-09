@@ -275,6 +275,7 @@ def test_build_swing_selection_funnel_report_from_injected_sources():
     assert report["model_selection"]["selected_count"] == 1
     assert report["recommendation_csv"]["selection_modes"]["SELECTED"] == 1
     assert report["db_recommendations"]["by_position_status"]["META_V2:WATCHING"] == 1
+    assert report["recommendation_db_load"]["db_load_skip_reason"] == "loaded"
     json.dumps(report, ensure_ascii=False)
 
 
@@ -404,6 +405,10 @@ def test_swing_lifecycle_audit_tracks_full_funnel_and_observation_axes():
                 "fields": {
                     "strategy": "KOSPI_ML",
                     "add_type": "PYRAMID",
+                    "add_trigger": "profit_breakout",
+                    "price_policy": "best_bid",
+                    "add_ratio": 0.25,
+                    "post_add_outcome": "pending",
                     "effective_qty": 2,
                     "actual_order_submitted": False,
                     "orderbook_micro_ready": True,
@@ -447,6 +452,20 @@ def test_swing_lifecycle_audit_tracks_full_funnel_and_observation_axes():
                     "swing_micro_runtime_effect": False,
                 },
             },
+            {
+                "stage": "gatekeeper_fast_reuse",
+                "stock_code": "000004",
+                "stock_name": "D",
+                "record_id": 4,
+                "fields": {
+                    "strategy": "KOSPI_ML",
+                    "ai_schema_valid": True,
+                    "ai_response_ms": 420,
+                    "ai_cost_krw": 1.5,
+                    "ai_prompt_type": "swing_gatekeeper",
+                    "ai_model": "gpt-5-nano",
+                },
+            },
         ],
     )
 
@@ -454,6 +473,12 @@ def test_swing_lifecycle_audit_tracks_full_funnel_and_observation_axes():
     assert report["lifecycle_events"]["unique_record_counts"]["blocked_swing_gap"] == 1
     assert report["lifecycle_events"]["gatekeeper_actions"]["눌림 대기"] == 1
     assert report["lifecycle_events"]["add_types"]["PYRAMID"] == 1
+    assert report["recommendation_db_load"]["db_load_skip_reason"] == "loaded"
+    assert report["lifecycle_events"]["scale_in_observation"]["action_groups"]["PYRAMID"] == 1
+    assert report["lifecycle_events"]["scale_in_observation"]["price_policies"]["best_bid"] == 1
+    assert report["ai_contract_audit"]["metrics"]["schema_valid_rate"] == 1.0
+    assert report["ai_contract_audit"]["metrics"]["latency_ms"]["p95"] == 420.0
+    assert report["ai_contract_audit"]["metrics"]["prompt_types"]["swing_gatekeeper"] == 1
     assert report["lifecycle_events"]["ofi_qi_summary"]["scale_in_micro_advice_counts"]["RISK_BEARISH"] == 1
     assert report["lifecycle_events"]["ofi_qi_summary"]["exit_smoothing_action_counts"]["NO_CHANGE"] == 1
     assert report["db_lifecycle"]["completed_rows"] == 1
@@ -465,6 +490,43 @@ def test_swing_lifecycle_audit_tracks_full_funnel_and_observation_axes():
     assert "swing_scale_in_ofi_qi_confirmation" in families
     assert "swing_exit_ofi_qi_smoothing" in families
     json.dumps(report, ensure_ascii=False)
+
+
+def test_swing_lifecycle_audit_reports_db_gap_and_report_only_zero_sample_reason():
+    report = build_swing_lifecycle_audit_report(
+        "2026-05-08",
+        recommendation_rows=[
+            {
+                "selection_mode": "SELECTED",
+                "position_tag": "META_V2",
+                "hybrid_mean": 0.37,
+                "meta_score": 0.02,
+            }
+        ],
+        diagnostic_summary={"selected_count": 1},
+        db_rows=[],
+        event_rows=[
+            {
+                "stage": "market_regime_pass",
+                "stock_code": "000001",
+                "stock_name": "A",
+                "record_id": 1,
+                "fields": {"strategy": "KOSPI_ML", "market_regime": "BULL"},
+            }
+        ],
+    )
+    automation = build_swing_improvement_automation_report(report)
+    orders = {order["order_id"]: order for order in automation["code_improvement_orders"]}
+
+    assert report["recommendation_db_load"]["db_load_gap"] is True
+    assert report["recommendation_db_load"]["db_load_skip_reason"] == "csv_rows_positive_db_rows_zero"
+    assert report["lifecycle_events"]["scale_in_observation"]["zero_sample_reason"] == "no_candidate"
+    assert orders["order_swing_recommendation_db_load_gap"]["runtime_effect"] is False
+    assert orders["order_swing_recommendation_db_load_gap"]["allowed_runtime_apply"] is False
+    assert "db_load_skip_reason=csv_rows_positive_db_rows_zero" in orders["order_swing_recommendation_db_load_gap"]["evidence"]
+    assert "zero_sample_reason=no_candidate" in orders["order_swing_scale_in_avg_down_pyramid_observation"]["evidence"]
+    assert automation["ev_report_summary"]["db_load_gap"] is True
+    assert automation["ev_report_summary"]["scale_in_zero_sample_reason"] == "no_candidate"
 
 
 def test_swing_threshold_ai_review_is_proposal_only_and_guarded():

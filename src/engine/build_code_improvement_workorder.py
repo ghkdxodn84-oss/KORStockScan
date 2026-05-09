@@ -15,6 +15,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 REPORT_DIR = PROJECT_ROOT / "data" / "report"
 PATTERN_LAB_AUTOMATION_DIR = REPORT_DIR / "scalping_pattern_lab_automation"
 SWING_IMPROVEMENT_AUTOMATION_DIR = REPORT_DIR / "swing_improvement_automation"
+SWING_PATTERN_LAB_AUTOMATION_DIR = REPORT_DIR / "swing_pattern_lab_automation"
 THRESHOLD_CYCLE_EV_DIR = REPORT_DIR / "threshold_cycle_ev"
 CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-workorders"
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
@@ -76,6 +77,10 @@ def automation_report_path(target_date: str) -> Path:
 
 def swing_automation_report_path(target_date: str) -> Path:
     return SWING_IMPROVEMENT_AUTOMATION_DIR / f"swing_improvement_automation_{target_date}.json"
+
+
+def swing_pattern_lab_automation_report_path(target_date: str) -> Path:
+    return SWING_PATTERN_LAB_AUTOMATION_DIR / f"swing_pattern_lab_automation_{target_date}.json"
 
 
 def threshold_ev_report_path(target_date: str) -> Path:
@@ -235,13 +240,18 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     automation = _load_json(source_path)
     swing_source_path = swing_automation_report_path(target_date)
     swing_automation = _load_json(swing_source_path)
+    swing_lab_source_path = swing_pattern_lab_automation_report_path(target_date)
+    swing_lab_automation = _load_json(swing_lab_source_path)
     ev_path = threshold_ev_report_path(target_date)
     ev_report = _load_json(ev_path)
     finding_by_order_id, finding_by_title_slug = _finding_maps(automation)
     swing_finding_by_order_id, swing_finding_by_title_slug = _finding_maps(swing_automation)
+    swing_lab_finding_by_order_id, swing_lab_finding_by_title_slug = _finding_maps(swing_lab_automation)
     finding_by_order_id.update(swing_finding_by_order_id)
+    finding_by_order_id.update(swing_lab_finding_by_order_id)
     finding_by_title_slug.update(swing_finding_by_title_slug)
-    auto_family_ids = _auto_family_order_ids(automation) | _auto_family_order_ids(swing_automation)
+    finding_by_title_slug.update(swing_lab_finding_by_title_slug)
+    auto_family_ids = _auto_family_order_ids(automation) | _auto_family_order_ids(swing_automation) | _auto_family_order_ids(swing_lab_automation)
     scalping_orders = [
         {**item, "source_report_type": "scalping_pattern_lab_automation"}
         for item in (automation.get("code_improvement_orders") or [])
@@ -252,7 +262,23 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         for item in (swing_automation.get("code_improvement_orders") or [])
         if isinstance(item, dict)
     ]
-    orders = [*scalping_orders, *swing_orders]
+    swing_lab_orders = [
+        {**item, "source_report_type": "swing_pattern_lab_automation"}
+        for item in (swing_lab_automation.get("code_improvement_orders") or [])
+        if isinstance(item, dict)
+    ]
+    orders = [*scalping_orders, *swing_orders, *swing_lab_orders]
+    seen_keys: set[tuple[str, str, str]] = set()
+    deduped_orders: list[dict[str, Any]] = []
+    collision_warnings: list[str] = []
+    for order in orders:
+        key = (str(order.get("source_report_type") or ""), str(order.get("lifecycle_stage") or ""), str(order.get("order_id") or ""))
+        if key in seen_keys:
+            collision_warnings.append(f"duplicate_order_id={order.get('order_id')} source={order.get('source_report_type')} stage={order.get('lifecycle_stage')}")
+            continue
+        seen_keys.add(key)
+        deduped_orders.append(order)
+    orders = deduped_orders
     classified = _sort_classified(
         [
             _classify_order(
@@ -276,6 +302,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         "source": {
             "pattern_lab_automation": str(source_path),
             "swing_improvement_automation": str(swing_source_path) if swing_source_path.exists() else None,
+            "swing_pattern_lab_automation": str(swing_lab_source_path) if swing_lab_source_path.exists() else None,
             "threshold_cycle_ev": str(ev_path) if ev_path.exists() else None,
         },
         "policy": {
@@ -287,13 +314,17 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "source_order_count": len(orders),
             "scalping_source_order_count": len(scalping_orders),
             "swing_source_order_count": len(swing_orders),
+            "swing_lab_source_order_count": len(swing_lab_orders),
             "selected_order_count": len(selected),
             "decision_counts": counts,
             "gemini_fresh": ((automation.get("ev_report_summary") or {}).get("gemini_fresh")),
             "claude_fresh": ((automation.get("ev_report_summary") or {}).get("claude_fresh")),
             "swing_lifecycle_audit_available": bool(swing_automation),
+            "swing_pattern_lab_automation_available": bool(swing_lab_automation),
+            "swing_pattern_lab_fresh": ((swing_lab_automation.get("ev_report_summary") or {}).get("deepseek_lab_available")),
             "swing_threshold_ai_status": ((swing_automation.get("ev_report_summary") or {}).get("threshold_ai_status")),
             "daily_ev_available": bool(ev_report),
+            "duplicate_order_warnings": collision_warnings,
         },
         "orders": [
             {
@@ -352,7 +383,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         "## 목적",
         "",
         "- Postclose 자동화가 생성한 `code_improvement_order`를 Codex 실행용 작업지시서로 변환한다.",
-        "- 입력은 scalping pattern lab automation과 swing lifecycle improvement automation을 함께 포함할 수 있다.",
+        "- 입력은 scalping pattern lab automation, swing lifecycle improvement automation, swing pattern lab automation을 함께 포함할 수 있다.",
         "- 이 문서는 repo/runtime을 직접 변경하지 않는다. 사용자가 이 문서를 Codex 세션에 넣고 구현을 요청하는 지점만 사람 개입으로 남긴다.",
         "- 구현 후 자동화체인 재투입은 다음 postclose report, threshold calibration, daily EV report가 담당한다.",
         "",
@@ -360,6 +391,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         "",
         f"- pattern_lab_automation: `{source.get('pattern_lab_automation')}`",
         f"- swing_improvement_automation: `{source.get('swing_improvement_automation') or '-'}`",
+        f"- swing_pattern_lab_automation: `{source.get('swing_pattern_lab_automation') or '-'}`",
         f"- threshold_cycle_ev: `{source.get('threshold_cycle_ev') or '-'}`",
         f"- generated_at: `{report.get('generated_at')}`",
         "",
@@ -376,14 +408,25 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- source_order_count: `{summary.get('source_order_count')}`",
         f"- scalping_source_order_count: `{summary.get('scalping_source_order_count')}`",
         f"- swing_source_order_count: `{summary.get('swing_source_order_count')}`",
+        f"- swing_lab_source_order_count: `{summary.get('swing_lab_source_order_count')}`",
         f"- selected_order_count: `{summary.get('selected_order_count')}`",
         f"- decision_counts: `{summary.get('decision_counts')}`",
         f"- gemini_fresh: `{summary.get('gemini_fresh')}`",
         f"- claude_fresh: `{summary.get('claude_fresh')}`",
         f"- swing_lifecycle_audit_available: `{summary.get('swing_lifecycle_audit_available')}`",
+        f"- swing_pattern_lab_automation_available: `{summary.get('swing_pattern_lab_automation_available')}`",
+        f"- swing_pattern_lab_fresh: `{summary.get('swing_pattern_lab_fresh')}`",
         f"- swing_threshold_ai_status: `{summary.get('swing_threshold_ai_status')}`",
         f"- daily_ev_available: `{summary.get('daily_ev_available')}`",
         "",
+    ]
+    dup_warnings = summary.get("duplicate_order_warnings") if isinstance(summary.get("duplicate_order_warnings"), list) else []
+    if dup_warnings:
+        lines.extend(["### Duplicate Order Collisions"])
+        for w in dup_warnings:
+            lines.append(f"- `{w}`")
+        lines.append("")
+    lines.extend([
         "## Codex 실행 지시",
         "",
         "아래 order를 위에서부터 순서대로 처리한다. 각 order는 `판정 -> 근거 -> 다음 액션`으로 닫고, 코드 변경 시 관련 문서와 테스트를 함께 갱신한다.",
@@ -405,7 +448,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         "",
         "## Implementation Orders",
         "",
-    ]
+    ])
     for index, item in enumerate(report.get("orders") or [], start=1):
         if not isinstance(item, dict):
             continue

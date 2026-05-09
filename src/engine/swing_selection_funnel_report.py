@@ -287,6 +287,40 @@ def summarize_db_rows(rows: Iterable[dict]) -> dict:
     }
 
 
+def summarize_recommendation_db_load_gap(
+    recommendation_csv: dict,
+    db_recommendations: dict,
+    diagnostic_summary: dict,
+) -> dict:
+    csv_rows = int(recommendation_csv.get("csv_rows") or 0)
+    db_rows = int(db_recommendations.get("db_rows") or 0)
+    db_error = diagnostic_summary.get("db_load_error")
+    selection_modes = recommendation_csv.get("selection_modes") or {}
+
+    if db_error:
+        reason = "db_load_error"
+    elif csv_rows <= 0:
+        reason = "no_recommendation_csv_rows"
+    elif db_rows > 0:
+        reason = "loaded"
+    elif selection_modes and not any(
+        str(mode).upper() in {"SELECTED", "META_V2", "META_FALLBACK", "EOD_TOP5"}
+        for mode in selection_modes
+    ):
+        reason = "diagnostic_only_recommendation_rows"
+    else:
+        reason = "csv_rows_positive_db_rows_zero"
+
+    return {
+        "csv_rows": csv_rows,
+        "db_rows": db_rows,
+        "db_load_gap": bool(csv_rows > 0 and db_rows <= 0),
+        "db_load_skip_reason": reason,
+        "db_load_error": str(db_error) if db_error else None,
+        "selection_modes": selection_modes,
+    }
+
+
 def load_recommendation_rows(path: str | Path = RECO_PATH) -> list[dict]:
     p = Path(path)
     if not p.exists():
@@ -352,13 +386,21 @@ def build_swing_selection_funnel_report(
         "score_distribution": diagnostic_summary.get("score_distribution", {}),
     }
 
+    recommendation_csv = summarize_recommendation_rows(recommendation_rows)
+    db_recommendations = summarize_db_rows(db_rows)
+
     return {
         "date": date_key,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "owner": SWING_SELECTION_OWNER,
         "model_selection": model,
-        "recommendation_csv": summarize_recommendation_rows(recommendation_rows),
-        "db_recommendations": summarize_db_rows(db_rows),
+        "recommendation_csv": recommendation_csv,
+        "db_recommendations": db_recommendations,
+        "recommendation_db_load": summarize_recommendation_db_load_gap(
+            recommendation_csv,
+            db_recommendations,
+            diagnostic_summary,
+        ),
         "pipeline_events": summarize_pipeline_events(event_rows),
     }
 
@@ -367,6 +409,7 @@ def render_markdown(report: dict) -> str:
     model = report["model_selection"]
     csv = report["recommendation_csv"]
     db = report["db_recommendations"]
+    db_load = report.get("recommendation_db_load") or {}
     events = report["pipeline_events"]
     lines = [
         f"# Swing Selection Funnel Report - {report['date']}",
@@ -377,6 +420,8 @@ def render_markdown(report: dict) -> str:
         f"- fallback_written_to_recommendations: `{model.get('fallback_written_to_recommendations')}`",
         f"- csv_rows: `{csv.get('csv_rows')}`",
         f"- db_rows: `{db.get('db_rows')}`",
+        f"- db_load_gap: `{db_load.get('db_load_gap')}`",
+        f"- db_load_skip_reason: `{db_load.get('db_load_skip_reason')}`",
         f"- entered_rows: `{db.get('entered_rows')}`",
         f"- submitted_unique_records: `{events.get('submitted_unique_records')}`",
         "",

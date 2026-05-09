@@ -11,6 +11,7 @@ from typing import Any
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.engine.build_code_improvement_workorder import code_improvement_workorder_paths
 from src.engine.scalping_pattern_lab_automation import automation_report_paths
+from src.engine.swing_pattern_lab_automation import swing_pattern_lab_automation_report_paths
 from src.engine.threshold_cycle_preopen_apply import apply_manifest_path
 
 
@@ -147,6 +148,69 @@ def _pattern_lab_automation_summary(target_date: str) -> tuple[dict[str, Any], s
     )
 
 
+def _swing_pattern_lab_automation_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+    json_path, _ = swing_pattern_lab_automation_report_paths(target_date)
+    payload = _load_json(json_path)
+    if not payload:
+        return (
+            {
+                "available": False,
+                "artifact": None,
+                "findings_count": 0,
+                "code_improvement_order_count": 0,
+                "data_quality_warning_count": 0,
+                "carryover_warning_count": 0,
+                "population_split_available": False,
+                "top_findings": [],
+                "top_orders": [],
+            },
+            None,
+            ["swing_pattern_lab_automation_missing"],
+        )
+    summary = payload.get("ev_report_summary") if isinstance(payload.get("ev_report_summary"), dict) else {}
+    warnings: list[str] = []
+    dq_warnings = (payload.get("data_quality") or {}).get("warnings", [])
+    if dq_warnings:
+        warnings.extend(f"swing_lab_dq:{w}" for w in (dq_warnings if isinstance(dq_warnings, list) else []))
+    if summary.get("stale_reason"):
+        warnings.append(f"swing_lab_stale:{summary['stale_reason']}")
+    carryover_count = _safe_int(summary.get("carryover_warning_count"), 0)
+    if carryover_count > 0:
+        warnings.append(f"swing_lab_carryover:{carryover_count}")
+    return (
+        {
+            "available": True,
+            "artifact": str(json_path),
+            "deepseek_lab_available": bool(summary.get("deepseek_lab_available")),
+            "findings_count": _safe_int(summary.get("findings_count"), 0),
+            "code_improvement_order_count": _safe_int(summary.get("code_improvement_order_count"), 0),
+            "data_quality_warning_count": _safe_int(summary.get("data_quality_warning_count"), 0),
+            "carryover_warning_count": carryover_count,
+            "population_split_available": bool(summary.get("population_split_available")),
+            "top_findings": [
+                {
+                    "finding_id": item.get("finding_id"),
+                    "title": item.get("title"),
+                    "route": item.get("route"),
+                }
+                for item in (payload.get("consensus_findings") or [])[:3]
+                if isinstance(item, dict)
+            ],
+            "top_orders": [
+                {
+                    "order_id": item.get("order_id"),
+                    "title": item.get("title"),
+                    "decision": item.get("decision"),
+                }
+                for item in (payload.get("code_improvement_orders") or [])[:3]
+                if isinstance(item, dict)
+            ],
+        },
+        str(json_path),
+        warnings,
+    )
+
+
 def _code_improvement_workorder_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
     json_path, md_path = code_improvement_workorder_paths(target_date)
     payload = _load_json(json_path)
@@ -201,6 +265,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     trade_metrics = trade_review.get("metrics") if isinstance(trade_review.get("metrics"), dict) else {}
     perf_metrics = performance.get("metrics") if isinstance(performance.get("metrics"), dict) else {}
     pattern_lab_summary, pattern_lab_path, pattern_lab_warnings = _pattern_lab_automation_summary(target_date)
+    swing_lab_summary, swing_lab_path, swing_lab_warnings = _swing_pattern_lab_automation_summary(target_date)
     code_workorder_summary, code_workorder_path, code_workorder_warnings = _code_improvement_workorder_summary(target_date)
     selected_families = _selected_families(apply_manifest)
     completed = _safe_int(trade_metrics.get("completed_trades"), 0)
@@ -255,6 +320,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "decisions": _cohort_decisions(calibration),
         },
         "pattern_lab_automation": pattern_lab_summary,
+        "swing_pattern_lab_automation": swing_lab_summary,
         "code_improvement_workorder": code_workorder_summary,
         "sources": {
             "trade_review": str(trade_review_path) if trade_review_path.exists() else None,
@@ -262,6 +328,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "calibration": str(calibration_path) if calibration_path.exists() else None,
             "apply_manifest": str(apply_path) if apply_path.exists() else None,
             "pattern_lab_automation": pattern_lab_path,
+            "swing_pattern_lab_automation": swing_lab_path,
             "code_improvement_workorder": code_workorder_path,
         },
         "warnings": [
@@ -272,6 +339,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
                 "calibration_report_missing" if not calibration_path.exists() else "",
                 "apply_manifest_missing" if not apply_path.exists() else "",
                 *pattern_lab_warnings,
+                *swing_lab_warnings,
                 *code_workorder_warnings,
             ]
             if message
@@ -290,6 +358,7 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
     holding = report.get("holding_exit") if isinstance(report.get("holding_exit"), dict) else {}
     runtime = report.get("runtime_apply") if isinstance(report.get("runtime_apply"), dict) else {}
     pattern_lab = report.get("pattern_lab_automation") if isinstance(report.get("pattern_lab_automation"), dict) else {}
+    swing_lab = report.get("swing_pattern_lab_automation") if isinstance(report.get("swing_pattern_lab_automation"), dict) else {}
     code_workorder = report.get("code_improvement_workorder") if isinstance(report.get("code_improvement_workorder"), dict) else {}
     decisions = ((report.get("calibration_outcome") or {}).get("decisions") or []) if isinstance(report.get("calibration_outcome"), dict) else []
     lines = [
@@ -321,6 +390,14 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- artifact: `{pattern_lab.get('artifact') or '-'}`",
         f"- fresh: gemini=`{pattern_lab.get('gemini_fresh')}` claude=`{pattern_lab.get('claude_fresh')}`",
         f"- consensus/orders/family_candidates: `{pattern_lab.get('consensus_count')}` / `{pattern_lab.get('code_improvement_order_count')}` / `{pattern_lab.get('auto_family_candidate_count')}`",
+        "",
+        "## Swing Pattern Lab Automation",
+        f"- artifact: `{swing_lab.get('artifact') or '-'}`",
+        f"- deepseek_lab_available: `{swing_lab.get('deepseek_lab_available')}`",
+        f"- findings/orders: `{swing_lab.get('findings_count')}` / `{swing_lab.get('code_improvement_order_count')}`",
+        f"- data_quality_warnings: `{swing_lab.get('data_quality_warning_count')}`",
+        f"- carryover_warnings: `{swing_lab.get('carryover_warning_count')}`",
+        f"- population_split_available: `{swing_lab.get('population_split_available')}`",
         "",
         "## Code Improvement Workorder",
         f"- artifact: `{code_workorder.get('artifact') or '-'}`",

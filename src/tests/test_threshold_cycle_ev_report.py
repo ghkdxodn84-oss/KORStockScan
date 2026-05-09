@@ -211,3 +211,91 @@ def test_build_threshold_cycle_ev_report_warns_when_pattern_lab_artifact_missing
     assert "code_improvement_workorder_missing" in report["warnings"]
     markdown = (ev_dir / "threshold_cycle_ev_2026-05-08.md").read_text(encoding="utf-8")
     assert "AI threshold miss EV 회수 조건 점검" not in markdown
+
+
+def test_build_threshold_cycle_ev_report_renders_swing_pattern_lab_section(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    monitor_dir = report_dir / "monitor_snapshots"
+    calibration_dir = report_dir / "threshold_cycle_calibration"
+    apply_dir = tmp_path / "apply_plans"
+    ev_dir = report_dir / "threshold_cycle_ev"
+    automation_dir = report_dir / "scalping_pattern_lab_automation"
+    swing_lab_automation_dir = report_dir / "swing_pattern_lab_automation"
+    workorder_report_dir = report_dir / "code_improvement_workorder"
+    workorder_doc_dir = tmp_path / "docs" / "code-improvement-workorders"
+    for d in (monitor_dir, calibration_dir, apply_dir, automation_dir, swing_lab_automation_dir, workorder_report_dir, workorder_doc_dir):
+        d.mkdir(parents=True)
+    monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
+    monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", calibration_dir)
+    monkeypatch.setattr(mod, "EV_REPORT_DIR", ev_dir)
+    monkeypatch.setattr(mod, "apply_manifest_path", lambda target_date: apply_dir / f"threshold_apply_{target_date}.json")
+    monkeypatch.setattr(
+        mod,
+        "automation_report_paths",
+        lambda target_date: (
+            automation_dir / f"scalping_pattern_lab_automation_{target_date}.json",
+            automation_dir / f"scalping_pattern_lab_automation_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(
+        mod,
+        "swing_pattern_lab_automation_report_paths",
+        lambda target_date: (
+            swing_lab_automation_dir / f"swing_pattern_lab_automation_{target_date}.json",
+            swing_lab_automation_dir / f"swing_pattern_lab_automation_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(
+        mod,
+        "code_improvement_workorder_paths",
+        lambda target_date: (
+            workorder_report_dir / f"code_improvement_workorder_{target_date}.json",
+            workorder_doc_dir / f"code_improvement_workorder_{target_date}.md",
+        ),
+    )
+
+    (monitor_dir / "trade_review_2026-05-08.json").write_text(json.dumps({"metrics": {}}), encoding="utf-8")
+    (monitor_dir / "performance_tuning_2026-05-08.json").write_text(json.dumps({"metrics": {}}), encoding="utf-8")
+    (calibration_dir / "threshold_cycle_calibration_2026-05-08_postclose.json").write_text(
+        json.dumps({"run_phase": "postclose"}), encoding="utf-8"
+    )
+    (apply_dir / "threshold_apply_2026-05-08.json").write_text(json.dumps({"status": "manifest_ready"}), encoding="utf-8")
+    (swing_lab_automation_dir / "swing_pattern_lab_automation_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "ev_report_summary": {
+                    "deepseek_lab_available": True,
+                    "findings_count": 2,
+                    "code_improvement_order_count": 1,
+                    "data_quality_warning_count": 0,
+                    "carryover_warning_count": 1,
+                    "population_split_available": True,
+                },
+                "consensus_findings": [
+                    {"finding_id": "f1", "title": "selection gap", "route": "design_family_candidate"},
+                    {"finding_id": "f2", "title": "entry block", "route": "attach_existing_family"},
+                ],
+                "code_improvement_orders": [
+                    {"order_id": "order_f1", "title": "selection gap", "decision": "design_family_candidate"},
+                ],
+                "data_quality": {"warnings": []},
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (workorder_report_dir / "code_improvement_workorder_2026-05-08.json").write_text(
+        json.dumps({"summary": {}, "orders": []}), encoding="utf-8"
+    )
+    (workorder_doc_dir / "code_improvement_workorder_2026-05-08.md").write_text("# workorder\n", encoding="utf-8")
+
+    report = mod.build_threshold_cycle_ev_report("2026-05-08")
+    assert report["swing_pattern_lab_automation"]["available"] is True
+    assert report["swing_pattern_lab_automation"]["findings_count"] == 2
+    assert report["swing_pattern_lab_automation"]["carryover_warning_count"] == 1
+
+    markdown = (ev_dir / "threshold_cycle_ev_2026-05-08.md").read_text(encoding="utf-8")
+    assert "Swing Pattern Lab Automation" in markdown
+    assert "deepseek_lab_available" in markdown
+    assert "carryover_warnings" in markdown
+    assert "population_split_available" in markdown

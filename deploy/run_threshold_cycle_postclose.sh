@@ -18,6 +18,7 @@ RUN_SWING_LIFECYCLE_AUDIT="${THRESHOLD_CYCLE_RUN_SWING_LIFECYCLE_AUDIT:-true}"
 SWING_THRESHOLD_AI_REVIEW_PROVIDER="${SWING_THRESHOLD_AI_REVIEW_PROVIDER:-openai}"
 BUILD_CODE_IMPROVEMENT_WORKORDER="${THRESHOLD_CYCLE_BUILD_CODE_IMPROVEMENT_WORKORDER:-true}"
 CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS="${CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS:-12}"
+RUN_DEEPSEEK_SWING_LAB="${THRESHOLD_CYCLE_RUN_DEEPSEEK_SWING_LAB:-true}"
 
 mkdir -p "$PROJECT_DIR/logs"
 cd "$PROJECT_DIR"
@@ -91,6 +92,12 @@ if [ "$RUN_SWING_LIFECYCLE_AUDIT" = "true" ] || [ "$RUN_SWING_LIFECYCLE_AUDIT" =
     --date "$TARGET_DATE" \
     --ai-review-provider "$SWING_THRESHOLD_AI_REVIEW_PROVIDER"
 fi
+if [ "$RUN_DEEPSEEK_SWING_LAB" = "true" ] || [ "$RUN_DEEPSEEK_SWING_LAB" = "1" ]; then
+  echo "[threshold-cycle] running deepseek swing pattern lab target_date=$TARGET_DATE"
+  ANALYSIS_START_DATE="$TARGET_DATE" ANALYSIS_END_DATE="$TARGET_DATE" \
+    bash "$PROJECT_DIR/analysis/deepseek_swing_pattern_lab/run_all.sh" "$TARGET_DATE" || \
+    echo "[threshold-cycle] deepseek swing pattern lab failed (non-fatal)" >&2
+fi
 if [ "$RUN_PATTERN_LABS" = "true" ] || [ "$RUN_PATTERN_LABS" = "1" ]; then
   ANALYSIS_START_DATE="$PATTERN_LAB_START_DATE" ANALYSIS_END_DATE="$TARGET_DATE" \
     "$PROJECT_DIR/analysis/gemini_scalping_pattern_lab/run.sh"
@@ -98,10 +105,12 @@ if [ "$RUN_PATTERN_LABS" = "true" ] || [ "$RUN_PATTERN_LABS" = "1" ]; then
     "$PROJECT_DIR/analysis/claude_scalping_pattern_lab/run_all.sh"
 fi
 PYTHONPATH=. "$VENV_PY" -m src.engine.scalping_pattern_lab_automation --date "$TARGET_DATE"
+PYTHONPATH=. "$VENV_PY" -m src.engine.swing_pattern_lab_automation --date "$TARGET_DATE" || \
+  echo "[threshold-cycle] swing pattern lab automation failed (non-fatal)" >&2
 if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "1" ]; then
   PYTHONPATH=. "$VENV_PY" -m src.engine.build_code_improvement_workorder \
     --date "$TARGET_DATE" \
     --max-orders "$CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS"
 fi
 PYTHONPATH=. "$VENV_PY" -m src.engine.threshold_cycle_ev_report --date "$TARGET_DATE"
-echo "[threshold-cycle] postclose report complete target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER pattern_labs=$RUN_PATTERN_LABS code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true"
+echo "[threshold-cycle] postclose report complete target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER pattern_labs=$RUN_PATTERN_LABS deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true"

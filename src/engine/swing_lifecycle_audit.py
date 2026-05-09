@@ -277,6 +277,10 @@ def _safe_bool(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y"}
 
 
+def _counter_dict(counter: Counter) -> dict[str, int]:
+    return {str(key): int(value) for key, value in counter.items()}
+
+
 def _safe_read_json(path: str | Path) -> dict[str, Any]:
     p = Path(path)
     if not p.exists():
@@ -362,6 +366,95 @@ def _first_present(fields: dict[str, Any], keys: Iterable[str]) -> Any:
     return None
 
 
+def _recommendation_db_load_summary(
+    recommendation_csv: dict[str, Any],
+    db_summary: dict[str, Any],
+    diagnostic_summary: dict[str, Any],
+) -> dict[str, Any]:
+    csv_rows = int(recommendation_csv.get("csv_rows") or 0)
+    db_rows = int(db_summary.get("db_rows") or 0)
+    db_error = diagnostic_summary.get("db_load_error")
+    selection_modes = recommendation_csv.get("selection_modes") or {}
+
+    if db_error:
+        reason = "db_load_error"
+    elif csv_rows <= 0:
+        reason = "no_recommendation_csv_rows"
+    elif db_rows > 0:
+        reason = "loaded"
+    elif selection_modes and not any(
+        str(mode).upper() in {"SELECTED", "META_V2", "META_FALLBACK", "EOD_TOP5"}
+        for mode in selection_modes
+    ):
+        reason = "diagnostic_only_recommendation_rows"
+    else:
+        reason = "csv_rows_positive_db_rows_zero"
+
+    return {
+        "csv_rows": csv_rows,
+        "db_rows": db_rows,
+        "db_load_gap": bool(csv_rows > 0 and db_rows <= 0),
+        "db_load_skip_reason": reason,
+        "db_load_error": str(db_error) if db_error else None,
+        "selection_modes": selection_modes,
+    }
+
+
+def _normalize_scale_in_action(stage: str, fields: dict[str, Any]) -> str:
+    action = _first_present(fields, ("add_type", "scale_in_type", "candidate_action", "scale_in_action"))
+    if action in (None, ""):
+        lowered = stage.lower()
+        if "pyramid" in lowered:
+            return "PYRAMID"
+        if "avg_down" in lowered or "reversal_add" in lowered:
+            return "AVG_DOWN"
+        return "NONE"
+    action_text = str(action).strip().upper()
+    if action_text in {"PYRAMID", "AVG_DOWN", "NONE"}:
+        return action_text
+    if "PYRAMID" in action_text:
+        return "PYRAMID"
+    if "AVG" in action_text or "REVERSAL" in action_text:
+        return "AVG_DOWN"
+    return action_text
+
+
+def _summarize_numeric(values: list[float]) -> dict[str, Any]:
+    if not values:
+        return {"count": 0, "min": None, "max": None, "avg": None, "mean": None, "p50": None, "p95": None}
+    sorted_values = sorted(float(value) for value in values)
+
+    def percentile(rank: float) -> float:
+        if len(sorted_values) == 1:
+            return sorted_values[0]
+        position = (len(sorted_values) - 1) * rank
+        lower = int(position)
+        upper = min(lower + 1, len(sorted_values) - 1)
+        weight = position - lower
+        return sorted_values[lower] * (1 - weight) + sorted_values[upper] * weight
+
+    mean_value = float(sum(sorted_values) / len(sorted_values))
+    return {
+        "count": int(len(sorted_values)),
+        "min": float(sorted_values[0]),
+        "max": float(sorted_values[-1]),
+        "avg": mean_value,
+        "mean": mean_value,
+        "p50": float(percentile(0.50)),
+        "p95": float(percentile(0.95)),
+    }
+
+
+def _scale_in_zero_sample_reason(scale_in_raw_count: int, guard_blockers: Counter, total_swing_events: int) -> str | None:
+    if scale_in_raw_count > 0:
+        return None
+    if guard_blockers:
+        return "blocked_guard"
+    if total_swing_events <= 0:
+        return "not_loaded"
+    return "no_candidate"
+
+
 def load_pipeline_event_rows(target_date: str | date | datetime) -> list[dict[str, Any]]:
     date_key = _date_text(target_date)
     return _read_jsonl(Path(DATA_DIR) / "pipeline_events" / f"pipeline_events_{date_key}.jsonl")
@@ -435,7 +528,22 @@ def summarize_lifecycle_events(events: Iterable[dict[str, Any]]) -> dict[str, An
     add_types = Counter()
     exit_sources = Counter()
     actual_order_flags = Counter()
+    scale_in_actions = Counter()
+    scale_in_triggers = Counter()
+    scale_in_price_policies = Counter()
+    scale_in_post_add_outcomes = Counter()
+    scale_in_guard_blockers = Counter()
+    scale_in_ratios: list[float] = []
+    ai_schema_valid = 0
+    ai_schema_invalid = 0
+    ai_parse_fail = 0
+    ai_disagreement = 0
+    ai_latency_ms: list[float] = []
+    ai_cost_values: list[float] = []
+    ai_prompt_types = Counter()
+    ai_model_tiers = Counter()
     by_record_timeline: dict[tuple[str, str, str], list[dict[str, Any]]] = defaultdict(list)
+    swing_event_count = 0
 
     for event in events:
         if not _is_swing_event(event):
@@ -443,6 +551,7 @@ def summarize_lifecycle_events(events: Iterable[dict[str, Any]]) -> dict[str, An
         stage = _event_stage(event)
         if not stage:
             continue
+        swing_event_count += 1
         fields = _event_fields(event)
         identity = _event_identity(event)
         group = _stage_group(stage)
@@ -483,6 +592,52 @@ def summarize_lifecycle_events(events: Iterable[dict[str, Any]]) -> dict[str, An
         add_type = _first_present(fields, ("add_type", "scale_in_type", "candidate_action"))
         if add_type not in (None, "") and group == "scale_in":
             add_types[str(add_type).upper()] += 1
+        if group == "scale_in":
+            scale_action = _normalize_scale_in_action(stage, fields)
+            scale_in_actions[scale_action] += 1
+            trigger = _first_present(
+                fields,
+                (
+                    "add_trigger",
+                    "scale_in_trigger",
+                    "trigger",
+                    "candidate_reason",
+                    "reason",
+                ),
+            )
+            if trigger not in (None, ""):
+                scale_in_triggers[str(trigger)] += 1
+            price_policy = _first_present(
+                fields,
+                (
+                    "add_price_policy",
+                    "price_policy",
+                    "scale_in_price_policy",
+                    "order_price_policy",
+                    "resolver_policy",
+                    "swing_micro_counterfactual_price_action",
+                ),
+            )
+            if price_policy not in (None, ""):
+                scale_in_price_policies[str(price_policy)] += 1
+            post_add = _first_present(fields, ("post_add_outcome", "post_add_result", "outcome"))
+            if post_add not in (None, ""):
+                scale_in_post_add_outcomes[str(post_add)] += 1
+            blocker = _first_present(
+                fields,
+                (
+                    "blocked_reason",
+                    "block_reason",
+                    "scale_in_blocked_reason",
+                    "guard_reason",
+                ),
+            )
+            if blocker not in (None, ""):
+                scale_in_guard_blockers[str(blocker)] += 1
+            ratio = _first_present(fields, ("add_ratio", "scale_in_ratio", "ratio"))
+            ratio_value = _safe_float(ratio, default=None)
+            if ratio_value is not None:
+                scale_in_ratios.append(float(ratio_value))
         exit_source = _first_present(fields, ("exit_source", "sell_reason", "reason", "decision_source"))
         if exit_source not in (None, "") and group == "exit":
             exit_sources[str(exit_source)] += 1
@@ -490,12 +645,46 @@ def summarize_lifecycle_events(events: Iterable[dict[str, Any]]) -> dict[str, An
         if actual_order not in (None, ""):
             actual_order_flags[str(_safe_bool(actual_order)).lower()] += 1
 
+        schema_valid = _first_present(fields, ("ai_schema_valid", "schema_valid", "structured_output_valid"))
+        if schema_valid not in (None, ""):
+            if _safe_bool(schema_valid):
+                ai_schema_valid += 1
+            else:
+                ai_schema_invalid += 1
+        parse_status = str(
+            _first_present(fields, ("ai_parse_status", "parse_status", "schema_parse_status")) or ""
+        ).lower()
+        if parse_status in {"fail", "failed", "error", "invalid", "schema_error"}:
+            ai_parse_fail += 1
+        disagreement = _first_present(
+            fields,
+            ("ai_decision_disagreement", "decision_disagreement", "structured_output_disagreement"),
+        )
+        if disagreement not in (None, "") and _safe_bool(disagreement):
+            ai_disagreement += 1
+        latency = _first_present(fields, ("ai_response_ms", "model_call_ms", "ai_latency_ms"))
+        latency_value = _safe_float(latency, default=None)
+        if latency_value is not None:
+            ai_latency_ms.append(float(latency_value))
+        cost = _first_present(fields, ("ai_cost_krw", "estimated_cost_krw", "cost_krw"))
+        cost_value = _safe_float(cost, default=None)
+        if cost_value is not None:
+            ai_cost_values.append(float(cost_value))
+        prompt_type = _first_present(fields, ("ai_prompt_type", "prompt_type", "endpoint_name"))
+        if prompt_type not in (None, ""):
+            ai_prompt_types[str(prompt_type)] += 1
+        model_tier = _first_present(fields, ("ai_model", "model", "model_tier"))
+        if model_tier not in (None, ""):
+            ai_model_tiers[str(model_tier)] += 1
+
         for key, value in fields.items():
             if value not in (None, ""):
                 field_coverage[str(key)] += 1
 
     groups = sorted(set(raw_by_group) | {"entry", "holding", "scale_in", "exit", "other"})
     stages = sorted(set(raw_by_stage) | SWING_EVENT_STAGES | SELL_STAGES)
+    schema_total = ai_schema_valid + ai_schema_invalid
+    scale_in_raw_count = int(raw_by_group.get("scale_in", 0))
     return {
         "raw_counts": {stage: int(raw_by_stage.get(stage, 0)) for stage in stages},
         "unique_record_counts": {
@@ -510,6 +699,29 @@ def summarize_lifecycle_events(events: Iterable[dict[str, Any]]) -> dict[str, An
         "add_types": dict(add_types),
         "exit_sources": dict(exit_sources),
         "actual_order_submitted_flags": dict(actual_order_flags),
+        "scale_in_observation": {
+            "action_groups": _counter_dict(scale_in_actions),
+            "add_triggers": _counter_dict(scale_in_triggers),
+            "price_policies": _counter_dict(scale_in_price_policies),
+            "add_ratio_summary": _summarize_numeric(scale_in_ratios),
+            "post_add_outcomes": _counter_dict(scale_in_post_add_outcomes),
+            "guard_blockers": _counter_dict(scale_in_guard_blockers),
+            "zero_sample_reason": _scale_in_zero_sample_reason(
+                scale_in_raw_count, scale_in_guard_blockers, swing_event_count
+            ),
+        },
+        "ai_contract_metrics": {
+            "schema_valid_count": int(ai_schema_valid),
+            "schema_invalid_count": int(ai_schema_invalid),
+            "schema_total": int(schema_total),
+            "schema_valid_rate": round(ai_schema_valid / schema_total, 4) if schema_total else None,
+            "parse_fail_count": int(ai_parse_fail),
+            "decision_disagreement_count": int(ai_disagreement),
+            "latency_ms": _summarize_numeric(ai_latency_ms),
+            "estimated_cost_krw": _summarize_numeric(ai_cost_values),
+            "prompt_types": _counter_dict(ai_prompt_types),
+            "model_tiers": _counter_dict(ai_model_tiers),
+        },
         "submitted_unique_records": int(
             len(set().union(*(unique_by_stage.get(stage, set()) for stage in SUBMITTED_STAGES)))
             if any(stage in unique_by_stage for stage in SUBMITTED_STAGES)
@@ -545,10 +757,12 @@ def build_observation_axes(
     recommendation_csv: dict[str, Any],
     db_summary: dict[str, Any],
     lifecycle_events: dict[str, Any],
+    recommendation_db_load: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     raw_counts = lifecycle_events.get("raw_counts") or {}
     unique_counts = lifecycle_events.get("unique_record_counts") or {}
     ofi_qi = lifecycle_events.get("ofi_qi_summary") or {}
+    recommendation_db_load = recommendation_db_load or {}
 
     axes = [
         {
@@ -568,8 +782,12 @@ def build_observation_axes(
             "lifecycle_stage": "db_load",
             "threshold_family": "swing_selection_top_k",
             "sample_count": int(recommendation_csv.get("csv_rows") or db_summary.get("db_rows") or 0),
-            "required_fields": ["csv_rows", "db_rows", "position_tag", "status"],
-            "observed_fields": ["csv_rows", "db_rows"] if db_summary.get("db_rows") else ["csv_rows"],
+            "required_fields": ["csv_rows", "db_rows", "position_tag", "status", "db_load_skip_reason"],
+            "observed_fields": [
+                key
+                for key in ("csv_rows", "db_rows", "db_load_skip_reason")
+                if recommendation_db_load.get(key) not in (None, "")
+            ],
         },
         {
             "axis_id": "swing_gatekeeper_accept_reject",
@@ -622,7 +840,8 @@ def build_observation_axes(
             "observed_field_count": _coverage_count(
                 lifecycle_events,
                 ["add_type", "would_qty", "effective_qty", "price_policy", "post_add_outcome"],
-            ),
+            )
+            + int(bool((lifecycle_events.get("scale_in_observation") or {}).get("action_groups"))),
         },
         {
             "axis_id": "swing_exit_post_sell_attribution",
@@ -678,6 +897,8 @@ def build_observation_axes(
                 lifecycle_events,
                 [
                     "add_type",
+                    "swing_micro_support",
+                    "swing_micro_risk",
                     "swing_micro_micro_support",
                     "swing_micro_micro_risk",
                     "swing_micro_recovery_support_observed",
@@ -780,6 +1001,11 @@ def build_swing_lifecycle_audit_report(
     model_selection = _model_selection_summary(diagnostic_summary or {})
     recommendation_csv = summarize_recommendation_rows(recommendation_rows)
     db_summary = summarize_db_lifecycle_rows(db_rows)
+    recommendation_db_load = _recommendation_db_load_summary(
+        recommendation_csv,
+        db_summary,
+        diagnostic_summary or {},
+    )
     pipeline_summary = summarize_pipeline_events(event_rows)
     lifecycle_events = summarize_lifecycle_events(event_rows)
     observation_axes = build_observation_axes(
@@ -787,6 +1013,7 @@ def build_swing_lifecycle_audit_report(
         recommendation_csv=recommendation_csv,
         db_summary=db_summary,
         lifecycle_events=lifecycle_events,
+        recommendation_db_load=recommendation_db_load,
     )
     status_counts = Counter(axis["status"] for axis in observation_axes)
 
@@ -807,6 +1034,7 @@ def build_swing_lifecycle_audit_report(
         "source_paths": _source_paths(date_key),
         "model_selection": model_selection,
         "recommendation_csv": recommendation_csv,
+        "recommendation_db_load": recommendation_db_load,
         "db_lifecycle": db_summary,
         "pipeline_events": pipeline_summary,
         "lifecycle_events": lifecycle_events,
@@ -821,6 +1049,7 @@ def build_swing_lifecycle_audit_report(
         "threshold_families": SWING_THRESHOLD_FAMILIES,
         "ai_contract_audit": {
             "runtime_change": False,
+            "metrics": lifecycle_events.get("ai_contract_metrics") or {},
             "contract_issues": AI_CONTRACT_ISSUES,
             "openai_target": {
                 "api_surface": "Responses API",
@@ -842,6 +1071,7 @@ def _family_metric_snapshot(audit_report: dict[str, Any], family: str) -> dict[s
     model = audit_report.get("model_selection") or {}
     csv = audit_report.get("recommendation_csv") or {}
     db = audit_report.get("db_lifecycle") or {}
+    db_load = audit_report.get("recommendation_db_load") or {}
     ofi_qi = events.get("ofi_qi_summary") or {}
     if family == "swing_model_floor":
         return {
@@ -856,6 +1086,8 @@ def _family_metric_snapshot(audit_report: dict[str, Any], family: str) -> dict[s
             "csv_rows": csv.get("csv_rows"),
             "db_rows": db.get("db_rows"),
             "selection_modes": csv.get("selection_modes"),
+            "db_load_gap": db_load.get("db_load_gap"),
+            "db_load_skip_reason": db_load.get("db_load_skip_reason"),
         }
     if family == "swing_gatekeeper_accept_reject":
         return {
@@ -879,6 +1111,7 @@ def _family_metric_snapshot(audit_report: dict[str, Any], family: str) -> dict[s
         return {
             "sample_count": int((events.get("group_unique_counts") or {}).get("scale_in", 0)),
             "add_types": events.get("add_types"),
+            "scale_in_observation": events.get("scale_in_observation"),
         }
     if family == "swing_trailing_stop_time_stop":
         return {
@@ -1294,6 +1527,7 @@ def _order(
         "improvement_type": improvement_type,
         "runtime_effect": False,
         "runtime_effect_type": "report_only_or_feature_flag_off",
+        "allowed_runtime_apply": False,
         "next_postclose_metric": expected_ev_effect,
     }
 
@@ -1306,11 +1540,14 @@ def build_swing_improvement_automation_report(
     model = audit_report.get("model_selection") or {}
     csv = audit_report.get("recommendation_csv") or {}
     db = audit_report.get("db_lifecycle") or {}
+    db_load = audit_report.get("recommendation_db_load") or {}
     events = audit_report.get("lifecycle_events") or {}
     raw = events.get("raw_counts") or {}
     unique = events.get("unique_record_counts") or {}
     ofi_qi = events.get("ofi_qi_summary") or {}
     axis_summary = audit_report.get("observation_axis_summary") or {}
+    scale_in_observation = events.get("scale_in_observation") or {}
+    ai_contract_metrics = events.get("ai_contract_metrics") or {}
 
     findings: list[dict[str, Any]] = []
     orders: list[dict[str, Any]] = []
@@ -1384,7 +1621,7 @@ def build_swing_improvement_automation_report(
             )
         )
 
-    if int(csv.get("csv_rows") or 0) > 0 and int(db.get("db_rows") or 0) <= 0:
+    if bool(db_load.get("db_load_gap")):
         findings.append(
             {
                 "finding_id": "swing_recommendation_db_load_gap",
@@ -1409,7 +1646,11 @@ def build_swing_improvement_automation_report(
                 expected_ev_effect="csv_rows and db_rows no longer diverge without a warning.",
                 files_likely_touched=["src/scanners/final_ensemble_scanner.py", "src/engine/swing_lifecycle_audit.py"],
                 acceptance_tests=["pytest swing funnel/report tests"],
-                evidence=[f"csv_rows={csv.get('csv_rows')}", f"db_rows={db.get('db_rows')}"],
+                evidence=[
+                    f"csv_rows={csv.get('csv_rows')}",
+                    f"db_rows={db.get('db_rows')}",
+                    f"db_load_skip_reason={db_load.get('db_load_skip_reason')}",
+                ],
                 improvement_type="instrumentation",
             )
         )
@@ -1651,7 +1892,10 @@ def build_swing_improvement_automation_report(
                 expected_ev_effect="scale_in group coverage and add_type/post_add outcome fields appear in lifecycle audit.",
                 files_likely_touched=["src/engine/sniper_scale_in.py", "src/engine/sniper_state_handlers.py"],
                 acceptance_tests=["pytest sniper scale-in tests", "pytest swing lifecycle audit tests"],
-                evidence=["scale_in_unique_records=0"],
+                evidence=[
+                    "scale_in_unique_records=0",
+                    f"zero_sample_reason={scale_in_observation.get('zero_sample_reason')}",
+                ],
                 improvement_type="lifecycle_logic_observation",
             )
         )
@@ -1679,6 +1923,12 @@ def build_swing_improvement_automation_report(
             "threshold_ai_status": (threshold_ai_review or {}).get("ai_status"),
             "instrumentation_gap_count": axis_summary.get("instrumentation_gap_count"),
             "hold_sample_count": axis_summary.get("hold_sample_count"),
+            "db_load_gap": db_load.get("db_load_gap"),
+            "db_load_skip_reason": db_load.get("db_load_skip_reason"),
+            "scale_in_action_groups": scale_in_observation.get("action_groups"),
+            "scale_in_zero_sample_reason": scale_in_observation.get("zero_sample_reason"),
+            "ai_contract_schema_valid_rate": ai_contract_metrics.get("schema_valid_rate"),
+            "ai_contract_parse_fail_count": ai_contract_metrics.get("parse_fail_count"),
         },
         "consensus_findings": [item for item in findings if item.get("confidence") != "solo"],
         "solo_findings": [item for item in findings if item.get("confidence") == "solo"],
@@ -1691,6 +1941,7 @@ def render_swing_lifecycle_audit_markdown(report: dict[str, Any]) -> str:
     model = report.get("model_selection") or {}
     csv = report.get("recommendation_csv") or {}
     db = report.get("db_lifecycle") or {}
+    db_load = report.get("recommendation_db_load") or {}
     events = report.get("lifecycle_events") or {}
     axis_summary = report.get("observation_axis_summary") or {}
     lines = [
@@ -1701,6 +1952,8 @@ def render_swing_lifecycle_audit_markdown(report: dict[str, Any]) -> str:
         f"- selected_count: `{model.get('selected_count')}`",
         f"- csv_rows: `{csv.get('csv_rows')}`",
         f"- db_rows: `{db.get('db_rows')}`",
+        f"- db_load_gap: `{db_load.get('db_load_gap')}`",
+        f"- db_load_skip_reason: `{db_load.get('db_load_skip_reason')}`",
         f"- entered_rows: `{db.get('entered_rows')}`",
         f"- completed_rows: `{db.get('completed_rows')}`",
         f"- submitted_unique_records: `{events.get('submitted_unique_records')}`",
@@ -1739,6 +1992,22 @@ def render_swing_lifecycle_audit_markdown(report: dict[str, Any]) -> str:
         ]
     )
 
+    scale_in_observation = events.get("scale_in_observation") or {}
+    lines.extend(
+        [
+            "",
+            "## Scale-In Observation",
+            "",
+            f"- action_groups: `{scale_in_observation.get('action_groups', {})}`",
+            f"- add_triggers: `{scale_in_observation.get('add_triggers', {})}`",
+            f"- price_policies: `{scale_in_observation.get('price_policies', {})}`",
+            f"- add_ratio_summary: `{scale_in_observation.get('add_ratio_summary', {})}`",
+            f"- post_add_outcomes: `{scale_in_observation.get('post_add_outcomes', {})}`",
+            f"- guard_blockers: `{scale_in_observation.get('guard_blockers', {})}`",
+            f"- zero_sample_reason: `{scale_in_observation.get('zero_sample_reason')}`",
+        ]
+    )
+
     lines.extend(["", "## Observation Axes", "", "| axis | stage | family | sample | status |", "| --- | --- | --- | ---: | --- |"])
     for axis in report.get("observation_axes") or []:
         lines.append(
@@ -1755,7 +2024,21 @@ def render_swing_lifecycle_audit_markdown(report: dict[str, Any]) -> str:
             + " |"
         )
 
-    lines.extend(["", "## AI Contract Audit", ""])
+    ai_metrics = (report.get("ai_contract_audit") or {}).get("metrics") or {}
+    lines.extend(
+        [
+            "",
+            "## AI Contract Audit",
+            "",
+            f"- schema_valid_rate: `{ai_metrics.get('schema_valid_rate')}`",
+            f"- parse_fail_count: `{ai_metrics.get('parse_fail_count')}`",
+            f"- decision_disagreement_count: `{ai_metrics.get('decision_disagreement_count')}`",
+            f"- latency_ms: `{ai_metrics.get('latency_ms', {})}`",
+            f"- estimated_cost_krw: `{ai_metrics.get('estimated_cost_krw', {})}`",
+            f"- prompt_types: `{ai_metrics.get('prompt_types', {})}`",
+            "",
+        ]
+    )
     for issue in (report.get("ai_contract_audit") or {}).get("contract_issues") or []:
         lines.append(
             f"- `{issue.get('issue_id')}` stage=`{issue.get('lifecycle_stage')}` severity=`{issue.get('severity')}`: {issue.get('reason')}"

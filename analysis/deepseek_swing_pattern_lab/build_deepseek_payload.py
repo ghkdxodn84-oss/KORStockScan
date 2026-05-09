@@ -1,0 +1,393 @@
+"""Build DeepSeek LLM payload from swing fact tables and analysis results."""
+
+from __future__ import annotations
+
+import json
+from collections import Counter
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+import pandas as pd
+
+from analysis.deepseek_swing_pattern_lab.config import OUTPUT_DIR, PROMPT_DIR
+
+SCHEMA_VERSION = 1
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        if value in (None, ""):
+            return default
+        return int(float(value))
+    except (TypeError, ValueError):
+        return default
+
+
+def _load_csv(name: str) -> pd.DataFrame:
+    path = OUTPUT_DIR / name
+    if not path.exists():
+        return pd.DataFrame()
+    if path.stat().st_size == 0:
+        return pd.DataFrame()
+    try:
+        return pd.read_csv(path)
+    except pd.errors.EmptyDataError:
+        return pd.DataFrame()
+
+
+def _load_json(name: str) -> dict[str, Any]:
+    path = OUTPUT_DIR / name
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _load_prompt(name: str) -> str:
+    path = PROMPT_DIR / name
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8")
+
+
+def _safe_value(value: Any) -> Any:
+    try:
+        if pd.isna(value):
+            return None
+    except (TypeError, ValueError):
+        pass
+    if isinstance(value, (pd.Timestamp,)):
+        return str(value)
+    return value
+
+
+def build_payload_summary(
+    trade_fact: pd.DataFrame,
+    funnel_fact: pd.DataFrame,
+    sequence_fact: pd.DataFrame,
+    ofi_qi_fact: pd.DataFrame,
+    analysis_result: dict[str, Any],
+) -> dict[str, Any]:
+    summary = {
+        "schema_version": SCHEMA_VERSION,
+        "payload_type": "deepseek_swing_pattern_lab_summary",
+        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "data_window": {
+            "start": str(funnel_fact["date"].iloc[0]) if not funnel_fact.empty else "",
+            "end": str(funnel_fact["date"].iloc[-1]) if not funnel_fact.empty else "",
+        },
+        "counts": {
+            "trade_rows": len(trade_fact),
+            "funnel_rows": len(funnel_fact),
+            "sequence_rows": len(sequence_fact),
+            "ofi_qi_rows": len(ofi_qi_fact),
+        },
+        "funnel_summary": _build_funnel_summary(funnel_fact),
+        "trade_summary": _build_trade_summary(trade_fact),
+        "ofi_qi_summary": _build_ofi_qi_summary(ofi_qi_fact),
+        "findings_count": len(analysis_result.get("stage_findings", [])),
+        "order_count": len(analysis_result.get("code_improvement_orders", [])),
+    }
+    return summary
+
+
+def _build_funnel_summary(funnel_fact: pd.DataFrame) -> dict[str, Any]:
+    if funnel_fact.empty:
+        return {"error": "No funnel data"}
+    return {
+        "total_selected": _safe_int(funnel_fact["selected_count"].sum()),
+        "total_db_rows": _safe_int(funnel_fact["db_rows"].sum()),
+        "total_entered": _safe_int(funnel_fact["entered_rows"].sum()),
+        "total_completed": _safe_int(funnel_fact["completed_rows"].sum()),
+        "total_blocked_gatekeeper": _safe_int(funnel_fact["blocked_gatekeeper_reject_unique"].sum()),
+        "total_blocked_gap": _safe_int(funnel_fact["blocked_swing_gap_unique"].sum()),
+        "total_market_regime_block": _safe_int(funnel_fact["market_regime_block_unique"].sum()),
+        "total_submitted": _safe_int(funnel_fact["submitted_unique_records"].sum()),
+        "total_simulated": _safe_int(funnel_fact["simulated_order_unique_records"].sum()),
+    }
+
+
+def _build_trade_summary(trade_fact: pd.DataFrame) -> dict[str, Any]:
+    if trade_fact.empty:
+        return {"error": "No trade data"}
+    completed = trade_fact[trade_fact["completed"] == True]
+    valid = completed[completed["valid_profit_rate"].notna()]
+    return {
+        "total_trades": len(trade_fact),
+        "completed": len(completed),
+        "valid_profit": len(valid),
+        "win_trades": int((valid["profit"] > 0).sum()) if not valid.empty else 0,
+        "loss_trades": int((valid["profit"] < 0).sum()) if not valid.empty else 0,
+        "total_pnl": round(float(valid["profit"].sum()), 2) if not valid.empty else 0.0,
+        "avg_profit_rate": round(float(valid["profit_rate"].mean()), 4) if not valid.empty else None,
+    }
+
+
+def _build_ofi_qi_summary(ofi_qi_fact: pd.DataFrame) -> dict[str, Any]:
+    if ofi_qi_fact.empty:
+        return {"error": "No OFI/QI data"}
+    total = len(ofi_qi_fact)
+    stale = int(ofi_qi_fact["stale_missing_flag"].sum())
+    advice = ofi_qi_fact["swing_micro_advice"].value_counts().to_dict() if "swing_micro_advice" in ofi_qi_fact else {}
+    return {
+        "total_samples": total,
+        "stale_missing_count": stale,
+        "stale_missing_ratio": round(stale / max(total, 1), 4),
+        "advice_distribution": advice,
+    }
+
+
+def build_payload_cases(
+    trade_fact: pd.DataFrame,
+    sequence_fact: pd.DataFrame,
+    ofi_qi_fact: pd.DataFrame,
+    analysis_result: dict[str, Any],
+) -> dict[str, Any]:
+    cases = {
+        "schema_version": SCHEMA_VERSION,
+        "payload_type": "deepseek_swing_pattern_lab_cases",
+        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "selected_trades": [],
+        "findings_brief": [],
+        "ofi_qi_samples": [],
+    }
+
+    if not trade_fact.empty:
+        completed = trade_fact[trade_fact["completed"] == True].head(20)
+        for _, row in completed.iterrows():
+            cases["selected_trades"].append(
+                {
+                    "record_id": str(row.get("record_id", "")),
+                    "stock_code": str(row.get("stock_code", "")),
+                    "stock_name": str(row.get("stock_name", "")),
+                    "strategy": str(row.get("strategy", "")),
+                    "position_tag": str(row.get("position_tag", "")),
+                    "buy_qty": _safe_int(row.get("buy_qty")),
+                    "buy_price": _safe_value(row.get("buy_price")),
+                    "sell_qty": _safe_int(row.get("sell_qty")),
+                    "sell_price": _safe_value(row.get("sell_price")),
+                    "profit_rate": _safe_value(row.get("profit_rate")),
+                    "profit": _safe_value(row.get("profit")),
+                    "pyramid_count": _safe_int(row.get("pyramid_count")),
+                    "avg_down_count": _safe_int(row.get("avg_down_count")),
+                }
+            )
+
+    for finding in (analysis_result.get("stage_findings") or [])[:10]:
+        cases["findings_brief"].append(
+            {
+                "finding_id": finding.get("finding_id"),
+                "title": finding.get("title"),
+                "stage": finding.get("lifecycle_stage"),
+                "route": finding.get("route"),
+                "mapped_family": finding.get("mapped_family"),
+            }
+        )
+
+    if not ofi_qi_fact.empty:
+        sample = ofi_qi_fact.head(30)
+        for _, row in sample.iterrows():
+            cases["ofi_qi_samples"].append(
+                {
+                    "record_id": str(row.get("record_id", "")),
+                    "stock_code": str(row.get("stock_code", "")),
+                    "stage": str(row.get("stage", "")),
+                    "group": str(row.get("group", "")),
+                    "micro_state": str(row.get("orderbook_micro_state", "")),
+                    "micro_advice": str(row.get("swing_micro_advice", "")),
+                    "stale_missing": bool(row.get("stale_missing_flag", False)),
+                    "ready": bool(row.get("orderbook_micro_ready", False)),
+                    "healthy": bool(row.get("orderbook_micro_observer_healthy", False)),
+                }
+            )
+
+    return cases
+
+
+def generate_final_review_markdown(
+    analysis_result: dict[str, Any],
+    summary: dict[str, Any],
+) -> str:
+    dq = analysis_result.get("data_quality", {})
+    findings = analysis_result.get("stage_findings", [])
+    orders = analysis_result.get("code_improvement_orders", [])
+
+    route_counts = Counter(f.get("route", "unknown") for f in findings)
+    stage_counts = Counter(f.get("lifecycle_stage", "unknown") for f in findings)
+
+    lines = [
+        "# DeepSeek Swing Pattern Lab - Final Review Report",
+        "",
+        "## 판정",
+        "",
+        f"- 분석 기간: `{analysis_result.get('analysis_start')}` ~ `{analysis_result.get('analysis_end')}`",
+        f"- trade_rows: `{dq.get('trade_rows', 0)}`",
+        f"- lifecycle_event_rows: `{dq.get('lifecycle_event_rows', 0)}`",
+        f"- completed_valid_profit_rows: `{dq.get('completed_valid_profit_rows', 0)}`",
+        f"- ofi_qi_rows: `{dq.get('ofi_qi_rows', 0)}`",
+        f"- total_findings: `{len(findings)}`",
+        f"- code_improvement_orders: `{len(orders)}`",
+        f"- runtime_change: `{analysis_result.get('runtime_change', False)}`",
+        "",
+        "## 분류 요약",
+        "",
+        f"- implement_now: `{route_counts.get('implement_now', 0)}`",
+        f"- attach_existing_family: `{route_counts.get('attach_existing_family', 0)}`",
+        f"- design_family_candidate: `{route_counts.get('design_family_candidate', 0)}`",
+        f"- defer_evidence: `{route_counts.get('defer_evidence', 0)}`",
+        f"- reject: `{route_counts.get('reject', 0)}`",
+        "",
+        "## Stage별 분석",
+        "",
+    ]
+    for stage in sorted(stage_counts):
+        count = stage_counts[stage]
+        lines.append(f"- `{stage}`: {count} findings")
+
+    lines.extend(["", "## Stage Findings", ""])
+    for idx, f in enumerate(findings, start=1):
+        lines.extend(
+            [
+                f"### {idx}. `{f.get('finding_id')}`",
+                "",
+                f"- title: {f.get('title')}",
+                f"- lifecycle_stage: `{f.get('lifecycle_stage')}`",
+                f"- route: `{f.get('route')}`",
+                f"- mapped_family: `{f.get('mapped_family') or '-'}`",
+                f"- confidence: `{f.get('confidence')}`",
+                f"- runtime_effect: `{f.get('runtime_effect')}`",
+                f"- expected_ev_effect: {f.get('expected_ev_effect')}",
+                "",
+            ]
+        )
+
+    lines.extend(["## Code Improvement Orders", ""])
+    for idx, order in enumerate(orders, start=1):
+        lines.extend(
+            [
+                f"### {idx}. `{order.get('order_id')}`",
+                "",
+                f"- title: {order.get('title')}",
+                f"- lifecycle_stage: `{order.get('lifecycle_stage')}`",
+                f"- target_subsystem: `{order.get('target_subsystem')}`",
+                f"- route: `{order.get('route')}`",
+                f"- mapped_family: `{order.get('mapped_family') or '-'}`",
+                f"- threshold_family: `{order.get('threshold_family') or '-'}`",
+                f"- runtime_effect: `{order.get('runtime_effect')}`",
+                f"- allowed_runtime_apply: `{order.get('allowed_runtime_apply')}`",
+                f"- expected_ev_effect: {order.get('expected_ev_effect')}",
+                f"- files_likely_touched: {', '.join(f'`{f}`' for f in (order.get('files_likely_touched') or []))}",
+                "",
+            ]
+        )
+
+    if not orders:
+        lines.append("- none")
+        lines.append("")
+
+    lines.extend(
+        [
+            "## Data Quality Warnings",
+            "",
+        ]
+    )
+    for w in dq.get("warnings", []):
+        lines.append(f"- {w}")
+    if not dq.get("warnings"):
+        lines.append("- none")
+    lines.append("")
+
+    return "\n".join(lines)
+
+
+def generate_ev_backlog_markdown(
+    analysis_result: dict[str, Any],
+) -> str:
+    findings = analysis_result.get("stage_findings", [])
+    lines = [
+        "# Swing EV Improvement Backlog for OPS",
+        "",
+        "## 개요",
+        "",
+        f"- total_findings: `{len(findings)}`",
+        f"- runtime_change: `{analysis_result.get('runtime_change', False)}`",
+        f"- purpose: report-only / proposal-only improvement backlog",
+        "",
+        "## Improvement Candidates",
+        "",
+    ]
+    for idx, f in enumerate(findings, start=1):
+        route = f.get("route", "defer_evidence")
+        priority = (
+            "HIGH" if route == "implement_now" else "MEDIUM" if route in ("attach_existing_family", "design_family_candidate") else "LOW"
+        )
+        lines.extend(
+            [
+                f"### {idx}. {f.get('title')}",
+                "",
+                f"- finding_id: `{f.get('finding_id')}`",
+                f"- lifecycle_stage: `{f.get('lifecycle_stage')}`",
+                f"- route: `{route}`",
+                f"- priority: `{priority}`",
+                f"- mapped_family: `{f.get('mapped_family') or '-'}`",
+                f"- confidence: `{f.get('confidence')}`",
+                f"- expected_ev_effect: {f.get('expected_ev_effect')}",
+                "",
+            ]
+        )
+
+    if not findings:
+        lines.append("- none")
+        lines.append("")
+
+    lines.append("")
+    return "\n".join(lines)
+
+
+def main() -> int:
+    trade_fact = _load_csv("swing_trade_fact.csv")
+    funnel_fact = _load_csv("swing_lifecycle_funnel_fact.csv")
+    sequence_fact = _load_csv("swing_sequence_fact.csv")
+    ofi_qi_fact = _load_csv("swing_ofi_qi_fact.csv")
+    analysis_result = _load_json("swing_pattern_analysis_result.json")
+
+    summary = build_payload_summary(trade_fact, funnel_fact, sequence_fact, ofi_qi_fact, analysis_result)
+    cases = build_payload_cases(trade_fact, sequence_fact, ofi_qi_fact, analysis_result)
+
+    (OUTPUT_DIR / "deepseek_payload_summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    (OUTPUT_DIR / "deepseek_payload_cases.json").write_text(
+        json.dumps(cases, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+    final_review_md = generate_final_review_markdown(analysis_result, summary)
+    (OUTPUT_DIR / "final_review_report_for_lead_ai.md").write_text(final_review_md, encoding="utf-8")
+
+    ev_backlog_md = generate_ev_backlog_markdown(analysis_result)
+    (OUTPUT_DIR / "swing_ev_improvement_backlog_for_ops.md").write_text(ev_backlog_md, encoding="utf-8")
+
+    manifest = _load_json("run_manifest.json") or {}
+    manifest.update(
+        {
+            "deeppayload_generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+            "deeppayload_outputs": {
+                "payload_summary": str(OUTPUT_DIR / "deepseek_payload_summary.json"),
+                "payload_cases": str(OUTPUT_DIR / "deepseek_payload_cases.json"),
+                "final_review_report": str(OUTPUT_DIR / "final_review_report_for_lead_ai.md"),
+                "ev_improvement_backlog": str(OUTPUT_DIR / "swing_ev_improvement_backlog_for_ops.md"),
+            },
+        }
+    )
+    (OUTPUT_DIR / "run_manifest.json").write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    print(f"DeepSeek payload built: {summary.get('findings_count', 0)} findings summarized")
+    print(f"Outputs written to {OUTPUT_DIR}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
