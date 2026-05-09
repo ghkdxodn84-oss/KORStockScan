@@ -26,6 +26,7 @@ from src.engine.sync_docs_backlog_to_project import (
     parse_checklist_tasks,
     parse_plan_tasks,
     parse_prompt_tasks,
+    parse_runbook_operational_tasks,
     parse_scalping_logic_tasks,
     sync_backlog_to_project,
     _graphql_request,
@@ -355,6 +356,25 @@ def test_infer_time_window_uses_explicit_range():
     assert _infer_time_window(task, slot_label="INTRADAY", default_duration_min=30) == "13:20~13:35"
 
 
+def test_infer_time_window_preserves_explicit_preopen_and_postclose_ranges():
+    preopen = BacklogTask(
+        title="장전 점검 (Due: 2026-05-11, Slot: PREOPEN, TimeWindow: 08:00~09:00)",
+        source="x",
+        section="체크",
+        track="RunbookOps",
+        due_date="2026-05-11",
+    )
+    postclose = BacklogTask(
+        title="장후 점검 (Due: 2026-05-11, Slot: POSTCLOSE, TimeWindow: 16:10~17:30)",
+        source="x",
+        section="체크",
+        track="RunbookOps",
+        due_date="2026-05-11",
+    )
+    assert _infer_time_window(preopen, slot_label="PREOPEN", default_duration_min=30) == "08:00~09:00"
+    assert _infer_time_window(postclose, slot_label="POSTCLOSE", default_duration_min=30) == "16:10~17:30"
+
+
 def test_infer_time_window_uses_slot_default_when_missing():
     task = BacklogTask(title="일반 작업", source="x", section="체크", track="AIPrompt")
     assert _infer_time_window(task, slot_label="POSTCLOSE", default_duration_min=30) == "15:40~16:10"
@@ -387,6 +407,47 @@ def test_infer_apply_target_text_detects_remote_and_main():
     assert _infer_apply_target_text("main/원격 동시 비교") == "main,remote"
     assert _infer_apply_target_text("장중 canary 모니터링") == "-"
     assert _infer_apply_target_text("일반 문서 작업") == "-"
+
+
+def test_parse_runbook_operational_tasks_emit_project_calendar_queue(monkeypatch, tmp_path):
+    checklist = tmp_path / "2026-05-11-stage2-todo-checklist.md"
+    checklist.write_text("# 2026-05-11\n", encoding="utf-8")
+    monkeypatch.setenv("DOC_BACKLOG_TODAY", "2026-05-09")
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project._checklist_doc_candidates",
+        lambda: [checklist],
+    )
+
+    tasks = parse_runbook_operational_tasks()
+
+    assert [task.track for task in tasks] == ["RunbookOps", "RunbookOps", "RunbookOps"]
+    assert [task.due_date for task in tasks] == ["2026-05-11", "2026-05-11", "2026-05-11"]
+    assert "Slot: PREOPEN" in tasks[0].title
+    assert "TimeWindow: 08:00~09:00" in tasks[0].title
+    assert "Slot: INTRADAY" in tasks[1].title
+    assert "TimeWindow: 09:05~15:30" in tasks[1].title
+    assert "Slot: POSTCLOSE" in tasks[2].title
+    assert "TimeWindow: 16:10~17:30" in tasks[2].title
+
+
+def test_collect_backlog_tasks_includes_runbook_ops(monkeypatch, tmp_path):
+    checklist = tmp_path / "2026-05-11-stage2-todo-checklist.md"
+    checklist.write_text("# 2026-05-11\n", encoding="utf-8")
+    monkeypatch.setenv("DOC_BACKLOG_TODAY", "2026-05-09")
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project._checklist_doc_candidates",
+        lambda: [checklist],
+    )
+    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project.parse_plan_tasks", lambda: [])
+    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project.parse_checklist_tasks", lambda: [])
+    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project.parse_scalping_logic_tasks", lambda: [])
+    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project.parse_prompt_tasks", lambda: [])
+
+    tasks = collect_backlog_tasks()
+
+    assert len(tasks) == 3
+    assert {task.track for task in tasks} == {"RunbookOps"}
+    assert all("[Runbook 운영 확인]" in task.title for task in tasks)
 
 
 def test_ensure_apply_target_fills_missing_target():

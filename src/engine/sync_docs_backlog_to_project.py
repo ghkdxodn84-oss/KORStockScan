@@ -49,13 +49,14 @@ class ProjectItem:
     time_window: str = ""
 
 
-MANAGED_TRACKS = ("Plan", "ScalpingLogic", "AIPrompt")
+MANAGED_TRACKS = ("Plan", "ScalpingLogic", "AIPrompt", "RunbookOps")
 CHECKLIST_TRACK_RE = re.compile(r"^Checklist\d{4}$")
 
 TRACK_DEFAULT_SLOT = {
     "Plan": "POSTCLOSE",
     "ScalpingLogic": "INTRADAY",
     "AIPrompt": "POSTCLOSE",
+    "RunbookOps": "INTRADAY",
 }
 
 SLOT_PREOPEN_KEYWORDS = (
@@ -335,6 +336,67 @@ def parse_checklist_tasks() -> list[BacklogTask]:
     return tasks
 
 
+def _active_runbook_due_date() -> str:
+    forced_path_raw = os.getenv("DOC_CHECKLIST_PATH", "").strip()
+    if forced_path_raw:
+        forced_due = _due_date_from_checklist_path(Path(forced_path_raw))
+        if forced_due:
+            return forced_due
+
+    today_iso = _local_today_iso()
+    future_due_dates: list[str] = []
+    past_due_dates: list[str] = []
+    for source_path in _checklist_doc_candidates():
+        due_date = _due_date_from_checklist_path(source_path)
+        if not due_date or not source_path.exists():
+            continue
+        if due_date >= today_iso:
+            future_due_dates.append(due_date)
+        else:
+            past_due_dates.append(due_date)
+    if future_due_dates:
+        return sorted(set(future_due_dates))[0]
+    if past_due_dates:
+        return sorted(set(past_due_dates))[-1]
+    return today_iso
+
+
+def parse_runbook_operational_tasks() -> list[BacklogTask]:
+    due_date = _active_runbook_due_date()
+    return [
+        BacklogTask(
+            title=(
+                f"[Runbook 운영 확인] 장전 자동화체인 상태 확인 "
+                f"(Due: {due_date}, Slot: PREOPEN, TimeWindow: 08:00~09:00, Track: RunbookOps)"
+            ),
+            source="docs/time-based-operations-runbook.md",
+            section="Runbook 운영 확인 큐 / 장전 확인 절차",
+            track="RunbookOps",
+            due_date=due_date,
+        ),
+        BacklogTask(
+            title=(
+                f"[Runbook 운영 확인] 장중 자동화체인 상태 확인 "
+                f"(Due: {due_date}, Slot: INTRADAY, TimeWindow: 09:05~15:30, Track: RunbookOps)"
+            ),
+            source="docs/time-based-operations-runbook.md",
+            section="Runbook 운영 확인 큐 / 장중 확인 절차",
+            track="RunbookOps",
+            due_date=due_date,
+        ),
+        BacklogTask(
+            title=(
+                f"[Runbook 운영 확인] 장후 자동화체인 상태 확인 "
+                f"(Due: {due_date}, Slot: POSTCLOSE, TimeWindow: 16:10~17:30, Track: RunbookOps)"
+            ),
+            source="docs/time-based-operations-runbook.md",
+            section="Runbook 운영 확인 큐 / 장후 확인 절차",
+            track="RunbookOps",
+            due_date=due_date,
+        ),
+    ]
+
+
 def parse_scalping_logic_tasks() -> list[BacklogTask]:
     loaded = _read_candidates(_scalping_doc_candidates())
     if not loaded:
@@ -449,6 +511,7 @@ def collect_backlog_tasks() -> list[BacklogTask]:
     tasks = []
     tasks.extend(parse_plan_tasks())
     tasks.extend(parse_checklist_tasks())
+    tasks.extend(parse_runbook_operational_tasks())
     tasks.extend(parse_scalping_logic_tasks())
     tasks.extend(parse_prompt_tasks())
     return _dedupe([_ensure_apply_target(t) for t in tasks])
@@ -930,9 +993,9 @@ def _infer_time_window(task: BacklogTask, *, slot_label: str, default_duration_m
     start, end = _extract_time_range_from_text(text)
     start = _normalize_hhmm(start)
     end = _normalize_hhmm(end)
-    if start and end and slot_label == "INTRADAY" and not holiday_forced_intraday:
+    if start and end and not holiday_forced_intraday:
         return f"{start}~{end}"
-    if start and slot_label == "INTRADAY" and not holiday_forced_intraday:
+    if start and not holiday_forced_intraday:
         end_auto = _add_minutes(start, max(5, default_duration_min))
         return f"{start}~{end_auto}" if end_auto else start
 
