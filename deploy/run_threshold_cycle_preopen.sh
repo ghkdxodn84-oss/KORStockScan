@@ -13,7 +13,7 @@ REQUIRE_AI="${THRESHOLD_CYCLE_AUTO_APPLY_REQUIRE_AI:-true}"
 mkdir -p "$PROJECT_DIR/logs"
 cd "$PROJECT_DIR"
 
-echo "[threshold-cycle] preopen start target_date=$TARGET_DATE apply_mode=$APPLY_MODE auto_apply=$AUTO_APPLY require_ai=$REQUIRE_AI"
+echo "[START] threshold-cycle preopen target_date=$TARGET_DATE apply_mode=$APPLY_MODE auto_apply=$AUTO_APPLY require_ai=$REQUIRE_AI"
 
 args=(--date "$TARGET_DATE" --apply-mode "$APPLY_MODE")
 if [ -n "$SOURCE_DATE" ]; then
@@ -27,4 +27,5 @@ if [ "$REQUIRE_AI" = "false" ] || [ "$REQUIRE_AI" = "0" ]; then
 fi
 
 PYTHONPATH=. "$VENV_PY" -m src.engine.threshold_cycle_preopen_apply "${args[@]}"
-echo "[threshold-cycle] preopen apply complete target_date=$TARGET_DATE"
+finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
+echo "[DONE] threshold-cycle preopen target_date=$TARGET_DATE finished_at=$finished_at"
