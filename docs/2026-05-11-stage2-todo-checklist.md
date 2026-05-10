@@ -19,6 +19,7 @@
 - 신규 수동 enable/hold 작업 없음.
 - Runbook 운영 확인은 [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md) `장전 확인 절차`와 `build_codex_daily_workorder --slot PREOPEN`의 `PreopenAutomationHealthCheckYYYYMMDD` 블록을 기준으로 본다.
 - 확인 범위: `threshold_cycle_preopen_cron.log`, apply plan, runtime env JSON, `src/run_bot.sh` runtime env source 여부, tmux `bot` 기동 상태. 실패 시 수동 env override가 아니라 blocked reason과 same-stage owner 충돌을 확인한다.
+- 운영 확인 기록 (`PreopenAutomationHealthCheck20260511`, `PVTI_lAHOAXZuE84BUTcPzgsPE-E`): `threshold_cycle_preopen_status=pass`, apply plan `auto_bounded_live_ready`, runtime env selected families `soft_stop_whipsaw_confirmation`/`score65_74_recovery_probe`, `tmux bot` alive, process/resource/artifact detector pass. `final_ensemble_scanner`는 07:21 실행/추천 3건 적재 증적은 있으나 detector 완료 marker가 없어 `cron_completion` fail로 분류됐고, scanner `[START]/[DONE]/[FAIL]` marker 보강 대상으로 처리했다. 판정은 `warning`이며 runtime threshold/order guard 변경 없음.
 
 ## 장중 체크리스트 (09:00~15:20)
 

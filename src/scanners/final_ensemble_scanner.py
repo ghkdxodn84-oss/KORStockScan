@@ -176,6 +176,9 @@ def get_performance_report(db):
 
 # --- [2. 메인 스캐너 엔진 (장 마감(또는 장 전) 배치 작업)] ---
 def run_integrated_scanner():
+    marker_date = datetime.now().strftime('%Y-%m-%d')
+    scanner_failed = False
+    print(f"[START] final_ensemble_scanner target_date={marker_date}")
     print(f"=== KORStockScan v14 (Stacking Ensemble + Event-Driven) ===")
     
     db = DBManager()
@@ -187,7 +190,9 @@ def run_integrated_scanner():
         # ==========================================
         models = ml_predictor.load_models()
         if not models:
+            scanner_failed = True
             print("❌ AI 모델 로드 실패로 스캐너를 종료합니다.")
+            print(f"[FAIL] final_ensemble_scanner target_date={marker_date} reason=model_load_failed")
             return
 
         kiwoom_token = None
@@ -465,8 +470,13 @@ def run_integrated_scanner():
             event_bus.publish("TELEGRAM_BROADCAST", payload)
 
     except Exception as e:
+        scanner_failed = True
         print(f"❌ 시스템 에러 발생: {e}")
+        print(f"[FAIL] final_ensemble_scanner target_date={marker_date} reason=exception")
     finally:
+        finished_at = datetime.now().strftime('%Y-%m-%dT%H:%M:%S%z')
+        if not scanner_failed:
+            print(f"[DONE] final_ensemble_scanner target_date={marker_date} finished_at={finished_at}")
         print("🏁 [4/4] 스캐닝 프로세스가 종료되었습니다.")
 
 if __name__ == "__main__":

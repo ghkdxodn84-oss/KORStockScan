@@ -369,40 +369,73 @@ def _active_runbook_due_date() -> str:
     return today_iso
 
 
+def _completed_runbook_slots(due_date: str) -> set[str]:
+    compact = str(due_date or "").replace("-", "")
+    if not compact:
+        return set()
+    markers = {
+        "PREOPEN": f"PreopenAutomationHealthCheck{compact}",
+        "INTRADAY": f"IntradayAutomationHealthCheck{compact}",
+        "POSTCLOSE": f"PostcloseAutomationHealthCheck{compact}",
+    }
+    completed: set[str] = set()
+    for source_path in _checklist_doc_candidates():
+        if _due_date_from_checklist_path(source_path) != due_date or not source_path.exists():
+            continue
+        text = _read_optional(source_path) or ""
+        for line in text.splitlines():
+            if "운영 확인 기록" not in line:
+                continue
+            for slot, marker in markers.items():
+                if marker in line:
+                    completed.add(slot)
+    return completed
+
+
 def parse_runbook_operational_tasks() -> list[BacklogTask]:
     due_date = _active_runbook_due_date()
-    return [
-        BacklogTask(
-            title=(
-                f"[Runbook 운영 확인] 장전 자동화체인 상태 확인 "
-                f"(Due: {due_date}, Slot: PREOPEN, TimeWindow: 08:00~09:00, Track: RunbookOps)"
-            ),
-            source="docs/time-based-operations-runbook.md",
-            section="Runbook 운영 확인 큐 / 장전 확인 절차",
-            track="RunbookOps",
-            due_date=due_date,
-        ),
-        BacklogTask(
-            title=(
-                f"[Runbook 운영 확인] 장중 자동화체인 상태 확인 "
-                f"(Due: {due_date}, Slot: INTRADAY, TimeWindow: 09:05~15:30, Track: RunbookOps)"
-            ),
-            source="docs/time-based-operations-runbook.md",
-            section="Runbook 운영 확인 큐 / 장중 확인 절차",
-            track="RunbookOps",
-            due_date=due_date,
-        ),
-        BacklogTask(
-            title=(
-                f"[Runbook 운영 확인] 장후 자동화체인 상태 확인 "
-                f"(Due: {due_date}, Slot: POSTCLOSE, TimeWindow: 16:10~17:30, Track: RunbookOps)"
-            ),
-            source="docs/time-based-operations-runbook.md",
-            section="Runbook 운영 확인 큐 / 장후 확인 절차",
-            track="RunbookOps",
-            due_date=due_date,
-        ),
-    ]
+    completed_slots = _completed_runbook_slots(due_date)
+    tasks: list[BacklogTask] = []
+    if "PREOPEN" not in completed_slots:
+        tasks.append(
+            BacklogTask(
+                title=(
+                    f"[Runbook 운영 확인] 장전 자동화체인 상태 확인 "
+                    f"(Due: {due_date}, Slot: PREOPEN, TimeWindow: 08:00~09:00, Track: RunbookOps)"
+                ),
+                source="docs/time-based-operations-runbook.md",
+                section="Runbook 운영 확인 큐 / 장전 확인 절차",
+                track="RunbookOps",
+                due_date=due_date,
+            )
+        )
+    if "INTRADAY" not in completed_slots:
+        tasks.append(
+            BacklogTask(
+                title=(
+                    f"[Runbook 운영 확인] 장중 자동화체인 상태 확인 "
+                    f"(Due: {due_date}, Slot: INTRADAY, TimeWindow: 09:05~15:30, Track: RunbookOps)"
+                ),
+                source="docs/time-based-operations-runbook.md",
+                section="Runbook 운영 확인 큐 / 장중 확인 절차",
+                track="RunbookOps",
+                due_date=due_date,
+            )
+        )
+    if "POSTCLOSE" not in completed_slots:
+        tasks.append(
+            BacklogTask(
+                title=(
+                    f"[Runbook 운영 확인] 장후 자동화체인 상태 확인 "
+                    f"(Due: {due_date}, Slot: POSTCLOSE, TimeWindow: 16:10~17:30, Track: RunbookOps)"
+                ),
+                source="docs/time-based-operations-runbook.md",
+                section="Runbook 운영 확인 큐 / 장후 확인 절차",
+                track="RunbookOps",
+                due_date=due_date,
+            )
+        )
+    return tasks
 
 
 def parse_scalping_logic_tasks() -> list[BacklogTask]:

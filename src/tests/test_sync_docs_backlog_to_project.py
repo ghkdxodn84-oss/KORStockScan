@@ -430,6 +430,32 @@ def test_parse_runbook_operational_tasks_emit_project_calendar_queue(monkeypatch
     assert "TimeWindow: 16:10~17:30" in tasks[2].title
 
 
+def test_parse_runbook_operational_tasks_skips_completed_preopen(monkeypatch, tmp_path):
+    checklist = tmp_path / "2026-05-11-stage2-todo-checklist.md"
+    checklist.write_text(
+        "\n".join(
+            [
+                "# 2026-05-11",
+                "## 장전 체크리스트",
+                "- 운영 확인 기록 (`PreopenAutomationHealthCheck20260511`, `PVTI_test`): 판정은 `warning`.",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DOC_BACKLOG_TODAY", "2026-05-09")
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project._checklist_doc_candidates",
+        lambda: [checklist],
+    )
+
+    tasks = parse_runbook_operational_tasks()
+
+    assert len(tasks) == 2
+    assert all("Slot: PREOPEN" not in task.title for task in tasks)
+    assert "Slot: INTRADAY" in tasks[0].title
+    assert "Slot: POSTCLOSE" in tasks[1].title
+
+
 def test_collect_backlog_tasks_includes_runbook_ops(monkeypatch, tmp_path):
     checklist = tmp_path / "2026-05-11-stage2-todo-checklist.md"
     checklist.write_text("# 2026-05-11\n", encoding="utf-8")

@@ -559,8 +559,9 @@ def build_runbook_operational_checks(*, target_date: str | None, slots: list[str
                     "tmux bot session / src/run_bot.sh runtime env source 여부",
                 ),
                 decision_rule=(
-                    "pass|warning|fail|not_yet_due 중 하나로 판정. final scanner 추천/empty/fallback diagnostic 분리, "
-                    "apply plan selected/blocked family, AI guard, same-stage owner 충돌, runtime env 생성 여부, "
+                    "pass|warning|fail|not_yet_due 중 하나로 판정. preopen apply와 final scanner의 당일 [DONE] marker, "
+                    "final scanner 추천/empty/fallback diagnostic 분리, apply plan selected/blocked family, "
+                    "AI guard, same-stage owner 충돌, runtime env 생성 여부, "
                     "스윙 approval request/approved/blocked 및 dry-run 강제 여부 확인."
                 ),
                 forbidden="실패해도 수동 env override, approval artifact 없는 스윙 env 반영, 스윙 dry-run 해제, 장전 수동 enable/hold 판정 금지.",
