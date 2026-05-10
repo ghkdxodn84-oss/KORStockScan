@@ -165,3 +165,85 @@ def test_promote_candidate_disabled_removes_active_bull_and_rollback_restores(tm
 
     assert "bull_xgb_v2.pkl" in restored
     assert (data_dir / "bull_xgb_v2.pkl").read_text(encoding="utf-8").startswith("active:")
+
+
+def test_pipeline_trains_enabled_and_disabled_then_selects_better_candidate(tmp_path, monkeypatch):
+    monkeypatch.setattr(pipeline, "RUNS_DIR", tmp_path / "runs")
+    monkeypatch.setattr(pipeline, "PROMOTIONS_DIR", tmp_path / "promotions")
+    monkeypatch.setattr(pipeline, "REPORT_DIR", tmp_path / "reports")
+    monkeypatch.setattr(pipeline, "write_diagnosis", lambda target, force=False: {"retrain_required": True})
+    monkeypatch.setattr(
+        pipeline,
+        "write_review",
+        lambda target: {
+            "decision": {
+                "bull_specialist_mode": "enabled",
+                "bull_base_start": "2024-05-01",
+                "bull_base_end": "2026-05-01",
+            }
+        },
+    )
+
+    trained = []
+
+    def fake_train_and_evaluate(parent_run_dir, mode, bull_review, **kwargs):
+        trained.append(mode)
+        assert kwargs["meta_period"]["meta_end"] == "2026-05-05"
+        metrics_by_mode = {
+            "enabled": {
+                "available": True,
+                "sample_count": 50,
+                "selected_count": 10,
+                "avg_net_pct": 0.35,
+                "downside_p10_pct": -1.00,
+                "win_rate": 0.60,
+                "tradeoff_score": 0.80,
+            },
+            "disabled": {
+                "available": True,
+                "sample_count": 50,
+                "selected_count": 10,
+                "avg_net_pct": 0.15,
+                "downside_p10_pct": -1.10,
+                "win_rate": 0.52,
+                "tradeoff_score": 0.70,
+            },
+        }
+        run_dir = parent_run_dir / mode
+        run_dir.mkdir(parents=True, exist_ok=True)
+        return {
+            "bull_specialist_mode": mode,
+            "run_dir": str(run_dir),
+            "command_results": [{"returncode": 0, "mode": mode}],
+            "failed": False,
+            "missing_artifacts": [],
+            "metrics": metrics_by_mode[mode],
+        }
+
+    monkeypatch.setattr(pipeline, "_train_and_evaluate_mode", fake_train_and_evaluate)
+    monkeypatch.setattr(
+        pipeline,
+        "resolve_meta_period",
+        lambda target: {
+            "meta_start": "2026-01-01",
+            "meta_end": "2026-05-05",
+            "latest_quote_date": "2026-05-10",
+            "label_safety_days": 5,
+        },
+    )
+    monkeypatch.setattr(pipeline, "_promote_candidate", lambda run_dir, backup_dir, mode: {"promoted_files": [mode]})
+    monkeypatch.setattr(pipeline, "_smoke_after_promote", lambda mode: {"returncode": 0})
+    monkeypatch.setattr(
+        pipeline,
+        "_write_current_manifest",
+        lambda run_id, target_date, run_dir, mode, metrics: tmp_path / "current.json",
+    )
+
+    report = pipeline.run_pipeline("2026-05-10", auto_promote=True, force=True)
+
+    assert trained == ["enabled", "disabled"]
+    assert report["bull_specialist_mode"] == "enabled"
+    assert report["bull_mode_decision"]["reason"] == "enabled_outperformed_disabled"
+    assert report["promoted"] is True
+    assert set(report["candidate_results"]) == {"enabled", "disabled"}
+    assert report["meta_period"]["meta_end"] == "2026-05-05"

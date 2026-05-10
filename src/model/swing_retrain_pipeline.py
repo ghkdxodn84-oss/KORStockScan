@@ -6,13 +6,14 @@ import os
 import shutil
 import subprocess
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+from sqlalchemy import text
 
-from src.model.common_v2 import DATA_DIR, MODEL_REGISTRY_DIR, resolve_bull_specialist_mode
+from src.model.common_v2 import DATA_DIR, META_END, META_START, MODEL_REGISTRY_DIR, engine, resolve_bull_specialist_mode
 from src.model.swing_bull_period_ai_review import write_review
 from src.model.swing_retrain_diagnosis import write_diagnosis
 
@@ -52,6 +53,38 @@ def _safe_int(value: Any, default: int = 0) -> int:
 def _run_id(target_date: str) -> str:
     stamp = datetime.now().strftime("%Y%m%dT%H%M%S")
     return f"{target_date}_{stamp}"
+
+
+def _parse_iso_date(value: Any) -> date | None:
+    try:
+        if value in (None, ""):
+            return None
+        return datetime.fromisoformat(str(value)[:10]).date()
+    except Exception:
+        return None
+
+
+def _latest_quote_date() -> date | None:
+    try:
+        with engine.connect() as conn:
+            value = conn.execute(text("SELECT MAX(quote_date) FROM daily_stock_quotes")).scalar()
+    except Exception:
+        return None
+    return _parse_iso_date(value)
+
+
+def resolve_meta_period(target_date: str, *, label_safety_days: int = 5) -> dict[str, Any]:
+    target = _parse_iso_date(target_date) or date.today()
+    latest_quote = _latest_quote_date()
+    target_safe_end = target - timedelta(days=label_safety_days)
+    end = min(latest_quote, target_safe_end) if latest_quote else target_safe_end
+    start = _parse_iso_date(os.getenv("KORSTOCKSCAN_SWING_META_START")) or _parse_iso_date(META_START)
+    return {
+        "meta_start": (start or date(2026, 1, 1)).isoformat(),
+        "meta_end": end.isoformat(),
+        "latest_quote_date": latest_quote.isoformat() if latest_quote else None,
+        "label_safety_days": label_safety_days,
+    }
 
 
 def _run_command(args: list[str], *, env: dict[str, str], cwd: Path) -> dict[str, Any]:
@@ -170,7 +203,13 @@ def _staging_env(run_dir: Path, bull_mode: str, bull_review: dict[str, Any]) -> 
     return env
 
 
-def _train_candidate(run_dir: Path, bull_mode: str, bull_review: dict[str, Any]) -> list[dict[str, Any]]:
+def _train_candidate(
+    run_dir: Path,
+    bull_mode: str,
+    bull_review: dict[str, Any],
+    *,
+    meta_period: dict[str, Any] | None = None,
+) -> list[dict[str, Any]]:
     root = Path(__file__).resolve().parents[2]
     env = _staging_env(run_dir, bull_mode, bull_review)
     commands = [
@@ -193,7 +232,17 @@ def _train_candidate(run_dir: Path, bull_mode: str, bull_review: dict[str, Any])
         _prepare_hold_current_bull_artifacts(run_dir)
     commands.extend(
         [
-            [sys.executable, "-m", "src.model.train_meta_model_v2", "--bull-mode", bull_mode],
+            [
+                sys.executable,
+                "-m",
+                "src.model.train_meta_model_v2",
+                "--bull-mode",
+                bull_mode,
+                "--meta-start",
+                str((meta_period or {}).get("meta_start") or META_START),
+                "--meta-end",
+                str((meta_period or {}).get("meta_end") or META_END),
+            ],
             [sys.executable, "-m", "src.model.backtest_v2"],
         ]
     )
@@ -218,6 +267,89 @@ def _validate_candidate_files(run_dir: Path, mode: str) -> list[str]:
         if not (run_dir / name).exists():
             missing.append(name)
     return missing
+
+
+def _train_and_evaluate_mode(
+    parent_run_dir: Path,
+    mode: str,
+    bull_review: dict[str, Any],
+    *,
+    meta_period: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    mode_run_dir = parent_run_dir / mode
+    mode_run_dir.mkdir(parents=True, exist_ok=True)
+    command_results = _train_candidate(mode_run_dir, mode, bull_review, meta_period=meta_period)
+    failed = [item for item in command_results if item.get("returncode") != 0]
+    missing = _validate_candidate_files(mode_run_dir, mode)
+    metrics = _summarize_backtest(mode_run_dir / "backtest_trades_v2.csv")
+    if not failed and not missing:
+        metrics["tradeoff_score"] = candidate_tradeoff_score(metrics)
+    return {
+        "bull_specialist_mode": mode,
+        "run_dir": str(mode_run_dir),
+        "command_results": command_results,
+        "failed": bool(failed),
+        "missing_artifacts": missing,
+        "metrics": metrics,
+    }
+
+
+def _candidate_status(candidate: dict[str, Any]) -> str:
+    if candidate.get("failed"):
+        return "failed"
+    missing = candidate.get("missing_artifacts") or []
+    if missing:
+        return "missing_artifacts"
+    return "ready"
+
+
+def _choose_candidate(
+    candidates: dict[str, dict[str, Any]],
+    initial_mode: str,
+    bull_review: dict[str, Any],
+    *,
+    meta_period: dict[str, Any] | None = None,
+) -> tuple[str | None, dict[str, Any]]:
+    enabled = candidates.get("enabled")
+    disabled = candidates.get("disabled")
+    if enabled and disabled and _candidate_status(enabled) == "ready" and _candidate_status(disabled) == "ready":
+        decision = evaluate_bull_specialist_mode(enabled.get("metrics") or {}, disabled.get("metrics") or {})
+        chosen_mode = resolve_bull_specialist_mode(decision.get("bull_specialist_mode"))
+        if chosen_mode == "hold_current":
+            hold = candidates.get("hold_current")
+            if hold and _candidate_status(hold) == "ready":
+                return "hold_current", decision
+            if (Path(DATA_DIR) / "bull_xgb_v2.pkl").exists() and (Path(DATA_DIR) / "bull_lgbm_v2.pkl").exists():
+                hold = _train_and_evaluate_mode(
+                    Path(candidates["enabled"]["run_dir"]).parent,
+                    "hold_current",
+                    bull_review,
+                    meta_period=meta_period,
+                )
+                candidates["hold_current"] = hold
+                if _candidate_status(hold) == "ready":
+                    return "hold_current", decision
+            fallback = "disabled" if _candidate_status(disabled) == "ready" else None
+            decision = {
+                **decision,
+                "fallback_bull_specialist_mode": fallback,
+                "fallback_reason": "hold_current_candidate_unavailable",
+            }
+            return fallback, decision
+        return chosen_mode, decision
+
+    preferred = candidates.get(initial_mode)
+    if preferred and _candidate_status(preferred) == "ready":
+        return initial_mode, {"bull_specialist_mode": initial_mode, "reason": "single_candidate_ready"}
+    for mode in ("disabled", "enabled", "hold_current"):
+        candidate = candidates.get(mode)
+        if candidate and _candidate_status(candidate) == "ready":
+            return mode, {
+                "bull_specialist_mode": mode,
+                "reason": "fallback_ready_candidate",
+                "initial_mode": initial_mode,
+            }
+    return None, {"bull_specialist_mode": initial_mode, "reason": "no_ready_candidate"}
 
 
 def _backup_active_models(backup_dir: Path) -> list[str]:
@@ -311,31 +443,58 @@ def run_pipeline(
     diagnosis = write_diagnosis(target, force=force)
     bull_review = write_review(target)
     initial_mode = resolve_bull_specialist_mode((bull_review.get("decision") or {}).get("bull_specialist_mode"))
+    meta_period = resolve_meta_period(target)
     run_id = _run_id(target)
     run_dir = RUNS_DIR / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 
     status = "skipped"
     command_results: list[dict[str, Any]] = []
+    candidate_results: dict[str, dict[str, Any]] = {}
     promoted = False
     rollback_executed = False
     promotion: dict[str, Any] = {}
     metrics: dict[str, Any] = {}
+    selected_run_dir = run_dir
+    selected_mode = initial_mode
     mode_decision = {"bull_specialist_mode": initial_mode, "reason": "review_decision"}
 
     if bool(diagnosis.get("retrain_required")):
-        command_results = _train_candidate(run_dir, initial_mode, bull_review)
-        failed = [item for item in command_results if item.get("returncode") != 0]
-        missing = _validate_candidate_files(run_dir, initial_mode)
-        metrics = _summarize_backtest(run_dir / "backtest_trades_v2.csv")
-        if failed:
+        modes_to_train = [initial_mode] if initial_mode == "hold_current" else ["enabled", "disabled"]
+        for mode in modes_to_train:
+            candidate_results[mode] = _train_and_evaluate_mode(
+                run_dir,
+                mode,
+                bull_review,
+                meta_period=meta_period,
+            )
+            command_results.extend(candidate_results[mode]["command_results"])
+        chosen_mode, mode_decision = _choose_candidate(
+            candidate_results,
+            initial_mode,
+            bull_review,
+            meta_period=meta_period,
+        )
+        if chosen_mode:
+            selected_mode = chosen_mode
+            selected_run_dir = Path(candidate_results[chosen_mode]["run_dir"])
+            metrics = dict(candidate_results[chosen_mode].get("metrics") or {})
+        failed = [mode for mode, item in candidate_results.items() if item.get("failed")]
+        missing_by_mode = {
+            mode: item.get("missing_artifacts") or []
+            for mode, item in candidate_results.items()
+            if item.get("missing_artifacts")
+        }
+        if not chosen_mode and failed:
             status = "failed"
             promotion["blocked_reason"] = "training_command_failed"
-        elif missing:
+        elif not chosen_mode and missing_by_mode:
             status = "failed"
-            promotion["blocked_reason"] = f"candidate_artifact_missing:{','.join(missing)}"
+            promotion["blocked_reason"] = f"candidate_artifact_missing:{missing_by_mode}"
+        elif not chosen_mode:
+            status = "failed"
+            promotion["blocked_reason"] = "no_ready_candidate"
         else:
-            metrics["tradeoff_score"] = candidate_tradeoff_score(metrics)
             min_score = _safe_float(os.getenv("KORSTOCKSCAN_SWING_RETRAIN_MIN_SCORE"), 0.72)
             hard_floor_passed = _safe_int(metrics.get("sample_count"), 0) >= 40
             avg_ok = _safe_float(metrics.get("avg_net_pct"), 0.0) >= 0.10
@@ -352,13 +511,13 @@ def run_pipeline(
                 promotion["min_tradeoff_score"] = min_score
             elif auto_promote:
                 backup_dir = PROMOTIONS_DIR / f"{run_id}_backup"
-                promotion = _promote_candidate(run_dir, backup_dir, initial_mode)
-                smoke = _smoke_after_promote(initial_mode)
+                promotion = _promote_candidate(selected_run_dir, backup_dir, selected_mode)
+                smoke = _smoke_after_promote(selected_mode)
                 promotion["smoke"] = smoke
                 if smoke.get("returncode") == 0:
                     promoted = True
                     status = "promoted"
-                    current_path = _write_current_manifest(run_id, target, run_dir, initial_mode, metrics)
+                    current_path = _write_current_manifest(run_id, target, selected_run_dir, selected_mode, metrics)
                     promotion["current_manifest"] = str(current_path)
                 else:
                     rollback_executed = True
@@ -379,9 +538,12 @@ def run_pipeline(
         "swing_live_order_dry_run_required": True,
         "diagnosis": diagnosis,
         "bull_period_review": bull_review,
-        "bull_specialist_mode": initial_mode,
+        "meta_period": meta_period,
+        "bull_specialist_mode": selected_mode,
         "bull_mode_decision": mode_decision,
         "run_dir": str(run_dir),
+        "selected_run_dir": str(selected_run_dir),
+        "candidate_results": candidate_results,
         "command_results": command_results,
         "metrics": metrics,
         "auto_promote": auto_promote,
