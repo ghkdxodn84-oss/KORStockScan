@@ -44,6 +44,7 @@ REQUIRED_ARTIFACT_IDS: set[str] = {
     "swing_model_retrain_report",
     "swing_model_retrain_diagnosis",
     "swing_bull_period_ai_review",
+    "update_kospi_status",
 }
 
 

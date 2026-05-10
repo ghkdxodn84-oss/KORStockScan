@@ -133,3 +133,43 @@ class TestArtifactFreshnessDetector:
             detector = ArtifactFreshnessDetector()
             result = detector.check()
             assert result.severity == "fail"
+
+    def test_json_status_value_is_validated(self, tmp_path):
+        status_file = tmp_path / "status.json"
+        status_file.write_text('{"status": "failed"}', encoding="utf-8")
+        artifact = {
+            "id": "test_status_json",
+            "path_template": str(status_file),
+            "max_staleness_sec": 600,
+            "critical": False,
+            "json_status_field": "status",
+            "json_ok_values": ["completed"],
+        }
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+        ):
+            detector = ArtifactFreshnessDetector()
+            result = detector.check()
+            assert result.severity == "warning"
+            assert result.details["test_status_json_content_status"] == "failed"
+
+    def test_json_status_ok_passes(self, tmp_path):
+        status_file = tmp_path / "status.json"
+        status_file.write_text('{"status": "completed"}', encoding="utf-8")
+        artifact = {
+            "id": "test_status_json",
+            "path_template": str(status_file),
+            "max_staleness_sec": 600,
+            "critical": False,
+            "json_status_field": "status",
+            "json_ok_values": ["completed"],
+        }
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+        ):
+            detector = ArtifactFreshnessDetector()
+            result = detector.check()
+            assert result.severity == "pass"
+            assert result.details["test_status_json_content_status"] == "completed"

@@ -22,9 +22,9 @@ import FinanceDataReader as fdr
 
 # --- [Level 2: 공통 모듈 명시적 상대 경로 반영] ---
 from src.utils import kiwoom_utils
-from src.model.ml_v2_common import calculate_all_features
-from src.database.db_manager import DBManager 
-from src.database.models import DailyStockQuote  
+from src.model.common_v2 import calculate_all_features
+from src.database.db_manager import DBManager
+from src.database.models import DailyStockQuote
 from src.core.event_bus import EventBus
 
 # 💡 [핵심 교정] 텔레그램 매니저를 초대해야 수신기가 EventBus에 정상 등록됩니다!
@@ -39,6 +39,8 @@ os.makedirs(LOG_DIR, exist_ok=True)
 
 LOG_PATH = os.path.join(LOG_DIR, 'update_kospi_error.log')
 TABLE_NAME = 'daily_stock_quotes'
+STATUS_DIR = PROJECT_ROOT / 'data' / 'runtime' / 'update_kospi_status'
+STATUS_VERSION = 1
 
 # Constants
 CUTOFF_DAYS = 100
@@ -61,7 +63,59 @@ if not logger.handlers:
     console_handler.setFormatter(logging.Formatter('%(message)s'))
     logger.addHandler(console_handler)
 
-logger.info("🧠 Nightly feature source: src.model.ml_v2_common.calculate_all_features")
+logger.info("🧠 Nightly feature source: src.model.common_v2.calculate_all_features")
+
+def _now_iso() -> str:
+    return datetime.now().isoformat(timespec='seconds')
+
+
+def _today_str() -> str:
+    return datetime.now().strftime('%Y-%m-%d')
+
+
+def _update_kospi_status_path(target_date: str | None = None) -> Path:
+    run_date = target_date or _today_str()
+    return STATUS_DIR / f"update_kospi_{run_date}.json"
+
+
+def _write_update_kospi_status(payload: dict, path: Path | None = None) -> Path:
+    status_path = path or _update_kospi_status_path(str(payload.get('target_date') or _today_str()))
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    status_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True, default=str), encoding='utf-8')
+    return status_path
+
+
+def _load_latest_quote_state() -> dict:
+    try:
+        db = DBManager()
+        with db.engine.connect() as conn:
+            latest_quote_date = conn.execute(text(f"SELECT MAX(quote_date) FROM {TABLE_NAME}")).scalar()
+            rows_on_latest_date = 0
+            if latest_quote_date is not None:
+                rows_on_latest_date = conn.execute(
+                    text(f"SELECT COUNT(*) FROM {TABLE_NAME} WHERE quote_date = :latest_quote_date"),
+                    {'latest_quote_date': latest_quote_date},
+                ).scalar()
+        return {
+            'db_state_status': 'available',
+            'latest_quote_date': str(latest_quote_date) if latest_quote_date is not None else None,
+            'rows_on_latest_date': int(rows_on_latest_date or 0),
+        }
+    except Exception as e:
+        return {
+            'db_state_status': 'unavailable',
+            'error': str(e),
+        }
+
+
+def _step(name: str, status: str, **details) -> dict:
+    payload = {
+        'name': name,
+        'status': status,
+        'finished_at': _now_iso(),
+    }
+    payload.update({k: v for k, v in details.items() if v is not None})
+    return payload
 
 # 💡 [핵심 매핑] 모델 스키마와 완벽 동기화 (Return -> daily_return 포함)
 COLUMN_MAPPING = {
@@ -248,7 +302,7 @@ def process_and_save_stock(code, token, session, is_nxt=False) -> pd.DataFrame:
         original_cols = df.columns.tolist()
 
         # 4. feature 계산 (nightly SSOT)
-        # ml_v2_common.calculate_all_features는 quote_date, stock_code 컬럼을 기대함
+        # common_v2.calculate_all_features는 quote_date, stock_code 컬럼을 기대함
         df_feat = df.rename(columns={'Date': 'quote_date', 'Code': 'stock_code'})
         df_feat = calculate_all_features(df_feat)
         df = _normalize_feature_output_columns(df_feat)
@@ -333,7 +387,7 @@ def update_kospi_data():
     
     if not is_open:
         logger.info(f"🛑 오늘은 {reason} 휴장일이므로 데이터베이스 업데이트를 종료합니다.")
-        return
+        return {'status': 'skipped_non_trading_day', 'reason': reason}
 
     logger.info("=== KORStockScan 일일 데이터 수집 (PostgreSQL 정식가동) ===")
     
@@ -344,7 +398,7 @@ def update_kospi_data():
     if not kiwoom_token:
         logger.error("❌ 키움 토큰 발급 실패! 시스템을 종료합니다.")
         event_bus.publish('TELEGRAM_BROADCAST', {'message': "🚨 [데이터 갱신 실패] 키움 토큰 발급 오류", 'audience': 'ADMIN_ONLY'})
-        return
+        return {'status': 'failed', 'reason': 'kiwoom_token_failed'}
 
     event_bus.publish('TELEGRAM_BROADCAST', {'message': "🔄 전 종목 일일 데이터 갱신을 시작합니다. (약 15분 소요)", 'audience': 'ADMIN_ONLY'})
 
@@ -377,18 +431,21 @@ def update_kospi_data():
 
             if df_codes.empty:
                 logger.warning("⚠️ DB가 완전히 비어있고 FDR도 실패했습니다! 기초 데이터 셋업이 필요합니다.")
-                return
+                return {'status': 'failed', 'reason': 'symbol_source_empty'}
             else:
                 kospi_codes = df_codes['stock_code'].tolist()
                 logger.info(f"✅ DB에서 종목 수집 성공! 총 {len(kospi_codes)}개 종목")
                 
         except Exception as db_e:
             logger.error(f"❌ DB 종목 수집 중 에러: {db_e}", exc_info=True)
-            return
+            return {'status': 'failed', 'reason': 'symbol_source_db_failed', 'error': str(db_e)}
 
     kospi_codes = sorted({_normalize_stock_code(c) for c in kospi_codes if c})
     total_count = len(kospi_codes)
     successful_codes = []
+    inserted_rows = 0
+    update_status = 'completed'
+    update_reason = None
 
     nxt_map = kiwoom_utils.get_nxt_flag_map_ka10099(kiwoom_token, kospi_codes, mrkt_tps=("0", "10"))
     if nxt_map:
@@ -470,6 +527,7 @@ def update_kospi_data():
                                              chunksize=BULK_CHUNKSIZE, method=None)
                 
                 logger.info(f"✅ DB 일괄 삽입 성공! (총 {len(final_bulk_df)}행 적재 완료)")
+                inserted_rows = int(len(final_bulk_df))
                 inserted = True
                 break
             except Exception as e:
@@ -482,42 +540,72 @@ def update_kospi_data():
         
         if not inserted:
             logger.error("🚨 DB 삽입 실패로 데이터가 저장되지 않았습니다.")
+            update_status = 'failed'
+            update_reason = 'bulk_insert_failed'
     else:
         logger.warning("⚠️ 수집된 데이터가 없어 DB 작업을 건너뜁니다.")
+        update_status = 'completed_with_warnings'
+        update_reason = 'no_collected_rows'
 
     logger.info(f"\n🎉 일일 업데이트 최종 완료! (성공: {len(successful_codes)} / {total_count} 종목)")
     
     finish_msg = f"✅ **KOSPI 일일 데이터 갱신 완료**\n총 **{len(successful_codes)} / {total_count}** 종목의 캔들 및 수급 데이터가 DB에 일괄 적재되었습니다.\n🟣 NXT 대상 플래그 반영: **{nxt_count}개**"
     event_bus.publish('TELEGRAM_BROADCAST', {'message': finish_msg, 'audience': 'ADMIN_ONLY', 'parse_mode': 'Markdown'})
+    return {
+        'status': update_status,
+        'reason': update_reason,
+        'total_count': int(total_count),
+        'successful_count': int(len(successful_codes)),
+        'inserted_rows': inserted_rows,
+        'nxt_count': int(nxt_count),
+    }
 
-if __name__ == "__main__":
-    # 1. 데이터 업데이트 실행
-    update_kospi_data()
-    
-    # 2. 대시보드 파일 DB 업로드 (실패해도 롤백하지 않음)
-    logger.info("📊 당일 대시보드 파일 DB 업로드 시작...")
-    try:
-        stats = upload_today_dashboard_files()
-        logger.info(f"✅ 대시보드 파일 DB 업로드 완료: pipeline_events={stats['pipeline_events']['inserted']}, monitor_snapshots={stats['monitor_snapshots']['inserted']}")
-    except Exception as e:
-        logger.error(f"❌ 대시보드 파일 DB 업로드 실패 (무시하고 진행): {e}")
-    
-    # 3. 업데이트가 끝난 후 V2 추천 스크립트 실행
-    logger.info("🚀 추천 모델(recommend_daily_v2.py)을 이어서 실행합니다...")
-    try:
-        # check=True는 에러 발생 시 프로세스를 중단시킵니다.
-        subprocess.run([sys.executable, "src/model/recommend_daily_v2.py"], check=True)
-    except subprocess.CalledProcessError as e:
-        logger.error(f"❌ 추천 모델 실행 중 에러 발생: {e}")
-
-    # 4. 스윙 추천 시뮬레이션/선정 funnel 리포트 생성 (실패해도 데이터 갱신은 롤백하지 않음)
-    latest_report_date = datetime.now().strftime("%Y-%m-%d")
+def _resolve_latest_report_date() -> str:
+    latest_report_date = _today_str()
     diagnostic_path = PROJECT_ROOT / "data" / "daily_recommendations_v2_diagnostics.json"
     try:
         if diagnostic_path.exists():
             latest_report_date = str(json.loads(diagnostic_path.read_text(encoding="utf-8")).get("latest_date") or latest_report_date)
     except Exception as e:
         logger.warning(f"⚠️ 추천 진단 날짜 로드 실패, calendar date 사용: {e}")
+    return latest_report_date
+
+
+def run_update_kospi_chain() -> dict:
+    target_date = _today_str()
+    started_at = _now_iso()
+    steps: list[dict] = []
+    logger.info(f"[START] update_kospi target_date={target_date} started_at={started_at}")
+
+    try:
+        update_summary = update_kospi_data() or {'status': 'completed'}
+        steps.append(_step('update_kospi_data', str(update_summary.get('status', 'completed')), details=update_summary))
+    except Exception as e:
+        logger.exception(f"❌ update_kospi_data 실행 중 치명적 오류: {e}")
+        steps.append(_step('update_kospi_data', 'failed', error=str(e)))
+        payload = _build_update_kospi_status(target_date, started_at, steps)
+        status_path = _write_update_kospi_status(payload)
+        logger.error(f"[FAIL] update_kospi target_date={target_date} finished_at={payload['finished_at']} status_path={status_path}")
+        raise
+
+    logger.info("📊 당일 대시보드 파일 DB 업로드 시작...")
+    try:
+        stats = upload_today_dashboard_files()
+        logger.info(f"✅ 대시보드 파일 DB 업로드 완료: pipeline_events={stats['pipeline_events']['inserted']}, monitor_snapshots={stats['monitor_snapshots']['inserted']}")
+        steps.append(_step('upload_today_dashboard_files', 'completed', stats=stats))
+    except Exception as e:
+        logger.error(f"❌ 대시보드 파일 DB 업로드 실패 (무시하고 진행): {e}")
+        steps.append(_step('upload_today_dashboard_files', 'failed', error=str(e)))
+
+    logger.info("🚀 추천 모델(recommend_daily_v2.py)을 이어서 실행합니다...")
+    try:
+        subprocess.run([sys.executable, "src/model/recommend_daily_v2.py"], check=True)
+        steps.append(_step('recommend_daily_v2', 'completed'))
+    except subprocess.CalledProcessError as e:
+        logger.error(f"❌ 추천 모델 실행 중 에러 발생: {e}")
+        steps.append(_step('recommend_daily_v2', 'failed', returncode=e.returncode, error=str(e)))
+
+    latest_report_date = _resolve_latest_report_date()
     logger.info("📈 스윙 일일 시뮬레이션 및 선정 funnel 리포트 생성 시작...")
     try:
         subprocess.run(
@@ -540,5 +628,47 @@ if __name__ == "__main__":
             check=True,
         )
         logger.info(f"✅ 스윙 일일 리포트 생성 완료: {latest_report_date}")
+        steps.append(_step('swing_daily_reports', 'completed', report_date=latest_report_date))
     except subprocess.CalledProcessError as e:
         logger.error(f"❌ 스윙 일일 리포트 생성 실패 (무시하고 진행): {e}")
+        steps.append(_step('swing_daily_reports', 'failed', report_date=latest_report_date, returncode=e.returncode, error=str(e)))
+
+    payload = _build_update_kospi_status(target_date, started_at, steps)
+    status_path = _write_update_kospi_status(payload)
+    log_marker = "[FAIL]" if payload["status"] == "failed" else "[DONE]"
+    logger.info(f"{log_marker} update_kospi target_date={target_date} finished_at={payload['finished_at']} status={payload['status']} status_path={status_path}")
+    return payload
+
+
+def _build_update_kospi_status(target_date: str, started_at: str, steps: list[dict]) -> dict:
+    update_status = steps[0].get('status') if steps else 'failed'
+    failed_steps = [s['name'] for s in steps if s.get('status') == 'failed']
+    warning_steps = [s['name'] for s in steps if s.get('status') == 'completed_with_warnings']
+
+    if update_status == 'failed':
+        status = 'failed'
+    elif failed_steps or warning_steps:
+        status = 'completed_with_warnings'
+    elif update_status == 'skipped_non_trading_day':
+        status = 'skipped_non_trading_day'
+    else:
+        status = 'completed'
+
+    return {
+        'schema_version': STATUS_VERSION,
+        'target_date': target_date,
+        'started_at': started_at,
+        'finished_at': _now_iso(),
+        'status': status,
+        'feature_source': 'src.model.common_v2.calculate_all_features',
+        'db_state': _load_latest_quote_state(),
+        'steps': steps,
+        'failed_steps': failed_steps,
+        'warning_steps': warning_steps,
+    }
+
+
+if __name__ == "__main__":
+    chain_status = run_update_kospi_chain()
+    if chain_status.get('status') == 'failed':
+        sys.exit(1)

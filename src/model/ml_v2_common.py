@@ -14,6 +14,11 @@ from sklearn.metrics import average_precision_score, precision_score
 warnings.filterwarnings("ignore")
 pd.set_option('future.no_silent_downcasting', True)
 
+# Legacy/experimental module.
+# Swing v2 production training, scoring, recommendation, and nightly DB feature
+# refresh must use src.model.common_v2.calculate_all_features. Keep this module
+# only for historical pack-based experiments and compatibility.
+
 # =========================================================
 # 0. 공통 경로 / DB
 # =========================================================

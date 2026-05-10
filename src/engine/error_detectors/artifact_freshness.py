@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import time
 from datetime import datetime, date
@@ -192,6 +193,17 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "window_start": (17, 30),
         "window_end": (18, 30),
     },
+    {
+        "id": "update_kospi_status",
+        "path_template": "data/runtime/update_kospi_status/update_kospi_{date}.json",
+        "max_staleness_sec": 1800,
+        "critical": False,
+        "trading_day_only": False,
+        "window_start": (21, 0),
+        "window_end": (21, 30),
+        "json_status_field": "status",
+        "json_ok_values": ["completed", "skipped_non_trading_day"],
+    },
 ]
 
 
@@ -257,6 +269,11 @@ class ArtifactFreshnessDetector(BaseDetector):
             mtime = artifact_path.stat().st_mtime
             age_sec = now_ts - mtime
             details[f"{aid}_age_sec"] = round(age_sec, 1)
+            status_warning = self._validate_json_status(artifact, artifact_path, details)
+            if status_warning:
+                warnings.append(status_warning)
+                details[f"{aid}_status"] = "warning"
+                continue
 
             if past_window_end:
                 details[f"{aid}_status"] = "pass_after_window"
@@ -296,6 +313,38 @@ class ArtifactFreshnessDetector(BaseDetector):
             return f"Check missing/stale artifacts: {'; '.join(issues[:3])}"
         if severity == "warning":
             return "Non-critical artifacts missing/stale. Monitor next cycle."
+        return ""
+
+    @staticmethod
+    def _validate_json_status(
+        artifact: dict[str, Any],
+        artifact_path: Path,
+        details: dict[str, Any],
+    ) -> str:
+        status_field = artifact.get("json_status_field")
+        if not status_field:
+            return ""
+
+        aid = artifact["id"]
+        ok_values = {str(v) for v in artifact.get("json_ok_values", [])}
+        try:
+            payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            details[f"{aid}_content_status"] = "invalid_json"
+            return f"{aid}: invalid status JSON ({exc})"
+
+        current: Any = payload
+        for part in str(status_field).split("."):
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+            else:
+                details[f"{aid}_content_status"] = "missing_status_field"
+                return f"{aid}: missing JSON status field {status_field}"
+
+        status_value = str(current)
+        details[f"{aid}_content_status"] = status_value
+        if ok_values and status_value not in ok_values:
+            return f"{aid}: JSON status is {status_value}"
         return ""
 
 

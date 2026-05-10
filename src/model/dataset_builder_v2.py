@@ -4,11 +4,9 @@ import FinanceDataReader as fdr
 from sqlalchemy import text
 
 try:
-    from .common_v2 import engine, sql_code_tuple, normalize_codes
-    from .feature_engineering_v2 import calculate_all_features
+    from .common_v2 import calculate_all_features, engine, normalize_codes, sql_code_tuple
 except ImportError:
-    from common_v2 import engine, sql_code_tuple, normalize_codes
-    from feature_engineering_v2 import calculate_all_features
+    from common_v2 import calculate_all_features, engine, normalize_codes, sql_code_tuple
 
 
 RAW_COLS = """

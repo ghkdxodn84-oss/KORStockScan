@@ -76,6 +76,14 @@
   - 유지 가드: 자동 승격은 스윙 ML artifact 교체만 뜻한다. `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True`, `actual_order_submitted=false`, one-share real canary 별도 approval, OpenAI/Gemini live routing 금지는 유지한다.
   - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_retrain_automation.py`, error detector coverage, parser 검증으로 확인한다.
 
+- [x] `[SwingFeatureSSOTCleanup0511] 스윙 v2 feature 계산 SSOT를 common_v2 facade로 통일` (`Due: 2026-05-11`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: ScalpingLogic`)
+  - Source: [common_v2.py](/home/ubuntu/KORStockScan/src/model/common_v2.py), [feature_engineering_v2.py](/home/ubuntu/KORStockScan/src/model/feature_engineering_v2.py), [update_kospi.py](/home/ubuntu/KORStockScan/src/utils/update_kospi.py), [dataset_builder_v2.py](/home/ubuntu/KORStockScan/src/model/dataset_builder_v2.py), [ml_v2_common.py](/home/ubuntu/KORStockScan/src/model/ml_v2_common.py)
+  - 실행 메모: `feature_engineering_v2.calculate_all_features`를 실제 계산 SSOT로 유지하고, `common_v2.calculate_all_features` facade를 통해 nightly DB update, training panel, scanner/runtime scoring import를 통일한다.
+  - legacy 처리: `ml_v2_common.py`는 삭제하지 않고 legacy/experimental module로 표시한다. 신규 스윙 v2 운영/재학습 feature 경로에는 사용하지 않는다.
+  - 유지 가드: DB schema, feature 계산 로직, active 모델 artifact, runtime threshold/order behavior는 변경하지 않는다. `update_kospi.py` 전체 실행은 Kiwoom/API/DB append side effect 때문에 검증 범위에서 제외한다.
+  - 후속 chain: 21:00 cron 실행 후 `data/runtime/update_kospi_status/update_kospi_YYYY-MM-DD.json`을 생성하고, System Error Detector가 `update_kospi_status` artifact의 `status` 값을 검증한다. 정상값은 `completed` 또는 `skipped_non_trading_day`이며, 후속 추천/리포트 실패는 `completed_with_warnings`로 분리한다.
+  - 검증: 신규 SSOT 단위 테스트는 feature 컬럼 존재뿐 아니라 실제 계산값(`return_*`, `ma*`, `vwap20`, 수급 rolling, `breakout_20`, `turnover_shock`)을 fixture 기대값과 비교한다. 스윙 재학습/추천 회귀 테스트, error detector coverage, `compileall`, `git diff --check`, parser 검증으로 확인한다.
+
 - [x] `[SwingRuntimeDryRunSimulation0509] 스윙 추천 후 장중 매매로직 dry-run 시뮬레이션 보강` (`Due: 2026-05-09`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: ScalpingLogic`)
   - Source: [swing_daily_simulation_report.py](/home/ubuntu/KORStockScan/src/engine/swing_daily_simulation_report.py), [test_swing_model_selection_funnel_repair.py](/home/ubuntu/KORStockScan/src/tests/test_swing_model_selection_funnel_repair.py)
   - 실행 메모: 단순 next-open TP/SL 시뮬레이션을 `runtime_order_dry_run_daily_proxy`로 바꿔, 스윙 gap guard, bull regime block, runtime score proxy, 전략별 비중, `describe_buy_capacity` 수량 산출, 최유리지정가 `order_type_code=6`, 주문 미전송 `actual_order_submitted=false`, hard stop/target/trailing/time stop 청산 규칙을 리포트에 남기도록 했다.

@@ -10,6 +10,11 @@ from pathlib import Path
 from sqlalchemy import create_engine, text
 from sklearn.isotonic import IsotonicRegression
 
+try:
+    from .feature_engineering_v2 import calculate_all_features
+except ImportError:
+    from feature_engineering_v2 import calculate_all_features
+
 warnings.filterwarnings("ignore")
 
 # ==========================================
