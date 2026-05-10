@@ -91,14 +91,6 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "critical": False,
     },
     {
-        "id": "preclose_sell_target",
-        "log": "logs/preclose_sell_target_cron.log",
-        "window_start": (15, 0),
-        "window_end": (15, 20),
-        "mode": "once",
-        "critical": False,
-    },
-    {
         "id": "swing_live_dry_run",
         "log": "logs/swing_live_dry_run_cron.log",
         "window_start": (15, 45),

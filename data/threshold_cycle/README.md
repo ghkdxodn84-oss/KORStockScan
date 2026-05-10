@@ -139,7 +139,7 @@ family별 기준 window는 다르게 적용한다.
 | `holding_exit_decision_matrix_advisory` | `latest_report` | `rolling_bucket_context` | 최신 matrix edge가 있어야 하며 bucket confidence는 SAW rolling context를 참조한다. |
 | `scale_in_price_guard` | `rolling_10d` | `cumulative_since_2026-04-21`, `daily` | 물타기/불타기는 체결 표본이 희소하므로 당일만으로 guard 값을 정하지 않는다. |
 
-새 관찰축 추가는 기본 금지다. follow-up이 어려운 신규 observe/report axis를 늘리지 않고 BUY 쪽 `buy_funnel_sentinel`, `sentinel_followup`, `wait6579_ev_cohort`, `missed_entry_counterfactual`, 보유/청산 쪽 `holding_exit_observation`, `post_sell_feedback`, `holding_exit_sentinel`, `trade_review`, decision-support 쪽 `holding_exit_decision_matrix`, `statistical_action_weight`의 기존 source를 calibration 입력으로 재사용한다. `preclose_sell_target`은 operator preclose review 산출물이며 tuning/calibration source가 아니다.
+새 관찰축 추가는 기본 금지다. follow-up이 어려운 신규 observe/report axis를 늘리지 않고 BUY 쪽 `buy_funnel_sentinel`, `sentinel_followup`, `wait6579_ev_cohort`, `missed_entry_counterfactual`, 보유/청산 쪽 `holding_exit_observation`, `post_sell_feedback`, `holding_exit_sentinel`, `trade_review`, decision-support 쪽 `holding_exit_decision_matrix`, `statistical_action_weight`의 기존 source를 calibration 입력으로 재사용한다. `preclose_sell_target`은 2026-05-10 제거된 operator review 축이므로 calibration 입력에서 제외한다.
 
 `gemini_scalping_pattern_lab`와 `claude_scalping_pattern_lab`는 신규 관찰축을 runtime에 직접 추가하지 않는다. postclose wrapper가 두 lab을 `ANALYSIS_START_DATE=2026-04-21`, `ANALYSIS_END_DATE=YYYY-MM-DD`로 실행하고, `scalping_pattern_lab_automation`이 결과를 기존 family 입력, `auto_family_candidate(allowed_runtime_apply=false)`, `code_improvement_order(runtime_effect=false)`로 분류한다. daily EV report에는 freshness/consensus/order 요약만 포함하고 상세는 별도 artifact를 참조한다.
 

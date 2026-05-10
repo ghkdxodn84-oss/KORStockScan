@@ -31,6 +31,12 @@
 - Runbook 운영 확인은 [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md) `장후 확인 절차`와 `build_codex_daily_workorder --slot POSTCLOSE`의 `PostcloseAutomationHealthCheckYYYYMMDD` 블록을 기준으로 본다.
 - 아래 체크박스는 runbook 반복 확인이 아니라 2026-05-11에 소유자가 필요한 구현/판정/재확인 작업만 남긴다.
 
+- [x] `[PrecloseSellTargetDecommission0510] preclose sell target 기능 제거 및 sim 알림 admin-only 전환` (`Due: 2026-05-10`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: RuntimeStability`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [sniper_execution_receipts.py](/home/ubuntu/KORStockScan/src/engine/sniper_execution_receipts.py), [kiwoom_sniper_v2.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_sniper_v2.py)
+  - 영향도: `preclose_sell_target`은 operator preclose review 전용이고 tuning/calibration source가 아니므로 제거 영향은 15:00 cron, wrapper/status manifest, detector cron inventory, 문서 inventory에 한정한다. 과거 `data/report/preclose_sell_target*` 산출물은 2026-05-10 사용자 요청으로 삭제했다.
+  - 실행 메모: `src.scanners.preclose_sell_target_report`, wrapper, 테스트, detector registry, crontab `PRECLOSE_SELL_TARGET_1500` 경로를 제거했다. 스윙 dry-run 및 스캘핑 live simulator 관련 텔레그램 audience는 `ADMIN_ONLY`로 강제한다.
+  - 유지 가드: threshold-cycle source bundle, daily EV, statistical action weight, ADM ladder는 `preclose_sell_target`을 입력으로 쓰지 않는다. sim/combined EV는 기존대로 report/calibration 입력이며, sim 알림만 VIP에서 제외한다.
+
 - [x] `[PositionSizingCapRemoval0509] 신규 BUY/REVERSAL_ADD/PYRAMID 1주 수량 cap 제거 반영` (`Due: 2026-05-09`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: ScalpingLogic`)
   - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py), [sniper_scale_in.py](/home/ubuntu/KORStockScan/src/engine/sniper_scale_in.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py)
   - 실행 메모: 사용자 지시로 신규 BUY `SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED=False`, `SCALPING_INITIAL_ENTRY_MAX_QTY=0`을 기본값으로 전환하고, 추가매수 `SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP=0`과 wait6579 probe `AI_WAIT6579_PROBE_CANARY_MAX_QTY=0`을 수량 cap 없음으로 해석하도록 변경했다.

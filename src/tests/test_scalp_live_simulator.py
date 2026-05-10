@@ -83,6 +83,7 @@ def test_scalp_simulator_arms_and_fills_without_real_buy_order(monkeypatch):
     assert sim_target["status"] == "HOLDING"
     assert sim_target["simulation_book"] == "scalp_ai_buy_all"
     assert sim_target["actual_order_submitted"] is False
+    assert sim_target["msg_audience"] == "ADMIN_ONLY"
     assert sim_target["buy_qty"] == 1
     assert sim_target["buy_price"] == 9_990
     assert [stage for stage, _ in logs] == [
@@ -94,6 +95,21 @@ def test_scalp_simulator_arms_and_fills_without_real_buy_order(monkeypatch):
     assert state_handlers.EVENT_BUS.published == [
         ("COMMAND_WS_REG", {"codes": ["123456"], "source": "scalp_live_simulator"})
     ]
+
+
+def test_swing_dry_run_gatekeeper_report_is_admin_only(monkeypatch):
+    event_bus = FakeEventBus()
+    monkeypatch.setattr(sniper_runtime, "event_bus", event_bus)
+
+    sniper_runtime._publish_gatekeeper_report(
+        {"name": "SWING", "strategy": "KOSPI_ML"},
+        "654321",
+        {"action_label": "BUY", "report": "ok"},
+        True,
+    )
+
+    assert event_bus.published[0][0] == "TELEGRAM_BROADCAST"
+    assert event_bus.published[0][1]["audience"] == "ADMIN_ONLY"
 
 
 def test_scalp_simulator_duplicate_buy_signal_does_not_create_second_position(monkeypatch):

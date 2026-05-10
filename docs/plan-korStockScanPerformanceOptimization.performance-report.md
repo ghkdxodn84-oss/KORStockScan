@@ -101,7 +101,7 @@
 | `statistical_action_weight_*` | `exit_only`, `avg_down_wait`, `pyramid_wait`, lower-confidence score | report-only, live threshold 직접 변경 금지 |
 | `holding_exit_decision_matrix_*` | AI/flow/exit authority decision matrix | ADM ladder 승인 전 prompt/live 반영 금지 |
 | `threshold_cycle_*` | daily/rolling/cumulative threshold 후보, manifest/apply plan | `ThresholdOpsTransition0506` 전 live mutation 금지 |
-| `preclose_sell_target_*` | 15:00 전후 SELL_TODAY/report-only 후보 | 정기화 전 dry-run 및 checklist owner 필요 |
+| `preclose_sell_target_*` | 제거된 15:00 전후 SELL_TODAY/report-only 후보 | 2026-05-10 제거. 과거 증적용 artifact로만 보존 |
 | pattern lab outputs | data quality, EV improvement backlog, final review | POSTCLOSE monitoring report-only, live routing/threshold 직접 변경 금지 |
 
 ## 7. Dashboard / Performance-Tuning 매핑

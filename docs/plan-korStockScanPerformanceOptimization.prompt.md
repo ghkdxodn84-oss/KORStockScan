@@ -80,7 +80,7 @@
 | `position sizing` | `initial_entry_qty_cap_1share` 유지, `MAX_*_COUNT`는 attribution counter, generic `AVG_DOWN` 평가는 제거됐다. scalping `AVG_DOWN` add_type은 `REVERSAL_ADD` 귀속으로만 남고, `SCALPING_ENABLE_PYRAMID`는 cooldown/pending/position cap/protection으로 관리 | count gate semantics 정리 완료, 동적 수량화만 OPEN | `2026-05-04 PREOPEN`, `2026-05-06 POSTCLOSE` |
 | `AI engine` | Gemini/DeepSeek/OpenAI contract/provenance 보강. 현재 `main` 스캘핑 live routing 기본값은 Gemini이며, OpenAI Responses WS와 OpenAI live routing은 flag-off/backlog | live routing 승격 아님 | `2026-05-06 POSTCLOSE` backlog 재분류 |
 | `threshold/action weight` | threshold collector/report/apply plan 자동화. apply는 `manifest_only`. `entry_ofi_ai_smoothing`, `holding_flow_ofi_smoothing` family도 manifest_only 후보만 생성 | runtime mutation 전 단계 | `2026-05-06 POSTCLOSE` acceptance |
-| `report inventory` | 정기 Markdown/JSON inventory와 누락 후보 정리. `preclose_sell_target`은 canonical JSON/Markdown report-only 산출물로 재개 준비 | report README 기준으로 작업계획 생성 | `2026-05-06 INTRADAY` dry-run 및 정기화 판정 |
+| `report inventory` | 정기 Markdown/JSON inventory와 누락 후보 정리. `preclose_sell_target`은 2026-05-10 제거되어 과거 증적용 산출물만 보존 | report README 기준으로 작업계획 생성 | active cron/source 아님 |
 | `scanner/code debt` | scanner boundary, state handler split, runtime stabilization | 설계/분해 단계 | `2026-05-06~2026-05-08` checklist |
 
 ## 2026-05-04~2026-05-08 실행 맵

@@ -273,8 +273,18 @@ def _publish_gatekeeper_report(stock, code, gatekeeper, allowed):
     # 리포트가 길면 첫 200자만 사용
     preview = report[:200] + ('...' if len(report) > 200 else '')
     status = '승인' if allowed else '거부'
-    audience = 'VIP_ALL'  # 기본적으로 관리자에게만 알림
-    # VIP 대상 여부는 stock에 따라 결정 가능 (필요 시 추가)    
+    strategy = str((stock or {}).get('strategy') or '').strip().upper()
+    simulation_context = (
+        bool((stock or {}).get('swing_live_order_dry_run'))
+        or bool((stock or {}).get('scalp_live_simulator'))
+        or bool((stock or {}).get('simulation_owner'))
+        or bool((stock or {}).get('simulation_book'))
+        or (
+            strategy in {'KOSPI_ML', 'KOSDAQ_ML', 'MAIN'}
+            and bool(getattr(TRADING_RULES, 'SWING_LIVE_ORDER_DRY_RUN_ENABLED', True))
+        )
+    )
+    audience = 'ADMIN_ONLY' if simulation_context else 'VIP_ALL'
     msg = (
         f"🤖 <b>[Gatekeeper {status}]</b>\n"
         f"🎯 종목: {stock['name']} ({code})\n"

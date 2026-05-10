@@ -269,6 +269,22 @@ def _is_any_simulated_position(stock: dict | None, strategy: str | None = None) 
     return _is_swing_simulated_position(stock, strategy) or _is_scalp_simulated_position(stock, strategy)
 
 
+def _is_simulation_alert_context(stock: dict | None, strategy: str | None = None) -> bool:
+    if _is_any_simulated_position(stock, strategy):
+        return True
+    resolved_strategy = strategy or ((stock or {}).get("strategy") if isinstance(stock, dict) else None)
+    return _is_swing_live_order_dry_run(resolved_strategy)
+
+
+def _resolve_telegram_audience_for_stock(
+    stock: dict | None,
+    strategy: str | None = None,
+    *,
+    default: str = "VIP_ALL",
+) -> str:
+    return "ADMIN_ONLY" if _is_simulation_alert_context(stock, strategy) else default
+
+
 def _active_runtime_status(stock: dict | None) -> bool:
     status = str((stock or {}).get("status") or "").strip().upper()
     return bool(status) and status not in {"COMPLETED", "EXPIRED"}
@@ -393,6 +409,7 @@ def _mark_swing_simulated_holding(stock, code, curr_price, requested_qty, entry_
             "simulation_owner": _swing_live_order_dry_run_owner(),
             "actual_order_submitted": False,
             "simulated_entry_orders": entry_orders,
+            "msg_audience": "ADMIN_ONLY",
         },
         pop_fields=[
             "pending_buy_msg",
@@ -698,6 +715,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(stock: dict, code: str, ws_da
             "buy_qty": 0,
             "entry_mode": stock.get("entry_mode") or "scalp_sim_ai_buy_all",
             "rt_ai_prob": current_ai_score / 100.0,
+            "msg_audience": "ADMIN_ONLY",
         }
     )
     for key in ("pending_buy_msg", "pending_sell_msg", "pending_entry_orders", "odno", "sell_odno", "add_odno"):
@@ -1253,7 +1271,11 @@ def _publish_buy_signal_submission_notice(
     if bundle_id and stock.get('last_buy_signal_telegram_bundle_id') == bundle_id:
         return
 
-    audience = _resolve_buy_signal_audience(liquidity_value=liquidity_value, ai_score=ai_score)
+    audience = _resolve_telegram_audience_for_stock(
+        stock,
+        strategy,
+        default=_resolve_buy_signal_audience(liquidity_value=liquidity_value, ai_score=ai_score),
+    )
     dynamic_reason = (
         stock.get('entry_dynamic_reason')
         or stock.get('entry_armed_dynamic_reason')
@@ -5187,6 +5209,11 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                         if liquidity_value >= config["VIP_LIQUIDITY_THRESHOLD"] and current_ai_score >= 90
                                         else 'ADMIN_ONLY'
                                     )
+                                    target_audience = _resolve_telegram_audience_for_stock(
+                                        stock,
+                                        strategy,
+                                        default=target_audience,
+                                    )
                                     event_bus.publish(
                                         'TELEGRAM_BROADCAST',
                                         {'message': ai_msg, 'audience': target_audience, 'parse_mode': 'HTML'},
@@ -5619,7 +5646,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                 stock,
                 set_fields={
                     'target_buy_price': curr_price,
-                    'msg_audience': 'VIP_ALL',
+                    'msg_audience': _resolve_telegram_audience_for_stock(stock, strategy),
                 },
             )
             _publish_gatekeeper_report_proxy(stock, code, gatekeeper, allowed=True)
@@ -6111,7 +6138,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         with ENTRY_LOCK:
             alerted_stocks.add(code)
     else:
-        _mutate_stock_state(stock, set_fields={'msg_audience': 'VIP_ALL'})
+        _mutate_stock_state(stock, set_fields={'msg_audience': _resolve_telegram_audience_for_stock(stock, strategy)})
 
     try:
         with DB.get_session() as session:

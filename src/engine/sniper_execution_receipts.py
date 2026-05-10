@@ -52,11 +52,17 @@ _BUY_RECEIPT_SNAPSHOT_KEYS = (
     "buy_price",
     "buy_qty",
     "code",
+    "actual_order_submitted",
     "msg_audience",
     "name",
     "pending_buy_msg",
+    "scalp_live_simulator",
+    "simulation_book",
+    "simulation_owner",
+    "swing_live_order_dry_run",
 )
 _SELL_RECEIPT_SNAPSHOT_KEYS = (
+    "actual_order_submitted",
     "buy_qty",
     "code",
     "last_exit_current_ai_score",
@@ -69,8 +75,13 @@ _SELL_RECEIPT_SNAPSHOT_KEYS = (
     "msg_audience",
     "name",
     "pending_sell_msg",
+    "scalp_live_simulator",
+    "simulation_book",
+    "simulation_owner",
+    "swing_live_order_dry_run",
 )
 _ADD_RECEIPT_SNAPSHOT_KEYS = (
+    "actual_order_submitted",
     "add_count",
     "avg_down_count",
     "buy_price",
@@ -81,7 +92,11 @@ _ADD_RECEIPT_SNAPSHOT_KEYS = (
     "name",
     "pyramid_count",
     "scale_in_locked",
+    "scalp_live_simulator",
+    "simulation_book",
+    "simulation_owner",
     "strategy",
+    "swing_live_order_dry_run",
     "trailing_stop_price",
 )
 _PENDING_ADD_META_KEYS = (
@@ -190,6 +205,20 @@ def _log_holding_pipeline(name, code, target_id, stage, **fields):
 
 def _receipt_snapshot(target_stock: dict[str, Any], keys: tuple[str, ...]) -> dict[str, Any]:
     return {key: target_stock.get(key) for key in keys}
+
+
+def _receipt_audience(snapshot: dict[str, Any] | None) -> str:
+    snapshot = snapshot or {}
+    simulated = (
+        bool(snapshot.get("swing_live_order_dry_run"))
+        or bool(snapshot.get("scalp_live_simulator"))
+        or bool(snapshot.get("simulation_book"))
+        or bool(snapshot.get("simulation_owner"))
+        or snapshot.get("actual_order_submitted") is False
+    )
+    if simulated:
+        return "ADMIN_ONLY"
+    return str(snapshot.get("msg_audience") or "ADMIN_ONLY")
 
 
 def _clear_runtime_keys(target_stock: dict[str, Any], keys: tuple[str, ...]) -> None:
@@ -310,7 +339,7 @@ def _handle_scalp_revive_sell_execution(
             _publish_sell_execution_message(
                 name=target_stock.get('name') or '-',
                 pending_msg=target_stock.get('pending_sell_msg') or '',
-                audience=target_stock.get('msg_audience', 'ADMIN_ONLY'),
+                audience=_receipt_audience(target_stock),
                 exec_price=exec_price,
                 profit_rate=profit_rate,
             )
@@ -811,7 +840,7 @@ def _update_db_for_buy(target_id, exec_price, now, receipt_snapshot):
 
         if not receipt_snapshot.get('buy_execution_notified'):
             pending_msg = receipt_snapshot.get('pending_buy_msg')
-            audience = receipt_snapshot.get('msg_audience', 'ADMIN_ONLY')
+            audience = _receipt_audience(receipt_snapshot)
             if pending_msg:
                 final_msg = pending_msg.replace("그물망 투척!", "그물망 매수 체결!").replace("스나이퍼 포착!", "스나이퍼 매수 체결!")
                 final_msg += f"\n✅ **평균 체결가:** `{avg_buy_price:,.0f}원` / **체결수량:** `{buy_qty}주`"
@@ -881,7 +910,7 @@ def _update_db_for_add(target_id, exec_price, exec_qty, now, receipt_snapshot, a
             )
             event_bus.publish('TELEGRAM_BROADCAST', {
                 'message': msg,
-                'audience': receipt_snapshot.get('msg_audience', 'ADMIN_ONLY'),
+                'audience': _receipt_audience(receipt_snapshot),
                 'parse_mode': None
             })
     except Exception as e:
@@ -916,7 +945,7 @@ def _update_db_for_sell(target_id, exec_price, now, receipt_snapshot, strategy, 
             _publish_sell_execution_message(
                 name=receipt_snapshot.get('name') or '-',
                 pending_msg=receipt_snapshot.get('pending_sell_msg') or '',
-                audience=receipt_snapshot.get('msg_audience', 'ADMIN_ONLY'),
+                audience=_receipt_audience(receipt_snapshot),
                 exec_price=exec_price,
                 profit_rate=profit_rate,
             )

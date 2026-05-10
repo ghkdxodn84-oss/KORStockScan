@@ -11,7 +11,6 @@ REQUIRED_CRON_JOB_IDS: set[str] = {
     "buy_pause_guard",
     "monitor_snapshot",
     "threshold_cycle_calibration_intraday",
-    "preclose_sell_target",
     "swing_live_dry_run",
     "threshold_cycle_postclose",
     "tuning_monitoring_postclose",

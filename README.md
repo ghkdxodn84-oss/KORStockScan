@@ -538,7 +538,7 @@ flowchart TD
 | Swing 1-share real canary | 별도 승인 필요 | 스윙 broker execution 품질 수집용 1주 real canary는 `swing_runtime_approval`과 별도 approval artifact가 필요하다. 승인되어도 스윙 전체 실매매 전환이 아니며, phase0에서는 1주 BUY/SELL만 허용하고 추가매수 실주문은 금지한다. |
 | AI correction의 직접 적용 | 차단 | AI는 수정안을 제안하지만 최종 state/value는 deterministic guard가 bounds, sample window, safety, same-stage owner rule로 결정한다. |
 | 사람 개입 누락 | daily chain에는 없음 | 무인 반영 후 제출물은 `threshold_cycle_ev_YYYY-MM-DD.{json,md}`다. 사람이 필요한 지점은 운영 장애, 신규 code improvement order 구현 착수, Project/Calendar 동기화뿐이며 daily threshold 반영 승인 단계는 의도적으로 제거했다. |
-| `preclose_sell_target` tuning source 혼입 | 차단 | operator preclose review 산출물로만 둔다. calibration source bundle에는 포함하지 않는다. |
+| 제거된 `preclose_sell_target` tuning source 혼입 | 차단 | 2026-05-10 제거되어 calibration source bundle과 cron inventory에 포함하지 않는다. 과거 `data/report/preclose_sell_target*` 산출물도 사용자 요청으로 삭제했다. |
 
 ## 분석 도구
 

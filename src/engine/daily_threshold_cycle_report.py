@@ -984,9 +984,7 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             )
             or 0,
             "saw_insufficient_sample": _safe_int(saw_policy_counts.get("insufficient_sample"), 0) or 0,
-            "excluded_reports": {
-                "preclose_sell_target": "operator_preclose_review_only_not_tuning_source",
-            },
+            "excluded_reports": {},
         },
         "scale_in_price_guard": {
             "scale_in_price_resolved": _safe_int(stage_events.get("scale_in_price_resolved"), 0) or 0,

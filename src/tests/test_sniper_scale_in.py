@@ -2807,6 +2807,53 @@ def test_publish_buy_signal_submission_notice_uses_vip_liquidity_gate(monkeypatc
     assert published[0][1]["audience"] == "VIP_ALL"
 
 
+def test_publish_buy_signal_submission_notice_forces_simulation_admin(monkeypatch):
+    published = []
+
+    class DummyEventBus:
+        def publish(self, topic, payload):
+            published.append((topic, payload))
+
+    monkeypatch.setattr(state_handlers, "EVENT_BUS", DummyEventBus())
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda _stock, _code, _stage, **_fields: None,
+    )
+
+    state_handlers._publish_buy_signal_submission_notice(
+        {
+            "id": 1,
+            "name": "스윙드라이런",
+            "entry_bundle_id": "swing-sim-bundle",
+            "entry_dynamic_reason": "dry_run",
+        },
+        "222222",
+        strategy="KOSPI_ML",
+        curr_price=10000,
+        requested_qty=10,
+        entry_mode="swing",
+        latency_gate={"latency_state": "SAFE", "decision": "ALLOW_NORMAL"},
+        liquidity_value=1_500_000_000,
+        ai_score=95,
+    )
+
+    assert published[0][1]["audience"] == "ADMIN_ONLY"
+
+
+def test_receipt_audience_forces_simulation_admin():
+    assert (
+        receipts._receipt_audience(
+            {
+                "msg_audience": "VIP_ALL",
+                "simulation_book": "scalp_ai_buy_all",
+                "actual_order_submitted": False,
+            }
+        )
+        == "ADMIN_ONLY"
+    )
+
+
 def test_execution_receipt_accumulates_fallback_bundle_fills(monkeypatch):
     receipts.ACTIVE_TARGETS = []
     receipts.highest_prices = {}

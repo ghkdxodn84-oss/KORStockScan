@@ -34,13 +34,12 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 | Scalping Pattern Lab Automation | `data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_YYYY-MM-DD.md` | `src.engine.scalping_pattern_lab_automation` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | Gemini/Claude pattern lab의 improvement order/family candidate 요약. runtime/code 직접 변경 없음 |
 | Code Improvement Workorder | `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md` | `src.engine.build_code_improvement_workorder` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | Codex 세션 입력용 구현 작업지시서. 사용자가 이 문서를 Codex에 넣어 구현 요청 |
 | Threshold Cycle Daily EV | `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.md` | `src.engine.threshold_cycle_ev_report` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | 무인 threshold apply 이후 제출 기준 리포트 |
-| Preclose Sell Target | `data/report/preclose_sell_target/preclose_sell_target_YYYY-MM-DD.md` | `src.scanners.preclose_sell_target_report` | `deploy/run_preclose_sell_target_report.sh YYYY-MM-DD --no-ai --no-telegram`로 1차 검증 후 정기화 판단 | canonical JSON과 같은 디렉터리에 생성하며 현재는 report-only. wrapper status는 `data/report/preclose_sell_target/status/`에 기록 |
 
 ## 비정기/legacy Markdown
 
 | 리포트 | 경로 | 비고 |
 |---|---|---|
-| Preclose Sell Target legacy root | `data/report/preclose_sell_target_YYYY-MM-DD.md` | 2026-04-15 단발 산출물 경로. 재개 후에는 호환성 Markdown으로만 유지하고 canonical 산출물은 `data/report/preclose_sell_target/`를 사용 |
+| Preclose Sell Target legacy root | `data/report/preclose_sell_target_YYYY-MM-DD.md` | 2026-05-10 기능 제거 및 사용자 요청으로 과거 산출물 삭제 |
 | Add Blocked Lock Markdown | `data/report/monitor_snapshots/add_blocked_lock_2026-04-16.md` | legacy 단발 산출물로 보이며 최근 snapshot 체인에서는 JSON만 생성됨 |
 
 ## 정기 JSON Snapshot
@@ -66,7 +65,6 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 | Code Improvement Workorder | `data/report/code_improvement_workorder/code_improvement_workorder_YYYY-MM-DD.json` | `src.engine.build_code_improvement_workorder` | `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md` |
 | Threshold Cycle Daily EV | `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.json` | `src.engine.threshold_cycle_ev_report` | `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.md` |
 | Cumulative Threshold Cycle Report | `data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_YYYY-MM-DD.json` | `src.engine.daily_threshold_cycle_report` | `data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_YYYY-MM-DD.md` |
-| Preclose Sell Target | `data/report/preclose_sell_target/preclose_sell_target_YYYY-MM-DD.json` | `src.scanners.preclose_sell_target_report` | `data/report/preclose_sell_target/preclose_sell_target_YYYY-MM-DD.md` |
 | Threshold Compact Events | `data/threshold_cycle/date=YYYY-MM-DD/family=*/part-*.jsonl`, `data/threshold_cycle/threshold_events_YYYY-MM-DD.jsonl` | `src.engine.backfill_threshold_cycle_events` | 없음 |
 | Pipeline Events | `data/pipeline_events/pipeline_events_YYYY-MM-DD.jsonl` | runtime pipeline event writer | 없음 |
 | Gatekeeper Snapshots | `data/gatekeeper/gatekeeper_snapshots_YYYY-MM-DD.jsonl` | gatekeeper snapshot writer | 없음 |
@@ -145,7 +143,7 @@ calibration의 source는 `threshold_cycle` compact event만이 아니다. 아래
 - ADM/SAW는 all `no_clear_edge`이면 `hold_no_edge`로 두고, non-`no_clear_edge` + `candidate_weight_source` bucket만 advisory canary 후보로 연결한다.
 - bad-entry는 naive hard block 재개가 아니라 `bad_entry_refined_candidate`의 soft-stop tail/defer cost 감소 후보만 calibration한다. 단, `bad_entry_refined_candidate`는 provisional signal이며 최종 유형은 진입부터 청산, 장후 `post_sell_evaluations`까지 `record_id`로 join한 lifecycle attribution에서 닫는다.
 - `trade_lifecycle_attribution`은 bad-entry 전용 리포트가 아니라 entry price/passive probe, soft-stop, trailing, holding_flow, scale-in family가 공통으로 참조하는 전중후 attribution layer다. 각 family는 부분 로그의 즉시 라벨이 아니라 postclose joined lifecycle type을 calibration 입력으로 쓴다.
-- `preclose_sell_target`은 tuning/calibration source가 아니다. operator preclose review와 Telegram/cron acceptance 산출물로만 유지한다.
+- `preclose_sell_target`은 2026-05-10 제거되어 tuning/calibration source와 운영 cron에서 제외한다. 과거 `data/report/preclose_sell_target*` 산출물도 사용자 요청으로 삭제했다.
 
 ## Statistical Action Weight 적용 범위
 
@@ -156,16 +154,3 @@ calibration의 source는 `threshold_cycle` compact event만이 아니다. 아래
 - 1차 소비자: `holding_exit_decision_matrix` report-only matrix. bucket별 `recommended_bias`와 `prompt_hint`를 만든다.
 - 금지선: `statistical_action_weight` 단독으로 runtime threshold, 주문/청산 행동, AI 응답을 변경하지 않는다.
 - live/advisory 전환: 별도 checklist에서 sample floor, baseline/candidate/excluded cohort, safety guard, feature flag, cache/provenance가 닫힌 뒤에만 가능하다.
-
-## Preclose Sell Target 재개 기준
-
-`preclose_sell_target`는 2026-04-15 legacy 단발 산출물에서 report-only 구조화 산출물로 재개한다. 현재 허용 단계는 `R1_daily_report`이며 live runtime effect는 없다.
-
-운영 해석 원칙:
-
-- canonical data는 `data/report/preclose_sell_target/preclose_sell_target_YYYY-MM-DD.json`이다.
-- Markdown은 운영자 검토용이며 자동화 소비자는 JSON만 읽는다.
-- 검증은 먼저 `deploy/run_preclose_sell_target_report.sh YYYY-MM-DD --no-ai --no-telegram`로 수행한다. wrapper는 lock, log path, status manifest, venv guard, weekend/holiday guard를 남긴다.
-- threshold/ADM 소비자 연결은 별도 checklist owner가 닫힌 뒤 진행한다.
-- 별도 acceptance 없이 이 리포트를 live threshold mutation, bot restart, 자동 주문 제출 근거로 쓰지 않는다.
-- 2026-05-07 판정: Gemini key fallback으로 AI JSON schema parse와 canonical JSON/Markdown 생성은 통과했고, 같은 날 Telegram 실제 전송과 `15:00` cron 등록까지 반영했다. consumer 범위는 `operator_preclose_review`까지만 승인한다. threshold/ADM 자동 소비와 live threshold mutation 연결은 계속 금지한다.
