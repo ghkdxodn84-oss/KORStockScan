@@ -224,6 +224,7 @@ class KiwoomWSManager:
                 'curr': 0, 'v_pw': 0, 'ask_tot': 0, 'bid_tot': 0,
                 'volume': 0, 'time': '', 'fluctuation': 0.0, 'open': 0,
                 'orderbook': {'asks': [], 'bids': []},
+                'expected_open': {'price': 0, 'qty': 0, 'source': ''},
                 'prog_net_qty': 0, 'prog_delta_qty': 0,
                 'prog_net_amt': 0, 'prog_delta_amt': 0,
                 'prog_buy_qty': 0, 'prog_buy_amt': 0,
@@ -408,7 +409,7 @@ class KiwoomWSManager:
 
         try:
             from src.utils import kiwoom_utils
-            new_token = kiwoom_utils.get_kiwoom_token(self.conf)
+            new_token = kiwoom_utils.get_kiwoom_token(self.conf, force_refresh=True)
         except Exception as e:
             log_error(f"❌ [WS TOKEN 재발급] 예외: {e}")
             self._last_token_refresh_at = now_ts
@@ -860,6 +861,20 @@ class KiwoomWSManager:
                                 best_bid_qty = target['orderbook']['bids'][0].get('volume', 0) if target['orderbook']['bids'] else 0
                                 ask_depth_l = sum(int(level.get('volume', 0) or 0) for level in target['orderbook']['asks'])
                                 bid_depth_l = sum(int(level.get('volume', 0) or 0) for level in target['orderbook']['bids'])
+                                expected_price = safe_int(values.get('291') or values.get('23'))
+                                expected_qty = safe_int(values.get('292') or values.get('24'))
+                                if expected_price > 0 or expected_qty > 0:
+                                    target['expected_open'] = {
+                                        'price': expected_price,
+                                        'qty': expected_qty,
+                                        'price_vs_prev': safe_int(values.get('294') or values.get('200')),
+                                        'price_vs_prev_rate': self._safe_float(values.get('295') or values.get('201'), 0.0),
+                                        'sign': values.get('293') or values.get('238') or '',
+                                        'volume_vs_prev_rate': self._safe_float(values.get('299'), 0.0),
+                                        'source': '0D_expected_open',
+                                        'valid_during_expected_session': True,
+                                        'raw_field_ids': ['291', '292', '293', '294', '295', '299'],
+                                    }
                                 ORDERBOOK_STABILITY_OBSERVER.record_quote(
                                     item_code,
                                     best_bid=best_bid,

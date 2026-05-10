@@ -1,6 +1,6 @@
 # Report-Based Automation Traceability
 
-기준일: `2026-05-04 KST`
+기준일: `2026-05-10 KST`
 
 이 문서는 report 기반 자동화가 누락되지 않도록 `산출물 -> 소비자 -> 적용 단계 -> owner`를 추적하는 registry다. 최종 목표는 기대값/순이익 극대화지만, report 산출물이 곧바로 runtime threshold 변경으로 이어지지는 않는다.
 
@@ -36,6 +36,7 @@
 | `data/report/holding_exit_sentinel/holding_exit_sentinel_YYYY-MM-DD.{json,md}` | `holding_exit_sentinel` | operator intraday review, holding/exit anomaly routing | `R1_daily_report` | `HoldingExitSentinel0506-Intraday`, `SentinelThresholdFeedback0507-Intraday`, `SentinelTelegramRemoval0508` | classification, holding/exit conversion, forbidden auto mutation, no Telegram alert |
 | `tmp/monitor_snapshot_completion_YYYY-MM-DD_PROFILE.json` | `run_monitor_snapshot_safe.sh` | cron/admin completion check, web async refresh status | `R0_collect` | `MonitorSnapshotAsyncCompletion0507` | async worker pid, result file, status, skip/failure reason, log path |
 | `data/report/tuning_monitoring/status/tuning_monitoring_postclose_YYYY-MM-DD.json` | `run_tuning_monitoring_postclose.sh` | postclose monitoring chain health check | `R0_collect` | `TuningMonitoringPostcloseFallback0507` | lock/retry status, per-step exit code, failed step, command provenance |
+| `data/ipo_listing_day/status/ipo_listing_day_YYYY-MM-DD.status.json` | `run_ipo_listing_day_autorun.sh` | operator IPO run audit. YAML 존재 시만 별도 real-order runner 실행 | IPO_YAML_GATED_REAL_ORDER | `IpoListingDayYamlGatedAutorun0510` | missing YAML skip, STOP skip, dry-select result, lock/status/log path. threshold-cycle/daily EV consumer 금지 |
 | `data/threshold_cycle/apply_plans/threshold_apply_YYYY-MM-DD.json` | `threshold_cycle_preopen_apply` | preopen bot start workflow | `R5_bounded_calibrated_apply` | `ThresholdUnattendedApply0508` | apply_mode, auto_apply_decisions, selected family, runtime env, safety guard, calibration trigger, same-stage owner rule |
 | `data/threshold_cycle/runtime_env/threshold_runtime_env_YYYY-MM-DD.{env,json}` | `threshold_cycle_preopen_apply` | `src/run_bot.sh` | `R5_bounded_calibrated_apply` | `ThresholdUnattendedApply0508` | env override provenance, selected family, source report, generated_at |
 | `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.{json,md}` | `threshold_cycle_ev_report` | postclose daily EV submission | `R6_post_apply_attribution` | `ThresholdDailyEVReport0508` | selected families, completed valid PnL, entry funnel, holding/exit latency, calibration decisions, pattern lab automation summary |
@@ -85,6 +86,7 @@ Sentinel routing은 [2026-05-07 checklist](./2026-05-07-stage2-todo-checklist.md
 - Project/Calendar owner가 없는 미래 자동화 작업은 유효한 next action으로 보지 않는다.
 - Sentinel abnormal alert를 즉시 threshold 완화/강화, fallback 재개, 자동 매도, cache TTL mutation, bot restart로 연결하지 않는다.
 - postclose collector가 live `pipeline_events_YYYY-MM-DD.jsonl` 대신 immutable snapshot을 읽어 `checkpoint_completed=true`를 만들더라도, 이는 R0/R1 수집 안정화일 뿐 auto bounded apply 통과로 보지 않는다.
+- IPO listing-day autorun status는 YAML-gated 실주문 실행 감사용이다. 결과를 threshold-cycle calibration, daily EV, scalping/swing runtime threshold 입력으로 자동 소비하지 않는다.
 
 ## 6. 다음 추적 항목
 

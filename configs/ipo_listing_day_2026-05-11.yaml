@@ -1,0 +1,7 @@
+trade_date: "2026-05-11"
+targets:
+  - code: "439960"
+    name: "코스모로보틱스"
+    listing_date: "2026-05-11"
+    offer_price: 6000
+    budget_cap_krw: 3000000

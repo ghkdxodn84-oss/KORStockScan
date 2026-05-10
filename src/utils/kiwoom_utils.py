@@ -2,22 +2,33 @@ import os
 import json
 import time
 import threading
+import hashlib
 import requests
 import pandas as pd
 import numpy as np
 import holidays
+from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timedelta
+from pathlib import Path
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-Unix fallback
+    fcntl = None
 
 # 💡 독립 로거 및 전역 상수 사용
 from src.utils.logger import log_error, log_info
-from src.utils.constants import CONFIG_PATH, DEV_PATH, TRADING_RULES  # 필요에 따라 상수를 추가/수정해서 사용
+from src.utils.constants import CONFIG_PATH, DEV_PATH, TRADING_RULES, DATA_DIR  # 필요에 따라 상수를 추가/수정해서 사용
 
 
 _MARKET_DATA_CACHE = {}
 _MARKET_DATA_CACHE_LOCK = threading.RLock()
+_KIWOOM_TOKEN_PROCESS_LOCK = threading.RLock()
 KIWOOM_CONNECT_TIMEOUT_SEC = float(os.getenv("KIWOOM_CONNECT_TIMEOUT_SEC", "5"))
 KIWOOM_READ_TIMEOUT_SEC = float(os.getenv("KIWOOM_READ_TIMEOUT_SEC", "20"))
+KIWOOM_TOKEN_CACHE_DEFAULT_TTL_SEC = int(os.getenv("KIWOOM_TOKEN_CACHE_DEFAULT_TTL_SEC", str(23 * 60 * 60)))
+KIWOOM_TOKEN_CACHE_SAFETY_SEC = int(os.getenv("KIWOOM_TOKEN_CACHE_SAFETY_SEC", "300"))
 
 
 def _cache_clone(value):
@@ -54,6 +65,147 @@ def _cache_set(namespace, key, value, ttl_sec):
             for item in expired[:512]:
                 _MARKET_DATA_CACHE.pop(item, None)
     return value
+
+
+def _kiwoom_token_cache_path() -> Path:
+    return Path(os.getenv("KIWOOM_TOKEN_CACHE_PATH", str(DATA_DIR / "runtime" / "kiwoom_token_cache.json")))
+
+
+def _kiwoom_token_lock_path() -> Path:
+    return Path(os.getenv("KIWOOM_TOKEN_LOCK_PATH", str(DATA_DIR / "runtime" / "kiwoom_token_cache.lock")))
+
+
+def _token_cache_key(config: dict) -> str:
+    app_key = str((config or {}).get("KIWOOM_APPKEY") or "")
+    base_url = str((config or {}).get("KIWOOM_BASE_URL") or KIWOOM_BASE_URL)
+    raw = f"{base_url}|{app_key}"
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _token_preview(token: str | None) -> str:
+    if not token:
+        return "None"
+    token_str = str(token)
+    if len(token_str) <= 12:
+        return "***"
+    return f"{token_str[:6]}...{token_str[-6:]}"
+
+
+def _json_load_path(path: Path) -> dict:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:
+        log_error(f"❌ [TOKEN CACHE] 캐시 로드 실패: {path} ({exc})")
+        return {}
+
+
+def _safe_positive_float(value, default=0.0):
+    try:
+        parsed = float(str(value).replace(",", "").strip())
+        return parsed if parsed > 0 else default
+    except Exception:
+        return default
+
+
+def _parse_token_expires_at(response_payload: dict, now_ts: float) -> float:
+    for key in ("expires_in", "expires_in_sec", "expire_in", "expires"):
+        ttl = _safe_positive_float((response_payload or {}).get(key), 0.0)
+        if ttl > 0:
+            return now_ts + ttl
+
+    for key in ("expires_at", "expire_at"):
+        expires_at = _safe_positive_float((response_payload or {}).get(key), 0.0)
+        if expires_at > now_ts:
+            return expires_at
+
+    for key in ("expires_dt", "expire_dt", "expires_datetime"):
+        raw = str((response_payload or {}).get(key) or "").strip()
+        if not raw:
+            continue
+        for fmt in ("%Y%m%d%H%M%S", "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                return datetime.strptime(raw[:19], fmt).timestamp()
+            except ValueError:
+                continue
+
+    return now_ts + max(60, KIWOOM_TOKEN_CACHE_DEFAULT_TTL_SEC)
+
+
+def _read_cached_kiwoom_token(config: dict, *, now_ts: float | None = None) -> str | None:
+    path = _kiwoom_token_cache_path()
+    payload = _json_load_path(path)
+    if not payload:
+        return None
+
+    expected_key = _token_cache_key(config)
+    if payload.get("cache_key") != expected_key:
+        return None
+
+    now = float(now_ts or time.time())
+    safety = max(0, KIWOOM_TOKEN_CACHE_SAFETY_SEC)
+    expires_at = _safe_positive_float(payload.get("expires_at"), 0.0)
+    token = str(payload.get("access_token") or "").strip()
+    if not token or expires_at <= now + safety:
+        return None
+
+    log_info(
+        "🔐 [TOKEN CACHE] 기존 Kiwoom token 재사용 "
+        f"(preview={_token_preview(token)}, expires_in_sec={int(expires_at - now)})"
+    )
+    return token
+
+
+def _write_cached_kiwoom_token(config: dict, token: str, response_payload: dict, *, now_ts: float | None = None) -> None:
+    path = _kiwoom_token_cache_path()
+    now = float(now_ts or time.time())
+    expires_at = _parse_token_expires_at(response_payload or {}, now)
+    payload = {
+        "schema_version": 1,
+        "cache_key": _token_cache_key(config),
+        "base_url": str((config or {}).get("KIWOOM_BASE_URL") or KIWOOM_BASE_URL),
+        "app_key_hash": hashlib.sha256(str((config or {}).get("KIWOOM_APPKEY") or "").encode("utf-8")).hexdigest(),
+        "access_token": token,
+        "issued_at": now,
+        "expires_at": expires_at,
+        "source": "kiwoom_oauth2_token",
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = path.with_suffix(path.suffix + ".tmp")
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True), encoding="utf-8")
+        try:
+            os.chmod(tmp_path, 0o600)
+        except Exception:
+            pass
+        os.replace(tmp_path, path)
+        try:
+            os.chmod(path, 0o600)
+        except Exception:
+            pass
+        log_info(f"🔐 [TOKEN CACHE] Kiwoom token 캐시 갱신: {path}")
+    except Exception as exc:
+        log_error(f"❌ [TOKEN CACHE] 캐시 저장 실패: {path} ({exc})")
+
+
+@contextmanager
+def _kiwoom_token_file_lock():
+    lock_path = _kiwoom_token_lock_path()
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with _KIWOOM_TOKEN_PROCESS_LOCK:
+        with lock_path.open("a+", encoding="utf-8") as fh:
+            try:
+                os.chmod(lock_path, 0o600)
+            except Exception:
+                pass
+            if fcntl is not None:
+                fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
+            try:
+                yield
+            finally:
+                if fcntl is not None:
+                    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)
 
 # ==========================================
 # 1. API 설정 및 공통 유틸리티
@@ -153,10 +305,54 @@ def get_effective_kiwoom_code(code: str, db=None, is_nxt=None) -> str:
 # ==========================================
 # 2. 인증 및 기초 정보 API (Data Fetching Only)
 # ==========================================
-def get_kiwoom_token(config=None):
+def _request_new_kiwoom_token(config: dict) -> tuple[str | None, dict]:
+    url = get_api_url("/oauth2/token")
+
+    app_key = config.get('KIWOOM_APPKEY')
+    sec_key = config.get('KIWOOM_SECRETKEY')
+
+    if not app_key or not sec_key:
+        log_error("❌ APP_KEY 또는 SECRET_KEY가 설정 파일에 없습니다.")
+        return None, {}
+    masked_key = f"{str(app_key)[:4]}...{str(app_key)[-4:]}" if len(str(app_key)) >= 8 else "***"
+    log_info(f"🔐 [TOKEN] app_key 확인: {masked_key}")
+
+    params = {
+        'grant_type': 'client_credentials',
+        'appkey': app_key,
+        'secretkey': sec_key,
+    }
+    headers = {'Content-Type': 'application/json;charset=UTF-8'}
+
+    try:
+        res = requests.post(url, headers=headers, json=params, timeout=5)
+
+        log_info(f"🔐 [TOKEN] 응답 코드: {res.status_code}")
+        if res.status_code == 200:
+            payload = res.json() or {}
+            token = payload.get('access_token') or payload.get('token')
+            if token:
+                log_info(f"🔐 [TOKEN] 발급 성공 (len={len(str(token))})")
+                return str(token), payload
+            log_error("❌ 토큰 발급 응답에 token이 없습니다.")
+            return None, payload
+
+        log_error(f"❌ 토큰 발급 실패 (HTTP {res.status_code}): {res.text}")
+        return None, {}
+
+    except requests.exceptions.Timeout:
+        log_error(f"⏳ 토큰 서버 응답 시간 초과 (5초): {url}")
+        return None, {}
+    except Exception as e:
+        log_error(f"🚨 토큰 발급 중 시스템 예외: {e}")
+        return None, {}
+
+
+def get_kiwoom_token(config=None, *, force_refresh=False, use_cache=True):
     """
     키움 접근 토큰 발급 (환경 자동 감지형)
     - config가 인자로 오면 우선 사용하고, 없으면 환경에 맞는 파일을 직접 로드합니다.
+    - 기본은 프로세스 간 공유 캐시를 재사용해 bot/IPO/web 중복 발급 충돌을 방지합니다.
     """
     # 1. 💡 [환경 감지] 인자가 없을 경우 스스로 설정 로드
     if config is None:
@@ -169,50 +365,28 @@ def get_kiwoom_token(config=None):
             log_error(f"❌ 토큰 발급용 설정 로드 실패: {e}")
             return None
 
-    url = get_api_url("/oauth2/token")
-    
-    # 2. 💡 [보안/정확성] 해당 환경의 키 추출
-    app_key = config.get('KIWOOM_APPKEY')
-    sec_key = config.get('KIWOOM_SECRETKEY')
-
-    if not app_key or not sec_key:
-        log_error("❌ APP_KEY 또는 SECRET_KEY가 설정 파일에 없습니다.")
+    if not isinstance(config, dict):
+        log_error("❌ 토큰 발급용 config는 dict여야 합니다.")
         return None
-    masked_key = f"{str(app_key)[:4]}...{str(app_key)[-4:]}" if len(str(app_key)) >= 8 else "***"
-    log_info(f"🔐 [TOKEN] app_key 확인: {masked_key}")
 
-    params = {
-        'grant_type': 'client_credentials',
-        'appkey': app_key,
-        'secretkey': sec_key,
-    }
-    headers = {'Content-Type': 'application/json;charset=UTF-8'}
+    if use_cache and not force_refresh:
+        cached = _read_cached_kiwoom_token(config)
+        if cached:
+            return cached
 
-    try:
-        # 3. 💡 [중요] 타임아웃(timeout)을 설정하여 무한 대기(Hang) 방지
-        # 서버 응답이 5초 이상 없으면 에러를 뱉고 다음 로직으로 넘어가게 합니다.
-        res = requests.post(url, headers=headers, json=params, timeout=5)
+    if force_refresh:
+        log_info("🔐 [TOKEN] force_refresh=True: 공유 캐시를 우회하고 새 발급을 시도합니다.")
 
-        log_info(f"🔐 [TOKEN] 응답 코드: {res.status_code}")
-        if res.status_code == 200:
-            token = res.json().get('access_token') or res.json().get('token')
-            # 성공 시 로그를 남겨 흐름 파악을 돕습니다.
-            # print(f"✅ 토큰 발급 성공 (목적지: {url})")
-            if token:
-                log_info(f"🔐 [TOKEN] 발급 성공 (len={len(str(token))})")
-            else:
-                log_error("❌ 토큰 발급 응답에 token이 없습니다.")
-            return token
-        else:
-            log_error(f"❌ 토큰 발급 실패 (HTTP {res.status_code}): {res.text}")
-            return None
-            
-    except requests.exceptions.Timeout:
-        log_error(f"⏳ 토큰 서버 응답 시간 초과 (5초): {url}")
-        return None
-    except Exception as e:
-        log_error(f"🚨 토큰 발급 중 시스템 예외: {e}")
-        return None
+    with _kiwoom_token_file_lock():
+        if use_cache and not force_refresh:
+            cached = _read_cached_kiwoom_token(config)
+            if cached:
+                return cached
+
+        token, payload = _request_new_kiwoom_token(config)
+        if token and use_cache:
+            _write_cached_kiwoom_token(config, token, payload)
+        return token
 
 def get_account_balance_kt00005(token):
     """

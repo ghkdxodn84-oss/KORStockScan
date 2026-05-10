@@ -48,6 +48,144 @@
 - runbook의 반복 확인 artifact, 시간표, 금지사항을 바꾸면 [build_codex_daily_workorder.py](/home/ubuntu/KORStockScan/src/engine/build_codex_daily_workorder.py)의 `build_runbook_operational_checks`와 관련 테스트를 같은 변경 세트로 맞춘다.
 - 새 recurring operational check는 `RunbookOps` track으로 Project/Calendar에 동기화한다. 특정 날짜에만 확인해야 하거나 사람이 구현해야 하는 후속은 날짜별 checklist에 자동 파싱 가능한 `- [ ]` 항목으로 별도 등록한다.
 
+## IPO 상장첫날 YAML-gated Runner 절차
+
+`ipo_listing_day_runner`는 threshold-cycle에는 포함하지 않는 별도 실주문 도구다. 기존 Kiwoom token, WS, 주문 유틸, OpenAI REPORT tier를 import해 쓰지만, 스캘핑/스윙 `ACTIVE_TARGETS`, threshold-cycle, Sentinel, Project/Calendar 동기화에는 연결하지 않는다. 자동 실행은 `configs/ipo_listing_day_YYYY-MM-DD.yaml` 파일이 있을 때만 동작하는 YAML-gated wrapper로 제한한다.
+
+운영 원칙:
+
+- 실행 승인 artifact는 당일 YAML 파일이다. `configs/ipo_listing_day_YYYY-MM-DD.yaml`이 없으면 자동 wrapper는 아무 주문도 시도하지 않고 `skipped/config_missing` status만 남긴다.
+- YAML 파일 존재와 당일 enabled target이 승인 artifact다. 브로커 주문은 실제 접수되므로 전일 또는 장전에는 YAML을 사람이 확인한다.
+- cron은 `deploy/run_ipo_listing_day_autorun.sh` wrapper만 등록한다. wrapper는 missing YAML, weekend, STOP 파일, lock, dry-select 실패를 먼저 검사한다.
+- Kiwoom access token은 `data/runtime/kiwoom_token_cache.json` 공유 캐시와 `data/runtime/kiwoom_token_cache.lock` 파일 lock을 통해 재사용한다. IPO runner가 실행돼도 정상 캐시가 있으면 새 `/oauth2/token` 발급을 하지 않아 스캘핑 봇 token 무효화 위험을 줄인다.
+- 종목별 `budget_cap_krw`는 사용자가 입력하지만 runner가 실제 주문 산출에 쓰는 상한은 `5,000,000 KRW`다. YAML 값이 이를 넘으면 `effective_budget_cap_krw=5000000`으로 잘라 쓰고 artifact에 원 입력값과 effective 값을 모두 남긴다.
+- `data/ipo_listing_day/STOP` 파일이 있으면 신규 주문을 즉시 막는다.
+- 산출물은 `data/ipo_listing_day/YYYY-MM-DD/`에만 남긴다. `pipeline_events`, `threshold_events`, `threshold_cycle`, `daily EV`, `performance_tuning` 산출물과 섞지 않는다.
+- 상장 첫날 KRX 가격범위 guard는 공모가 기준 `60%~400%` 규칙을 참고하되, runner 기본 진입 상한은 공모가 대비 `250%` 초과 보류다.
+
+### 1. 사전 준비
+
+1. 오늘 상장 예정 종목의 `code`, `name`, `listing_date`, `offer_price`, `budget_cap_krw`를 확인한다.
+2. 기존 `tmux bot` 또는 다른 실매매 프로세스가 같은 종목을 동시에 주문하지 않는지 확인한다.
+3. 필요한 경우 STOP 파일을 제거한다. STOP 파일이 남아 있으면 runner는 신규 주문을 보내지 않는다.
+
+   ```bash
+   rm -f data/ipo_listing_day/STOP
+   ```
+
+4. IPO용 YAML 파일을 만든다. 자동 실행 기준 경로는 `configs/ipo_listing_day_YYYY-MM-DD.yaml`이다. API key나 계좌 비밀번호는 넣지 않는다.
+
+   ```yaml
+   trade_date: "2026-05-11"
+   targets:
+     - code: "123456"
+       name: "공모주예시"
+       listing_date: "2026-05-11"
+       offer_price: 10000
+       budget_cap_krw: 5000000
+   ```
+
+5. 사용자가 매번 수정해야 하는 최소 필드는 `trade_date`, `code`, `name`, `listing_date`, `offer_price`, `budget_cap_krw`다. `offer_price`는 공모가이며 원 단위 정수로 입력한다.
+6. 나머지 필드는 기본값을 쓸 수 있다. 기본값은 `global_daily_loss_cap_krw=100000`, `max_order_failures=2`, `active_symbol_limit=1`, `max_ai_calls_per_symbol=6`, `max_ai_calls_per_run=10`, `premium_guard_pct=250`, `enabled=true`다.
+7. `budget_cap_krw`를 500만원보다 크게 써도 실제 산출은 500만원으로 제한된다. 종목별로 더 작게 운용하려면 YAML 값을 500만원 미만으로 넣는다.
+
+### 2. 실행 전 검증
+
+1. YAML 선택 결과만 먼저 확인한다. 이 명령은 WS 연결과 주문을 시작하지 않는다.
+
+   ```bash
+   PYTHONPATH=. .venv/bin/python -m src.engine.ipo_listing_day_runner \
+     --config configs/ipo_listing_day_$(TZ=Asia/Seoul date +%F).yaml \
+     --dry-select
+   ```
+
+2. 출력 JSON에서 `trade_date`가 오늘 KST 날짜와 맞는지 확인한다.
+3. `targets`가 1개만 선택됐는지 확인한다. `active_symbol_limit=1`이 기본이며, phase0에서는 동시에 여러 IPO를 active로 운용하지 않는다.
+4. `offer_price`, `budget_cap_krw`, `premium_guard_pct`, `enabled=true`가 맞는지 확인한다.
+5. 장 시작 전에는 Kiwoom token 캐시와 WS가 정상이어야 한다. runner 본 실행은 공유 token 캐시를 먼저 재사용하고, 캐시가 없거나 만료됐을 때만 파일 lock 안에서 새 token을 발급한다. dry-select만으로 token 상태가 검증된 것은 아니다.
+
+### 3. 자동 실행 등록
+
+1. cron 등록은 아래 스크립트로 수행한다. 등록 시각은 평일 `08:59 KST`다.
+
+   ```bash
+   deploy/install_ipo_listing_day_autorun_cron.sh
+   ```
+
+2. 등록된 cron은 매 영업일 아침 wrapper를 호출하지만, 당일 YAML이 없으면 실행하지 않는다.
+3. wrapper가 보는 기본 파일명은 아래와 같다.
+
+   ```bash
+   configs/ipo_listing_day_$(TZ=Asia/Seoul date +%F).yaml
+   ```
+
+4. 수동으로 wrapper 동작만 확인하려면 아래 명령을 쓴다. YAML이 없으면 `skipped/config_missing`이 정상이다.
+
+   ```bash
+   deploy/run_ipo_listing_day_autorun.sh $(TZ=Asia/Seoul date +%F)
+   ```
+
+5. 자동 wrapper status는 `data/ipo_listing_day/status/ipo_listing_day_YYYY-MM-DD.status.json`에 남는다. 상세 log는 `logs/ipo_listing_day/ipo_listing_day_YYYY-MM-DD.log`와 `logs/ipo_listing_day_autorun_cron.log`를 본다.
+
+### 4. 수동 본 실행
+
+1. cron을 쓰지 않을 때는 `08:59:40~08:59:50 KST` 사이에 수동으로 실행한다.
+
+   ```bash
+   PYTHONPATH=. .venv/bin/python -m src.engine.ipo_listing_day_runner \
+     --config configs/ipo_listing_day_$(TZ=Asia/Seoul date +%F).yaml
+   ```
+
+2. runner는 `08:59:50`부터 WS snapshot을 기록한다. Kiwoom `0D` 주식호가잔량의 예상체결 필드가 있으면 `indicative_open_source=0D_expected_open`, `explicit_expected_open_available=true`로 기록한다. 해당 필드가 없거나 유효하지 않으면 `ws_curr`를 fallback `indicative_open_price`로 기록하고 `explicit_expected_open_available=false`를 남긴다.
+3. 실제 매수 주문은 `09:00:00~09:00:30 KST` 안에서만 허용된다.
+4. 진입 전 gate는 아래 순서로 본다.
+   - STOP 파일, 일손실 cap, 주문 실패 cap, global buy pause
+   - 공모가 대비 premium guard 기본 `250%`
+   - quote age, VI/호가공백 의심, top 1~3호가 depth `effective_budget_cap_krw * 3`
+   - OpenAI REPORT tier entry risk review. `risk_score >= 80`일 때만 진입 차단
+5. 첫 주문 실패/미응답 시 한 번만 retry한다. retry는 IOC 성격으로 `best_ask + 1 tick` 한도에서 재가격 산출한다.
+6. 최초 체결, 손절, 미체결 종료 이후 같은 종목 재진입은 금지한다.
+
+### 5. 보유/청산 규칙
+
+1. `-10%` hard stop은 AI 판단보다 항상 우선한다.
+2. 첫 체결 후 최대 보유시간은 30분이다. 30분이 지나면 강제 청산 후보가 된다.
+3. `+20%` 최초 도달 시 보유수량의 30%를 분할익절 후보로 만든다.
+4. AI가 `hold_confidence >= 75`이고 `continuation_reasons`가 2개 이상일 때만 `+20%` 30% 익절을 보류할 수 있다.
+5. 20% 일부 익절 이후 잔여 수량은 peak profit 대비 `8%p` 하락 시 trailing 청산한다.
+6. 보유 중 VI/거래정지/호가공백이 의심되면 신규 위험을 추가하지 않는다. hard stop, trailing, time stop만 유지한다.
+
+### 6. 중지와 사고 대응
+
+1. 즉시 신규 주문을 막으려면 STOP 파일을 만든다.
+
+   ```bash
+   mkdir -p data/ipo_listing_day
+   touch data/ipo_listing_day/STOP
+   ```
+
+2. STOP 파일은 신규 진입만 막는 운영 kill switch다. 이미 접수된 브로커 주문이나 체결 포지션은 Kiwoom 주문/잔고 화면과 runner artifact를 같이 확인한다.
+3. 주문 실패/무응답이 2회 누적되면 runner는 신규 주문을 막는다.
+4. runner 전체 실현손실이 `-100,000 KRW` 이하가 되면 신규 주문을 막는다.
+5. 장애가 나면 먼저 아래 산출물을 확인한다.
+
+   ```bash
+   ls -l data/ipo_listing_day/$(TZ=Asia/Seoul date +%F)/
+   tail -n 120 data/ipo_listing_day/$(TZ=Asia/Seoul date +%F)/events.jsonl
+   cat data/ipo_listing_day/$(TZ=Asia/Seoul date +%F)/summary.md
+   ```
+
+6. 이 runner의 결과로 당일 스캘핑 threshold, spread cap, provider routing, Sentinel, swing dry-run guard를 변경하지 않는다.
+7. token 캐시가 손상됐거나 만료 오판이 의심되면 장중 hot-refresh를 반복하지 말고 `data/runtime/kiwoom_token_cache.json`과 `data/runtime/kiwoom_token_cache.lock` 상태를 확인한다. 실전 중 `8005 Token이 유효하지 않습니다`가 반복되면 기존 표준대로 graceful restart 경로를 우선한다.
+
+### 7. 장후 확인
+
+1. `summary.md`에서 `status`, `realized_pnl_krw`, `reason`을 확인한다.
+2. 각 종목 `*_decision.json`에서 진입 허용/차단 사유, `budget_cap_krw`, `effective_budget_cap_krw`, `max_budget_cap_krw`, premium, depth, AI risk를 확인한다.
+3. `events.jsonl`에서 `ipo_entry_order_submitted`, `ipo_exit_order_submitted`, `ipo_entry_order_failed`, `ipo_exit_order_failed`를 확인한다.
+4. 실제 체결/잔고는 Kiwoom 계좌 화면 또는 기존 계좌 조회 유틸로 별도 대사한다. IPO runner artifact만으로 broker execution 품질을 확정하지 않는다.
+5. 다음 개선이 필요하면 별도 code review 또는 workorder로 남긴다. threshold-cycle candidate로 자동 투입하지 않는다.
+
 ## 시간대별 Runbook
 
 | 시간대 KST | 실행 주체 | 실행/트리거 | 산출물 | 운영 확인 기준 | 금지/주의 |
@@ -57,6 +195,7 @@
 | `07:35` | cron | `deploy/run_threshold_cycle_preopen.sh` with `THRESHOLD_CYCLE_APPLY_MODE=auto_bounded_live`, `THRESHOLD_CYCLE_AUTO_APPLY_REQUIRE_AI=true` | `data/threshold_cycle/apply_plans/threshold_apply_YYYY-MM-DD.json`, `data/threshold_cycle/runtime_env/threshold_runtime_env_YYYY-MM-DD.{env,json}`, `logs/threshold_cycle_preopen_cron.log` | 실패 시 apply plan의 `blocked_reason`, AI guard, same-stage owner 충돌, `swing_runtime_approval.requested/approved/blocked` 확인 | 실패했다고 수동으로 env 값을 직접 덮어쓰지 않는다. 스윙 approval artifact 없이는 승인 요청만 보고 적용하지 않는다 |
 | `07:40` | cron | `src/run_bot.sh`를 tmux `bot` 세션에서 실행 | bot runtime log, source된 runtime env echo | `runtime_env` 적용 여부와 봇 기동 여부 확인 | runtime env 파일이 없으면 전일 guard 실패로 보고 원인 확인 |
 | `08:00~09:00` | operator/guard | PREOPEN 안정 구간 | 없음 | checklist 상단 `오늘 목적/강제 규칙`과 전일 EV report를 읽고 불일치가 있으면 `warning`으로 기록 | full monitor snapshot build는 wrapper가 차단한다. 새 workorder 없는 live toggle 금지 |
+| `08:59` | cron | `deploy/run_ipo_listing_day_autorun.sh` | `data/ipo_listing_day/status/ipo_listing_day_YYYY-MM-DD.status.json`, `logs/ipo_listing_day/ipo_listing_day_YYYY-MM-DD.log` | 당일 YAML 존재, dry-select target, STOP 파일, lock, runner exit code 확인 | YAML 없을 때 실행 금지. threshold-cycle/daily EV 자동 입력 금지 |
 | `09:00~09:05` | runtime | 장 시작 후 실전 이벤트 수집 시작 | `data/pipeline_events/pipeline_events_YYYY-MM-DD.jsonl`, `data/threshold_cycle/threshold_events_YYYY-MM-DD.jsonl` | 봇 연결, 계좌/잔고/주문 가능 상태 확인 | threshold 변경, provider 라우팅 변경 금지 |
 | `09:05~15:20` | cron | `deploy/run_buy_funnel_sentinel_intraday.sh` 5분 주기 | `data/report/buy_funnel_sentinel/buy_funnel_sentinel_YYYY-MM-DD.md`, `logs/run_buy_funnel_sentinel_cron.log` | `UPSTREAM_AI_THRESHOLD`, `LATENCY_DROUGHT`, `PRICE_GUARD_DROUGHT`, `RUNTIME_OPS` 추세 확인 | Sentinel 결과로 score/spread/fallback/restart 자동 변경 금지 |
 | `09:05~15:30` | cron | `deploy/run_holding_exit_sentinel_intraday.sh` 5분 주기 | `data/report/holding_exit_sentinel/holding_exit_sentinel_YYYY-MM-DD.md`, `logs/run_holding_exit_sentinel_cron.log` | `HOLD_DEFER_DANGER`, `SOFT_STOP_WHIPSAW`, `AI_HOLDING_OPS` 추세 확인 | Sentinel 결과로 자동 매도, threshold mutation, bot restart 금지 |

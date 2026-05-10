@@ -60,6 +60,8 @@ logs/
 # bot_main.py의 재시작 감지용 플래그 파일
 restart.flag
 data/threshold_cycle/runtime_env/
+data/runtime/kiwoom_token_cache.json
+data/runtime/kiwoom_token_cache.lock
 
 # ==========================================
 # 💻 OS 및 IDE 설정
