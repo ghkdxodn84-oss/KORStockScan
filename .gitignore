@@ -8,7 +8,6 @@ credentials.json
 docker-compose.yml
 *.token
 *.key
-*.txt
 *.sql
 .env
 .clinerules
