@@ -69,6 +69,13 @@
   - 판정 메모: 현재 코드 기준 재생성한 `data/backtest_trades_v2.csv`는 `2026-01-02~2026-03-16` 123건, win rate `47.15%`, 평균 net `+1.51%`, 누적 net `+185.32%`다. 다만 검증 구간이 3/16에서 끊겨 4~5월 활황 구간을 포함하지 않으므로, 현 모델은 후보 생성 canary로 유지하되 실전 확대 전 재학습/forward 검증 owner가 필요하다. 일일 리포트는 runtime 주문/threshold를 바꾸지 않는 `runtime_change=false` 산출물이다.
   - 검증: 스윙 시뮬레이션 단위 테스트, `compileall`, 2026-05-08 추천/백테스트 재생성 및 리포트 생성으로 확인한다.
 
+- [x] `[SwingModelRetrainAutomation0511] 스윙 ML v2 재학습/상승장 특화모델 자동 판정 체인 구현` (`Due: 2026-05-11`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: ScalpingLogic`)
+  - Source: [auto_retrain_pipeline.sh](/home/ubuntu/KORStockScan/auto_retrain_pipeline.sh), [common_v2.py](/home/ubuntu/KORStockScan/src/model/common_v2.py), [train_meta_model_v2.py](/home/ubuntu/KORStockScan/src/model/train_meta_model_v2.py), [recommend_daily_v2.py](/home/ubuntu/KORStockScan/src/model/recommend_daily_v2.py), [swing_retrain_pipeline.py](/home/ubuntu/KORStockScan/src/model/swing_retrain_pipeline.py)
+  - 실행 메모: `bull_specialist_mode=enabled|disabled|hold_current`를 추가하고, `disabled`에서는 `bx/bl`을 `hx/hl`로 중립화해 `META_FEATURES` schema를 유지한다. 재학습은 staging output dir에서 수행한 뒤 guard 통과 시 모델 artifact만 자동 승격하고, smoke 실패 시 backup에서 rollback한다.
+  - 상승장 기간 판정: `swing_bull_period_ai_review`가 AI strict JSON 또는 deterministic fallback 제안을 받아 DB 범위, 최소 기간/표본, label safety guard를 검증한다. guard 실패 시 `hold_current`로 닫는다.
+  - 유지 가드: 자동 승격은 스윙 ML artifact 교체만 뜻한다. `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True`, `actual_order_submitted=false`, one-share real canary 별도 approval, OpenAI/Gemini live routing 금지는 유지한다.
+  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_retrain_automation.py`, error detector coverage, parser 검증으로 확인한다.
+
 - [x] `[SwingRuntimeDryRunSimulation0509] 스윙 추천 후 장중 매매로직 dry-run 시뮬레이션 보강` (`Due: 2026-05-09`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: ScalpingLogic`)
   - Source: [swing_daily_simulation_report.py](/home/ubuntu/KORStockScan/src/engine/swing_daily_simulation_report.py), [test_swing_model_selection_funnel_repair.py](/home/ubuntu/KORStockScan/src/tests/test_swing_model_selection_funnel_repair.py)
   - 실행 메모: 단순 next-open TP/SL 시뮬레이션을 `runtime_order_dry_run_daily_proxy`로 바꿔, 스윙 gap guard, bull regime block, runtime score proxy, 전략별 비중, `describe_buy_capacity` 수량 산출, 최유리지정가 `order_type_code=6`, 주문 미전송 `actual_order_submitted=false`, hard stop/target/trailing/time stop 청산 규칙을 리포트에 남기도록 했다.

@@ -5,37 +5,36 @@ from lightgbm import LGBMRanker, early_stopping, log_evaluation
 try:
     from .common_v2 import (
         META_START, META_END,
-        HYBRID_XGB_PATH, HYBRID_LGBM_PATH, BULL_XGB_PATH, BULL_LGBM_PATH,
         META_MODEL_PATH, AI_PRED_PATH, META_FEATURES,
         get_top_kospi_codes, split_by_unique_dates,
-        precision_at_k_by_day, build_meta_feature_frame,
-        score_artifact, select_daily_candidates,
-        PassThroughCalibrator, load_model_artifact
+        precision_at_k_by_day, select_daily_candidates,
+        PassThroughCalibrator, build_base_score_frame, resolve_bull_specialist_mode
     )
     from .dataset_builder_v2 import build_panel_dataset
 except ImportError:
     from common_v2 import (
         META_START, META_END,
-        HYBRID_XGB_PATH, HYBRID_LGBM_PATH, BULL_XGB_PATH, BULL_LGBM_PATH,
         META_MODEL_PATH, AI_PRED_PATH, META_FEATURES,
         get_top_kospi_codes, split_by_unique_dates,
-        precision_at_k_by_day, build_meta_feature_frame,
-        score_artifact, select_daily_candidates,
-        PassThroughCalibrator, load_model_artifact
+        precision_at_k_by_day, select_daily_candidates,
+        PassThroughCalibrator, build_base_score_frame, resolve_bull_specialist_mode
     )
     from dataset_builder_v2 import build_panel_dataset
 
 
-def train_meta_model_v2():
-    print(f"[1/5] Meta 학습용 패널 생성 중... (타겟: {META_START} ~ {META_END})")
+def train_meta_model_v2(meta_start=None, meta_end=None, bull_mode=None):
+    meta_start = meta_start or META_START
+    meta_end = meta_end or META_END
+    bull_mode = resolve_bull_specialist_mode(bull_mode)
+    print(f"[1/5] Meta 학습용 패널 생성 중... (타겟: {meta_start} ~ {meta_end}, bull_mode={bull_mode})")
     codes = get_top_kospi_codes(limit=300)
 
     # 💡 핵심 수정: 지표 워밍업(ma120 등)을 위해 200일 이전부터 데이터를 DB에서 끌어옵니다.
-    meta_start_dt = pd.to_datetime(META_START)
+    meta_start_dt = pd.to_datetime(meta_start)
     fetch_start = (meta_start_dt - pd.Timedelta(days=200)).strftime('%Y-%m-%d')
     
     # 패널 생성은 과거부터 넉넉히 (min_rows=150으로 안전하게)
-    panel = build_panel_dataset(codes, fetch_start, META_END, min_rows=150, include_labels=True)
+    panel = build_panel_dataset(codes, fetch_start, meta_end, min_rows=150, include_labels=True)
     if panel.empty:
         print("❌ 메타 학습 데이터 추출 실패.")
         return
@@ -50,21 +49,16 @@ def train_meta_model_v2():
     print(f"✅ 메타 패널 준비 완료: {len(panel)} rows")
 
     print("[2/5] Base model 로드 및 예측 피처 병합 중...")
-    hybrid_xgb = load_model_artifact(HYBRID_XGB_PATH)
-    hybrid_lgbm = load_model_artifact(HYBRID_LGBM_PATH)
-    bull_xgb = load_model_artifact(BULL_XGB_PATH)
-    bull_lgbm = load_model_artifact(BULL_LGBM_PATH)
 
     # atr_ratio를 함께 가져옵니다 (Risk-Adjusted Return 계산용)
-    meta_df = panel[['date', 'code', 'name', 'bull_regime', 'idx_ret20', 'idx_atr_ratio',
-                     'target_loose', 'target_strict', 'realized_ret_3d', 'atr_ratio']].copy()
-
-    meta_df['hx'] = score_artifact(hybrid_xgb, panel)
-    meta_df['hl'] = score_artifact(hybrid_lgbm, panel)
-    meta_df['bx'] = score_artifact(bull_xgb, panel)
-    meta_df['bl'] = score_artifact(bull_lgbm, panel)
-
-    meta_df = build_meta_feature_frame(meta_df)
+    meta_df = build_base_score_frame(
+        panel,
+        bull_mode=bull_mode,
+        include_columns=[
+            'date', 'code', 'name', 'bull_regime', 'idx_ret20', 'idx_atr_ratio',
+            'target_loose', 'target_strict', 'realized_ret_3d', 'atr_ratio',
+        ],
+    )
 
     print("[3/5] Cross-Sectional 타깃(Top 10%) 생성 중...")
     # 변동성 대비 3일 실현 수익률 (Risk-Adjusted Return)
@@ -123,7 +117,8 @@ def train_meta_model_v2():
         'model': meta_model,
         'calibrator': PassThroughCalibrator(),
         'features': META_FEATURES,
-        'model_name': 'stacking_meta_ranker_v2'
+        'model_name': 'stacking_meta_ranker_v2',
+        'bull_specialist_mode': bull_mode,
     }
     joblib.dump(artifact, META_MODEL_PATH)
 
@@ -137,6 +132,7 @@ def train_meta_model_v2():
         'hx', 'hl', 'bx', 'bl',
         'mean_prob', 'std_prob', 'max_prob', 'min_prob',
         'bull_mean', 'hybrid_mean', 'bull_hybrid_gap',
+        'bull_specialist_mode', 'bull_score_source', 'bull_artifact_used',
         'score', 'target_loose', 'target_strict', 'realized_ret_3d'
     ]
     save_df = save_df[save_cols].sort_values(['date', 'code']).reset_index(drop=True)
@@ -147,4 +143,11 @@ def train_meta_model_v2():
 
 
 if __name__ == "__main__":
-    train_meta_model_v2()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Train swing v2 meta ranker.")
+    parser.add_argument("--meta-start", default=None)
+    parser.add_argument("--meta-end", default=None)
+    parser.add_argument("--bull-mode", default=None, choices=["enabled", "disabled", "hold_current"])
+    args = parser.parse_args()
+    train_meta_model_v2(meta_start=args.meta_start, meta_end=args.meta_end, bull_mode=args.bull_mode)

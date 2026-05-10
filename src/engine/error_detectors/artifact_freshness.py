@@ -165,6 +165,33 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "window_start": (15, 45),
         "window_end": (16, 5),
     },
+    {
+        "id": "swing_model_retrain_diagnosis",
+        "path_template": "data/report/swing_model_retrain/diagnosis_{date}.json",
+        "max_staleness_sec": 3600,
+        "critical": False,
+        "trading_day_only": True,
+        "window_start": (17, 30),
+        "window_end": (18, 30),
+    },
+    {
+        "id": "swing_bull_period_ai_review",
+        "path_template": "data/report/swing_model_retrain/bull_period_ai_review_{date}.json",
+        "max_staleness_sec": 3600,
+        "critical": False,
+        "trading_day_only": True,
+        "window_start": (17, 30),
+        "window_end": (18, 30),
+    },
+    {
+        "id": "swing_model_retrain_report",
+        "path_template": "data/report/swing_model_retrain/swing_model_retrain_{date}.json",
+        "max_staleness_sec": 3600,
+        "critical": False,
+        "trading_day_only": True,
+        "window_start": (17, 30),
+        "window_end": (18, 30),
+    },
 ]
 
 

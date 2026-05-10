@@ -13,6 +13,7 @@ REQUIRED_CRON_JOB_IDS: set[str] = {
     "threshold_cycle_calibration_intraday",
     "swing_live_dry_run",
     "threshold_cycle_postclose",
+    "swing_model_retrain_postclose",
     "tuning_monitoring_postclose",
     "update_kospi",
     "eod_analyzer",
@@ -40,6 +41,9 @@ REQUIRED_ARTIFACT_IDS: set[str] = {
     "swing_threshold_ai_review_report",
     "swing_improvement_automation_report",
     "swing_runtime_approval_report",
+    "swing_model_retrain_report",
+    "swing_model_retrain_diagnosis",
+    "swing_bull_period_ai_review",
 }
 
 

@@ -1,24 +1,34 @@
 import joblib
-import pandas as pd
 from xgboost import XGBClassifier
 
-from common_v2 import (
-    BASE_START, BASE_END, FEATURES_XGB, HYBRID_XGB_PATH,
-    get_top_kospi_codes, split_by_unique_dates, recency_sample_weight,
-    class_balance, fit_calibrator, apply_calibrator, threshold_table,
-    precision_at_k_by_day, select_daily_candidates
-)
-from dataset_builder_v2 import build_panel_dataset
+try:
+    from .common_v2 import (
+        BASE_START, BASE_END, FEATURES_XGB, HYBRID_XGB_PATH,
+        get_top_kospi_codes, split_by_unique_dates, recency_sample_weight,
+        class_balance, fit_calibrator, apply_calibrator, threshold_table,
+        precision_at_k_by_day, select_daily_candidates
+    )
+    from .dataset_builder_v2 import build_panel_dataset
+except ImportError:
+    from common_v2 import (
+        BASE_START, BASE_END, FEATURES_XGB, HYBRID_XGB_PATH,
+        get_top_kospi_codes, split_by_unique_dates, recency_sample_weight,
+        class_balance, fit_calibrator, apply_calibrator, threshold_table,
+        precision_at_k_by_day, select_daily_candidates
+    )
+    from dataset_builder_v2 import build_panel_dataset
 
 
 TARGET_COL = 'target_loose'
 
 
-def train_hybrid_xgb_v2():
+def train_hybrid_xgb_v2(base_start=None, base_end=None):
+    base_start = base_start or BASE_START
+    base_end = base_end or BASE_END
     codes = get_top_kospi_codes(limit=300)
 
-    print(f"[1/4] Hybrid XGB용 패널 생성 중... ({BASE_START} ~ {BASE_END})")
-    panel = build_panel_dataset(codes, BASE_START, BASE_END, min_rows=150, include_labels=True)
+    print(f"[1/4] Hybrid XGB용 패널 생성 중... ({base_start} ~ {base_end})")
+    panel = build_panel_dataset(codes, base_start, base_end, min_rows=150, include_labels=True)
     if panel.empty:
         print("❌ 학습 데이터가 없습니다.")
         return
@@ -90,4 +100,10 @@ def train_hybrid_xgb_v2():
 
 
 if __name__ == "__main__":
-    train_hybrid_xgb_v2()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Train swing v2 hybrid XGB model.")
+    parser.add_argument("--base-start", default=None)
+    parser.add_argument("--base-end", default=None)
+    args = parser.parse_args()
+    train_hybrid_xgb_v2(base_start=args.base_start, base_end=args.base_end)

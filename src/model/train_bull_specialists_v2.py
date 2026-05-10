@@ -2,24 +2,36 @@ import joblib
 from xgboost import XGBClassifier
 from lightgbm import LGBMClassifier, early_stopping, log_evaluation
 
-from common_v2 import (
-    BASE_START, BASE_END, FEATURES_XGB, FEATURES_LGBM,
-    BULL_XGB_PATH, BULL_LGBM_PATH,
-    get_top_kospi_codes, split_by_unique_dates, recency_sample_weight,
-    class_balance, fit_calibrator, apply_calibrator, threshold_table,
-    precision_at_k_by_day, select_daily_candidates
-)
-from dataset_builder_v2 import build_panel_dataset
+try:
+    from .common_v2 import (
+        BULL_BASE_START, BULL_BASE_END, FEATURES_XGB, FEATURES_LGBM,
+        BULL_XGB_PATH, BULL_LGBM_PATH,
+        get_top_kospi_codes, split_by_unique_dates, recency_sample_weight,
+        class_balance, fit_calibrator, apply_calibrator, threshold_table,
+        precision_at_k_by_day, select_daily_candidates
+    )
+    from .dataset_builder_v2 import build_panel_dataset
+except ImportError:
+    from common_v2 import (
+        BULL_BASE_START, BULL_BASE_END, FEATURES_XGB, FEATURES_LGBM,
+        BULL_XGB_PATH, BULL_LGBM_PATH,
+        get_top_kospi_codes, split_by_unique_dates, recency_sample_weight,
+        class_balance, fit_calibrator, apply_calibrator, threshold_table,
+        precision_at_k_by_day, select_daily_candidates
+    )
+    from dataset_builder_v2 import build_panel_dataset
 
 
 TARGET_COL = 'target_strict'
 
 
-def train_bull_specialists_v2():
+def train_bull_specialists_v2(bull_base_start=None, bull_base_end=None):
+    bull_base_start = bull_base_start or BULL_BASE_START
+    bull_base_end = bull_base_end or BULL_BASE_END
     codes = get_top_kospi_codes(limit=300)
 
-    print(f"[1/5] Bull Specialist용 패널 생성 중... ({BASE_START} ~ {BASE_END})")
-    panel = build_panel_dataset(codes, BASE_START, BASE_END, min_rows=150, include_labels=True)
+    print(f"[1/5] Bull Specialist용 패널 생성 중... ({bull_base_start} ~ {bull_base_end})")
+    panel = build_panel_dataset(codes, bull_base_start, bull_base_end, min_rows=150, include_labels=True)
     if panel.empty:
         print("❌ 학습 데이터가 없습니다.")
         return
@@ -126,7 +138,9 @@ def train_bull_specialists_v2():
         'calibrator': cal_x,
         'features': FEATURES_XGB,
         'target_col': TARGET_COL,
-        'model_name': 'bull_xgb_v2'
+        'model_name': 'bull_xgb_v2',
+        'bull_base_start': bull_base_start,
+        'bull_base_end': bull_base_end,
     }, BULL_XGB_PATH)
 
     joblib.dump({
@@ -134,7 +148,9 @@ def train_bull_specialists_v2():
         'calibrator': cal_l,
         'features': FEATURES_LGBM,
         'target_col': TARGET_COL,
-        'model_name': 'bull_lgbm_v2'
+        'model_name': 'bull_lgbm_v2',
+        'bull_base_start': bull_base_start,
+        'bull_base_end': bull_base_end,
     }, BULL_LGBM_PATH)
 
     print(f"[4/5] 저장 완료: {BULL_XGB_PATH}")
@@ -142,4 +158,10 @@ def train_bull_specialists_v2():
 
 
 if __name__ == "__main__":
-    train_bull_specialists_v2()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Train swing v2 bull specialist models.")
+    parser.add_argument("--bull-base-start", default=None)
+    parser.add_argument("--bull-base-end", default=None)
+    args = parser.parse_args()
+    train_bull_specialists_v2(bull_base_start=args.bull_base_start, bull_base_end=args.bull_base_end)

@@ -4,24 +4,22 @@ from datetime import datetime
 
 try:
     from .common_v2 import (
-        HYBRID_XGB_PATH, HYBRID_LGBM_PATH, BULL_XGB_PATH, BULL_LGBM_PATH,
         META_MODEL_PATH, RECO_PATH, RECO_DIAGNOSTIC_PATH, RECO_DIAGNOSTIC_JSON_PATH,
         META_FEATURES, SWING_SELECTION_OWNER, SWING_FLOOR_BULL, SWING_FLOOR_BEAR,
         SWING_FALLBACK_FLOOR_BULL, SWING_SELECTION_TOP_K,
         get_top_kospi_codes, get_latest_quote_date,
-        build_meta_feature_frame, score_artifact,
-        select_daily_candidates, daily_selection_stats, load_model_artifact
+        select_daily_candidates, daily_selection_stats, load_model_artifact,
+        build_base_score_frame, resolve_bull_specialist_mode
     )
     from .dataset_builder_v2 import build_panel_dataset
 except ImportError:
     from common_v2 import (
-        HYBRID_XGB_PATH, HYBRID_LGBM_PATH, BULL_XGB_PATH, BULL_LGBM_PATH,
         META_MODEL_PATH, RECO_PATH, RECO_DIAGNOSTIC_PATH, RECO_DIAGNOSTIC_JSON_PATH,
         META_FEATURES, SWING_SELECTION_OWNER, SWING_FLOOR_BULL, SWING_FLOOR_BEAR,
         SWING_FALLBACK_FLOOR_BULL, SWING_SELECTION_TOP_K,
         get_top_kospi_codes, get_latest_quote_date,
-        build_meta_feature_frame, score_artifact,
-        select_daily_candidates, daily_selection_stats, load_model_artifact
+        select_daily_candidates, daily_selection_stats, load_model_artifact,
+        build_base_score_frame, resolve_bull_specialist_mode
     )
     from dataset_builder_v2 import build_panel_dataset
 
@@ -48,7 +46,7 @@ def _attach_recommendation_provenance(score_df, stats_df):
     return out
 
 
-def _save_recommendation_outputs(score_df, picks, stats_df, latest_date):
+def _save_recommendation_outputs(score_df, picks, stats_df, latest_date, *, bull_mode):
     score_df = _attach_recommendation_provenance(score_df, stats_df)
     selected_keys = set()
     if not picks.empty:
@@ -96,6 +94,9 @@ def _save_recommendation_outputs(score_df, picks, stats_df, latest_date):
         'floor_bear': SWING_FLOOR_BEAR,
         'fallback_floor_bull': SWING_FALLBACK_FLOOR_BULL,
         'selection_top_k': SWING_SELECTION_TOP_K,
+        'bull_specialist_mode': bull_mode,
+        'bull_score_source': str(score_df['bull_score_source'].iloc[0]) if 'bull_score_source' in score_df.columns and not score_df.empty else '',
+        'bull_artifact_used': bool(score_df['bull_artifact_used'].iloc[0]) if 'bull_artifact_used' in score_df.columns and not score_df.empty else False,
         'latest_stats': latest_stats,
         'score_distribution': {
             'hybrid_mean_max': float(score_df['hybrid_mean'].max()) if not score_df.empty else 0.0,
@@ -110,7 +111,8 @@ def _save_recommendation_outputs(score_df, picks, stats_df, latest_date):
     return summary
 
 
-def recommend_daily_v2():
+def recommend_daily_v2(bull_mode=None):
+    bull_mode = resolve_bull_specialist_mode(bull_mode)
     latest_date = get_latest_quote_date()
     start_date = (latest_date - pd.Timedelta(days=400)).strftime('%Y-%m-%d')
     end_date = latest_date.strftime('%Y-%m-%d')
@@ -127,20 +129,14 @@ def recommend_daily_v2():
         print("❌ 최신 거래일 데이터가 없습니다.")
         return
 
-    print("[2/4] 모델 로드 및 base score 생성 중...")
-    hybrid_xgb = load_model_artifact(HYBRID_XGB_PATH)
-    hybrid_lgbm = load_model_artifact(HYBRID_LGBM_PATH)
-    bull_xgb = load_model_artifact(BULL_XGB_PATH)
-    bull_lgbm = load_model_artifact(BULL_LGBM_PATH)
+    print(f"[2/4] 모델 로드 및 base score 생성 중... (bull_mode={bull_mode})")
     meta_artifact = load_model_artifact(META_MODEL_PATH)
 
-    score_df = latest_rows[['date', 'code', 'name', 'close', 'bull_regime', 'idx_ret20', 'idx_atr_ratio']].copy()
-    score_df['hx'] = score_artifact(hybrid_xgb, latest_rows)
-    score_df['hl'] = score_artifact(hybrid_lgbm, latest_rows)
-    score_df['bx'] = score_artifact(bull_xgb, latest_rows)
-    score_df['bl'] = score_artifact(bull_lgbm, latest_rows)
-
-    score_df = build_meta_feature_frame(score_df)
+    score_df = build_base_score_frame(
+        latest_rows,
+        bull_mode=bull_mode,
+        include_columns=['date', 'code', 'name', 'close', 'bull_regime', 'idx_ret20', 'idx_atr_ratio'],
+    )
 
     # recommend_daily_v2.py 내부 [3/4] 단계 부분 교체
 
@@ -166,7 +162,7 @@ def recommend_daily_v2():
         floor_bear=SWING_FLOOR_BEAR,
         fallback_floor=SWING_FALLBACK_FLOOR_BULL,
     )
-    summary = _save_recommendation_outputs(score_df, picks, stats_df, latest_date)
+    summary = _save_recommendation_outputs(score_df, picks, stats_df, latest_date, bull_mode=bull_mode)
 
     if picks.empty:
         print("⚠️ 오늘 추천 종목이 없습니다 (안전망 통과 종목 0건).")
@@ -182,4 +178,9 @@ def recommend_daily_v2():
 
 
 if __name__ == "__main__":
-    recommend_daily_v2()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Generate swing v2 daily recommendations.")
+    parser.add_argument("--bull-mode", default=None, choices=["enabled", "disabled", "hold_current"])
+    args = parser.parse_args()
+    recommend_daily_v2(bull_mode=args.bull_mode)

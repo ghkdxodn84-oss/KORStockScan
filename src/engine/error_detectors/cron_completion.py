@@ -107,6 +107,14 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "critical": True,
     },
     {
+        "id": "swing_model_retrain_postclose",
+        "log": "logs/swing_model_retrain_cron.log",
+        "window_start": (17, 30),
+        "window_end": (18, 30),
+        "mode": "once",
+        "critical": False,
+    },
+    {
         "id": "tuning_monitoring_postclose",
         "log": "logs/tuning_monitoring_postclose_cron.log",
         "window_start": (18, 0),

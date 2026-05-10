@@ -1,10 +1,12 @@
 import os
 import sys
 import warnings
+import json
 import joblib
 import numpy as np
 import pandas as pd
 import FinanceDataReader as fdr
+from pathlib import Path
 from sqlalchemy import create_engine, text
 from sklearn.isotonic import IsotonicRegression
 
@@ -17,6 +19,12 @@ CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, '..', '..'))
 DATA_DIR = os.path.join(PROJECT_ROOT, 'data')
 os.makedirs(DATA_DIR, exist_ok=True)
+MODEL_OUTPUT_DIR = os.getenv('KORSTOCKSCAN_SWING_MODEL_OUTPUT_DIR', DATA_DIR)
+os.makedirs(MODEL_OUTPUT_DIR, exist_ok=True)
+MODEL_REGISTRY_DIR = os.getenv(
+    'KORSTOCKSCAN_SWING_MODEL_REGISTRY_DIR',
+    os.path.join(DATA_DIR, 'model_registry', 'swing_v2'),
+)
 
 DB_URL = os.getenv(
     "DATABASE_URL",
@@ -24,18 +32,19 @@ DB_URL = os.getenv(
 )
 engine = create_engine(DB_URL)
 
-HYBRID_XGB_PATH = os.path.join(DATA_DIR, 'hybrid_xgb_v2.pkl')
-HYBRID_LGBM_PATH = os.path.join(DATA_DIR, 'hybrid_lgbm_v2.pkl')
-BULL_XGB_PATH = os.path.join(DATA_DIR, 'bull_xgb_v2.pkl')
-BULL_LGBM_PATH = os.path.join(DATA_DIR, 'bull_lgbm_v2.pkl')
-META_MODEL_PATH = os.path.join(DATA_DIR, 'stacking_meta_v2.pkl')
+HYBRID_XGB_PATH = os.path.join(MODEL_OUTPUT_DIR, 'hybrid_xgb_v2.pkl')
+HYBRID_LGBM_PATH = os.path.join(MODEL_OUTPUT_DIR, 'hybrid_lgbm_v2.pkl')
+BULL_XGB_PATH = os.path.join(MODEL_OUTPUT_DIR, 'bull_xgb_v2.pkl')
+BULL_LGBM_PATH = os.path.join(MODEL_OUTPUT_DIR, 'bull_lgbm_v2.pkl')
+META_MODEL_PATH = os.path.join(MODEL_OUTPUT_DIR, 'stacking_meta_v2.pkl')
 
-AI_PRED_PATH = os.path.join(DATA_DIR, 'ai_predictions_v2.csv')
+AI_PRED_PATH = os.path.join(MODEL_OUTPUT_DIR, 'ai_predictions_v2.csv')
 RECO_PATH = os.path.join(DATA_DIR, 'daily_recommendations_v2.csv')
 RECO_DIAGNOSTIC_PATH = os.path.join(DATA_DIR, 'daily_recommendations_v2_diagnostics.csv')
 RECO_DIAGNOSTIC_JSON_PATH = os.path.join(DATA_DIR, 'daily_recommendations_v2_diagnostics.json')
 
 SWING_SELECTION_OWNER = 'SwingModelSelectionFunnelRepair'
+BULL_SPECIALIST_MODES = {'enabled', 'disabled', 'hold_current'}
 
 
 def _env_float(name, default):
@@ -58,6 +67,13 @@ def _env_int(name, default):
         return default
 
 
+def _env_str(name, default):
+    raw = os.getenv(name)
+    if raw in (None, ''):
+        return default
+    return str(raw)
+
+
 SWING_FLOOR_BULL = _env_float('KORSTOCKSCAN_SWING_FLOOR_BULL', 0.35)
 SWING_FLOOR_BEAR = _env_float('KORSTOCKSCAN_SWING_FLOOR_BEAR', 0.40)
 SWING_FALLBACK_FLOOR_BULL = _env_float('KORSTOCKSCAN_SWING_FALLBACK_FLOOR_BULL', 0.35)
@@ -71,6 +87,8 @@ BASE_END = "2025-12-31"
 
 META_START = "2026-01-01"
 META_END = "2026-03-20"
+BULL_BASE_START = _env_str('KORSTOCKSCAN_SWING_BULL_BASE_START', BASE_START)
+BULL_BASE_END = _env_str('KORSTOCKSCAN_SWING_BULL_BASE_END', BASE_END)
 
 # ==========================================
 # 피처 정의
@@ -124,6 +142,45 @@ def ensure_pickle_compat():
 def load_model_artifact(path):
     ensure_pickle_compat()
     return joblib.load(path)
+
+
+def swing_model_current_manifest_path():
+    return Path(MODEL_REGISTRY_DIR) / 'current.json'
+
+
+def load_swing_model_current_manifest(path=None):
+    manifest_path = Path(path) if path is not None else swing_model_current_manifest_path()
+    try:
+        payload = json.loads(manifest_path.read_text(encoding='utf-8'))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def resolve_bull_specialist_mode(mode=None, manifest=None):
+    candidate = mode or os.getenv('KORSTOCKSCAN_SWING_BULL_SPECIALIST_MODE')
+    if candidate in (None, ''):
+        source = manifest if manifest is not None else load_swing_model_current_manifest()
+        candidate = source.get('bull_specialist_mode') if isinstance(source, dict) else None
+    candidate = str(candidate or 'enabled').strip().lower()
+    if candidate not in BULL_SPECIALIST_MODES:
+        return 'enabled'
+    return candidate
+
+
+def bull_mode_runtime_provenance(mode):
+    mode = resolve_bull_specialist_mode(mode)
+    if mode == 'disabled':
+        return {
+            'bull_specialist_mode': mode,
+            'bull_score_source': 'neutralized_from_hybrid',
+            'bull_artifact_used': False,
+        }
+    return {
+        'bull_specialist_mode': mode,
+        'bull_score_source': 'artifact',
+        'bull_artifact_used': True,
+    }
 
 def fit_calibrator(raw_prob, y_true):
     raw_prob = np.asarray(raw_prob, dtype=float)
@@ -300,6 +357,45 @@ def score_artifact(artifact, df):
 
     raw = model.predict_proba(df[features])[:, 1]
     return apply_calibrator(calibrator, raw)
+
+
+def build_base_score_frame(
+    source_df,
+    *,
+    bull_mode=None,
+    hybrid_xgb_path=None,
+    hybrid_lgbm_path=None,
+    bull_xgb_path=None,
+    bull_lgbm_path=None,
+    include_columns=None,
+):
+    """Build hx/hl/bx/bl and meta features with a stable META_FEATURES contract."""
+    mode = resolve_bull_specialist_mode(bull_mode)
+    hybrid_xgb = load_model_artifact(hybrid_xgb_path or HYBRID_XGB_PATH)
+    hybrid_lgbm = load_model_artifact(hybrid_lgbm_path or HYBRID_LGBM_PATH)
+
+    base_cols = list(include_columns or [])
+    for required in ('date', 'code', 'name', 'bull_regime', 'idx_ret20', 'idx_atr_ratio'):
+        if required in source_df.columns and required not in base_cols:
+            base_cols.append(required)
+    score_df = source_df[base_cols].copy() if base_cols else pd.DataFrame(index=source_df.index)
+    score_df['hx'] = score_artifact(hybrid_xgb, source_df)
+    score_df['hl'] = score_artifact(hybrid_lgbm, source_df)
+
+    if mode == 'disabled':
+        score_df['bx'] = score_df['hx']
+        score_df['bl'] = score_df['hl']
+    else:
+        bull_xgb = load_model_artifact(bull_xgb_path or BULL_XGB_PATH)
+        bull_lgbm = load_model_artifact(bull_lgbm_path or BULL_LGBM_PATH)
+        score_df['bx'] = score_artifact(bull_xgb, source_df)
+        score_df['bl'] = score_artifact(bull_lgbm, source_df)
+
+    score_df = build_meta_feature_frame(score_df)
+    provenance = bull_mode_runtime_provenance(mode)
+    for key, value in provenance.items():
+        score_df[key] = value
+    return score_df
 
 
 # common_v2.py 내부의 해당 함수 교체
