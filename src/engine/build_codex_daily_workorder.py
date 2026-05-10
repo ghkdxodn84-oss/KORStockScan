@@ -15,6 +15,7 @@ from urllib import error, request
 from zoneinfo import ZoneInfo
 
 from src.engine.sync_docs_backlog_to_project import (
+    _completed_runbook_slots,
     _is_managed_project_title,
     _managed_title_key,
     collect_backlog_tasks,
@@ -534,12 +535,13 @@ def build_runbook_operational_checks(*, target_date: str | None, slots: list[str
     """Build runbook-derived Codex workorder checks without creating Project items."""
 
     compact = _target_date_compact(target_date)
-    date_text = str(target_date or "YYYY-MM-DD")
+    date_text = str(target_date or _local_today_iso())
+    completed_slots = _completed_runbook_slots(date_text)
     selected = {_norm(slot) for slot in (slots or []) if str(slot or "").strip()}
     include_all = not selected
     checks: list[RunbookCheck] = []
 
-    if include_all or "preopen" in selected:
+    if (include_all or "preopen" in selected) and "PREOPEN" not in completed_slots:
         checks.append(
             RunbookCheck(
                 check_id=f"PreopenAutomationHealthCheck{compact}",
@@ -567,7 +569,7 @@ def build_runbook_operational_checks(*, target_date: str | None, slots: list[str
                 forbidden="실패해도 수동 env override, approval artifact 없는 스윙 env 반영, 스윙 dry-run 해제, 장전 수동 enable/hold 판정 금지.",
             )
         )
-    if include_all or "intraday" in selected:
+    if (include_all or "intraday" in selected) and "INTRADAY" not in completed_slots:
         checks.append(
             RunbookCheck(
                 check_id=f"IntradayAutomationHealthCheck{compact}",
@@ -596,7 +598,7 @@ def build_runbook_operational_checks(*, target_date: str | None, slots: list[str
                           "SystemErrorDetector 탐지 결과로 runtime threshold/spread/주문/재시작 변경 금지.",
             )
         )
-    if include_all or "postclose" in selected:
+    if (include_all or "postclose" in selected) and "POSTCLOSE" not in completed_slots:
         checks.append(
             RunbookCheck(
                 check_id=f"PostcloseAutomationHealthCheck{compact}",

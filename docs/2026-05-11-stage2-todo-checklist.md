@@ -20,6 +20,7 @@
 - Runbook 운영 확인은 [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md) `장전 확인 절차`와 `build_codex_daily_workorder --slot PREOPEN`의 `PreopenAutomationHealthCheckYYYYMMDD` 블록을 기준으로 본다.
 - 확인 범위: `threshold_cycle_preopen_cron.log`, apply plan, runtime env JSON, `src/run_bot.sh` runtime env source 여부, tmux `bot` 기동 상태. 실패 시 수동 env override가 아니라 blocked reason과 same-stage owner 충돌을 확인한다.
 - 운영 확인 기록 (`PreopenAutomationHealthCheck20260511`, `PVTI_lAHOAXZuE84BUTcPzgsPE-E`): `threshold_cycle_preopen_status=pass`, apply plan `auto_bounded_live_ready`, runtime env selected families `soft_stop_whipsaw_confirmation`/`score65_74_recovery_probe`, `tmux bot` alive, process/resource/artifact detector pass. `final_ensemble_scanner`는 07:21 실행/추천 3건 적재 증적은 있으나 detector 완료 marker가 없어 `cron_completion` fail로 분류됐고, scanner `[START]/[DONE]/[FAIL]` marker 보강 대상으로 처리했다. 판정은 `warning`이며 runtime threshold/order guard 변경 없음.
+- 생성기 보정: 같은 날짜 운영 확인 기록이 남은 슬롯은 `build_codex_daily_workorder`의 `Runbook 운영 확인` 블록에서 제외한다. `PreopenAutomationHealthCheck20260511`은 완료 기록 기준으로 PREOPEN workorder 재생성 시 다시 생성하지 않는다.
 
 ## 장중 체크리스트 (09:00~15:20)
 
@@ -56,6 +57,7 @@
   - 실행 메모: `SCALP_LIVE_SIMULATOR_ENABLED=True` 기본 ON으로 스캘핑 AI/Gatekeeper BUY 확정 지점에서 `scalp_ai_buy_all` sim 포지션을 종목당 1개 생성한다. 브로커 매수/매도/추가매수 접수는 차단하고, quote-based full-fill v1로 BUY/scale-in/sell을 가상 체결한다.
   - 데이터/WS: open sim state는 `data/runtime/scalp_live_simulator_state.json`에 저장/복원한다. active sim target은 Kiwoom WS prune에서 active consumer로 보며 `scalp_sim_*`, `actual_order_submitted=false`, `calibration_authority=equal_weight`를 pipeline event에 남긴다.
   - 자동화체인 연결: threshold-cycle/daily EV/performance tuning은 sim completed rows를 `real`/`sim`/`combined`로 분리 표시하되 combined를 실매매 동급 calibration 입력으로 사용한다. 장중 runtime threshold mutation 금지는 유지한다.
+  - 추가 운영 메모: heartbeat의 `보유` 카운트는 실계좌/실주문 포지션만 표시하고 simulator HOLDING은 `sim`으로 분리한다. `TEST/DUMMY/MOCK` 또는 `123456` synthetic simulator state는 재시작 복원 대상에서 제외한다.
   - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_scalp_live_simulator.py`, parser 검증으로 확인한다.
 
 - [x] `[SwingModelSelectionFunnelRepair0509] 스윙 모델 추천 생성 정상화 및 선정 funnel 진단 병합 구현` (`Due: 2026-05-09`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: ScalpingLogic`)

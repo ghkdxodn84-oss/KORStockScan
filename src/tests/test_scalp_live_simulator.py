@@ -382,6 +382,63 @@ def test_ws_prune_retains_active_scalp_simulator_consumer(monkeypatch):
     assert fake_bus.published == []
 
 
+def test_scalp_simulator_restore_skips_synthetic_state(monkeypatch, tmp_path):
+    state_path = tmp_path / "scalp_live_sim_state.json"
+    state_path.write_text(
+        """
+{
+  "schema_version": 1,
+  "simulation_book": "scalp_ai_buy_all",
+  "active_positions": [
+    {
+      "code": "123456",
+      "name": "TEST",
+      "strategy": "SCALPING",
+      "status": "HOLDING",
+      "simulation_book": "scalp_ai_buy_all",
+      "scalp_live_simulator": true,
+      "sim_record_id": "SIM-TEST"
+    },
+    {
+      "code": "005930",
+      "name": "삼성전자",
+      "strategy": "SCALPING",
+      "status": "HOLDING",
+      "simulation_book": "scalp_ai_buy_all",
+      "scalp_live_simulator": true,
+      "sim_record_id": "SIM-REAL"
+    }
+  ]
+}
+""",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(state_handlers, "SCALP_SIM_STATE_PATH", state_path)
+    targets = []
+
+    restored = state_handlers.restore_scalp_simulator_targets(targets)
+
+    assert restored == 1
+    assert [target["code"] for target in targets] == ["005930"]
+
+
+def test_runtime_heartbeat_classifies_scalp_sim_as_non_real_holding():
+    assert sniper_runtime._is_runtime_simulation_target(
+        {
+            "status": "HOLDING",
+            "simulation_book": "scalp_ai_buy_all",
+            "actual_order_submitted": False,
+        }
+    )
+    assert not sniper_runtime._is_runtime_simulation_target(
+        {
+            "status": "HOLDING",
+            "code": "005930",
+            "actual_order_submitted": True,
+        }
+    )
+
+
 def test_daily_threshold_cycle_report_uses_scalp_sim_completed_rows_as_combined_authority():
     target_date = "2026-05-11"
 

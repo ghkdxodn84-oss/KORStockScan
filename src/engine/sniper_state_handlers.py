@@ -368,6 +368,10 @@ def restore_scalp_simulator_targets(targets=None) -> int:
         code = str(row.get("code") or "").strip()[:6]
         if not code:
             continue
+        name = str(row.get("name") or "").strip().upper()
+        if code == "123456" or name in {"TEST", "DUMMY", "MOCK"}:
+            log_info(f"[SCALP_SIM_STATE] skipped synthetic simulator target code={code} name={name or '-'}")
+            continue
         row["code"] = code
         row["strategy"] = "SCALPING"
         row["simulation_book"] = SCALP_SIMULATION_BOOK

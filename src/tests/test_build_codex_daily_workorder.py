@@ -116,7 +116,11 @@ def test_render_markdown_includes_template_and_ids():
     assert "작업시간이 지났으나 반복적으로 실행해야하는 작업" in md
 
 
-def test_build_runbook_operational_checks_for_slot():
+def test_build_runbook_operational_checks_for_slot(monkeypatch):
+    monkeypatch.setattr(
+        "src.engine.build_codex_daily_workorder._completed_runbook_slots",
+        lambda due_date: set(),
+    )
     checks = build_runbook_operational_checks(target_date="2026-05-11", slots=["PREOPEN"])
 
     assert [check.check_id for check in checks] == ["PreopenAutomationHealthCheck20260511"]
@@ -138,6 +142,19 @@ def test_build_runbook_operational_checks_for_slot():
     assert "real/sim/combined" in postclose.decision_rule
     intraday = next(check for check in all_checks if check.slot == "INTRADAY")
     assert "pipeline_events_2026-05-11.jsonl" in "\n".join(intraday.artifact_checks)
+
+
+def test_build_runbook_operational_checks_skips_completed_slot(monkeypatch):
+    monkeypatch.setattr(
+        "src.engine.build_codex_daily_workorder._completed_runbook_slots",
+        lambda due_date: {"PREOPEN"} if due_date == "2026-05-11" else set(),
+    )
+
+    preopen = build_runbook_operational_checks(target_date="2026-05-11", slots=["PREOPEN"])
+    all_checks = build_runbook_operational_checks(target_date="2026-05-11", slots=None)
+
+    assert preopen == []
+    assert [check.slot for check in all_checks] == ["INTRADAY", "POSTCLOSE"]
 
 
 def test_render_markdown_includes_runbook_operational_checks():

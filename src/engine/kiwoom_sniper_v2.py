@@ -296,6 +296,17 @@ def _publish_gatekeeper_report(stock, code, gatekeeper, allowed):
         {'message': msg, 'audience': audience, 'parse_mode': 'HTML'}
     )
 
+def _is_runtime_simulation_target(stock):
+    stock = stock or {}
+    return (
+        bool(stock.get('swing_live_order_dry_run'))
+        or bool(stock.get('scalp_live_simulator'))
+        or bool(stock.get('simulation_owner'))
+        or bool(stock.get('simulation_book'))
+        or bool(stock.get('simulated_order'))
+        or stock.get('actual_order_submitted') is False
+    )
+
 def _send_exit_best_ioc(code, qty, token):
     """[공통 긴급 청산 래퍼] 최유리(IOC, 16) 조건으로 즉각 청산 시도"""
     return sniper_trade_utils.send_exit_best_ioc(code, qty, token)
@@ -1347,8 +1358,19 @@ def run_sniper(is_test_mode=False):
             # =====================================================
             if now_t.minute % 5 == 0 and now_t.minute != last_msg_min:
                 watching_count = len([t for t in targets if t.get('status') == 'WATCHING'])
-                holding_count = len([t for t in targets if t.get('status') == 'HOLDING'])
-                print(f"💓 [{now.strftime('%H:%M:%S')}] 다중 감시망 가동 중... (감시: {watching_count} / 보유: {holding_count})")
+                holding_targets = [t for t in targets if t.get('status') == 'HOLDING']
+                real_holding_count = len([t for t in holding_targets if not _is_runtime_simulation_target(t)])
+                sim_holding_count = len(holding_targets) - real_holding_count
+                if sim_holding_count:
+                    print(
+                        f"💓 [{now.strftime('%H:%M:%S')}] 다중 감시망 가동 중... "
+                        f"(감시: {watching_count} / 보유: {real_holding_count} / sim: {sim_holding_count})"
+                    )
+                else:
+                    print(
+                        f"💓 [{now.strftime('%H:%M:%S')}] 다중 감시망 가동 중... "
+                        f"(감시: {watching_count} / 보유: {real_holding_count})"
+                    )
                 last_msg_min = now_t.minute
 
             # =====================================================
