@@ -166,17 +166,76 @@ PYTHONPATH=. .venv/bin/python src/web/app.py
 
 공식 참조:
 
+- AWS Graviton: <https://aws.amazon.com/ec2/graviton/>
+- AWS EC2 On-Demand pricing: <https://aws.amazon.com/ec2/pricing/on-demand/>
+- Amazon EBS pricing: <https://aws.amazon.com/ebs/pricing/>
+- Amazon VPC pricing: <https://aws.amazon.com/vpc/pricing/>
+- EC2 instance launch wizard: <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-launch-instance-wizard.html>
+- EC2 Elastic IP: <https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/working-with-eips.html>
 - Kiwoom REST API: <https://openapi.kiwoom.com/guide/index>
 - OpenAI API quickstart: <https://developers.openai.com/api/docs/quickstart>
+- OpenAI API pricing: <https://openai.com/ko-KR/api/pricing/>
 - OpenAI project/key/budget 관리: <https://help.openai.com/en/articles/9186755-managing-your-work-in-the-api-platform-with-projects>
 - Gemini API key: <https://ai.google.dev/gemini-api/docs/api-key>
 - DeepSeek API: <https://api-docs.deepseek.com/api/deepseek-api/>
 - Anthropic API: <https://docs.anthropic.com/en/api/overview>
 - OpenRouter API key: <https://openrouter.ai/docs/api-keys>
 
-### 1. 서버와 레포 준비
+### 1. AWS EC2 ARM 서버 생성
 
-권장 기본값은 Ubuntu 계열 서버, Python 3.11 이상, PostgreSQL, systemd/tmux, 고정 outbound IP입니다. Kiwoom REST API는 허용 IP 기반 보안 정책을 쓰므로, 클라우드 서버를 쓰면 고정 공인 IP 또는 NAT egress IP를 먼저 정합니다.
+신규 운영 서버는 AWS EC2 Graviton ARM 계열을 권장합니다. 이 프로젝트는 장중에는 Python runtime, WebSocket, PostgreSQL, pandas/ML 라이브러리, 리포트 생성이 함께 돌기 때문에 x86보다 Graviton의 가격대비 성능과 전력 효율 이점이 잘 맞습니다. 단, 네이티브 wheel이 없는 라이브러리는 ARM에서 빌드될 수 있으므로 `build-essential`, `python3-dev`, `libpq-dev`를 설치합니다.
+
+권장 시작점:
+
+- 개발/검증: `t4g.medium` 이상
+- 단일 서버 운영(PostgreSQL + bot + web): `t4g.large` 또는 `m7g.large` 이상
+- AMI: Ubuntu Server LTS `arm64`
+- Storage: gp3 EBS `40~80 GiB`에서 시작하고, `data/report`, `data/pipeline_events`, `logs` 증가량에 맞춰 확장
+- IP: Kiwoom REST API 허용 IP 등록을 위해 Elastic IP를 할당해 instance에 연결
+
+AWS Console 생성 절차:
+
+1. AWS Console에서 EC2로 이동한 뒤, 운영할 Region을 먼저 고릅니다. Kiwoom 서버와의 지연을 줄이려면 서울 리전(`ap-northeast-2`)을 우선 검토합니다.
+2. `Launch instance`를 선택합니다.
+3. Name은 예를 들어 `korstockscan-prod-arm`처럼 지정합니다.
+4. AMI는 Ubuntu Server LTS의 `64-bit (Arm)` 또는 `arm64` 이미지를 선택합니다.
+5. Instance type은 `t4g.medium`, `t4g.large`, `m7g.large` 중 예산과 부하에 맞춰 선택합니다. 처음에는 `t4g.medium`으로 검증하고, 장후 리포트/DB/웹까지 같은 서버에서 돌릴 때 CPU steal, memory, swap, PostgreSQL latency를 보고 올립니다.
+6. Key pair를 새로 만들거나 기존 key pair를 선택합니다. `Proceed without a key pair`는 복구 경로가 제한되므로 사용하지 않습니다.
+7. Network settings에서 보안 그룹을 새로 만들고 inbound rule은 최소화합니다.
+   - SSH `22`: 본인 고정 IP 또는 VPN IP만 허용
+   - Web/API `5000`: 외부 공개 금지. 필요하면 본인 IP만 허용하거나 nginx `80/443` 뒤에 둡니다.
+   - PostgreSQL `5432`: 같은 서버 안에서만 쓰는 경우 외부 inbound를 열지 않습니다.
+8. Storage는 gp3 root volume `40 GiB` 이상으로 시작합니다. 장중 JSONL과 장후 report를 오래 보관하면 더 크게 잡습니다.
+9. `Launch instance`로 생성하고, instance가 `running` 상태가 되면 Elastic IP를 allocate 후 해당 instance에 associate합니다. Elastic IP는 할당/연결 상태와 관계없이 비용이 발생할 수 있으므로 미사용 IP는 해제합니다.
+10. Kiwoom OpenAPI 사이트의 허용 IP에는 Elastic IP를 등록합니다. public IP가 바뀌면 token/주문 API가 실패할 수 있으므로, 운영 서버를 교체할 때도 Elastic IP 재연결 순서를 먼저 잡습니다.
+
+SSH 접속:
+
+```bash
+chmod 600 ~/Downloads/korstockscan-prod-arm.pem
+ssh -i ~/Downloads/korstockscan-prod-arm.pem ubuntu@<elastic-ip>
+```
+
+#### 월 운영비 추정 (`t4g.large` + OpenAI engine)
+
+기준일은 `2026-05-10 KST`이며, AWS 서울 리전(`ap-northeast-2`) On-Demand Linux, 월 `730`시간, gp3 `80 GiB`, Public IPv4 1개를 기준으로 잡습니다. Savings Plans/Reserved Instance/Free Tier, VAT, 카드 해외결제 수수료, NAT Gateway, snapshot, CloudWatch 추가 과금, 데이터 전송량은 제외합니다. KRW 환산은 예산 감을 잡기 위한 예시로 `1 USD = 1,350 KRW`를 사용합니다.
+
+| 항목 | 산식/가정 | 월 예상 |
+| --- | --- | --- |
+| EC2 `t4g.large` | `$0.0832/hour * 730h` | `$60.74` |
+| EBS gp3 root volume | `$0.0912/GB-month * 80GiB` | `$7.30` |
+| Public IPv4/Elastic IP | `$0.005/hour * 730h` | `$3.65` |
+| AWS subtotal | EC2 + EBS + IPv4 | `$71.68` |
+| OpenAI baseline | 월 `10M` input / `1M` output, `FAST 70% + REPORT 25% + DEEP 5%` | `$5.63` |
+| 합계 | AWS subtotal + OpenAI baseline | `$77.31` |
+
+위 baseline의 OpenAI 라우팅은 현재 레포 기준 `FAST=gpt-5-nano`, `REPORT=gpt-5.4-mini`, `DEEP=gpt-5.4`를 사용한다고 가정합니다. 표준 처리 단가는 각각 `gpt-5-nano` 입력 `$0.05`/출력 `$0.40`, `gpt-5.4-mini` 입력 `$0.75`/출력 `$4.50`, `gpt-5.4` 입력 `$2.50`/출력 `$15.00` per 1M tokens 기준입니다. 같은 `10M/1M` token을 전부 `gpt-5.4`로 보내면 OpenAI 비용은 약 `$40.00/month`이고, threshold correction에서 `gpt-5.5`를 추가로 `1M/0.1M` tokens 쓰면 약 `$8.00`가 더 붙습니다.
+
+따라서 기본 OpenAI 라우팅 기준 월 운영비는 VAT 제외 약 `$77.31`, 즉 약 `104,000 KRW`입니다. 10% VAT까지 보수적으로 잡으면 약 `115,000 KRW`를 1차 예산으로 둡니다. 운영 초기에는 OpenAI project budget/usage limit을 먼저 설정하고, `data/report`, `data/pipeline_events`, `logs` 증가량과 실제 token usage를 1주 단위로 보고 서버/예산을 조정합니다.
+
+### 2. 서버와 레포 준비
+
+권장 기본값은 Ubuntu 계열 서버, Python `3.13.12`(현재 `.venv/bin/python` 기준), PostgreSQL, systemd/tmux, 고정 outbound IP입니다. Kiwoom REST API는 허용 IP 기반 보안 정책을 쓰므로, 클라우드 서버를 쓰면 고정 공인 IP 또는 NAT egress IP를 먼저 정합니다.
 
 ```bash
 sudo apt update
@@ -204,7 +263,7 @@ sudo -u postgres psql -c "ALTER USER quant_admin WITH PASSWORD 'change-this-pass
 
 운영 전에는 `data/config_prod.json`을 별도로 만들고 `chmod 600`으로 제한합니다. 이 파일은 절대 공개 저장소에 커밋하지 않습니다.
 
-### 2. Kiwoom REST API 신청
+### 3. Kiwoom REST API 신청
 
 1. Kiwoom 증권 계좌와 온라인 ID를 준비하고, 휴면/거래종료/미사용 제한이 없는지 확인합니다.
 2. <https://openapi.kiwoom.com>에 로그인한 뒤 `API 사용신청`을 진행합니다.
@@ -223,7 +282,7 @@ sudo -u postgres psql -c "ALTER USER quant_admin WITH PASSWORD 'change-this-pass
 
 토큰은 `data/runtime/kiwoom_token_cache.json`과 `data/runtime/kiwoom_token_cache.lock`으로 프로세스 간 재사용합니다. 토큰 캐시는 `.gitignore` 대상이며, 토큰 오류가 반복되면 캐시 삭제보다 로그의 `return_code`, 허용 IP, 계정 상태, token 발급 한도를 먼저 봅니다.
 
-### 3. AI API 신청
+### 4. AI API 신청
 
 이 레포의 현재 운영 기준은 Gemini/DeepSeek/OpenAI를 모두 "즉시 live routing 승격"이 아니라 endpoint contract, flag-off acceptance, proposal layer로 분리하는 것입니다. 키를 발급받아도 `Plan Rebase`와 runtime flag guard 없이 provider routing을 임의로 바꾸지 않습니다.
 
@@ -272,7 +331,7 @@ DeepSeek/Claude/OpenRouter:
 }
 ```
 
-### 4. 첫 기동 전 안전 점검
+### 5. 첫 기동 전 안전 점검
 
 1. `pause.flag`를 만들어 신규 매수/추가매수 차단 상태에서 먼저 기동합니다.
 
@@ -290,7 +349,7 @@ DeepSeek/Claude/OpenRouter:
 3. token 발급, 계좌/잔고, 주문가능금액, WS 연결은 장중이 아닌 시간에 소액/모의 계정으로 먼저 확인합니다. `src/tests/test_deposit.py`, `src/tests/test_inventory_api.py`, `src/tests/test_api_data.py`는 실제 API 키와 네트워크가 필요한 live smoke 성격입니다.
 4. `pause.flag` 해제와 `src/run_bot.sh` 실거래 기동은 계좌, 허용 IP, 주문가능금액, Telegram admin, rollback guard, 당일 checklist를 모두 확인한 뒤에만 합니다.
 
-### 5. IPO 상장첫날 runner
+### 6. IPO 상장첫날 runner
 
 IPO runner는 스캘핑/스윙 threshold-chain과 분리된 별도 실주문 도구입니다. 당일 `configs/ipo_listing_day_YYYY-MM-DD.yaml`이 있어야만 자동 wrapper가 실행됩니다.
 
