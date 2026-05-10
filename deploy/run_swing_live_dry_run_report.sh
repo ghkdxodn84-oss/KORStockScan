@@ -41,6 +41,8 @@ write_status() {
   printf '  "lifecycle_audit_artifact": "%s",\n' "$PROJECT_DIR/data/report/swing_lifecycle_audit/swing_lifecycle_audit_${TARGET_DATE}.json" >> "$STATUS_PATH"
   printf '  "threshold_ai_review_artifact": "%s",\n' "$PROJECT_DIR/data/report/swing_threshold_ai_review/swing_threshold_ai_review_${TARGET_DATE}.json" >> "$STATUS_PATH"
   printf '  "improvement_automation_artifact": "%s",\n' "$PROJECT_DIR/data/report/swing_improvement_automation/swing_improvement_automation_${TARGET_DATE}.json" >> "$STATUS_PATH"
+  printf '  "runtime_approval_artifact": "%s",\n' "$PROJECT_DIR/data/report/swing_runtime_approval/swing_runtime_approval_${TARGET_DATE}.json" >> "$STATUS_PATH"
+  printf '  "runtime_approval_markdown_artifact": "%s",\n' "$PROJECT_DIR/data/report/swing_runtime_approval/swing_runtime_approval_${TARGET_DATE}.md" >> "$STATUS_PATH"
   printf '  "runtime_change": false\n' >> "$STATUS_PATH"
   printf '}\n' >> "$STATUS_PATH"
 }
@@ -75,9 +77,18 @@ rc="$selection_rc"
 if [[ "$selection_rc" -eq 0 && "$lifecycle_rc" -ne 0 ]]; then
   rc="$lifecycle_rc"
 fi
+if [[ "$selection_rc" -eq 0 && "$lifecycle_rc" -eq 0 ]]; then
+  runtime_approval_json="$PROJECT_DIR/data/report/swing_runtime_approval/swing_runtime_approval_${TARGET_DATE}.json"
+  if [[ ! -s "$runtime_approval_json" ]]; then
+    echo "runtime approval artifact missing after lifecycle audit: $runtime_approval_json"
+    rc=66
+  fi
+fi
 
 if [[ "$rc" -eq 0 ]]; then
   write_status "succeeded" 0 "completed"
+elif [[ "$rc" -eq 66 ]]; then
+  write_status "failed" "$rc" "runtime_approval_missing"
 else
   write_status "failed" "$rc" "report_command_failed"
 fi

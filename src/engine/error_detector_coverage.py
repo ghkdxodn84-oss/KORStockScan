@@ -41,9 +41,16 @@ REQUIRED_ARTIFACT_IDS: set[str] = {
     "swing_threshold_ai_review_report",
     "swing_improvement_automation_report",
     "swing_runtime_approval_report",
+    "scalping_pattern_lab_automation_report",
+    "swing_pattern_lab_automation_report",
+    "swing_live_dry_run_status",
     "swing_model_retrain_report",
     "swing_model_retrain_diagnosis",
     "swing_bull_period_ai_review",
+    "swing_model_retrain_status",
+    "swing_model_registry_current",
+    "swing_daily_simulation_status",
+    "swing_daily_simulation_report",
     "update_kospi_status",
 }
 

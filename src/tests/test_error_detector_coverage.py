@@ -25,6 +25,12 @@ def test_new_operational_feature_must_declare_detector_coverage():
     assert "system_metric_sampler" in REQUIRED_CRON_JOB_IDS
     assert "swing_lifecycle_audit_report" in REQUIRED_ARTIFACT_IDS
     assert "swing_improvement_automation_report" in REQUIRED_ARTIFACT_IDS
+    assert "swing_live_dry_run_status" in REQUIRED_ARTIFACT_IDS
+    assert "swing_daily_simulation_status" in REQUIRED_ARTIFACT_IDS
+    assert "swing_daily_simulation_report" in REQUIRED_ARTIFACT_IDS
+    assert "swing_pattern_lab_automation_report" in REQUIRED_ARTIFACT_IDS
+    assert "scalping_pattern_lab_automation_report" in REQUIRED_ARTIFACT_IDS
+    assert "swing_model_registry_current" in REQUIRED_ARTIFACT_IDS
     assert "update_kospi_status" in REQUIRED_ARTIFACT_IDS
     assert "main_loop" in REQUIRED_HEARTBEAT_COMPONENTS
     assert DETECTOR_COVERAGE_EXEMPTIONS["install_*"].startswith("installer/")

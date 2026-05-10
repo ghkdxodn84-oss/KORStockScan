@@ -247,3 +247,33 @@ def test_pipeline_trains_enabled_and_disabled_then_selects_better_candidate(tmp_
     assert report["promoted"] is True
     assert set(report["candidate_results"]) == {"enabled", "disabled"}
     assert report["meta_period"]["meta_end"] == "2026-05-05"
+    assert report["promotion_guard"] == {
+        "min_tradeoff_score": 0.72,
+        "sample_floor": 40,
+        "avg_net_floor_pct": 0.10,
+        "candidate_score": 0.80,
+        "sample_count": 50,
+        "avg_net_pct": 0.35,
+        "sample_floor_passed": True,
+        "avg_net_floor_passed": True,
+        "tradeoff_score_floor_passed": True,
+        "decision": "promoted",
+        "reason": "enabled_outperformed_disabled",
+        "bull_specialist_mode": "enabled",
+    }
+
+
+def test_swing_live_dry_run_wrapper_tracks_runtime_approval_artifact():
+    script = Path("deploy/run_swing_live_dry_run_report.sh").read_text(encoding="utf-8")
+
+    assert "runtime_approval_artifact" in script
+    assert "runtime_approval_markdown_artifact" in script
+    assert "runtime_approval_missing" in script
+    assert "swing_runtime_approval_${TARGET_DATE}.json" in script
+
+
+def test_auto_retrain_status_tracks_promotion_guard():
+    script = Path("auto_retrain_pipeline.sh").read_text(encoding="utf-8")
+
+    assert '"promotion_guard": %s' in script
+    assert 'payload.get("promotion_guard")' in script

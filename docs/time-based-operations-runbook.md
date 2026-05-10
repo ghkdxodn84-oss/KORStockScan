@@ -206,6 +206,7 @@
 | `15:45` | cron | `deploy/run_swing_live_dry_run_report.sh` | `data/report/swing_selection_funnel/swing_selection_funnel_YYYY-MM-DD.{json,md}`, `data/report/swing_lifecycle_audit/swing_lifecycle_audit_YYYY-MM-DD.{json,md}`, `data/report/swing_threshold_ai_review/swing_threshold_ai_review_YYYY-MM-DD.{json,md}`, `data/report/swing_improvement_automation/swing_improvement_automation_YYYY-MM-DD.{json,md}`, `data/report/swing_runtime_approval/swing_runtime_approval_YYYY-MM-DD.{json,md}`, status JSON, `logs/swing_live_dry_run_cron.log` | `swing_sim_*` stage, `actual_order_submitted=false`, `recommendation_db_load.db_load_skip_reason`, `scale_in_observation`, `ai_contract_metrics`, lifecycle axis coverage, swing threshold AI proposal-only status, `approval_required`/blocked reason 확인 | 스윙 dry-run/lifecycle 리포트 결과로 당일 runtime guard 완화 금지. approval request는 다음 장전 승인 입력일 뿐 즉시 적용 아님 |
 | `16:10` | cron | `deploy/run_threshold_cycle_postclose.sh` with OpenAI correction | threshold partition, `threshold_cycle_YYYY-MM-DD.json`, `statistical_action_weight`, `holding_exit_decision_matrix`, `threshold_cycle_cumulative`, postclose AI review, swing lifecycle automation, swing runtime approval, pattern lab automation, code improvement workorder, daily EV report | `logs/threshold_cycle_postclose_cron.log`, `threshold_cycle_ev_YYYY-MM-DD.md`, real/sim/combined split, swing/scalping automation freshness, `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md`를 확인하고 지연/누락은 `warning` 또는 `fail`로 분류 | postclose 실패 시 다음 장전 auto apply 입력이 부정확하므로 먼저 재실행/복구. sim/combined EV만 보고 broker execution 품질을 확정하지 않는다 |
 | `18:00` | cron | `deploy/run_tuning_monitoring_postclose.sh` | Parquet/DuckDB refresh status, `data/report/tuning_monitoring/status/*` | `canonical_runner=THRESHOLD_CYCLE_POSTCLOSE`인지 확인 | pattern lab 중복 실행 금지 |
+| `18:30~19:00` | checklist checkpoint | 날짜별 checklist의 스윙 실주문/floor 후속 판단 항목 | `swing_runtime_approval`, `swing_live_dry_run` status, `swing_daily_simulation`, `threshold_cycle_ev` | 실주문 전환은 `global dry-run 유지`/`one-share real canary approval request`/`hold_sample|freeze` 중 하나로만 닫고, floor 변경은 `approval_required|hold_sample|freeze`로 닫는다 | 전체 스윙 실주문 전환과 approval artifact 없는 floor env 작성 금지 |
 | `21:00` | cron | `update_kospi.py` | `logs/update_kospi.log`, `data/runtime/update_kospi_status/update_kospi_YYYY-MM-DD.json` | `[START]/[DONE]/[FAIL]` marker와 status JSON의 `status`, `failed_steps`, 최신 DB quote 상태 확인 | 매매 runtime과 무관한 데이터 갱신으로 취급. `completed_with_warnings`는 추천/리포트 후속 chain 실패 여부를 분리 확인 |
 | `22:30` | cron | `eod_analyzer.py` | `logs/eod_analyzer.log` | EOD 분석 실패 여부 확인 | threshold daily EV를 대체하지 않는다 |
 | `22:55` | cron | 봇 tmux 세션 종료 | tmux session 상태 | 장 종료 후 잔여 세션 확인 | 장중 세션 종료와 혼동 금지 |
@@ -396,9 +397,11 @@ ls -l data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_$(TZ=Asia/
 5. 스윙 postclose는 `recommendation_db_load`, `scale_in_observation`, `ai_contract_metrics`, `ofi_qi_summary`, `runtime_effect=false`, `allowed_runtime_apply=false`, `approval_requests`, `blocked_requests`를 확인한다.
 6. `swing_runtime_approval`에서 hard floor 통과 여부와 `tradeoff_score >=0.68` 요청을 확인한다. 요청이 생성되어도 approval artifact가 없으면 다음 장전 env 반영은 금지된다.
 7. DeepSeek 스윙 lab re-entry는 `run_manifest.json`의 `analysis_window.start == target_date == end`와 필수 JSON schema 유효성이 닫힌 경우에만 fresh로 본다. stale/range/malformed output은 warning만 남기고 order로 승격하지 않는다.
-8. 신규 code improvement order는 scalping/swing source를 병합해 자동으로 작업지시서로 변환된다. 사용자는 `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md`를 Codex 세션에 넣고 구현을 요청한다.
-9. 날짜별 checklist를 수정했다면 parser 검증 후 Project/Calendar 동기화 명령을 사용자에게 남긴다.
-10. OpenAI AI correction은 품질 우선 `gpt-5.5` 경로라 수 분 단위로 걸릴 수 있다. 2026-05-08 postclose 재측정 기준 `real 744.78s`가 소요됐고, `OPENAI_API_KEY_2`, `gpt-5.5`, `reasoning_effort=high`, `schema_name=threshold_ai_correction_v1`, `ai_status=parsed`로 완료됐다. 15분 이내 실행 중이면 `not_yet_due`, 15분 초과 미생성이면 cron log와 job 종료 여부를 확인해 `warning` 또는 `fail`로 분류한다. cron timeout은 이보다 짧게 잡지 않는다.
+8. 스윙 실주문 전환 checkpoint는 전체 live 전환이 아니라 최대 `swing_one_share_real_canary` 승인 요청 여부만 판단한다. 승인 artifact가 없으면 `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True`를 유지한다.
+9. 스윙 숫자 floor checkpoint는 `swing_model_floor` 후보를 `approval_required|hold_sample|freeze`로 닫는다. 사용자 approval artifact가 없으면 다음 장전 floor env를 쓰지 않는다.
+10. 신규 code improvement order는 scalping/swing source를 병합해 자동으로 작업지시서로 변환된다. 사용자는 `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md`를 Codex 세션에 넣고 구현을 요청한다.
+11. 날짜별 checklist를 수정했다면 parser 검증 후 Project/Calendar 동기화 명령을 사용자에게 남긴다.
+12. OpenAI AI correction은 품질 우선 `gpt-5.5` 경로라 수 분 단위로 걸릴 수 있다. 2026-05-08 postclose 재측정 기준 `real 744.78s`가 소요됐고, `OPENAI_API_KEY_2`, `gpt-5.5`, `reasoning_effort=high`, `schema_name=threshold_ai_correction_v1`, `ai_status=parsed`로 완료됐다. 15분 이내 실행 중이면 `not_yet_due`, 15분 초과 미생성이면 cron log와 job 종료 여부를 확인해 `warning` 또는 `fail`로 분류한다. cron timeout은 이보다 짧게 잡지 않는다.
 
 표준 확인 명령:
 
@@ -410,6 +413,8 @@ ls -l data/report/swing_lifecycle_audit/swing_lifecycle_audit_$(TZ=Asia/Seoul da
 ls -l data/report/swing_threshold_ai_review/swing_threshold_ai_review_$(TZ=Asia/Seoul date +%F).md
 ls -l data/report/swing_improvement_automation/swing_improvement_automation_$(TZ=Asia/Seoul date +%F).json
 ls -l data/report/swing_runtime_approval/swing_runtime_approval_$(TZ=Asia/Seoul date +%F).json
+ls -l data/report/swing_daily_simulation/swing_daily_simulation_$(TZ=Asia/Seoul date +%F).json
+ls -l data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_$(TZ=Asia/Seoul date +%F).json
 ls -l data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_$(TZ=Asia/Seoul date +%F).md
 ls -l docs/code-improvement-workorders/code_improvement_workorder_$(TZ=Asia/Seoul date +%F).md
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500

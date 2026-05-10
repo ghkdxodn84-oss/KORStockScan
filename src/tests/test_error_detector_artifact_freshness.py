@@ -173,3 +173,13 @@ class TestArtifactFreshnessDetector:
             result = detector.check()
             assert result.severity == "pass"
             assert result.details["test_status_json_content_status"] == "completed"
+
+    def test_swing_automation_artifacts_are_registered_with_status_guards(self):
+        registry = {str(item["id"]): item for item in ARTIFACT_REGISTRY}
+
+        assert registry["swing_live_dry_run_status"]["json_status_field"] == "status"
+        assert "succeeded" in registry["swing_live_dry_run_status"]["json_ok_values"]
+        assert registry["swing_daily_simulation_status"]["json_status_field"] == "status"
+        assert "swing_daily_simulation_{date}.json" in registry["swing_daily_simulation_report"]["path_template"]
+        assert "swing_pattern_lab_automation_{date}.json" in registry["swing_pattern_lab_automation_report"]["path_template"]
+        assert "current.json" in registry["swing_model_registry_current"]["path_template"]

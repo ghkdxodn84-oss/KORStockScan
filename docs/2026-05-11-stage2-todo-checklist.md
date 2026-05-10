@@ -26,7 +26,7 @@
 - Runbook 운영 확인은 [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md) `장중 확인 절차`와 `build_codex_daily_workorder --slot INTRADAY`의 `IntradayAutomationHealthCheckYYYYMMDD` 블록을 기준으로 본다.
 - 확인 범위: BUY/HOLD-EXIT Sentinel, intraday calibration, pipeline/threshold event append, 스윙 dry-run provenance. Sentinel/calibration 결과로 당일 threshold, provider routing, 스윙 주문 guard를 변경하지 않는다.
 
-## 장후 체크리스트 (16:00~18:30)
+## 장후 체크리스트 (16:00~19:00)
 
 - Runbook 운영 확인은 [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md) `장후 확인 절차`와 `build_codex_daily_workorder --slot POSTCLOSE`의 `PostcloseAutomationHealthCheckYYYYMMDD` 블록을 기준으로 본다.
 - 아래 체크박스는 runbook 반복 확인이 아니라 2026-05-11에 소유자가 필요한 구현/판정/재확인 작업만 남긴다.
@@ -167,3 +167,21 @@
   - 판정 기준: `run_manifest.json`의 `analysis_window.start == target_date == end`와 필수 output 3종 JSON/schema 유효성을 확인한다. fresh 조건 미충족 시 `deepseek_lab_available=false`, `swing_lab_source_order_count=0`, `code_improvement_order_count=0`이어야 한다.
   - 범위: DeepSeek finding은 fresh single-day 조건이 닫힌 경우에만 `design_family_candidate` 또는 report-only order로 재진입한다. stale/range/malformed output은 warning만 남기고 workorder order로 승격하지 않는다.
   - 다음 액션: fresh 조건이 닫히면 다음 `code_improvement_workorder_YYYY-MM-DD.md`에 source/stage/family가 보존되는지 확인한다. fresh가 아니면 warning과 artifact link만 daily EV에 남긴다.
+
+- [ ] `[SwingRealOrderTransitionDecision0511] 스윙 실주문 전환 다음 판단시점 고정` (`Due: 2026-05-11`, `Slot: POSTCLOSE`, `TimeWindow: 18:30~18:45`, `Track: ScalpingLogic`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md), [swing_lifecycle_audit.py](/home/ubuntu/KORStockScan/src/engine/swing_lifecycle_audit.py), [threshold_cycle_ev_report.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_ev_report.py), [swing_daily_simulation_report.py](/home/ubuntu/KORStockScan/src/engine/swing_daily_simulation_report.py)
+  - 판단 입력: `data/report/swing_runtime_approval/swing_runtime_approval_2026-05-11.json`, `data/report/swing_selection_funnel/status/swing_live_dry_run_2026-05-11.status.json`, `data/report/swing_daily_simulation/swing_daily_simulation_2026-05-11.json`, `data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-11.json`.
+  - 판정 기준: 결론은 `global dry-run 유지`, `one-share real canary approval request`, `hold_sample/freeze` 중 하나로만 남긴다. `swing_one_share_real_canary`는 broker execution 품질 수집용 phase0이며 전체 스윙 실주문 전환이 아니다.
+  - 유지 가드: 별도 2차 계획/승인 없이 `SWING_LIVE_ORDER_DRY_RUN_ENABLED=False` 또는 전체 스윙 실주문 허용으로 전환하지 않는다.
+
+- [ ] `[SwingNumericFloorAutoChangeDecision0511] 스윙 숫자 floor 자동 변경 다음 판단시점 고정` (`Due: 2026-05-11`, `Slot: POSTCLOSE`, `TimeWindow: 18:45~19:00`, `Track: ScalpingLogic`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md), [swing_lifecycle_audit.py](/home/ubuntu/KORStockScan/src/engine/swing_lifecycle_audit.py), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [threshold_cycle_ev_report.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_ev_report.py)
+  - 판단 입력: `swing_runtime_approval`의 `swing_model_floor` 후보, 추천 후보수, downside tail, fallback contamination, regime별 성과, same-stage owner conflict 여부.
+  - 판정 기준: 사용자 approval artifact 없이는 floor env를 쓰지 않고 `approval_required`, `hold_sample`, `freeze` 중 하나로 닫는다. 숫자 floor는 스윙 추천/selection 후보이며 intraday runtime mutation 대상이 아니다.
+  - 유지 가드: approval request만으로 `SWING_FLOOR_BULL`, `SWING_FLOOR_BEAR`를 다음 장전 runtime env에 쓰지 않는다.
+
+- [ ] `[ThresholdEnvAutoApplyPreopen0512] threshold env 자동 apply 다음 장전 확인` (`Due: 2026-05-12`, `Slot: PREOPEN`, `TimeWindow: 08:50~09:00`, `Track: RuntimeStability`)
+  - Source: [data/threshold_cycle/README.md](/home/ubuntu/KORStockScan/data/threshold_cycle/README.md), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_threshold_cycle_preopen.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_preopen.sh), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
+  - 판단 입력: 전일 `threshold_cycle_ev_2026-05-11.{json,md}`, `data/threshold_cycle/apply_plans/threshold_apply_2026-05-12.json`, `data/threshold_cycle/runtime_env/threshold_runtime_env_2026-05-12.{env,json}`, `src/run_bot.sh`의 runtime env source 로그.
+  - 판정 기준: `auto_bounded_live` guard를 통과한 family만 장전 runtime env로 반영됐는지 확인한다. blocked family는 `blocked_reason`, AI guard, same-stage owner conflict를 남기고 수동 env override를 하지 않는다.
+  - 유지 가드: 장중 runtime threshold mutation은 계속 금지한다. 스윙 approval artifact가 없는 `approval_required` 요청은 env apply 대상이 아니다.

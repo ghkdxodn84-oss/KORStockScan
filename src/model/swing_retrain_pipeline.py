@@ -418,6 +418,7 @@ def pipeline_paths(target_date: str) -> tuple[Path, Path]:
 
 
 def render_markdown(report: dict[str, Any]) -> str:
+    promotion_guard = report.get("promotion_guard") if isinstance(report.get("promotion_guard"), dict) else {}
     return "\n".join(
         [
             f"# Swing Model Retrain {report.get('target_date')}",
@@ -427,6 +428,9 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"- bull_specialist_mode: `{report.get('bull_specialist_mode')}`",
             f"- promoted: `{report.get('promoted')}`",
             f"- rollback_executed: `{report.get('rollback_executed')}`",
+            f"- promotion_guard.decision: `{promotion_guard.get('decision')}`",
+            f"- promotion_guard.candidate_score: `{promotion_guard.get('candidate_score')}`",
+            f"- promotion_guard.reason: `{promotion_guard.get('reason')}`",
             "- swing_live_order_dry_run_required: `true`",
             "",
         ]
@@ -527,6 +531,27 @@ def run_pipeline(
                 status = "passed_not_promoted"
                 promotion["blocked_reason"] = "auto_promote_false"
 
+    min_score = _safe_float(os.getenv("KORSTOCKSCAN_SWING_RETRAIN_MIN_SCORE"), 0.72)
+    sample_count = _safe_int(metrics.get("sample_count"), 0)
+    avg_net_pct = _safe_float(metrics.get("avg_net_pct"), 0.0)
+    candidate_score = _safe_float(metrics.get("tradeoff_score"), 0.0)
+    promotion_guard = {
+        "min_tradeoff_score": min_score,
+        "sample_floor": 40,
+        "avg_net_floor_pct": 0.10,
+        "candidate_score": candidate_score,
+        "sample_count": sample_count,
+        "avg_net_pct": avg_net_pct,
+        "sample_floor_passed": sample_count >= 40,
+        "avg_net_floor_passed": avg_net_pct >= 0.10,
+        "tradeoff_score_floor_passed": candidate_score >= min_score,
+        "decision": status,
+        "reason": promotion.get("blocked_reason")
+        or mode_decision.get("reason")
+        or ("retrain_not_required" if not bool(diagnosis.get("retrain_required")) else status),
+        "bull_specialist_mode": selected_mode,
+    }
+
     report = {
         "schema_version": 1,
         "report_type": "swing_model_retrain",
@@ -546,6 +571,7 @@ def run_pipeline(
         "candidate_results": candidate_results,
         "command_results": command_results,
         "metrics": metrics,
+        "promotion_guard": promotion_guard,
         "auto_promote": auto_promote,
         "promoted": promoted,
         "rollback_executed": rollback_executed,

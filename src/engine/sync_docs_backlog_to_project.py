@@ -234,6 +234,13 @@ def _due_date_from_checklist_path(path: Path) -> str:
     return m.group(1)
 
 
+def _due_date_from_checklist_item(item: str, fallback_due_date: str) -> str:
+    m = re.search(r"(?:^|[,(]\s*)Due:\s*(\d{4}-\d{2}-\d{2})(?:\s*[,)]|$)", item)
+    if not m:
+        return fallback_due_date
+    return m.group(1)
+
+
 def _extract_section_lines(text: str, heading_prefix: str) -> list[str]:
     lines = text.splitlines()
     start = -1
@@ -314,6 +321,7 @@ def parse_checklist_tasks() -> list[BacklogTask]:
             item = re.sub(r"`([^`]+)`", r"\1", item)
             if not item:
                 continue
+            item_due_date = _due_date_from_checklist_item(item, due_date)
             section_label = "체크박스 미완료"
             if current_section:
                 section_label = f"{current_section} / 체크박스 미완료"
@@ -323,7 +331,7 @@ def parse_checklist_tasks() -> list[BacklogTask]:
                     source=str(source_path),
                     section=section_label,
                     track=_checklist_track_from_source(source_path),
-                    due_date=due_date,
+                    due_date=item_due_date,
                 )
             )
     if not loaded_any:

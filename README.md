@@ -389,11 +389,13 @@ HTML 대시보드 경로는 `/`, `/dashboard`, `/daily-report`, `/entry-pipeline
 | `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_{intraday,postclose}.{json,md}` | AI correction proposal와 deterministic guard 결과 |
 | `data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_YYYY-MM-DD.{json,md}` | pattern lab 기반 improvement order 및 auto family 후보 |
 | `data/runtime/scalp_live_simulator_state.json` | 스캘핑 live simulator open sim 포지션 재시작 복원 상태 |
+| `data/report/swing_daily_simulation/swing_daily_simulation_YYYY-MM-DD.{json,md}` | 야간 DB 갱신 후 스윙 추천 후보의 runtime dry-run proxy 시뮬레이션 리포트 |
 | `data/report/swing_selection_funnel/swing_selection_funnel_YYYY-MM-DD.{json,md}` | 스윙 추천/DB/장중 진입 funnel raw vs unique 리포트 |
 | `data/report/swing_lifecycle_audit/swing_lifecycle_audit_YYYY-MM-DD.{json,md}` | 스윙 선정-진입-보유-추가매수-청산 lifecycle 관찰축 리포트 |
 | `data/report/swing_threshold_ai_review/swing_threshold_ai_review_YYYY-MM-DD.{json,md}` | 스윙 threshold/logic 후보에 대한 proposal-only AI review |
 | `data/report/swing_improvement_automation/swing_improvement_automation_YYYY-MM-DD.{json,md}` | 스윙 lifecycle 기반 improvement order 및 auto family 후보 |
 | `data/report/swing_runtime_approval/swing_runtime_approval_YYYY-MM-DD.{json,md}` | 스윙 EV trade-off 기반 approval_required 요청과 blocked reason |
+| `data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_YYYY-MM-DD.{json,md}` | DeepSeek 스윙 pattern lab fresh output을 report-only order로 정규화한 산출물 |
 | `data/report/swing_model_retrain/*_YYYY-MM-DD.{json,md}` | 스윙 ML 재학습 진단, 상승장 특화모델 기간 검토, 재학습/승격 결과 |
 | `data/model_registry/swing_v2/current.json` | 현재 승격된 스윙 ML v2 모델 manifest와 `bull_specialist_mode` |
 | `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md` | Codex 세션 입력용 code improvement 작업지시서 |
@@ -425,7 +427,7 @@ JSON/JSONL이 canonical data이며, 사람이 장후 판정에 바로 읽어야 
 | threshold POSTCLOSE | `deploy/run_threshold_cycle_postclose.sh` | compact backfill, postclose calibration/AI correction, swing lifecycle automation, pattern lab automation, code improvement workorder, daily EV report 생성 |
 | swing model retrain POSTCLOSE | `auto_retrain_pipeline.sh`, `deploy/install_swing_model_retrain_cron.sh` | 17:30 KST 스윙 ML v2 재학습 필요성 진단과 staging 재학습/평가/자동 artifact 승격. 실주문 전환 없음 |
 | tuning monitoring POSTCLOSE | `deploy/run_tuning_monitoring_postclose.sh` | Parquet/DuckDB refresh와 shadow diff. pattern lab은 기본 skip하고 `THRESHOLD_CYCLE_POSTCLOSE`를 canonical runner로 둠 |
-| nightly KOSPI update | `src/utils/update_kospi.py` | 21:00 KST 원천 DB 업데이트 후 status JSON을 남깁니다. Error Detector가 log marker와 `status` 값을 함께 확인합니다. |
+| nightly KOSPI update | `src/utils/update_kospi.py` | 21:00 KST 원천 DB 업데이트 후 status JSON을 남깁니다. 후속 스윙 추천/시뮬레이션 리포트는 별도 artifact freshness로 확인합니다. |
 | monitor snapshot | `deploy/run_monitor_snapshot_safe.sh`, `deploy/run_monitor_snapshot_incremental_cron.sh` | 장중/장후 snapshot 생성 |
 | system metric sampler | `deploy/run_system_metric_sampler_cron.sh` | 1분 단위 시스템 지표 |
 | system error detector | `deploy/run_error_detection.sh full` | 5분 단위 process/cron/log/artifact/resource/stale-lock 운영 감시 report 생성. detector 결과로 threshold/spread/order guard를 자동 변경하지 않음 |
@@ -435,6 +437,16 @@ JSON/JSONL이 canonical data이며, 사람이 장후 판정에 바로 읽어야 
 | Calendar sync | `.github/workflows/sync_project_to_google_calendar.yml` | GitHub Project 일정을 Google Calendar로 동기화 |
 
 신규 운영 기능을 추가할 때는 detector coverage도 같은 변경 세트에 포함합니다.
+
+### 후속 누락 방지 checkpoint
+
+아래 판단시점은 실행 권한이 아니라 review/approval gate다. 날짜별 checklist에 parser-friendly `Due/Slot/TimeWindow/Track` 항목으로 남겨 Project/Calendar 동기화 대상이 되게 한다.
+
+| checkpoint | 판단 입력 | 허용 결론 |
+| --- | --- | --- |
+| `SwingRealOrderTransitionDecision0511` | `swing_runtime_approval`, `swing_live_dry_run`, `swing_daily_simulation`, `threshold_cycle_ev` | global dry-run 유지, one-share real canary approval request, hold_sample/freeze |
+| `SwingNumericFloorAutoChangeDecision0511` | `swing_runtime_approval.swing_model_floor`, 추천 후보수, downside tail, fallback contamination, regime별 성과 | approval_required, hold_sample, freeze. 사용자 approval artifact 없이는 floor env 미작성 |
+| `ThresholdEnvAutoApplyPreopen0512` | 전일 `threshold_cycle_ev`, `threshold_apply`, `threshold_runtime_env_YYYY-MM-DD.env/json`, `src/run_bot.sh` source 여부 | `auto_bounded_live` guard 통과분만 장전 env 반영 확인. 장중 mutation 금지 |
 
 | 신규 기능 유형 | 필수 등록 |
 | --- | --- |

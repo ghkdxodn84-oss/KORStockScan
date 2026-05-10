@@ -13,6 +13,7 @@ STATUS_DIR="$PROJECT_DIR/data/report/swing_model_retrain/status"
 LOCK_ROOT="$PROJECT_DIR/tmp"
 LOG_PATH="$LOG_DIR/swing_model_retrain_${TARGET_DATE}.log"
 STATUS_PATH="$STATUS_DIR/swing_model_retrain_${TARGET_DATE}.status.json"
+REPORT_PATH="$PROJECT_DIR/data/report/swing_model_retrain/swing_model_retrain_${TARGET_DATE}.json"
 LOCK_DIR="$LOCK_ROOT/swing_model_retrain_${TARGET_DATE}.lock"
 STARTED_AT="$(TZ=Asia/Seoul date --iso-8601=seconds)"
 
@@ -24,7 +25,25 @@ write_status() {
   local exit_code="$2"
   local reason="$3"
   local finished_at
+  local promotion_guard_json
   finished_at="$(TZ=Asia/Seoul date --iso-8601=seconds)"
+  promotion_guard_json="{}"
+  if [[ -x "$VENV_PY" && -f "$REPORT_PATH" ]]; then
+    promotion_guard_json="$("$VENV_PY" - "$REPORT_PATH" <<'PY' || printf '{}'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    guard = payload.get("promotion_guard") or {}
+    print(json.dumps(guard, ensure_ascii=False, separators=(",", ":")))
+except Exception:
+    print("{}")
+PY
+)"
+  fi
   printf '{\n' > "$STATUS_PATH"
   printf '  "schema_version": 1,\n' >> "$STATUS_PATH"
   printf '  "report_type": "swing_model_retrain_status",\n' >> "$STATUS_PATH"
@@ -35,7 +54,8 @@ write_status() {
   printf '  "finished_at": "%s",\n' "$finished_at" >> "$STATUS_PATH"
   printf '  "exit_code": %s,\n' "$exit_code" >> "$STATUS_PATH"
   printf '  "log_path": "%s",\n' "$LOG_PATH" >> "$STATUS_PATH"
-  printf '  "json_artifact": "%s",\n' "$PROJECT_DIR/data/report/swing_model_retrain/swing_model_retrain_${TARGET_DATE}.json" >> "$STATUS_PATH"
+  printf '  "json_artifact": "%s",\n' "$REPORT_PATH" >> "$STATUS_PATH"
+  printf '  "promotion_guard": %s,\n' "$promotion_guard_json" >> "$STATUS_PATH"
   printf '  "runtime_change": "model_artifact_promote_only_if_guard_passed"\n' >> "$STATUS_PATH"
   printf '}\n' >> "$STATUS_PATH"
 }
