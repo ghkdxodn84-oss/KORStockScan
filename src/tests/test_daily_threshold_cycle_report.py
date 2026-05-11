@@ -609,6 +609,13 @@ def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates(
                 "budget_pass": 30,
                 "order_bundle_submitted": 10,
             },
+            "latency_guard_miss_ev_recovery": {
+                "evaluated_candidates": 10,
+                "avg_close_10m_pct": 1.2,
+                "performance_latency_block_events": 10,
+                "events_without_counterfactual": 0,
+                "next_action": "use_latency_block_ev_for_refined_guard_review",
+            },
             "bad_entry": {
                 "refined_candidate": 441,
                 "soft_stop_tail_sample": 20,
@@ -643,6 +650,8 @@ def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates(
     assert candidates["score65_74_recovery_probe"]["apply_mode"] == "efficient_tradeoff_canary_candidate"
     assert candidates["score65_74_recovery_probe"]["calibration_state"] == "adjust_up"
     assert candidates["score65_74_recovery_probe"]["source_metrics"]["partial_samples"] == 0
+    assert candidates["pre_submit_price_guard"]["source_metrics"]["events_without_counterfactual"] == 0
+    assert candidates["pre_submit_price_guard"]["source_metrics"]["next_action"] == "use_latency_block_ev_for_refined_guard_review"
     assert candidates["bad_entry_refined_canary"]["apply_mode"] == "efficient_tradeoff_canary_candidate"
     assert candidates["bad_entry_refined_canary"]["source_metrics"]["holding_flow_override_defer_exit"] == 67
     assert candidates["holding_exit_decision_matrix_advisory"]["calibration_state"] == "hold_no_edge"
@@ -1424,7 +1433,11 @@ def test_holding_exit_decision_matrix_artifact_contains_prompt_hints(tmp_path, m
     assert payload["hard_veto"]
     assert payload["entries"]
     assert "prompt_hint" in payload["entries"][0]
+    assert "counterfactual_coverage" in payload["entries"][0]
+    assert payload["counterfactual_coverage_summary"]["entry_count"] == len(payload["entries"])
+    assert "exit_only" in payload["counterfactual_coverage_summary"]["per_action_samples"]
     assert "Holding/Exit Decision Matrix" in markdown
+    assert "Counterfactual Coverage" in markdown
     assert "Prompt Hints" in markdown
 
 

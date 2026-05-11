@@ -21,3 +21,22 @@ def test_tuning_monitoring_wrapper_skips_pattern_labs_by_default():
     assert 'RUN_PATTERN_LABS="${TUNING_MONITORING_RUN_PATTERN_LABS:-false}"' in script
     assert 'canonical_runner=THRESHOLD_CYCLE_POSTCLOSE' in script
     assert 'if [[ "$RUN_PATTERN_LABS" == "1" || "$RUN_PATTERN_LABS" == "true" ]]' in script
+
+
+def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
+    script = Path("src/run_bot.sh").read_text(encoding="utf-8")
+
+    assert "wait_for_threshold_runtime_env" in script
+    assert "KORSTOCKSCAN_THRESHOLD_RUNTIME_ENV_REQUIRED" in script
+    assert "KORSTOCKSCAN_THRESHOLD_RUNTIME_ENV_BOOTSTRAP" in script
+    assert "./deploy/run_threshold_cycle_preopen.sh" in script
+    assert "threshold runtime env 미생성으로 봇 기동 중단" in script
+    assert script.index('wait_for_threshold_runtime_env "$THRESHOLD_RUNTIME_ENV"') < script.index("../.venv/bin/python bot_main.py")
+
+
+def test_preopen_wrapper_uses_lock_to_avoid_duplicate_bootstrap_run():
+    script = Path("deploy/run_threshold_cycle_preopen.sh").read_text(encoding="utf-8")
+
+    assert "threshold_cycle_preopen.lock" in script
+    assert "flock -n 9" in script
+    assert "threshold-cycle preopen already running" in script

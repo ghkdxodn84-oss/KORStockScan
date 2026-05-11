@@ -12,28 +12,27 @@
 - sim-only actions: `AVG_DOWN, PYRAMID, SCALE_IN`
 - scale-in real canary policy: `swing_scale_in_real_canary_phase0`
 - scale-in allowed actions: `PYRAMID, AVG_DOWN`
-- requested/blocked/approved: `0` / `13` / `0`
+- requested/blocked/approved: `2` / `11` / `0`
 
 ## Approval Requests
 
 | approval_id | family | stage | score | sample | target_env_keys |
 | --- | --- | --- | ---: | ---: | --- |
-| `-` | `none` | `-` | 0 | 0/0 | `-` |
+| `swing_runtime_approval:2026-05-11:swing_model_floor` | `swing_model_floor` | `selection` | 0.8907 | 3/3 | `SWING_FLOOR_BULL, SWING_FLOOR_BEAR` |
+| `swing_runtime_approval:2026-05-11:swing_gatekeeper_reject_cooldown` | `swing_gatekeeper_reject_cooldown` | `entry` | 0.8907 | 9/5 | `ML_GATEKEEPER_REJECT_COOLDOWN` |
 
 ## Blocked
 
 | family | state | score | reasons |
 | --- | --- | ---: | --- |
-| `swing_model_floor` | `freeze` | 0.8657 | `critical_instrumentation_gap, db_load_gap` |
-| `swing_selection_top_k` | `freeze` | 0.8657 | `critical_instrumentation_gap, db_load_gap` |
-| `swing_gatekeeper_accept_reject` | `freeze` | 0.8657 | `critical_instrumentation_gap, db_load_gap, runtime_family_guard_missing` |
-| `swing_gatekeeper_reject_cooldown` | `freeze` | 0.8657 | `critical_instrumentation_gap, db_load_gap` |
-| `swing_market_regime_sensitivity` | `freeze` | 0.8657 | `critical_instrumentation_gap, db_load_gap` |
-| `swing_pyramid_trigger` | `freeze` | 0.8657 | `critical_instrumentation_gap, db_load_gap, runtime_family_guard_missing` |
-| `swing_avg_down_eligibility` | `hold_sample` | 0.8557 | `family_sample_floor_not_met, critical_instrumentation_gap, db_load_gap, runtime_family_guard_missing` |
-| `swing_trailing_stop_time_stop` | `hold_sample` | 0.8457 | `family_sample_floor_not_met, critical_instrumentation_gap, db_load_gap, runtime_family_guard_missing` |
-| `swing_holding_flow_defer` | `freeze` | 0.8657 | `critical_instrumentation_gap, db_load_gap, runtime_family_guard_missing` |
-| `swing_entry_ofi_qi_execution_quality` | `hold_sample` | 0.8157 | `family_sample_floor_not_met, critical_instrumentation_gap, db_load_gap, runtime_family_guard_missing` |
-| `swing_scale_in_ofi_qi_confirmation` | `freeze` | 0.8657 | `critical_instrumentation_gap, db_load_gap, runtime_family_guard_missing` |
-| `swing_exit_ofi_qi_smoothing` | `freeze` | 0.8657 | `critical_instrumentation_gap, db_load_gap, runtime_family_guard_missing` |
-| `swing_scale_in_real_canary_phase0` | `freeze` | None | `pyramid_sample_floor_not_met, critical_instrumentation_gap, db_load_gap, post_add_outcome_field_missing, final_exit_return_missing, exit_only_delta_missing, post_add_mae_missing, critical_instrumentation_gap, db_load_gap, post_add_outcome_field_missing, final_exit_return_missing, exit_only_delta_missing, post_add_mae_missing` |
+| `swing_selection_top_k` | `freeze` | 0.8907 | `same_stage_owner_conflict:swing_model_floor` |
+| `swing_gatekeeper_accept_reject` | `freeze` | 0.8907 | `runtime_family_guard_missing` |
+| `swing_market_regime_sensitivity` | `freeze` | 0.8907 | `same_stage_owner_conflict:swing_gatekeeper_reject_cooldown` |
+| `swing_pyramid_trigger` | `freeze` | 0.8907 | `runtime_family_guard_missing` |
+| `swing_avg_down_eligibility` | `hold_sample` | 0.8807 | `family_sample_floor_not_met, runtime_family_guard_missing` |
+| `swing_trailing_stop_time_stop` | `hold_sample` | 0.8707 | `family_sample_floor_not_met, runtime_family_guard_missing` |
+| `swing_holding_flow_defer` | `freeze` | 0.8907 | `runtime_family_guard_missing` |
+| `swing_entry_ofi_qi_execution_quality` | `hold_sample` | 0.8407 | `family_sample_floor_not_met, runtime_family_guard_missing` |
+| `swing_scale_in_ofi_qi_confirmation` | `freeze` | 0.8907 | `runtime_family_guard_missing` |
+| `swing_exit_ofi_qi_smoothing` | `freeze` | 0.8907 | `runtime_family_guard_missing` |
+| `swing_scale_in_real_canary_phase0` | `freeze` | None | `pyramid_sample_floor_not_met, post_add_outcome_field_missing, final_exit_return_missing, exit_only_delta_missing, post_add_mae_missing, post_add_outcome_field_missing, final_exit_return_missing, exit_only_delta_missing, post_add_mae_missing` |

@@ -13,13 +13,13 @@
 - full_fill_completed_avg_profit_rate: `0.0`%
 
 ## Entry Funnel
-- budget_pass_to_submitted: `3` / `712` (`0.42`%)
-- latency pass/block: `3` / `709`
-- full/partial fill: `21` / `21`
+- budget_pass_to_submitted: `3` / `713` (`0.42`%)
+- latency pass/block: `3` / `710`
+- full/partial fill: `24` / `24`
 
 ## Holding Exit
 - holding_reviews: `373`
-- exit_signals: `46`
+- exit_signals: `50`
 - holding_review_ms_p95: `3198.0`
 
 ## Scalp Simulator
@@ -57,8 +57,8 @@
 ## Code Improvement Workorder
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-11.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-11.md`
-- selected_order_count: `12`
-- decision_counts: `{'implement_now': 3, 'attach_existing_family': 4, 'design_family_candidate': 4, 'defer_evidence': 5, 'reject': 4}`
+- selected_order_count: `19`
+- decision_counts: `{'implement_now': 2, 'attach_existing_family': 4, 'design_family_candidate': 4, 'defer_evidence': 5, 'reject': 4}`
 
 ## Approval Requests
 - none
@@ -68,9 +68,9 @@
 
 ## Calibration Decisions
 ## Code Improvement Top Orders
-- `order_swing_lifecycle_observation_coverage` decision=`implement_now` subsystem=`runtime_instrumentation`
-- `order_swing_recommendation_db_load_gap` decision=`implement_now` subsystem=`runtime_instrumentation`
 - `order_latency_guard_miss_ev_recovery` decision=`implement_now` subsystem=`runtime_instrumentation`
+- `order_holding_exit_decision_matrix_edge_counterfactual` decision=`implement_now` subsystem=`runtime_instrumentation`
+- `order_ai_threshold_miss_ev_recovery` decision=`attach_existing_family` subsystem=`entry_funnel`
 
 ## Pattern Lab Top Findings
 - `AI threshold miss EV recovery` route=`existing_family` family=`score65_74_recovery_probe`
@@ -81,12 +81,12 @@
 - `holding_flow_ofi_smoothing`: `hold` sample=`187/20`
 - `protect_trailing_smoothing`: `hold_sample` sample=`18/20`
 - `trailing_continuation`: `freeze` sample=`18/20`
-- `pre_submit_price_guard`: `freeze` sample=`709/20`
+- `pre_submit_price_guard`: `freeze` sample=`710/20`
 - `score65_74_recovery_probe`: `adjust_up` sample=`712/20`
 - `liquidity_gate_refined_candidate`: `hold` sample=`3285/20`
 - `overbought_gate_refined_candidate`: `hold` sample=`82230/20`
 - `bad_entry_refined_canary`: `hold_sample` sample=`565/10`
-- `holding_exit_decision_matrix_advisory`: `hold_no_edge` sample=`0/1`
+- `holding_exit_decision_matrix_advisory`: `hold_no_edge` sample=`14/1`
 - `scale_in_price_guard`: `hold` sample=`63/20`
 - `position_sizing_cap_release`: `hold_sample` sample=`49/30`
 

@@ -1,0 +1,402 @@
+"""Build a read-only daily summary for scalping and swing runtime decisions."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import re
+from datetime import date, datetime
+from pathlib import Path
+from typing import Any
+
+from src.engine.daily_threshold_cycle_report import REPORT_DIR
+from src.engine.threshold_cycle_ev_report import ev_report_paths
+
+
+SUMMARY_DIR = REPORT_DIR / "runtime_approval_summary"
+SWING_RUNTIME_APPROVAL_DIR = REPORT_DIR / "swing_runtime_approval"
+BOT_HISTORY_LOG = Path(__file__).resolve().parents[2] / "logs" / "bot_history.log"
+
+
+_REASON_LABELS = {
+    "critical_instrumentation_gap": "계측 gap",
+    "db_load_gap": "DB gap",
+    "runtime_family_guard_missing": "runtime guard 없음",
+    "family_sample_floor_not_met": "표본 부족",
+    "sample_floor_not_met": "표본 부족",
+    "pyramid_sample_floor_not_met": "PYRAMID 표본 부족",
+    "post_add_outcome_field_missing": "추가매수 outcome 누락",
+    "final_exit_return_missing": "최종 exit 수익률 누락",
+    "exit_only_delta_missing": "exit-only 비교 누락",
+    "post_add_mae_missing": "추가매수 MAE 누락",
+    "approval_artifact_missing": "approval artifact 없음",
+    "scale_in_real_canary_approval_artifact_missing": "scale-in approval artifact 없음",
+    "selected_auto_bounded_live": "auto_bounded_live 선택",
+    "hold": "유지",
+    "hold_no_edge": "edge 부족",
+    "freeze": "동결",
+}
+
+_FAMILY_DESCRIPTIONS = {
+    "soft_stop_whipsaw_confirmation": "soft stop 직후 반등 가능성이 큰 표본은 1회 확인 시간을 두고 성급한 청산을 줄이는 축",
+    "holding_flow_ofi_smoothing": "보유/청산 AI flow 결과에 OFI/QI 미시수급을 붙여 EXIT 확정 또는 보류를 다듬는 축",
+    "protect_trailing_smoothing": "protect/trailing 청산 후보에서 미시 반등 신호가 있으면 과조기 청산을 줄이는 축",
+    "trailing_continuation": "trailing 이후 추가 상승 여지가 큰 표본을 계속 보유할 수 있는지 보는 축",
+    "pre_submit_price_guard": "주문 제출 직전 quote stale, spread, passive probe 가격품질 문제를 막는 진입 안전축",
+    "score65_74_recovery_probe": "AI 점수 65~74 WAIT 구간 중 수급/가속 조건이 좋은 후보를 1주/소액 canary로 회수하는 축",
+    "liquidity_gate_refined_candidate": "유동성 gate가 막은 후보의 후행 EV를 보고 gate 완화/유지 필요성을 판단하는 축",
+    "overbought_gate_refined_candidate": "과열 gate가 막은 후보의 후행 EV를 보고 과열 차단 기준을 다듬는 축",
+    "bad_entry_refined_canary": "진입 직후 never-green/AI fade 위험이 큰 표본을 조기 정리할 수 있는지 보는 축",
+    "holding_exit_decision_matrix_advisory": "보유 중 가능한 행동(EXIT/HOLD/AVG_DOWN/PYRAMID)을 matrix 점수로 보조 판단하는 축",
+    "scale_in_price_guard": "추가매수 직전 best bid/defensive limit, spread, stale quote로 가격품질을 보장하는 축",
+    "position_sizing_cap_release": "신규/추가매수 1주 cap을 풀 수 있는지 EV와 downside 기준으로 보는 축",
+    "swing_model_floor": "스윙 추천 모델 floor 값을 올리거나 낮출 수 있는지 보는 선택 기준 축",
+    "swing_selection_top_k": "스윙 추천 후보 수(top-k)를 늘리거나 줄일 수 있는지 보는 선택 폭 축",
+    "swing_gatekeeper_accept_reject": "스윙 gatekeeper가 accept/reject한 후보의 후행 성과를 비교하는 진입 판단 축",
+    "swing_gatekeeper_reject_cooldown": "gatekeeper reject 이후 같은 후보를 다시 볼 cooldown 시간을 조정하는 축",
+    "swing_market_regime_sensitivity": "시장 regime에 따라 스윙 진입 민감도를 완화/강화할지 보는 축",
+    "swing_pyramid_trigger": "스윙 보유 후 불타기(PYRAMID) 조건이 유효한지 보는 추가매수 축",
+    "swing_avg_down_eligibility": "스윙 보유 후 물타기(AVG_DOWN) 조건이 유효한지 보는 추가매수 축",
+    "swing_trailing_stop_time_stop": "스윙 trailing/time stop 청산 조건의 적정성을 보는 exit 축",
+    "swing_holding_flow_defer": "스윙 보유/청산 AI가 청산 보류를 결정한 뒤 성과가 개선되는지 보는 축",
+    "swing_entry_ofi_qi_execution_quality": "스윙 진입 시 OFI/QI와 주문품질이 실제 성과에 도움이 되는지 보는 축",
+    "swing_scale_in_ofi_qi_confirmation": "스윙 추가매수 직전 OFI/QI 확인 신호가 유효한지 보는 축",
+    "swing_exit_ofi_qi_smoothing": "스윙 청산 직전 OFI/QI로 EXIT 확정/보류를 다듬을 수 있는지 보는 축",
+    "swing_scale_in_real_canary_phase0": "승인된 실제 스윙 보유분에 한해 PYRAMID/AVG_DOWN 1주 추가매수 canary를 열 수 있는지 보는 정책 축",
+}
+
+_BASELINE_APPLICATION = {
+    "holding_flow_ofi_smoothing": "기존 적용 유지: holding_flow_override 내부 OFI/QI postprocessor ON",
+    "scale_in_price_guard": "기존 적용 유지: 추가매수 가격품질 guard ON",
+    "pre_submit_price_guard": "기존 적용/검증 유지: 제출 직전 가격품질 guard 계열",
+    "holding_exit_decision_matrix_advisory": "관찰/리포트 only: advisory live 적용 아님",
+    "protect_trailing_smoothing": "관찰/리포트 only: protect/trailing live smoothing 미적용",
+    "trailing_continuation": "관찰/리포트 only: trailing 연장 live 미적용",
+    "bad_entry_refined_canary": "OFF/관찰 only: refined canary live 미적용",
+    "liquidity_gate_refined_candidate": "관찰/리포트 only: gate 기준 변경 없음",
+    "overbought_gate_refined_candidate": "관찰/리포트 only: gate 기준 변경 없음",
+    "position_sizing_cap_release": "미적용: 1주 cap 유지",
+    "swing_scale_in_real_canary_phase0": "미적용: approval artifact 없이는 실주문 추가매수 금지",
+}
+
+_STATE_INTERPRETATIONS = {
+    "adjust_up": "자동 반영 후보로 선택되면 PREOPEN env에 적용된다",
+    "adjust_down": "자동 반영 후보로 선택되면 PREOPEN env에 적용된다",
+    "hold": "현재 적용 상태와 값을 유지하고 추가 env 변경은 하지 않는다",
+    "hold_sample": "축은 유지/관찰하지만 표본 부족으로 runtime 변경은 하지 않는다",
+    "hold_no_edge": "명확한 edge가 없어 runtime 변경은 하지 않는다",
+    "freeze": "계측/DB/safety 문제로 runtime 변경을 금지한다",
+}
+
+
+def _description(family: str) -> str:
+    return _FAMILY_DESCRIPTIONS.get(family, "설명 미등록")
+
+
+def _current_application(family: str, state: str, selected: bool) -> str:
+    if selected:
+        return "PREOPEN env 적용: 당일 runtime 변경 대상"
+    baseline = _BASELINE_APPLICATION.get(family)
+    if baseline:
+        return baseline
+    if family.startswith("swing_"):
+        return "스윙 dry-run/probe 관찰: 실주문 변경 없음"
+    if state in {"hold_sample", "freeze", "hold_no_edge"}:
+        return "관찰/리포트 only: runtime 변경 없음"
+    return "기존 상태 유지: runtime 변경 없음"
+
+
+def _state_interpretation(state: str, selected: bool) -> str:
+    if selected:
+        return "threshold-cycle guard 통과로 당일 PREOPEN env에 반영됨"
+    return _STATE_INTERPRETATIONS.get(state, "판정 해석 미등록")
+
+
+def summary_paths(target_date: str) -> tuple[Path, Path]:
+    base = SUMMARY_DIR / f"runtime_approval_summary_{target_date}"
+    return base.with_suffix(".json"), base.with_suffix(".md")
+
+
+def _load_json(path: Path) -> dict[str, Any]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _format_score(value: Any) -> str:
+    if value is None:
+        return "없음"
+    try:
+        return f"{float(value):.4f}".rstrip("0").rstrip(".")
+    except (TypeError, ValueError):
+        text = str(value).strip()
+        return text or "없음"
+
+
+def _reason_text(reasons: Any) -> str:
+    if not isinstance(reasons, list):
+        return "-"
+    labels: list[str] = []
+    for reason in reasons:
+        text = str(reason or "").strip()
+        if not text:
+            continue
+        label = _REASON_LABELS.get(text, text)
+        if label not in labels:
+            labels.append(label)
+    return ", ".join(labels) if labels else "-"
+
+
+def _candidate_by_family(items: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(items, list):
+        return {}
+    return {
+        str(item.get("family") or ""): item
+        for item in items
+        if isinstance(item, dict) and item.get("family")
+    }
+
+
+def _scalping_rows(ev_report: dict[str, Any], calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
+    outcome = ev_report.get("calibration_outcome") if isinstance(ev_report.get("calibration_outcome"), dict) else {}
+    decisions = outcome.get("decisions") if isinstance(outcome.get("decisions"), list) else []
+    candidates = _candidate_by_family(calibration_report.get("calibration_candidates"))
+    selected = set((ev_report.get("runtime_apply") or {}).get("selected_families") or [])
+    rows: list[dict[str, Any]] = []
+    for item in decisions:
+        if not isinstance(item, dict):
+            continue
+        family = str(item.get("family") or "").strip()
+        if not family:
+            continue
+        candidate = candidates.get(family, {})
+        state = str(item.get("calibration_state") or "-")
+        reasons: list[str] = []
+        if state == "hold_sample":
+            reasons.append("family_sample_floor_not_met")
+        if state == "freeze":
+            reasons.append(str(item.get("calibration_reason") or "freeze"))
+        if family in selected:
+            reasons.append("selected_auto_bounded_live")
+        elif state in {"hold", "hold_no_edge"}:
+            reasons.append(str(item.get("calibration_reason") or state))
+        rows.append(
+            {
+                "domain": "scalping",
+                "family": family,
+                "description": _description(family),
+                "state": state,
+                "current_application": _current_application(family, state, family in selected),
+                "state_interpretation": _state_interpretation(state, family in selected),
+                "score": item.get("tradeoff_score", item.get("confidence", candidate.get("confidence"))),
+                "score_label": _format_score(
+                    item.get("tradeoff_score", item.get("confidence", candidate.get("confidence")))
+                ),
+                "sample": {
+                    "count": item.get("sample_count"),
+                    "floor": item.get("sample_floor"),
+                },
+                "reasons": reasons,
+                "reason_label": _reason_text(reasons),
+                "selected_auto_bounded_live": family in selected,
+            }
+        )
+    return rows
+
+
+def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates = _candidate_by_family(swing_report.get("candidates"))
+    rows: list[dict[str, Any]] = []
+    blocked = swing_report.get("blocked_requests") if isinstance(swing_report.get("blocked_requests"), list) else []
+    for item in blocked:
+        if not isinstance(item, dict):
+            continue
+        family = str(item.get("family") or "").strip()
+        if not family:
+            continue
+        candidate = candidates.get(family, {})
+        rows.append(
+            {
+                "domain": "swing",
+                "family": family,
+                "description": _description(family),
+                "state": item.get("calibration_state") or candidate.get("calibration_state") or "-",
+                "current_application": _current_application(
+                    family,
+                    str(item.get("calibration_state") or candidate.get("calibration_state") or "-"),
+                    False,
+                ),
+                "state_interpretation": _state_interpretation(
+                    str(item.get("calibration_state") or candidate.get("calibration_state") or "-"),
+                    False,
+                ),
+                "score": item.get("tradeoff_score"),
+                "score_label": _format_score(item.get("tradeoff_score")),
+                "sample": {
+                    "count": candidate.get("sample_count"),
+                    "floor": candidate.get("sample_floor"),
+                },
+                "reasons": list(item.get("block_reasons") or []),
+                "reason_label": _reason_text(item.get("block_reasons") or []),
+                "selected_auto_bounded_live": False,
+            }
+        )
+    return rows
+
+
+def _parse_kst_log_time(value: str) -> datetime | None:
+    try:
+        return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+    except ValueError:
+        return None
+
+
+def _bot_start_times(target_date: str) -> list[datetime]:
+    if not BOT_HISTORY_LOG.exists():
+        return []
+    pattern = re.compile(rf"^\[{re.escape(target_date)} (\d{{2}}:\d{{2}}:\d{{2}})\].*KORStockScan v")
+    starts: list[datetime] = []
+    try:
+        for line in BOT_HISTORY_LOG.read_text(encoding="utf-8", errors="ignore").splitlines():
+            match = pattern.search(line)
+            if not match:
+                continue
+            parsed = _parse_kst_log_time(f"{target_date} {match.group(1)}")
+            if parsed:
+                starts.append(parsed)
+    except OSError:
+        return []
+    return starts
+
+
+def _application_timing(target_date: str, ev_report: dict[str, Any]) -> dict[str, Any]:
+    runtime = ev_report.get("runtime_apply") if isinstance(ev_report.get("runtime_apply"), dict) else {}
+    runtime_env_file = runtime.get("runtime_env_file")
+    env_path = Path(str(runtime_env_file)) if runtime_env_file else None
+    env_generated_at = None
+    if env_path and env_path.exists():
+        env_generated_at = datetime.fromtimestamp(env_path.stat().st_mtime).isoformat(timespec="seconds")
+    starts = _bot_start_times(target_date)
+    env_dt = datetime.fromisoformat(env_generated_at) if env_generated_at else None
+    first_start = starts[0] if starts else None
+    first_after_env = next((item for item in starts if env_dt and item >= env_dt.replace(tzinfo=None)), None)
+    pre_env_boot_gap = bool(first_start and env_dt and first_start < env_dt.replace(tzinfo=None))
+    return {
+        "runtime_env_file": str(env_path) if env_path else None,
+        "env_generated_at": env_generated_at,
+        "first_bot_start_at": first_start.isoformat(timespec="seconds") if first_start else None,
+        "first_bot_start_after_env_at": first_after_env.isoformat(timespec="seconds") if first_after_env else None,
+        "pre_env_boot_gap": pre_env_boot_gap,
+    }
+
+
+def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
+    target_date = str(target_date).strip()
+    ev_json, _ = ev_report_paths(target_date)
+    swing_path = SWING_RUNTIME_APPROVAL_DIR / f"swing_runtime_approval_{target_date}.json"
+    ev_report = _load_json(ev_json)
+    swing_report = _load_json(swing_path)
+    sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
+    calibration_source = sources.get("calibration")
+    calibration_report = _load_json(Path(str(calibration_source))) if calibration_source else {}
+    scalping_rows = _scalping_rows(ev_report, calibration_report)
+    swing_rows = _swing_rows(swing_report)
+    report = {
+        "date": target_date,
+        "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "report_type": "runtime_approval_summary",
+        "purpose": "read_only_summary_only_no_runtime_mutation",
+        "runtime_mutation_allowed": False,
+        "sources": {
+            "threshold_cycle_ev": str(ev_json) if ev_json.exists() else None,
+            "swing_runtime_approval": str(swing_path) if swing_path.exists() else None,
+        },
+        "summary": {
+            "scalping_items": len(scalping_rows),
+            "scalping_selected_auto_bounded_live": sum(1 for row in scalping_rows if row["selected_auto_bounded_live"]),
+            "swing_blocked": len(swing_rows),
+            "swing_requested": int((swing_report.get("summary") or {}).get("requested") or 0)
+            if isinstance(swing_report.get("summary"), dict)
+            else 0,
+            "swing_approved": int((swing_report.get("summary") or {}).get("approved") or 0)
+            if isinstance(swing_report.get("summary"), dict)
+            else 0,
+        },
+        "application_timing": _application_timing(target_date, ev_report),
+        "scalping": scalping_rows,
+        "swing": swing_rows,
+        "warnings": [
+            message
+            for message in [
+                "threshold_cycle_ev_missing" if not ev_json.exists() else "",
+                "swing_runtime_approval_missing" if not swing_path.exists() else "",
+            ]
+            if message
+        ],
+    }
+    SUMMARY_DIR.mkdir(parents=True, exist_ok=True)
+    json_path, md_path = summary_paths(target_date)
+    json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+    md_path.write_text(render_runtime_approval_summary_markdown(report), encoding="utf-8")
+    return report
+
+
+def _render_rows(rows: list[dict[str, Any]]) -> list[str]:
+    lines = [
+        "| 항목 | 설명 | 현재 적용 | 상태 | 판정 해석 | 점수 | 차단/판정 사유 |",
+        "| --- | --- | --- | --- | --- | ---: | --- |",
+    ]
+    if not rows:
+        lines.append("| - | - | - | - | - | - | - |")
+        return lines
+    for row in rows:
+        lines.append(
+            f"| `{row.get('family')}` | {row.get('description') or '-'} | {row.get('current_application') or '-'} | `{row.get('state')}` | {row.get('state_interpretation') or '-'} | {row.get('score_label')} | {row.get('reason_label')} |"
+        )
+    return lines
+
+
+def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    timing = report.get("application_timing") if isinstance(report.get("application_timing"), dict) else {}
+    scalping = report.get("scalping") if isinstance(report.get("scalping"), list) else []
+    swing = report.get("swing") if isinstance(report.get("swing"), list) else []
+    lines = [
+        f"# Runtime Approval Summary - {report.get('date')}",
+        "",
+        "- 목적: 스캘핑 threshold-cycle 판정과 스윙 runtime approval 판정을 한 화면에서 보는 읽기 전용 요약이다.",
+        "- runtime_mutation_allowed: `False`",
+        f"- scalping_items/selected: `{summary.get('scalping_items')}` / `{summary.get('scalping_selected_auto_bounded_live')}`",
+        f"- swing_blocked/requested/approved: `{summary.get('swing_blocked')}` / `{summary.get('swing_requested')}` / `{summary.get('swing_approved')}`",
+        f"- env_generated_at: `{timing.get('env_generated_at') or '-'}`",
+        f"- first_bot_start_at: `{timing.get('first_bot_start_at') or '-'}`",
+        f"- first_bot_start_after_env_at: `{timing.get('first_bot_start_after_env_at') or '-'}`",
+        f"- pre_env_boot_gap: `{timing.get('pre_env_boot_gap')}`",
+        "",
+        "## Scalping",
+        *_render_rows(scalping),
+        "",
+        "## Swing",
+        *_render_rows(swing),
+    ]
+    warnings = report.get("warnings") if isinstance(report.get("warnings"), list) else []
+    if warnings:
+        lines.extend(["", "## Warnings"])
+        lines.extend(f"- `{warning}`" for warning in warnings)
+    lines.append("")
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Build read-only runtime approval summary report.")
+    parser.add_argument("--date", dest="target_date", default=date.today().isoformat())
+    args = parser.parse_args(argv)
+    report = build_runtime_approval_summary(args.target_date)
+    print(json.dumps(report, ensure_ascii=False))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

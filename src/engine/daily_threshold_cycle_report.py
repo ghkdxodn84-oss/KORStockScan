@@ -790,6 +790,11 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         for entry in matrix_entries
         if isinstance(entry, dict) and str(entry.get("recommended_bias") or "no_clear_edge") != "no_clear_edge"
     ]
+    matrix_counterfactual = (
+        decision_matrix.get("counterfactual_coverage_summary")
+        if isinstance(decision_matrix.get("counterfactual_coverage_summary"), dict)
+        else _summarize_matrix_counterfactual_coverage(matrix_entries)
+    )
     saw_policy_counts = stat_action.get("policy_counts") if isinstance(stat_action.get("policy_counts"), dict) else {}
     stat_action_sample = stat_action.get("sample") if isinstance(stat_action.get("sample"), dict) else {}
     blocker_outcomes = (
@@ -855,6 +860,25 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             "performance_latency_pass_events": _safe_int(perf_metrics.get("latency_pass_events"), 0) or 0,
             "quote_fresh_latency_pass_rate": _safe_float(perf_metrics.get("quote_fresh_latency_pass_rate"), None),
             "gatekeeper_eval_ms_p95": _safe_float(perf_metrics.get("gatekeeper_eval_ms_p95"), None),
+            "attribution_ready": bool(
+                (_safe_int(latency_outcome.get("evaluated_candidates"), 0) or 0) > 0
+                and _safe_float(latency_outcome.get("avg_close_10m_pct"), None) is not None
+            ),
+            "attribution_gap": bool(
+                (_safe_int(perf_metrics.get("latency_block_events"), 0) or 0)
+                > (_safe_int(latency_outcome.get("evaluated_candidates"), 0) or 0)
+            ),
+            "events_without_counterfactual": max(
+                0,
+                (_safe_int(perf_metrics.get("latency_block_events"), 0) or 0)
+                - (_safe_int(latency_outcome.get("evaluated_candidates"), 0) or 0),
+            ),
+            "next_action": (
+                "backfill_latency_block_counterfactual_join"
+                if (_safe_int(perf_metrics.get("latency_block_events"), 0) or 0)
+                > (_safe_int(latency_outcome.get("evaluated_candidates"), 0) or 0)
+                else "use_latency_block_ev_for_refined_guard_review"
+            ),
         },
         "liquidity_gate_refined_candidate": {
             "evaluated_candidates": _safe_int(liquidity_outcome.get("evaluated_candidates"), 0) or 0,
@@ -984,6 +1008,15 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             )
             or 0,
             "saw_insufficient_sample": _safe_int(saw_policy_counts.get("insufficient_sample"), 0) or 0,
+            "counterfactual_entry_count": _safe_int(matrix_counterfactual.get("entry_count"), 0) or 0,
+            "counterfactual_ready_count": _safe_int(matrix_counterfactual.get("ready_count"), 0) or 0,
+            "counterfactual_gap_count": _safe_int(matrix_counterfactual.get("gap_count"), 0) or 0,
+            "counterfactual_ready_rate": _safe_float(matrix_counterfactual.get("ready_rate"), None),
+            "counterfactual_per_action_samples": (
+                matrix_counterfactual.get("per_action_samples")
+                if isinstance(matrix_counterfactual.get("per_action_samples"), dict)
+                else {}
+            ),
             "excluded_reports": {},
         },
         "scale_in_price_guard": {
@@ -3289,6 +3322,14 @@ def _build_report_source_families(report_source_context: dict | None) -> list[di
                 )
                 or 0,
                 "saw_insufficient_sample": _safe_int(decision_support.get("saw_insufficient_sample"), 0) or 0,
+                "counterfactual_entry_count": _safe_int(decision_support.get("counterfactual_entry_count"), 0) or 0,
+                "counterfactual_ready_count": _safe_int(decision_support.get("counterfactual_ready_count"), 0) or 0,
+                "counterfactual_gap_count": _safe_int(decision_support.get("counterfactual_gap_count"), 0) or 0,
+                "counterfactual_per_action_samples": (
+                    decision_support.get("counterfactual_per_action_samples")
+                    if isinstance(decision_support.get("counterfactual_per_action_samples"), dict)
+                    else {}
+                ),
             },
             "apply_ready": sample_ready,
             "current": {
@@ -3506,10 +3547,13 @@ def _calibration_state_for_family(
         family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
         non_clear_edge = _safe_int(family_sample.get("matrix_non_clear_edge"), 0) or 0
         candidate_weight_source = _safe_int(family_sample.get("saw_candidate_weight_source"), 0) or 0
+        counterfactual_gap_count = _safe_int(family_sample.get("counterfactual_gap_count"), 0) or 0
         if non_clear_edge <= 0:
             return ("hold_no_edge", "ADM/SAW matrix가 전부 no_clear_edge라 최소 edge 부재; live AI 응답 변경 없음")
         if candidate_weight_source <= 0:
             return ("hold_sample", "SAW candidate_weight_source bucket이 없어 advisory canary 후보 유지")
+        if counterfactual_gap_count > 0:
+            return ("hold_sample", "ADM action별 exit_only/avg_down/pyramid counterfactual coverage가 닫히지 않음")
     if output_family == "score65_74_recovery_probe":
         family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
         avg_ev = _safe_float(source_metrics.get("score65_74_avg_expected_ev_pct"), None)
@@ -4608,6 +4652,68 @@ def _best_action_row(bucket: dict) -> dict:
     return {}
 
 
+MATRIX_COUNTERFACTUAL_ACTIONS = ("exit_only", "avg_down_wait", "pyramid_wait")
+
+
+def _matrix_action_counterfactual_coverage(row: dict) -> dict:
+    actions = row.get("actions") if isinstance(row.get("actions"), list) else []
+    by_action = {
+        str(action.get("action")): action
+        for action in actions
+        if isinstance(action, dict) and action.get("action") not in (None, "")
+    }
+    action_metrics: dict[str, dict] = {}
+    present: list[str] = []
+    missing: list[str] = []
+    for action_name in MATRIX_COUNTERFACTUAL_ACTIONS:
+        action = by_action.get(action_name) or {}
+        sample = _safe_int(action.get("sample"), 0) or 0
+        metric = {
+            "sample": sample,
+            "avg_profit_rate": _safe_float(action.get("avg_profit_rate"), None),
+            "loss_rate": _safe_float(action.get("loss_rate"), None),
+            "confidence_adjusted_score": _safe_float(action.get("confidence_adjusted_score"), None),
+        }
+        action_metrics[action_name] = metric
+        if sample > 0:
+            present.append(action_name)
+        else:
+            missing.append(action_name)
+    return {
+        "required_actions": list(MATRIX_COUNTERFACTUAL_ACTIONS),
+        "actions_present": present,
+        "missing_actions": missing,
+        "ready": not missing,
+        "ready_action_count": len(present),
+        "required_action_count": len(MATRIX_COUNTERFACTUAL_ACTIONS),
+        "action_metrics": action_metrics,
+    }
+
+
+def _summarize_matrix_counterfactual_coverage(entries: list[dict]) -> dict:
+    per_action_samples = {action: 0 for action in MATRIX_COUNTERFACTUAL_ACTIONS}
+    ready_count = 0
+    for entry in entries:
+        coverage = entry.get("counterfactual_coverage") if isinstance(entry, dict) else {}
+        if not isinstance(coverage, dict):
+            continue
+        if bool(coverage.get("ready")):
+            ready_count += 1
+        action_metrics = coverage.get("action_metrics") if isinstance(coverage.get("action_metrics"), dict) else {}
+        for action_name in MATRIX_COUNTERFACTUAL_ACTIONS:
+            metric = action_metrics.get(action_name) if isinstance(action_metrics.get(action_name), dict) else {}
+            per_action_samples[action_name] += _safe_int(metric.get("sample"), 0) or 0
+    entry_count = len(entries)
+    return {
+        "entry_count": int(entry_count),
+        "ready_count": int(ready_count),
+        "gap_count": int(max(0, entry_count - ready_count)),
+        "ready_rate": round(ready_count / entry_count, 4) if entry_count else None,
+        "per_action_samples": per_action_samples,
+        "required_actions": list(MATRIX_COUNTERFACTUAL_ACTIONS),
+    }
+
+
 def _render_bucket_markdown(title: str, rows: list[dict]) -> list[str]:
     lines = [f"## {title}", ""]
     if not rows:
@@ -4828,6 +4934,7 @@ def build_holding_exit_decision_matrix(report: dict) -> dict:
                 continue
             best = _best_action_row(row)
             bias = _recommended_bias_for_bucket(row)
+            counterfactual_coverage = _matrix_action_counterfactual_coverage(row)
             entries.append(
                 {
                     "axis": axis,
@@ -4839,9 +4946,11 @@ def build_holding_exit_decision_matrix(report: dict) -> dict:
                     "loss_rate": best.get("loss_rate"),
                     "downside_p10_profit_rate": best.get("downside_p10_profit_rate"),
                     "policy_hint": row.get("policy_hint"),
+                    "counterfactual_coverage": counterfactual_coverage,
                     "prompt_hint": _prompt_hint_for_matrix_entry(axis, row, bias),
                 }
             )
+    coverage_summary = _summarize_matrix_counterfactual_coverage(entries)
     return {
         "matrix_version": f"holding_exit_decision_matrix_v1_{target_date}",
         "source_report": str(report_path_for_date(target_date)),
@@ -4857,6 +4966,7 @@ def build_holding_exit_decision_matrix(report: dict) -> dict:
             "post_add_eval_exclusion",
         ],
         "entries": entries,
+        "counterfactual_coverage_summary": coverage_summary,
         "notes": [
             "장중 self-updating 금지: 장후 산정 matrix를 다음 장전 로드하고 장중에는 immutable context로만 사용한다.",
             "AI 점수를 직접 덮어쓰지 않는다. recommended_bias가 no_clear_edge가 아닌 bucket만 advisory canary 후보로 검증한다.",
@@ -4879,16 +4989,34 @@ def render_holding_exit_decision_matrix_markdown(matrix: dict) -> str:
     ]
     for item in matrix.get("hard_veto") or []:
         lines.append(f"- `{item}`")
+    coverage_summary = (
+        matrix.get("counterfactual_coverage_summary")
+        if isinstance(matrix.get("counterfactual_coverage_summary"), dict)
+        else {}
+    )
+    lines.extend(
+        [
+            "",
+            "## Counterfactual Coverage",
+            "",
+            f"- ready_count: `{_markdown_value(coverage_summary.get('ready_count'))}` / "
+            f"`{_markdown_value(coverage_summary.get('entry_count'))}`",
+            f"- ready_rate: `{_markdown_value(coverage_summary.get('ready_rate'))}`",
+            f"- per_action_samples: `{coverage_summary.get('per_action_samples') or {}}`",
+            "",
+        ]
+    )
     lines.extend(
         [
             "",
             "## Matrix Entries",
             "",
-            "| axis | bucket | bias | score | edge | sample | loss_rate | policy |",
-            "| --- | --- | --- | ---: | ---: | ---: | ---: | --- |",
+            "| axis | bucket | bias | score | edge | sample | loss_rate | cf_ready | missing_actions | policy |",
+            "| --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | --- |",
         ]
     )
     for entry in matrix.get("entries") or []:
+        coverage = entry.get("counterfactual_coverage") if isinstance(entry.get("counterfactual_coverage"), dict) else {}
         lines.append(
             "| "
             + " | ".join(
@@ -4900,6 +5028,8 @@ def render_holding_exit_decision_matrix_markdown(matrix: dict) -> str:
                     _markdown_value(entry.get("edge_margin")),
                     _markdown_value(entry.get("sample")),
                     _markdown_value(entry.get("loss_rate")),
+                    _markdown_value(coverage.get("ready")),
+                    ",".join(str(item) for item in coverage.get("missing_actions") or []) or "-",
                     _markdown_value(entry.get("policy_hint")),
                 ]
             )

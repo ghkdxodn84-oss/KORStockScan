@@ -32,8 +32,9 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 | Holding/Exit Decision Matrix | `data/report/holding_exit_decision_matrix/holding_exit_decision_matrix_YYYY-MM-DD.md` | `src.engine.daily_threshold_cycle_report` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | 2026-04-30, 2026-05-01 생성 확인 |
 | Threshold Cycle AI Review | `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_{intraday,postclose}.md` | `src.engine.daily_threshold_cycle_report` | threshold-cycle intraday/postclose cron | AI correction proposal + deterministic guard 결과 |
 | Scalping Pattern Lab Automation | `data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_YYYY-MM-DD.md` | `src.engine.scalping_pattern_lab_automation` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | Gemini/Claude pattern lab의 improvement order/family candidate 요약. runtime/code 직접 변경 없음 |
-| Code Improvement Workorder | `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md` | `src.engine.build_code_improvement_workorder` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | Codex 세션 입력용 구현 작업지시서. 사용자가 이 문서를 Codex에 넣어 구현 요청 |
+| Code Improvement Workorder | `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md` | `src.engine.build_code_improvement_workorder` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | Codex 세션 입력용 구현 작업지시서. `generation_id`, `source_hash`, `lineage` diff로 같은 날짜 재생성/2-pass 구현 여부를 추적 |
 | Threshold Cycle Daily EV | `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.md` | `src.engine.threshold_cycle_ev_report` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | 무인 threshold apply 이후 제출 기준 리포트 |
+| Runtime Approval Summary | `data/report/runtime_approval_summary/runtime_approval_summary_YYYY-MM-DD.md` | `src.engine.runtime_approval_summary` | `deploy/run_threshold_cycle_postclose.sh` 장후 실행 | 스캘핑 threshold-cycle 판정과 스윙 runtime approval을 합친 읽기 전용 요약. runtime 변경 권한 없음 |
 
 ## 비정기/legacy Markdown
 
@@ -62,8 +63,9 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 | Threshold Cycle Calibration | `data/report/threshold_cycle_calibration/threshold_cycle_calibration_YYYY-MM-DD_{intraday,postclose}.json` | `src.engine.daily_threshold_cycle_report` | 없음. 장중/장후 2회 자동 calibration artifact |
 | Threshold Cycle AI Review | `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_{intraday,postclose}.json` | `src.engine.daily_threshold_cycle_report` | `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_{intraday,postclose}.md` |
 | Scalping Pattern Lab Automation | `data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_YYYY-MM-DD.json` | `src.engine.scalping_pattern_lab_automation` | `data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_YYYY-MM-DD.md` |
-| Code Improvement Workorder | `data/report/code_improvement_workorder/code_improvement_workorder_YYYY-MM-DD.json` | `src.engine.build_code_improvement_workorder` | `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md` |
+| Code Improvement Workorder | `data/report/code_improvement_workorder/code_improvement_workorder_YYYY-MM-DD.json` | `src.engine.build_code_improvement_workorder` | `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md`, `generation_id/source_hash/lineage` 포함 |
 | Threshold Cycle Daily EV | `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.json` | `src.engine.threshold_cycle_ev_report` | `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.md` |
+| Runtime Approval Summary | `data/report/runtime_approval_summary/runtime_approval_summary_YYYY-MM-DD.json` | `src.engine.runtime_approval_summary` | `data/report/runtime_approval_summary/runtime_approval_summary_YYYY-MM-DD.md` |
 | Cumulative Threshold Cycle Report | `data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_YYYY-MM-DD.json` | `src.engine.daily_threshold_cycle_report` | `data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_YYYY-MM-DD.md` |
 | Threshold Compact Events | `data/threshold_cycle/date=YYYY-MM-DD/family=*/part-*.jsonl`, `data/threshold_cycle/threshold_events_YYYY-MM-DD.jsonl` | `src.engine.backfill_threshold_cycle_events` | 없음 |
 | Pipeline Events | `data/pipeline_events/pipeline_events_YYYY-MM-DD.jsonl` | runtime pipeline event writer | 없음 |

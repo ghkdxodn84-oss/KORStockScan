@@ -4,7 +4,7 @@
 - recommendation_rows: `23` / live `23` / diagnostic `0`
 - recommendation_sources: `{'recommendation_history': 20, 'daily_recommendations_v2_csv': 3}`
 - db_recommendation_rows: `20`
-- source_signal_dates: `['2026-05-08', '2026-05-11']`
+- source_signal_dates: `['2026-05-11']`
 - simulated_count: `23`
 - closed_count: `0`
 - planned_or_open_count: `23`
@@ -40,8 +40,8 @@
 
 | stage | raw | unique_records | examples |
 | --- | ---: | ---: | --- |
-| `blocked_swing_gap` | 7192 | 4 | 삼성물산(028260), 삼성생명(032830), 삼성물산(028260), 삼성생명(032830), 삼성물산(028260) |
-| `blocked_gatekeeper_reject` | 64 | 9 | 코리안리(003690), 하나금융지주(086790), LG(003550), 이노션(214320), 삼양식품(003230) |
+| `blocked_swing_gap` | 17801 | 4 | 삼성물산(028260), 삼성생명(032830), 삼성물산(028260), 삼성생명(032830), 삼성물산(028260) |
+| `blocked_gatekeeper_reject` | 73 | 9 | 코리안리(003690), 하나금융지주(086790), LG(003550), 이노션(214320), 삼양식품(003230) |
 
 ## Simulated Trades
 
@@ -57,16 +57,16 @@
 | `005830` | DB손해보험 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `006040` | 동원산업 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `008770` | 호텔신라 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `011690` | 와이투솔루션 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
+| `010690` | 화신 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `011780` | 금호석유화학 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `015360` | INVENI | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `028260` | 삼성물산 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `032830` | 삼성생명 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `036460` | 한국가스공사 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
+| `037270` | YG PLUS | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `066570` | LG전자 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `078930` | GS | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `086790` | 하나금융지주 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
-| `092200` | 디아이씨 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `214320` | 이노션 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `267260` | HD현대일렉트릭 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
 | `373220` | LG에너지솔루션 | `recommendation_history` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |
+| `950210` | 프레스티지바이오파마 | `daily_recommendations_v2_csv` | `PENDING_ENTRY` | `WAITING_FOR_NEXT_SESSION_QUOTE` | 0 |  |  |  |  |

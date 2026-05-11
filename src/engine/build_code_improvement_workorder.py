@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 from dataclasses import dataclass
@@ -48,6 +49,67 @@ def _load_json(path: Path) -> dict[str, Any]:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _file_fingerprint(path: Path, label: str) -> dict[str, Any]:
+    exists = path.exists()
+    payload = b""
+    if exists:
+        try:
+            payload = path.read_bytes()
+        except OSError:
+            payload = b""
+    stat = path.stat() if exists else None
+    return {
+        "label": label,
+        "path": str(path),
+        "exists": bool(exists),
+        "size_bytes": int(stat.st_size) if stat else 0,
+        "mtime_ns": int(stat.st_mtime_ns) if stat else None,
+        "sha256": hashlib.sha256(payload).hexdigest() if exists else None,
+    }
+
+
+def _source_fingerprint(source_paths: dict[str, Path]) -> dict[str, Any]:
+    files = [_file_fingerprint(path, label) for label, path in sorted(source_paths.items())]
+    hash_input = json.dumps(files, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    source_hash = hashlib.sha256(hash_input).hexdigest()
+    return {
+        "source_hash": source_hash,
+        "generation_id": source_hash[:12],
+        "files": files,
+    }
+
+
+def _previous_workorder_lineage(previous_report: dict[str, Any], current_orders: list[dict[str, Any]]) -> dict[str, Any]:
+    previous_orders = previous_report.get("orders") if isinstance(previous_report.get("orders"), list) else []
+    previous_by_id = {
+        str(order.get("order_id")): order
+        for order in previous_orders
+        if isinstance(order, dict) and order.get("order_id") not in (None, "")
+    }
+    current_by_id = {
+        str(order.get("order_id")): order
+        for order in current_orders
+        if isinstance(order, dict) and order.get("order_id") not in (None, "")
+    }
+    previous_ids = set(previous_by_id)
+    current_ids = set(current_by_id)
+    decision_changed = sorted(
+        order_id
+        for order_id in previous_ids & current_ids
+        if previous_by_id[order_id].get("decision") != current_by_id[order_id].get("decision")
+    )
+    return {
+        "previous_exists": bool(previous_report),
+        "previous_generation_id": previous_report.get("generation_id"),
+        "previous_source_hash": previous_report.get("source_hash"),
+        "previous_generated_at": previous_report.get("generated_at"),
+        "new_order_ids": sorted(current_ids - previous_ids),
+        "removed_order_ids": sorted(previous_ids - current_ids),
+        "unchanged_order_ids": sorted(current_ids & previous_ids),
+        "decision_changed_order_ids": decision_changed,
+    }
 
 
 def _safe_int(value: Any, default: int = 0) -> int:
@@ -234,8 +296,56 @@ def _sort_classified(items: list[ClassifiedOrder]) -> list[ClassifiedOrder]:
     )
 
 
+def _threshold_ev_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, Any]]:
+    outcome = ev_report.get("calibration_outcome") if isinstance(ev_report.get("calibration_outcome"), dict) else {}
+    decisions = outcome.get("decisions") if isinstance(outcome.get("decisions"), list) else []
+    orders: list[dict[str, Any]] = []
+    for item in decisions:
+        if not isinstance(item, dict):
+            continue
+        family = str(item.get("family") or "").strip()
+        state = str(item.get("calibration_state") or "").strip()
+        if family != "holding_exit_decision_matrix_advisory" or state != "hold_no_edge":
+            continue
+        orders.append(
+            {
+                "order_id": "order_holding_exit_decision_matrix_edge_counterfactual",
+                "title": "holding exit decision matrix edge counterfactual coverage",
+                "source_report_type": "threshold_cycle_ev",
+                "lifecycle_stage": "holding_exit",
+                "target_subsystem": "runtime_instrumentation",
+                "route": "instrumentation_order",
+                "mapped_family": family,
+                "threshold_family": family,
+                "improvement_type": "instrumentation",
+                "confidence": "consensus",
+                "priority": 4,
+                "runtime_effect": False,
+                "expected_ev_effect": "Break hold_no_edge by separating exit_only/hold_defer/avg_down/pyramid counterfactual outcomes.",
+                "evidence": [
+                    "calibration_state=hold_no_edge",
+                    f"sample_count={item.get('sample_count')}",
+                    f"sample_floor={item.get('sample_floor')}",
+                ],
+                "next_postclose_metric": "holding_exit_decision_matrix_advisory should report per-action edge buckets, non_no_clear_edge_count, and counterfactual coverage.",
+                "files_likely_touched": [
+                    "src/engine/daily_threshold_cycle_report.py",
+                    "src/engine/holding_exit_decision_matrix.py",
+                    "src/engine/statistical_action_weight.py",
+                ],
+                "acceptance_tests": [
+                    "pytest holding exit decision matrix/report tests",
+                    "threshold EV report includes per-action counterfactual coverage",
+                ],
+            }
+        )
+    return orders
+
+
 def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) -> dict[str, Any]:
     target_date = str(target_date).strip()
+    json_path, md_path = code_improvement_workorder_paths(target_date)
+    previous_report = _load_json(json_path)
     source_path = automation_report_path(target_date)
     automation = _load_json(source_path)
     swing_source_path = swing_automation_report_path(target_date)
@@ -244,6 +354,14 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     swing_lab_automation = _load_json(swing_lab_source_path)
     ev_path = threshold_ev_report_path(target_date)
     ev_report = _load_json(ev_path)
+    source_fingerprint = _source_fingerprint(
+        {
+            "pattern_lab_automation": source_path,
+            "swing_improvement_automation": swing_source_path,
+            "swing_pattern_lab_automation": swing_lab_source_path,
+            "threshold_cycle_ev": ev_path,
+        }
+    )
     finding_by_order_id, finding_by_title_slug = _finding_maps(automation)
     swing_finding_by_order_id, swing_finding_by_title_slug = _finding_maps(swing_automation)
     swing_lab_finding_by_order_id, swing_lab_finding_by_title_slug = _finding_maps(swing_lab_automation)
@@ -267,7 +385,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         for item in (swing_lab_automation.get("code_improvement_orders") or [])
         if isinstance(item, dict)
     ]
-    orders = [*scalping_orders, *swing_orders, *swing_lab_orders]
+    threshold_ev_orders = _threshold_ev_followup_orders(ev_report)
+    orders = [*scalping_orders, *swing_orders, *swing_lab_orders, *threshold_ev_orders]
     seen_keys: set[tuple[str, str, str]] = set()
     deduped_orders: list[dict[str, Any]] = []
     collision_warnings: list[str] = []
@@ -298,6 +417,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         "schema_version": WORKORDER_SCHEMA_VERSION,
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        "generation_id": f"{target_date}-{source_fingerprint['generation_id']}",
+        "source_hash": source_fingerprint["source_hash"],
         "purpose": "codex_code_improvement_workorder_from_postclose_automation",
         "source": {
             "pattern_lab_automation": str(source_path),
@@ -305,16 +426,23 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "swing_pattern_lab_automation": str(swing_lab_source_path) if swing_lab_source_path.exists() else None,
             "threshold_cycle_ev": str(ev_path) if ev_path.exists() else None,
         },
+        "source_fingerprint": source_fingerprint["files"],
         "policy": {
             "runtime_patch_automation": False,
             "user_intervention_point": "paste generated markdown into a Codex session and request implementation",
             "post_implementation_reentry": "postclose reports and daily EV consume the updated source metrics automatically",
+            "recommended_operator_instruction": (
+                "implement_now를 2-pass로 처리: Pass1 instrumentation/report/provenance 구현, "
+                "관련 리포트 재생성 후 workorder diff 확인, 신규 runtime_effect=false 항목만 Pass2 구현, "
+                "마지막에 generation_id/source_hash 기준으로 final freeze 보고"
+            ),
         },
         "summary": {
             "source_order_count": len(orders),
             "scalping_source_order_count": len(scalping_orders),
             "swing_source_order_count": len(swing_orders),
             "swing_lab_source_order_count": len(swing_lab_orders),
+            "threshold_ev_source_order_count": len(threshold_ev_orders),
             "selected_order_count": len(selected),
             "decision_counts": counts,
             "gemini_fresh": ((automation.get("ev_report_summary") or {}).get("gemini_fresh")),
@@ -358,7 +486,10 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "workorder_markdown": str(code_improvement_workorder_paths(target_date)[1]),
         },
     }
-    json_path, md_path = code_improvement_workorder_paths(target_date)
+    report["lineage"] = _previous_workorder_lineage(previous_report, report["orders"])
+    report["summary"]["new_selected_order_count"] = len(report["lineage"]["new_order_ids"])
+    report["summary"]["removed_selected_order_count"] = len(report["lineage"]["removed_order_ids"])
+    report["summary"]["decision_changed_order_count"] = len(report["lineage"]["decision_changed_order_ids"])
     json_path.parent.mkdir(parents=True, exist_ok=True)
     md_path.parent.mkdir(parents=True, exist_ok=True)
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -377,6 +508,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
     source = report.get("source") if isinstance(report.get("source"), dict) else {}
     summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
     policy = report.get("policy") if isinstance(report.get("policy"), dict) else {}
+    lineage = report.get("lineage") if isinstance(report.get("lineage"), dict) else {}
     lines = [
         f"# Code Improvement Workorder - {date_value}",
         "",
@@ -394,6 +526,8 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- swing_pattern_lab_automation: `{source.get('swing_pattern_lab_automation') or '-'}`",
         f"- threshold_cycle_ev: `{source.get('threshold_cycle_ev') or '-'}`",
         f"- generated_at: `{report.get('generated_at')}`",
+        f"- generation_id: `{report.get('generation_id')}`",
+        f"- source_hash: `{report.get('source_hash')}`",
         "",
         "## 운영 원칙",
         "",
@@ -402,6 +536,24 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         "- runtime 영향이 생길 수 있는 변경은 feature flag, threshold family metadata, provenance, safety guard를 같이 닫는다.",
         "- 새 family는 `allowed_runtime_apply=false`에서 시작하고, 구현/테스트/guard 완료 후에만 auto_bounded_live 후보가 될 수 있다.",
         "- 구현 후에는 관련 테스트와 parser 검증을 실행하고, 다음 postclose daily EV에서 metric을 확인한다.",
+        "- 같은 날짜 workorder를 재생성하면 `generation_id`와 `lineage` diff로 신규/삭제/판정변경 order를 먼저 확인한다.",
+        "",
+        "## 2-Pass 실행 기준",
+        "",
+        "- Pass 1: `implement_now` 중 instrumentation/report/provenance 구현만 먼저 수행한다.",
+        "- Regeneration: 관련 postclose report와 이 workorder를 재생성하고 `lineage` diff를 확인한다.",
+        "- Pass 2: 재생성 후 새로 생긴 `runtime_effect=false` order만 추가 구현한다.",
+        "- Final freeze: `generation_id`, `source_hash`, 신규/삭제/판정변경 order를 최종 보고에 남긴다.",
+        f"- 권장 지시문: `{policy.get('recommended_operator_instruction')}`",
+        "",
+        "## Snapshot Lineage",
+        "",
+        f"- previous_exists: `{lineage.get('previous_exists')}`",
+        f"- previous_generation_id: `{lineage.get('previous_generation_id') or '-'}`",
+        f"- previous_source_hash: `{lineage.get('previous_source_hash') or '-'}`",
+        f"- new_order_ids: `{lineage.get('new_order_ids') or []}`",
+        f"- removed_order_ids: `{lineage.get('removed_order_ids') or []}`",
+        f"- decision_changed_order_ids: `{lineage.get('decision_changed_order_ids') or []}`",
         "",
         "## Summary",
         "",
@@ -409,6 +561,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- scalping_source_order_count: `{summary.get('scalping_source_order_count')}`",
         f"- swing_source_order_count: `{summary.get('swing_source_order_count')}`",
         f"- swing_lab_source_order_count: `{summary.get('swing_lab_source_order_count')}`",
+        f"- threshold_ev_source_order_count: `{summary.get('threshold_ev_source_order_count')}`",
         f"- selected_order_count: `{summary.get('selected_order_count')}`",
         f"- decision_counts: `{summary.get('decision_counts')}`",
         f"- gemini_fresh: `{summary.get('gemini_fresh')}`",

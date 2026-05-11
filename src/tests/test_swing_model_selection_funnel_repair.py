@@ -1202,6 +1202,9 @@ def test_swing_lifecycle_audit_reports_db_gap_and_report_only_zero_sample_reason
 
     assert report["recommendation_db_load"]["db_load_gap"] is True
     assert report["recommendation_db_load"]["db_load_skip_reason"] == "csv_rows_positive_db_rows_zero"
+    assert report["recommendation_db_load"]["db_load_missing_rows"] == 1
+    assert report["recommendation_db_load"]["db_load_next_action"] == "investigate_recommendation_history_write_path"
+    assert "swing_gap_market_budget_price_qty" in report["observation_axis_coverage"]["missing_required_fields_by_axis"]
     assert report["lifecycle_events"]["scale_in_observation"]["zero_sample_reason"] == "no_candidate"
     assert orders["order_swing_recommendation_db_load_gap"]["runtime_effect"] is False
     assert orders["order_swing_recommendation_db_load_gap"]["allowed_runtime_apply"] is False

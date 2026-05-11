@@ -11,6 +11,14 @@ AUTO_APPLY="${THRESHOLD_CYCLE_AUTO_APPLY:-true}"
 REQUIRE_AI="${THRESHOLD_CYCLE_AUTO_APPLY_REQUIRE_AI:-true}"
 
 mkdir -p "$PROJECT_DIR/logs"
+LOCK_FILE="$PROJECT_DIR/logs/threshold_cycle_preopen.lock"
+exec 9>"$LOCK_FILE"
+if command -v flock >/dev/null 2>&1; then
+  if ! flock -n 9; then
+    echo "[SKIP] threshold-cycle preopen already running target_date=$TARGET_DATE lock_file=$LOCK_FILE"
+    exit 0
+  fi
+fi
 cd "$PROJECT_DIR"
 
 echo "[START] threshold-cycle preopen target_date=$TARGET_DATE apply_mode=$APPLY_MODE auto_apply=$AUTO_APPLY require_ai=$REQUIRE_AI"

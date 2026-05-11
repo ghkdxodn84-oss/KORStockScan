@@ -84,6 +84,45 @@ def test_update_kospi_normalizes_ssot_output_for_db_mapping():
     assert row["Margin_Rate"] == 2.1
 
 
+def test_update_kospi_prepares_title_case_input_for_feature_ssot():
+    raw = _raw_quote_fixture().rename(
+        columns={
+            "quote_date": "Date",
+            "stock_code": "Code",
+            "stock_name": "Name",
+            "open_price": "Open",
+            "high_price": "High",
+            "low_price": "Low",
+            "close_price": "Close",
+            "volume": "Volume",
+            "foreign_net": "Foreign_Net",
+            "inst_net": "Inst_Net",
+            "margin_rate": "Margin_Rate",
+        }
+    )
+
+    prepared = update_kospi._prepare_feature_input_columns(raw)
+    for column in [
+        "quote_date",
+        "stock_code",
+        "stock_name",
+        "open_price",
+        "high_price",
+        "low_price",
+        "close_price",
+        "volume",
+        "foreign_net",
+        "inst_net",
+        "margin_rate",
+    ]:
+        assert column in prepared.columns
+
+    features = update_kospi.calculate_all_features(prepared)
+    assert "open" in features.columns
+    assert "close" in features.columns
+    assert "return_1d" in features.columns
+
+
 def test_update_kospi_status_payload_records_warning_steps(monkeypatch, tmp_path):
     monkeypatch.setattr(
         update_kospi,

@@ -573,7 +573,7 @@ def build_preopen_apply_manifest(
                 "decisions": swing_decisions,
                 "dry_run_forced": bool(swing_env_overrides),
             },
-            "runtime_env_file": str(runtime_env_path(target_date)) if runtime_change else None,
+            "runtime_env_file": str(runtime_env_path(target_date)) if auto_apply_requested else None,
             "runtime_env_overrides": env_overrides,
             "threshold_snapshot": report.get("threshold_snapshot") or {},
             "post_apply_attribution": report.get("post_apply_attribution") or {},
@@ -593,7 +593,7 @@ def build_preopen_apply_manifest(
             },
             "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         }
-        if runtime_change:
+        if auto_apply_requested:
             _write_runtime_env(target_date, manifest, env_overrides)
     APPLY_PLAN_DIR.mkdir(parents=True, exist_ok=True)
     apply_manifest_path(target_date).write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")

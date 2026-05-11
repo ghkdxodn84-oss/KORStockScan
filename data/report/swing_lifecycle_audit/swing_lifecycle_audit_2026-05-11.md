@@ -4,42 +4,44 @@
 - runtime_change: `false`
 - selected_count: `3`
 - csv_rows: `3`
-- db_rows: `0`
-- db_load_gap: `True`
-- db_load_skip_reason: `db_load_error`
+- db_rows: `23`
+- db_load_gap: `False`
+- db_load_skip_reason: `loaded`
 - entered_rows: `0`
 - completed_rows: `0`
 - submitted_unique_records: `0`
 - simulated_order_unique_records: `13`
-- observation_axis_status: `{'ready': 8, 'instrumentation_gap': 1, 'hold_sample': 1}`
+- observation_axis_status: `{'ready': 9, 'hold_sample': 1}`
 
 ## Lifecycle Funnel
 
 | group | raw | unique_records |
 | --- | ---: | ---: |
-| `entry` | 143875 | 23 |
-| `holding` | 69 | 8 |
+| `entry` | 150282 | 23 |
+| `holding` | 71 | 8 |
 | `scale_in` | 12 | 4 |
-| `exit` | 36 | 3 |
-| `other` | 6 | 1 |
+| `exit` | 46 | 3 |
+| `other` | 24 | 1 |
 
 ## Key Stages
 
 | stage | raw | unique_records |
 | --- | ---: | ---: |
 | `blocked_gatekeeper_reject` | 73 | 9 |
-| `blocked_swing_gap` | 16541 | 4 |
-| `blocked_swing_score_vpw` | 73910 | 21 |
+| `blocked_swing_gap` | 17801 | 4 |
+| `blocked_swing_score_vpw` | 78950 | 21 |
 | `gatekeeper_fast_reuse_bypass` | 74 | 9 |
 | `holding_flow_ofi_smoothing_applied` | 62 | 7 |
-| `holding_started` | 7 | 1 |
-| `sell_order_sent` | 36 | 3 |
-| `swing_probe_discarded` | 53223 | 23 |
+| `holding_started` | 9 | 1 |
+| `sell_order_blocked_market_closed` | 2 | 1 |
+| `sell_order_sent` | 44 | 3 |
+| `swing_probe_discarded` | 53330 | 23 |
 | `swing_probe_entry_candidate` | 27 | 13 |
 | `swing_probe_holding_started` | 27 | 13 |
 | `swing_probe_scale_in_order_assumed_filled` | 4 | 4 |
-| `swing_probe_state_persisted` | 2 | 1 |
-| `swing_probe_state_restored` | 4 | 1 |
+| `swing_probe_state_empty_overwrite_blocked` | 2 | 1 |
+| `swing_probe_state_persisted` | 12 | 1 |
+| `swing_probe_state_restored` | 10 | 1 |
 | `swing_scale_in_micro_context_observed` | 4 | 4 |
 | `swing_sim_scale_in_order_assumed_filled` | 4 | 4 |
 
@@ -86,7 +88,7 @@
 | `swing_recommendation_db_load` | `db_load` | `swing_selection_top_k` | 3 | `ready` |
 | `swing_gatekeeper_accept_reject` | `entry` | `swing_gatekeeper_accept_reject` | 22 | `ready` |
 | `swing_gap_market_budget_price_qty` | `entry` | `swing_market_regime_sensitivity` | 51 | `ready` |
-| `swing_holding_mfe_mae_defer` | `holding` | `swing_holding_flow_defer` | 8 | `instrumentation_gap` |
+| `swing_holding_mfe_mae_defer` | `holding` | `swing_holding_flow_defer` | 8 | `ready` |
 | `swing_scale_in_avg_down_pyramid` | `scale_in` | `swing_pyramid_trigger` | 4 | `ready` |
 | `swing_exit_post_sell_attribution` | `exit` | `swing_trailing_stop_time_stop` | 3 | `ready` |
 | `swing_entry_ofi_qi_execution_quality` | `entry` | `swing_entry_ofi_qi_execution_quality` | 0 | `hold_sample` |

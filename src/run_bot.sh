@@ -1,5 +1,39 @@
 #!/bin/bash
 
+THRESHOLD_RUNTIME_ENV_WAIT_SEC="${KORSTOCKSCAN_THRESHOLD_RUNTIME_ENV_WAIT_SEC:-1800}"
+THRESHOLD_RUNTIME_ENV_REQUIRED="${KORSTOCKSCAN_THRESHOLD_RUNTIME_ENV_REQUIRED:-true}"
+THRESHOLD_RUNTIME_ENV_BOOTSTRAP="${KORSTOCKSCAN_THRESHOLD_RUNTIME_ENV_BOOTSTRAP:-true}"
+
+wait_for_threshold_runtime_env() {
+    local env_path="$1"
+    local waited=0
+    if [ "$THRESHOLD_RUNTIME_ENV_REQUIRED" != "true" ] && [ "$THRESHOLD_RUNTIME_ENV_REQUIRED" != "1" ]; then
+        return 0
+    fi
+    if [ ! -f "$env_path" ] && { [ "$THRESHOLD_RUNTIME_ENV_BOOTSTRAP" = "true" ] || [ "$THRESHOLD_RUNTIME_ENV_BOOTSTRAP" = "1" ]; }; then
+        echo "🧭 threshold runtime env 생성 시도: $env_path"
+        (
+            cd ..
+            THRESHOLD_CYCLE_APPLY_MODE="${THRESHOLD_CYCLE_APPLY_MODE:-auto_bounded_live}" \
+            THRESHOLD_CYCLE_AUTO_APPLY="${THRESHOLD_CYCLE_AUTO_APPLY:-true}" \
+            THRESHOLD_CYCLE_AUTO_APPLY_REQUIRE_AI="${THRESHOLD_CYCLE_AUTO_APPLY_REQUIRE_AI:-true}" \
+            ./deploy/run_threshold_cycle_preopen.sh "$(TZ=Asia/Seoul date +%F)"
+        )
+    fi
+    while [ ! -f "$env_path" ]; do
+        if [ "$waited" -ge "$THRESHOLD_RUNTIME_ENV_WAIT_SEC" ]; then
+            echo "❌ threshold runtime env 미생성으로 봇 기동 중단: $env_path (waited=${waited}s)"
+            return 1
+        fi
+        if [ "$waited" -eq 0 ]; then
+            echo "⏳ threshold runtime env 대기: $env_path"
+        fi
+        sleep 5
+        waited=$((waited + 5))
+    done
+    return 0
+}
+
 # 무한 루프 시작
 while true; do
     echo "🚀 KORStockScan 스나이퍼 엔진을 시작합니다..."
@@ -23,6 +57,7 @@ while true; do
     export KORSTOCKSCAN_SWING_INTRADAY_PROBE_MAX_PER_SYMBOL=1
 
     THRESHOLD_RUNTIME_ENV="../data/threshold_cycle/runtime_env/threshold_runtime_env_$(TZ=Asia/Seoul date +%F).env"
+    wait_for_threshold_runtime_env "$THRESHOLD_RUNTIME_ENV" || exit 1
     if [ -f "$THRESHOLD_RUNTIME_ENV" ]; then
         echo "📌 threshold runtime env 적용: $THRESHOLD_RUNTIME_ENV"
         set -a

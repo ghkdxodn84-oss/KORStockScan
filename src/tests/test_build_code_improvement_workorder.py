@@ -122,9 +122,14 @@ def test_build_code_improvement_workorder_classifies_and_renders(tmp_path, monke
     assert decisions["order_liquidity_gate_miss_ev_recovery"] == "design_family_candidate"
     assert decisions["order_cache_signature_noise"] == "defer_evidence"
     assert decisions["order_partial_fallback_shadow"] == "reject"
+    assert report["generation_id"].startswith("2026-05-08-")
+    assert report["source_hash"]
+    assert report["lineage"]["previous_exists"] is False
     assert (doc_dir / "code_improvement_workorder_2026-05-08.md").exists()
     markdown = (doc_dir / "code_improvement_workorder_2026-05-08.md").read_text(encoding="utf-8")
     assert "Codex 실행 지시" in markdown
+    assert "2-Pass 실행 기준" in markdown
+    assert "Snapshot Lineage" in markdown
     assert "order_latency_guard_miss_ev_recovery" in markdown
     assert "auto_bounded_live" in markdown
 
@@ -336,3 +341,123 @@ def test_build_code_improvement_workorder_dedupes_duplicate_orders(tmp_path, mon
     assert "swing_pattern_lab_automation" in dup_warnings[0]
     markdown = (doc_dir / "code_improvement_workorder_2026-05-08.md").read_text(encoding="utf-8")
     assert "Duplicate Order Collisions" in markdown
+
+
+def test_build_code_improvement_workorder_adds_threshold_ev_hold_no_edge_followup(tmp_path, monkeypatch):
+    scalping_dir = tmp_path / "scalping"
+    ev_dir = tmp_path / "ev"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    scalping_dir.mkdir()
+    ev_dir.mkdir()
+    (scalping_dir / "scalping_pattern_lab_automation_2026-05-11.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-11",
+                "consensus_findings": [],
+                "solo_findings": [],
+                "auto_family_candidates": [],
+                "code_improvement_orders": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ev_dir / "threshold_cycle_ev_2026-05-11.json").write_text(
+        json.dumps(
+            {
+                "calibration_outcome": {
+                    "decisions": [
+                        {
+                            "family": "holding_exit_decision_matrix_advisory",
+                            "calibration_state": "hold_no_edge",
+                            "sample_count": 42,
+                            "sample_floor": 20,
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", scalping_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-11", max_orders=5)
+
+    assert report["summary"]["threshold_ev_source_order_count"] == 1
+    order = report["orders"][0]
+    assert order["order_id"] == "order_holding_exit_decision_matrix_edge_counterfactual"
+    assert order["decision"] == "implement_now"
+    assert order["mapped_family"] == "holding_exit_decision_matrix_advisory"
+    markdown = (doc_dir / "code_improvement_workorder_2026-05-11.md").read_text(encoding="utf-8")
+    assert "hold_no_edge" in markdown
+    assert "counterfactual" in markdown
+
+
+def test_build_code_improvement_workorder_reports_previous_generation_diff(tmp_path, monkeypatch):
+    automation_dir = tmp_path / "automation"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    report_dir.mkdir()
+    previous = {
+        "generation_id": "2026-05-08-oldhash",
+        "source_hash": "oldhash",
+        "generated_at": "2026-05-08T17:00:00+09:00",
+        "orders": [
+            {"order_id": "order_old", "decision": "implement_now"},
+            {"order_id": "order_keep", "decision": "defer_evidence"},
+        ],
+    }
+    (report_dir / "code_improvement_workorder_2026-05-08.json").write_text(
+        json.dumps(previous, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-08",
+                "consensus_findings": [],
+                "solo_findings": [],
+                "auto_family_candidates": [],
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_keep",
+                        "title": "keep now instrumentation",
+                        "target_subsystem": "runtime_instrumentation",
+                        "priority": 1,
+                        "runtime_effect": False,
+                    },
+                    {
+                        "order_id": "order_new",
+                        "title": "new instrumentation",
+                        "target_subsystem": "runtime_instrumentation",
+                        "priority": 2,
+                        "runtime_effect": False,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", tmp_path / "missing-ev")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-08", max_orders=5)
+
+    assert report["lineage"]["previous_exists"] is True
+    assert report["lineage"]["previous_generation_id"] == "2026-05-08-oldhash"
+    assert report["lineage"]["new_order_ids"] == ["order_new"]
+    assert report["lineage"]["removed_order_ids"] == ["order_old"]
+    assert report["lineage"]["decision_changed_order_ids"] == ["order_keep"]
+    markdown = (doc_dir / "code_improvement_workorder_2026-05-08.md").read_text(encoding="utf-8")
+    assert "order_new" in markdown
+    assert "order_old" in markdown

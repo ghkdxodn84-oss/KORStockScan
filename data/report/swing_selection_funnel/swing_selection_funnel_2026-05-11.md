@@ -16,12 +16,12 @@
 | stage | raw | unique_records |
 | --- | ---: | ---: |
 | `blocked_gatekeeper_reject` | 73 | 9 |
-| `blocked_swing_gap` | 13371 | 4 |
-| `blocked_swing_score_vpw` | 62756 | 21 |
+| `blocked_swing_gap` | 17801 | 4 |
+| `blocked_swing_score_vpw` | 78950 | 21 |
 | `gatekeeper_fast_reuse_bypass` | 74 | 9 |
 | `holding_flow_ofi_smoothing_applied` | 62 | 7 |
-| `holding_started` | 7 | 1 |
-| `swing_probe_discarded` | 52965 | 23 |
+| `holding_started` | 9 | 1 |
+| `swing_probe_discarded` | 53330 | 23 |
 | `swing_probe_entry_candidate` | 27 | 13 |
 | `swing_probe_holding_started` | 27 | 13 |
 | `swing_probe_scale_in_order_assumed_filled` | 4 | 4 |
@@ -30,16 +30,16 @@
 
 ## Top Code Stage
 
-- `blocked_swing_gap` 삼성물산(028260): 6470
-- `blocked_swing_gap` 현대차(005380): 4520
-- `blocked_swing_score_vpw` 한화투자증권(003530): 3282
-- `blocked_swing_score_vpw` 호텔신라(008770): 3281
-- `blocked_swing_score_vpw` LG전자(066570): 3279
-- `blocked_swing_score_vpw` 한국가스공사(036460): 3279
-- `blocked_swing_score_vpw` 하나금융지주(086790): 3278
-- `blocked_swing_score_vpw` HD현대일렉트릭(267260): 3277
-- `blocked_swing_score_vpw` 이노션(214320): 3277
-- `blocked_swing_score_vpw` LG에너지솔루션(373220): 3276
+- `blocked_swing_gap` 삼성물산(028260): 8674
+- `blocked_swing_gap` 현대차(005380): 6746
+- `blocked_swing_score_vpw` 한화투자증권(003530): 5507
+- `blocked_swing_score_vpw` LG전자(066570): 5503
+- `blocked_swing_score_vpw` LG에너지솔루션(373220): 5300
+- `blocked_swing_score_vpw` HD현대일렉트릭(267260): 5275
+- `blocked_swing_score_vpw` 디아이씨(092200): 5239
+- `blocked_swing_score_vpw` 와이투솔루션(011690): 4961
+- `blocked_swing_score_vpw` 넥센(005720): 4753
+- `blocked_swing_score_vpw` LG(003550): 4603
 
 ## OFI/QI Micro Context
 

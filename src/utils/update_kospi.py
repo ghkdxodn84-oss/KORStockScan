@@ -190,6 +190,29 @@ def _normalize_feature_output_columns(df: pd.DataFrame) -> pd.DataFrame:
     applicable = {k: v for k, v in rename_map.items() if k in df.columns and v not in df.columns}
     return df.rename(columns=applicable)
 
+
+def _prepare_feature_input_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """nightly update 원본 컬럼을 common_v2 feature 입력 스키마에 맞춥니다."""
+    out = df.copy()
+    rename_map = {
+        'Date': 'quote_date',
+        'Code': 'stock_code',
+        'Name': 'stock_name',
+        'Open': 'open_price',
+        'High': 'high_price',
+        'Low': 'low_price',
+        'Close': 'close_price',
+        'Volume': 'volume',
+        'Foreign_Net': 'foreign_net',
+        'Inst_Net': 'inst_net',
+        'Margin_Rate': 'margin_rate',
+        'Is_NXT': 'is_nxt',
+    }
+    for source, target in rename_map.items():
+        if source in out.columns and target not in out.columns:
+            out[target] = out[source]
+    return out
+
 def _sanitize_daily_input(df: pd.DataFrame, code_str: str) -> pd.DataFrame:
     """지표 계산 전에 Datetime/숫자 입력을 정규화합니다."""
     out = df.copy()
@@ -302,8 +325,8 @@ def process_and_save_stock(code, token, session, is_nxt=False) -> pd.DataFrame:
         original_cols = df.columns.tolist()
 
         # 4. feature 계산 (nightly SSOT)
-        # common_v2.calculate_all_features는 quote_date, stock_code 컬럼을 기대함
-        df_feat = df.rename(columns={'Date': 'quote_date', 'Code': 'stock_code'})
+        # common_v2.calculate_all_features는 *_price/volume 입력 스키마를 기대함
+        df_feat = _prepare_feature_input_columns(df)
         df_feat = calculate_all_features(df_feat)
         df = _normalize_feature_output_columns(df_feat)
 

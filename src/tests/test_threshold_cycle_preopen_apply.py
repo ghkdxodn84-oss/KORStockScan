@@ -285,9 +285,11 @@ def test_auto_bounded_live_excludes_ai_instrumentation_gap(tmp_path, monkeypatch
 
     assert manifest["status"] == "auto_bounded_live_blocked"
     assert manifest["runtime_change"] is False
-    assert manifest["runtime_env_file"] is None
+    assert manifest["runtime_env_file"] == str(runtime_dir / "threshold_runtime_env_2026-05-11.env")
     assert manifest["auto_apply_decisions"][0]["decision_reason"] == "ai_route_excluded_from_threshold_candidate"
-    assert not runtime_dir.exists()
+    env_text = (runtime_dir / "threshold_runtime_env_2026-05-11.env").read_text(encoding="utf-8")
+    assert "KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED=true" in env_text
+    assert "KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED" not in env_text
 
 
 def test_swing_approval_required_request_does_not_auto_apply_without_artifact(tmp_path, monkeypatch):
@@ -346,7 +348,9 @@ def test_swing_approval_required_request_does_not_auto_apply_without_artifact(tm
     assert manifest["swing_runtime_approval"]["requested"] == 1
     assert manifest["swing_runtime_approval"]["approved"] == 0
     assert "approval_artifact_missing" in manifest["swing_runtime_approval"]["blocked"]
-    assert not runtime_dir.exists()
+    env_text = (runtime_dir / "threshold_runtime_env_2026-05-11.env").read_text(encoding="utf-8")
+    assert "KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED=true" in env_text
+    assert "KORSTOCKSCAN_SWING_FLOOR_BULL" not in env_text
 
 
 def test_swing_user_approval_artifact_applies_env_and_keeps_dry_run(tmp_path, monkeypatch):
@@ -476,7 +480,9 @@ def test_swing_scale_in_real_canary_requires_separate_artifact(tmp_path, monkeyp
 
     assert manifest["runtime_change"] is False
     assert "scale_in_real_canary_approval_artifact_missing" in manifest["swing_runtime_approval"]["blocked"]
-    assert not runtime_dir.exists()
+    env_text = (runtime_dir / "threshold_runtime_env_2026-05-11.env").read_text(encoding="utf-8")
+    assert "KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED=true" in env_text
+    assert "KORSTOCKSCAN_SWING_SCALE_IN_REAL_CANARY_ENABLED" not in env_text
 
 
 def test_swing_scale_in_real_canary_artifact_applies_env(tmp_path, monkeypatch):

@@ -628,13 +628,23 @@ def _recommendation_db_load_summary(
         reason = "diagnostic_only_recommendation_rows"
     else:
         reason = "csv_rows_positive_db_rows_zero"
+    db_load_gap = bool(csv_rows > 0 and db_rows <= 0)
 
     return {
         "csv_rows": csv_rows,
         "db_rows": db_rows,
-        "db_load_gap": bool(csv_rows > 0 and db_rows <= 0),
+        "db_load_gap": db_load_gap,
+        "db_load_gap_severity": "fail" if reason == "db_load_error" else ("warning" if db_load_gap else "none"),
         "db_load_skip_reason": reason,
         "db_load_error": str(db_error) if db_error else None,
+        "db_load_missing_rows": max(0, csv_rows - db_rows),
+        "db_load_expected_source": "recommendation_history",
+        "db_load_observed_source": "daily_recommendations_csv" if csv_rows > 0 else "none",
+        "db_load_next_action": (
+            "investigate_recommendation_history_write_path"
+            if db_load_gap
+            else "continue_daily_lifecycle_audit"
+        ),
         "selection_modes": selection_modes,
     }
 
@@ -729,12 +739,17 @@ def summarize_db_lifecycle_rows(rows: Iterable[dict[str, Any]]) -> dict[str, Any
             "realized_profit_sum": 0.0,
         }
 
+    def column_or_default(key: str, default: Any = 0) -> pd.Series:
+        if key in df.columns:
+            return df[key]
+        return pd.Series([default] * len(df))
+
     status = df.get("status", pd.Series(dtype=str)).fillna("UNKNOWN").astype(str)
     position = df.get("position_tag", pd.Series(dtype=str)).fillna("UNKNOWN").astype(str)
-    buy_qty = pd.to_numeric(df.get("buy_qty", 0), errors="coerce").fillna(0)
+    buy_qty = pd.to_numeric(column_or_default("buy_qty", 0), errors="coerce").fillna(0)
     buy_time_present = df.get("buy_time", pd.Series([None] * len(df))).notna()
-    profit_rate = pd.to_numeric(df.get("profit_rate", None), errors="coerce")
-    profit = pd.to_numeric(df.get("profit", 0), errors="coerce").fillna(0)
+    profit_rate = pd.to_numeric(column_or_default("profit_rate", None), errors="coerce")
+    profit = pd.to_numeric(column_or_default("profit", 0), errors="coerce").fillna(0)
     completed = status.eq("COMPLETED")
     valid_profit = completed & profit_rate.notna()
 
@@ -1037,6 +1052,11 @@ def _coverage_count(events: dict[str, Any], keys: Iterable[str]) -> int:
     return int(sum(_safe_int(coverage.get(key), 0) for key in keys))
 
 
+def _observed_field_names(events: dict[str, Any], keys: Iterable[str]) -> list[str]:
+    coverage = events.get("field_coverage") or {}
+    return [str(key) for key in keys if _safe_int(coverage.get(key), 0) > 0]
+
+
 def build_observation_axes(
     *,
     model_selection: dict[str, Any],
@@ -1212,7 +1232,18 @@ def build_observation_axes(
     for axis in axes:
         sample_count = int(axis.get("sample_count") or 0)
         observed = axis.get("observed_fields")
-        observed_count = len(observed) if isinstance(observed, list) else int(axis.get("observed_field_count") or 0)
+        if not isinstance(observed, list):
+            observed = _observed_field_names(lifecycle_events, axis.get("required_fields") or [])
+            axis["observed_fields"] = observed
+        observed_count = int(axis.get("observed_field_count") or len(observed))
+        required_fields = [str(field) for field in axis.get("required_fields") or []]
+        missing_fields = [field for field in required_fields if field not in set(observed)]
+        axis["observed_field_count"] = observed_count
+        axis["missing_required_fields"] = missing_fields
+        axis["coverage_ratio"] = round(
+            min(1.0, observed_count / max(1, len(required_fields))),
+            4,
+        )
         if sample_count <= 0:
             status = "hold_sample"
         elif observed_count <= 0:
@@ -1235,24 +1266,38 @@ def summarize_observation_axis_coverage(axes: Iterable[dict[str, Any]]) -> dict[
             "threshold_family": axis.get("threshold_family"),
             "sample_count": int(axis.get("sample_count") or 0),
             "required_fields": list(axis.get("required_fields") or []),
+            "observed_fields": list(axis.get("observed_fields") or []),
+            "missing_required_fields": list(axis.get("missing_required_fields") or []),
             "observed_field_count": int(
                 len(axis.get("observed_fields"))
                 if isinstance(axis.get("observed_fields"), list)
                 else axis.get("observed_field_count") or 0
             ),
+            "coverage_ratio": axis.get("coverage_ratio"),
             "status": axis.get("status"),
         }
         for axis in axes
         if str(axis.get("status") or "") == "instrumentation_gap"
     ]
     ready_axes = [axis for axis in axes if str(axis.get("status") or "") == "ready"]
+    complete_axes = [
+        axis
+        for axis in axes
+        if str(axis.get("status") or "") == "ready" and not list(axis.get("missing_required_fields") or [])
+    ]
     return {
         "axis_count": int(len(axes)),
         "stage_counts": {str(key): int(value) for key, value in stage_counts.items()},
         "status_counts": {str(key): int(value) for key, value in by_status.items()},
         "ready_count": int(len(ready_axes)),
+        "field_complete_count": int(len(complete_axes)),
         "instrumentation_gap_count": int(len(gap_axes)),
         "gap_axes": gap_axes,
+        "missing_required_fields_by_axis": {
+            str(axis.get("axis_id")): list(axis.get("missing_required_fields") or [])
+            for axis in axes
+            if list(axis.get("missing_required_fields") or [])
+        },
         "runtime_change": False,
     }
 

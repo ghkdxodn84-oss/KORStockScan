@@ -1,0 +1,123 @@
+import json
+
+from src.engine import runtime_approval_summary as mod
+
+
+def test_runtime_approval_summary_combines_scalping_and_swing(tmp_path, monkeypatch):
+    ev_dir = tmp_path / "threshold_cycle_ev"
+    env_dir = tmp_path / "runtime_env"
+    swing_dir = tmp_path / "swing_runtime_approval"
+    out_dir = tmp_path / "runtime_approval_summary"
+    ev_dir.mkdir(parents=True)
+    env_dir.mkdir(parents=True)
+    swing_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        mod,
+        "ev_report_paths",
+        lambda target_date: (
+            ev_dir / f"threshold_cycle_ev_{target_date}.json",
+            ev_dir / f"threshold_cycle_ev_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing_dir)
+    monkeypatch.setattr(mod, "SUMMARY_DIR", out_dir)
+
+    env_path = env_dir / "threshold_runtime_env_2026-05-11.env"
+    env_path.write_text("export KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED=true\n", encoding="utf-8")
+    (ev_dir / "threshold_cycle_ev_2026-05-11.json").write_text(
+        json.dumps(
+            {
+                "runtime_apply": {
+                    "selected_families": ["score65_74_recovery_probe"],
+                    "runtime_env_file": str(env_path),
+                },
+                "calibration_outcome": {
+                    "decisions": [
+                        {
+                            "family": "score65_74_recovery_probe",
+                            "calibration_state": "adjust_up",
+                            "confidence": 1.0,
+                            "sample_count": 712,
+                            "sample_floor": 20,
+                        },
+                        {
+                            "family": "position_sizing_cap_release",
+                            "calibration_state": "hold_sample",
+                            "confidence": 0.8,
+                            "sample_count": 49,
+                            "sample_floor": 30,
+                        },
+                    ]
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (swing_dir / "swing_runtime_approval_2026-05-11.json").write_text(
+        json.dumps(
+            {
+                "summary": {"requested": 0, "approved": 0},
+                "candidates": [
+                    {
+                        "family": "swing_model_floor",
+                        "sample_count": 3,
+                        "sample_floor": 3,
+                    }
+                ],
+                "blocked_requests": [
+                    {
+                        "family": "swing_model_floor",
+                        "calibration_state": "freeze",
+                        "tradeoff_score": 0.8657,
+                        "block_reasons": ["critical_instrumentation_gap", "db_load_gap"],
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_runtime_approval_summary("2026-05-11")
+
+    assert report["runtime_mutation_allowed"] is False
+    assert report["summary"]["scalping_items"] == 2
+    assert report["summary"]["scalping_selected_auto_bounded_live"] == 1
+    assert report["summary"]["swing_blocked"] == 1
+    assert report["application_timing"]["runtime_env_file"] == str(env_path)
+    assert "WAIT 구간" in report["scalping"][0]["description"]
+    assert report["scalping"][0]["current_application"] == "PREOPEN env 적용: 당일 runtime 변경 대상"
+    assert "PREOPEN env" in report["scalping"][0]["state_interpretation"]
+    assert report["scalping"][1]["reason_label"] == "표본 부족"
+    assert "표본 부족" in report["scalping"][1]["state_interpretation"]
+    assert report["swing"][0]["reason_label"] == "계측 gap, DB gap"
+    assert report["swing"][0]["current_application"] == "스윙 dry-run/probe 관찰: 실주문 변경 없음"
+    markdown = (out_dir / "runtime_approval_summary_2026-05-11.md").read_text(encoding="utf-8")
+    assert "## Scalping" in markdown
+    assert "score65_74_recovery_probe" in markdown
+    assert "설명" in markdown
+    assert "현재 적용" in markdown
+    assert "판정 해석" in markdown
+    assert "## Swing" in markdown
+    assert "swing_model_floor" in markdown
+
+
+def test_runtime_approval_summary_warns_when_sources_missing(tmp_path, monkeypatch):
+    ev_dir = tmp_path / "threshold_cycle_ev"
+    swing_dir = tmp_path / "swing_runtime_approval"
+    out_dir = tmp_path / "runtime_approval_summary"
+    monkeypatch.setattr(
+        mod,
+        "ev_report_paths",
+        lambda target_date: (
+            ev_dir / f"threshold_cycle_ev_{target_date}.json",
+            ev_dir / f"threshold_cycle_ev_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing_dir)
+    monkeypatch.setattr(mod, "SUMMARY_DIR", out_dir)
+
+    report = mod.build_runtime_approval_summary("2026-05-11")
+
+    assert "threshold_cycle_ev_missing" in report["warnings"]
+    assert "swing_runtime_approval_missing" in report["warnings"]

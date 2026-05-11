@@ -9,8 +9,6 @@
 
 | order_id | stage | subsystem | route | family | priority |
 | --- | --- | --- | --- | --- | ---: |
-| `order_swing_lifecycle_observation_coverage` | `full_lifecycle` | `runtime_instrumentation` | `instrumentation_order` | `-` | 1 |
-| `order_swing_recommendation_db_load_gap` | `db_load` | `runtime_instrumentation` | `instrumentation_order` | `-` | 2 |
 | `order_swing_gatekeeper_reject_threshold_review` | `entry` | `swing_entry` | `existing_family` | `swing_gatekeeper_accept_reject` | 3 |
 | `order_swing_ofi_qi_stale_or_missing_context` | `entry` | `swing_orderbook_micro_context` | `existing_family` | `swing_entry_ofi_qi_execution_quality` | 4 |
 | `order_swing_exit_ofi_qi_smoothing_distribution` | `holding_exit` | `swing_holding_exit` | `existing_family` | `swing_exit_ofi_qi_smoothing` | 6 |
