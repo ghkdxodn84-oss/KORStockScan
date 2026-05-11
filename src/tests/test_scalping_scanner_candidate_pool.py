@@ -60,7 +60,51 @@ def test_candidate_pool_merges_sources_and_prefers_value_vi_combo():
     assert target["Source"] == "VI+VALUE"
     assert target["SourceSet"] == {"OPEN_TOP", "SUPERNOVA", "VALUE_TOP", "VI_TRIGGERED"}
     assert target["TradeValue"] == 50000000000
+    assert target["CntrStrAvailable"] is True
     assert scalping_scanner._freshness_score(target) > 0
+
+
+def test_value_top_without_strength_is_displayed_as_waiting(capsys, monkeypatch):
+    monkeypatch.setattr(kiwoom_utils, "is_valid_stock", lambda *args, **kwargs: True)
+    db = _DB()
+    event_bus = _EventBus()
+    pool = scalping_scanner.build_candidate_pool(
+        value_targets=[
+            {"Code": "005930", "Name": "삼성전자", "Price": 70000, "FluRate": 1.0, "TradeValue": 50000000000}
+        ]
+    )
+
+    target = pool["005930"]
+    codes, _ = scalping_scanner.promote_candidates(
+        db,
+        event_bus,
+        [target],
+        {},
+        max_new_codes=1,
+        reentry_cooldown_sec=1500,
+        token="TOKEN",
+        now_ts=1000.0,
+    )
+
+    captured = capsys.readouterr().out
+    assert codes == ["005930"]
+    assert target["CntrStrAvailable"] is False
+    assert "체결강도: 수신대기" in captured
+    assert "체결강도: 0.0" not in captured
+
+
+def test_strength_aliases_are_preserved_for_scanner_display():
+    pool = scalping_scanner.build_candidate_pool(
+        value_targets=[
+            {"Code": "005930", "Name": "삼성전자", "Price": 70000, "FluRate": 1.0, "cntr_strg": "132.5"}
+        ]
+    )
+
+    target = pool["005930"]
+
+    assert target["CntrStr"] == 132.5
+    assert target["CntrStrAvailable"] is True
+    assert scalping_scanner._format_strength_display(target) == "132.5"
 
 
 def test_safe_int_preserves_rank_sentinel_but_price_helper_absorbs_signed_prices():

@@ -3845,6 +3845,15 @@ def _build_ai_ops_log_fields(
     ):
         if field_name in payload:
             out[field_name] = str(payload.get(field_name, "-") or "-")
+    for field_name in (
+        "openai_input_tokens",
+        "openai_output_tokens",
+        "openai_total_tokens",
+        "openai_cached_input_tokens",
+        "openai_reasoning_tokens",
+    ):
+        if field_name in payload:
+            out[field_name] = int(payload.get(field_name, 0) or 0)
     if "holding_exit_matrix_feature_enabled" in payload:
         out["holding_exit_matrix_feature_enabled"] = bool(payload.get("holding_exit_matrix_feature_enabled"))
     if "holding_exit_matrix_applied" in payload:

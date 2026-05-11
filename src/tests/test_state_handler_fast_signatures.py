@@ -242,6 +242,11 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
             "ai_prompt_type": "scalping_shared",
             "ai_prompt_version": "split_v1",
             "ai_result_source": "live",
+            "openai_input_tokens": 1234,
+            "openai_output_tokens": 56,
+            "openai_total_tokens": 1290,
+            "openai_cached_input_tokens": 120,
+            "openai_reasoning_tokens": 8,
         },
         ai_score_raw=74,
         ai_score_after_bonus=79,
@@ -257,6 +262,11 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
     assert fields["ai_prompt_type"] == "scalping_shared"
     assert fields["ai_prompt_version"] == "split_v1"
     assert fields["ai_result_source"] == "live"
+    assert fields["openai_input_tokens"] == 1234
+    assert fields["openai_output_tokens"] == 56
+    assert fields["openai_total_tokens"] == 1290
+    assert fields["openai_cached_input_tokens"] == 120
+    assert fields["openai_reasoning_tokens"] == 8
     assert fields["ai_score_raw"] == "74.0"
     assert fields["ai_score_after_bonus"] == "79.0"
     assert fields["entry_score_threshold"] == "75.0"

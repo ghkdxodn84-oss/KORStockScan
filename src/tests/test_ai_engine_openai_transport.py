@@ -303,6 +303,51 @@ def test_openai_gpt5_models_omit_temperature(monkeypatch):
     assert calls[0]["reasoning"] == {"effort": "minimal"}
 
 
+def test_openai_usage_meta_is_exposed_for_pipeline_events(monkeypatch):
+    engine = _build_engine()
+
+    def _fake_create(**kwargs):
+        return SimpleNamespace(
+            output_text='{"action":"WAIT","score":50,"reason":"ok"}',
+            usage=SimpleNamespace(
+                input_tokens=1234,
+                output_tokens=56,
+                total_tokens=1290,
+                input_tokens_details=SimpleNamespace(cached_tokens=120),
+                output_tokens_details=SimpleNamespace(reasoning_tokens=8),
+            ),
+        )
+
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=_fake_create))
+
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_TRANSPORT_MODE="http",
+        ),
+    )
+
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="json",
+        endpoint_name="analyze_target",
+        symbol="000001",
+    )
+    result = engine._merge_last_transport_meta(result)
+
+    assert result["action"] == "WAIT"
+    assert result["openai_input_tokens"] == 1234
+    assert result["openai_output_tokens"] == 56
+    assert result["openai_total_tokens"] == 1290
+    assert result["openai_cached_input_tokens"] == 120
+    assert result["openai_reasoning_tokens"] == 8
+
+
 def test_openai_reasoning_effort_auto_uses_none_for_gpt54_mini(monkeypatch):
     engine = _build_engine()
     engine.current_model_name = "gpt-5.4-mini"

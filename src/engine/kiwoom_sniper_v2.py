@@ -1361,16 +1361,10 @@ def run_sniper(is_test_mode=False):
                 holding_targets = [t for t in targets if t.get('status') == 'HOLDING']
                 real_holding_count = len([t for t in holding_targets if not _is_runtime_simulation_target(t)])
                 sim_holding_count = len(holding_targets) - real_holding_count
-                if sim_holding_count:
-                    print(
-                        f"💓 [{now.strftime('%H:%M:%S')}] 다중 감시망 가동 중... "
-                        f"(감시: {watching_count} / 보유: {real_holding_count} / sim: {sim_holding_count})"
-                    )
-                else:
-                    print(
-                        f"💓 [{now.strftime('%H:%M:%S')}] 다중 감시망 가동 중... "
-                        f"(감시: {watching_count} / 보유: {real_holding_count})"
-                    )
+                print(
+                    f"💓 [{now.strftime('%H:%M:%S')}] 다중 감시망 가동 중... "
+                    f"(감시: {watching_count} / 보유: {real_holding_count} / sim: {sim_holding_count})"
+                )
                 last_msg_min = now_t.minute
 
             # =====================================================

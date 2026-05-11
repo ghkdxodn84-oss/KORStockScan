@@ -147,6 +147,52 @@ Use the glossary to interpret Korean terms, but keep the original field names, e
 """
 
 
+def _get_usage_value(usage: Any, key: str) -> Any:
+    if isinstance(usage, dict):
+        return usage.get(key)
+    return getattr(usage, key, None)
+
+
+def _coerce_usage_int(value: Any) -> int | None:
+    try:
+        if value is None:
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
+def _extract_openai_usage_meta(response: Any) -> dict[str, int]:
+    usage = _get_usage_value(response, "usage")
+    if not usage:
+        return {}
+
+    input_tokens = _coerce_usage_int(_get_usage_value(usage, "input_tokens"))
+    output_tokens = _coerce_usage_int(_get_usage_value(usage, "output_tokens"))
+    total_tokens = _coerce_usage_int(_get_usage_value(usage, "total_tokens"))
+
+    input_details = _get_usage_value(usage, "input_tokens_details") or {}
+    output_details = _get_usage_value(usage, "output_tokens_details") or {}
+    cached_input_tokens = _coerce_usage_int(_get_usage_value(input_details, "cached_tokens"))
+    reasoning_tokens = _coerce_usage_int(_get_usage_value(output_details, "reasoning_tokens"))
+
+    if total_tokens is None and (input_tokens is not None or output_tokens is not None):
+        total_tokens = int(input_tokens or 0) + int(output_tokens or 0)
+
+    meta: dict[str, int] = {}
+    if input_tokens is not None:
+        meta["openai_input_tokens"] = input_tokens
+    if output_tokens is not None:
+        meta["openai_output_tokens"] = output_tokens
+    if total_tokens is not None:
+        meta["openai_total_tokens"] = total_tokens
+    if cached_input_tokens is not None:
+        meta["openai_cached_input_tokens"] = cached_input_tokens
+    if reasoning_tokens is not None:
+        meta["openai_reasoning_tokens"] = reasoning_tokens
+    return meta
+
+
 class OpenAIWSLateResponseError(TimeoutError):
     pass
 
@@ -227,6 +273,7 @@ class OpenAITransportResult:
     ws_http_fallback: bool = False
     queue_wait_ms: int = 0
     roundtrip_ms: int = 0
+    usage_meta: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -365,6 +412,7 @@ class OpenAIResponsesWSWorker:
                         ws_http_fallback=False,
                         queue_wait_ms=queue_wait_ms,
                         roundtrip_ms=roundtrip_ms,
+                        usage_meta=_extract_openai_usage_meta(response),
                     )
                 if event_type in {"error", "response.failed", "response.incomplete"}:
                     self._record("openai_ws_parse_fail", 1)
@@ -1254,6 +1302,7 @@ class GPTSniperEngine:
                     ws_http_fallback=False,
                     queue_wait_ms=0,
                     roundtrip_ms=roundtrip_ms,
+                    usage_meta=_extract_openai_usage_meta(response),
                 )
             except RateLimitError as e:
                 last_error = str(e)
@@ -1420,6 +1469,8 @@ class GPTSniperEngine:
                         "openai_ws_roundtrip_ms": int(result.roundtrip_ms),
                     }
                 )
+            if getattr(result, "usage_meta", None):
+                transport_meta.update(result.usage_meta)
             self._set_last_transport_meta(transport_meta)
             if isinstance(result.payload, dict):
                 return result.payload

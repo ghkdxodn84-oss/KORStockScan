@@ -77,6 +77,37 @@ def _bounded(value, low=0.0, high=9999.0):
     return max(low, min(high, float(value or 0.0)))
 
 
+def _pick_first_present(payload, keys):
+    for key in keys:
+        if key in payload and payload.get(key) not in (None, ""):
+            return payload.get(key)
+    return None
+
+
+def _extract_strength_value(payload):
+    raw_value = _pick_first_present(
+        payload or {},
+        (
+            "CntrStr",
+            "cntr_str",
+            "cntr_strg",
+            "cntr_streng",
+            "exec_strength",
+            "v_pw",
+        ),
+    )
+    if raw_value is None:
+        return 0.0, False
+    value = _safe_float(raw_value)
+    return value, value > 0.0
+
+
+def _format_strength_display(target):
+    if not bool(target.get("CntrStrAvailable", False)):
+        return "수신대기"
+    return f"{_safe_float(target.get('CntrStr')):.1f}"
+
+
 def _representative_source(source_set):
     sources = set(source_set or [])
     has_open = "OPEN_TOP" in sources
@@ -180,6 +211,7 @@ def _merge_candidate(candidate_pool, raw_target, source):
             "RankPrev": 0,
             "VIMotionCount": 0,
             "VIReleaseTime": "",
+            "CntrStrAvailable": False,
         },
     )
 
@@ -188,7 +220,10 @@ def _merge_candidate(candidate_pool, raw_target, source):
         current["Name"] = name
 
     current["FluRate"] = max(current.get("FluRate", 0.0), _safe_float(raw_target.get("FluRate", raw_target.get("flu_rate"))))
-    current["CntrStr"] = max(current.get("CntrStr", 0.0), _safe_float(raw_target.get("CntrStr", raw_target.get("cntr_str"))))
+    strength_value, strength_available = _extract_strength_value(raw_target)
+    if strength_available:
+        current["CntrStr"] = max(current.get("CntrStr", 0.0), strength_value)
+        current["CntrStrAvailable"] = True
     current["PriorityScore"] = max(current.get("PriorityScore", 0.0), _safe_float(raw_target.get("PriorityScore", raw_target.get("priority_score"))))
     current["SpikeRate"] = max(current.get("SpikeRate", 0.0), _safe_float(raw_target.get("SpikeRate", raw_target.get("spike_rate"))))
     current["TradeValue"] = max(current.get("TradeValue", 0), _safe_positive_int(raw_target.get("TradeValue", raw_target.get("trade_value"))))
@@ -297,7 +332,7 @@ def promote_candidates(db, event_bus, ranked_targets, recent_picks, *, max_new_c
         source_sig = ",".join(_source_signature(target))
         print(
             f"🎯 [타겟 포착] {target['Name']} "
-            f"(등락률: +{target['FluRate']}%, 체결강도: {target['CntrStr']}, "
+            f"(등락률: +{target['FluRate']}%, 체결강도: {_format_strength_display(target)}, "
             f"신선도점수: {score:.1f} | 출처: {target['Source']} [{source_sig}])"
         )
         try:
