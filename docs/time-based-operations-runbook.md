@@ -574,6 +574,18 @@ code_improvement_workorder_YYYY-MM-DD.md implement_now를 2-pass로 처리해줘
 마지막에 기존 구현/신규 구현/보류 항목을 분리 보고
 ```
 
+### 1.2 비-implement 항목 재판정 시점
+
+`attach_existing_family`, `design_family_candidate`, `defer_evidence`는 자동 구현이나 자동 runtime 반영 대상이 아니다. 다만 작업지시서에 남은 이상 operator가 다시 판단할 수 있어야 하므로, 장후 checklist에는 `CodeImprovementWorkorderReview`와 별도로 비-implement 항목 triage를 둔다.
+
+| 판정 | 사람이 다시 보는 시점 | 확인할 것 | 닫는 방식 |
+| --- | --- | --- | --- |
+| `attach_existing_family` | 다음 영업일 POSTCLOSE code-improvement triage | 기존 threshold family의 report/calibration 입력으로 흡수됐는지, 다음 `threshold_cycle_ev`/family report에 source metric이 보이는지 | `attached_to_existing_family`, `needs_codex_instrumentation`, `stale_no_action` 중 하나 |
+| `design_family_candidate` | 다음 영업일 POSTCLOSE code-improvement triage | 새 family 설계가 필요한 반복 패턴인지, `allowed_runtime_apply=false`, sample floor, safety guard, env key, rollback guard가 정의됐는지 | `design_backlog_required`, `merge_into_existing_family`, `reject_or_defer` 중 하나 |
+| `defer_evidence` | 다음 영업일 POSTCLOSE code-improvement triage | 새 표본이 추가되어 `implement_now` 또는 `attach_existing_family`로 승격됐는지, 여전히 stale/sample 부족인지 | `promoted`, `continue_defer`, `drop_stale` 중 하나 |
+
+이 triage는 repo 수정을 자동 수행하지 않는다. 결과가 `needs_codex_instrumentation` 또는 `design_backlog_required`이면 operator가 별도 Codex 구현 지시를 내리거나 다음 영업일 checklist에 parser-friendly 항목으로 남긴다. 결과가 `attached_to_existing_family`이면 다음 threshold-cycle/daily EV 산출물에서 재평가되도록 두고, runtime threshold나 주문 guard를 수동 변경하지 않는다.
+
 ### 2. 승격 판정
 
 `build_code_improvement_workorder`가 각 order를 아래 중 하나로 deterministic 분류한다.

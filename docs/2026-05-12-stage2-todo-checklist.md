@@ -78,7 +78,13 @@
   - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
   - 다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.
 
-- [ ] `[HumanInterventionSummary0512] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-05-12`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
+- [ ] `[CodeImprovementNonImplementTriage0512] attach/design/defer 항목 재판정 및 다음 소유자 고정` (`Due: 2026-05-12`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: ScalpingLogic`)
+  - Source: [code_improvement_workorder_2026-05-11.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-11.md), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정 기준: `attach_existing_family`는 기존 family 입력 흡수 여부, `design_family_candidate`는 설계 backlog 필요 여부, `defer_evidence`는 승격/계속보류/폐기 여부로 분리한다.
+  - 금지: 비-implement 항목을 자동 구현 또는 자동 runtime apply로 취급하지 않는다.
+  - 다음 액션: `attached_to_existing_family`, `needs_codex_instrumentation`, `design_backlog_required`, `continue_defer`, `drop_stale` 중 하나로 닫고, 사람이 다시 지시해야 하는 항목만 다음 checklist에 남긴다.
+
+- [ ] `[HumanInterventionSummary0512] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-05-12`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:30`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-11.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-11.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - 판정 기준: 개입사항을 `승인 artifact 필요`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`으로 분류한다.
   - 금지: 자동화 산출물에 있는 요청을 답변에만 남기고 checklist/Project 대상에서 누락하지 않는다.
