@@ -1136,7 +1136,7 @@ def test_post_sell_feedback_api_returns_pending_when_snapshot_missing(monkeypatc
             "status": "already_running",
             "worker_pid": "654",
             "result_file": "/tmp/run_snapshot_full.result",
-            "next_prompt_hint": "기존 완료 통보를 기다리세요.",
+            "next_prompt_hint": "기존 completion artifact를 확인하세요.",
         },
     )
 

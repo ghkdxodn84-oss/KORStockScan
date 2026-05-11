@@ -81,19 +81,45 @@ def test_normalize_result_payload_detects_cooldown_skip():
     assert "중복 실행" in payload["next_prompt_hint"] or "기존 결과" in payload["next_prompt_hint"]
 
 
+def test_dispatch_monitor_snapshot_job_disables_admin_notice_by_default(tmp_path, monkeypatch):
+    captured = {}
+
+    def fake_run(cmd, cwd, env, text, capture_output, check):
+        captured["cmd"] = cmd
+        captured["env"] = env
+        return types.SimpleNamespace(
+            returncode=0,
+            stdout=(
+                "[INFO] monitor snapshot async response status=dispatched "
+                "date=2026-04-24 profile=full worker_pid=123 output_file=/tmp/snapshot.out\n"
+            ),
+            stderr="",
+        )
+
+    monkeypatch.setattr(runtime.subprocess, "run", fake_run)
+    monkeypatch.setattr(runtime, "completion_artifact_path", lambda *args: tmp_path / "completion.json")
+    monkeypatch.setattr(runtime, "write_completion_artifact", lambda *args, **kwargs: None)
+
+    result = runtime.dispatch_monitor_snapshot_job(target_date="2026-04-24", profile="full")
+
+    assert captured["env"]["MONITOR_SNAPSHOT_NOTIFY_ADMIN"] == "0"
+    assert result["status"] == "dispatched"
+    assert "completion artifact" in result["next_prompt_hint"]
+
+
 def test_completion_artifact_roundtrip(tmp_path):
     artifact_path = tmp_path / "monitor_snapshot_completion_2026-04-24_full.json"
     payload = {
         "status": "dispatched",
         "target_date": "2026-04-24",
         "profile": "full",
-        "next_prompt_hint": "완료 통보를 기다리세요.",
+        "next_prompt_hint": "completion artifact를 확인하세요.",
     }
     runtime.write_completion_artifact(artifact_path, payload)
 
     loaded = json.loads(artifact_path.read_text(encoding="utf-8"))
     assert loaded["status"] == "dispatched"
-    assert loaded["next_prompt_hint"] == "완료 통보를 기다리세요."
+    assert loaded["next_prompt_hint"] == "completion artifact를 확인하세요."
 
 
 def test_archive_and_replay_daily_log_slice(tmp_path, monkeypatch):

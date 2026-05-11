@@ -22,6 +22,10 @@ SCAN_STATE_PATH = PROJECT_ROOT / "tmp" / "error_detector_log_scan_state.json"
 _EXCEPTION_PATTERNS: list[tuple[str, re.Pattern]] = []
 _IGNORED_LINE_PATTERNS: list[re.Pattern] = [
     re.compile(r"\[ERROR_DETECTION\]"),
+    re.compile(r"\bTEST(?:\b|[:(])"),
+    re.compile(r"\b123456\b"),
+    re.compile(r"_DummySession"),
+    re.compile(r"\bbus fail\b"),
 ]
 
 

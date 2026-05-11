@@ -101,8 +101,8 @@ def normalize_result_payload(
         "success": "snapshot 결과를 확인하고 다음 판정 프롬프트를 이어서 입력하세요.",
         "failed": "error/log를 확인한 뒤 원인 수정 또는 재실행 프롬프트를 입력하세요.",
         "skipped": "이미 최신 결과가 있거나 실행 중입니다. 중복 실행 대신 기존 결과를 확인하세요.",
-        "dispatched": "백그라운드 완료 통보를 기다린 뒤 결과 기반 다음 프롬프트를 입력하세요.",
-        "already_running": "기존 백그라운드 작업 완료 통보를 기다린 뒤 같은 결과 파일을 확인하세요.",
+        "dispatched": "completion artifact 갱신 후 결과 기반 다음 프롬프트를 입력하세요.",
+        "already_running": "기존 백그라운드 작업의 completion artifact와 결과 파일을 확인하세요.",
         "unknown": "상태를 확인한 뒤 다음 프롬프트를 입력하세요.",
     }.get(status, "상태를 확인한 뒤 다음 프롬프트를 입력하세요.")
 
@@ -200,7 +200,7 @@ def dispatch_monitor_snapshot_job(
     *,
     target_date: str,
     profile: str,
-    notify_admin: bool = True,
+    notify_admin: bool = False,
 ) -> dict[str, Any]:
     normalized_profile = str(profile or "full").strip().lower().replace("-", "_")
     if normalized_profile not in {"full", "intraday_light"}:
@@ -343,7 +343,6 @@ def guard_stdin_heavy_build(
     dispatch_info = dispatch_monitor_snapshot_job(
         target_date=target_date,
         profile=profile,
-        notify_admin=True,
     )
     report = copy.deepcopy(fallback_snapshot or pending_report_shell(snapshot_kind, target_date))
     meta = report.setdefault("meta", {})

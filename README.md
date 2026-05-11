@@ -402,6 +402,7 @@ HTML 대시보드 경로는 `/`, `/dashboard`, `/daily-report`, `/entry-pipeline
 | `data/model_registry/swing_v2/current.json` | 현재 승격된 스윙 ML v2 모델 manifest와 `bull_specialist_mode` |
 | `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md` | Codex 세션 입력용 code improvement 작업지시서 |
 | `data/report/code_improvement_workorder/code_improvement_workorder_YYYY-MM-DD.json` | code improvement 작업지시서 machine-readable 요약 |
+| `docs/YYYY-MM-DD-stage2-todo-checklist.md` | 다음 영업일 사람 개입/판정/승인 요구사항의 source of truth |
 | `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.{json,md}` | 무인 threshold 반영 이후 daily EV 성과 리포트 |
 | `data/report/error_detection/error_detection_YYYY-MM-DD.json` | System Error Detector 실행 결과와 detector별 severity/details/recommended_action |
 | `data/runtime/update_kospi_status/update_kospi_YYYY-MM-DD.json` | 야간 `update_kospi.py` chain 실행 결과, step별 성공/실패, feature source, 최신 DB quote 상태 |
@@ -426,7 +427,7 @@ JSON/JSONL이 canonical data이며, 사람이 장후 판정에 바로 읽어야 
 | threshold PREOPEN | `deploy/run_threshold_cycle_preopen.sh` | 전일 report/AI correction guard 기반 `auto_bounded_live` apply plan과 runtime env 생성 |
 | threshold INTRADAY calibration | `deploy/run_threshold_cycle_calibration.sh` | 12:05 KST 장중 calibration/AI correction artifact 생성. runtime mutation 없음. `cron_completion` 기준 완료 marker는 `[DONE] threshold-cycle calibration target_date=YYYY-MM-DD phase=intraday` |
 | swing live dry-run POSTCLOSE | `deploy/run_swing_live_dry_run_report.sh` | 15:45 KST 스윙 selection funnel, lifecycle audit, threshold AI review, improvement automation 생성 |
-| threshold POSTCLOSE | `deploy/run_threshold_cycle_postclose.sh` | compact backfill, postclose calibration/AI correction, swing lifecycle automation, pattern lab automation, code improvement workorder, daily EV report 생성. `cron_completion` 기준 완료 marker는 `[DONE] threshold-cycle postclose target_date=YYYY-MM-DD` |
+| threshold POSTCLOSE | `deploy/run_threshold_cycle_postclose.sh` | compact backfill, postclose calibration/AI correction, swing lifecycle automation, pattern lab automation, code improvement workorder, daily EV report, 다음 영업일 stage2 checklist 생성. `cron_completion` 기준 완료 marker는 `[DONE] threshold-cycle postclose target_date=YYYY-MM-DD` |
 | swing model retrain POSTCLOSE | `auto_retrain_pipeline.sh`, `deploy/install_swing_model_retrain_cron.sh` | 17:30 KST 스윙 ML v2 재학습 필요성 진단과 staging 재학습/평가/자동 artifact 승격. 실주문 전환 없음 |
 | tuning monitoring POSTCLOSE | `deploy/run_tuning_monitoring_postclose.sh` | Parquet/DuckDB refresh와 shadow diff. pattern lab은 기본 skip하고 `THRESHOLD_CYCLE_POSTCLOSE`를 canonical runner로 둠 |
 | nightly KOSPI update | `src/utils/update_kospi.py` | 21:00 KST 원천 DB 업데이트 후 status JSON을 남깁니다. 후속 스윙 추천/시뮬레이션 리포트는 별도 artifact freshness로 확인합니다. |

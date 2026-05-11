@@ -119,6 +119,35 @@ class TestLogScanner:
             assert new_pos == 0
             assert counter == {}
 
+    def test_scan_file_ignores_test_fixture_noise(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_file = Path(tmpdir) / "sniper_state_handlers_error.log"
+            log_file.write_text(
+                "\n".join([
+                    "[2026-05-11 18:22:21] 🚨 ERROR in sniper_state_handlers: "
+                    "🚨 [DB 조회 에러] ID 1 수량 조회 실패: 'NoneType' object has no attribute 'get_session'",
+                    "[2026-05-11 18:22:21] 🚨 ERROR in sniper_state_handlers: "
+                    "[ADD_CANCELLED] TEST(123456) pending add missing order number.",
+                    "[2026-05-11 18:22:22] 🚨 ERROR in sniper_scale_in_utils: "
+                    "[ADD_HISTORY] event persist failed: '_DummySession' object has no attribute 'add'",
+                    "[2026-05-11 18:22:22] 🚨 ERROR in telegram_manager: "
+                    "[TRADING_PAUSED] EventBus publish failed after pause: bus fail",
+                    "[2026-05-11 18:22:22] 🚨 ERROR in kiwoom_orders: "
+                    "❌ [취소거절] 123456: 인증에 실패했습니다[8005:Token이 유효하지 않습니다]",
+                    "[2026-05-11 18:22:23] 🚨 ERROR in live_component: real API error",
+                ]),
+                encoding="utf-8",
+            )
+
+            scanner = LogScanner()
+            counter = __import__("collections").Counter()
+            errors, _, _ = scanner._scan_file(log_file, 0, counter)
+
+            assert errors == 2
+            assert counter == {"DB_ERROR": 1, "API_ERROR": 1}
+            severity, _ = scanner._classify(errors, counter)
+            assert severity == "warning"
+
     def test_scan_file_no_change(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             log_file = Path(tmpdir) / "test_error.log"

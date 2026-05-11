@@ -13,7 +13,7 @@ PROFILE="${MONITOR_SNAPSHOT_PROFILE:-full}"
 IO_DELAY_SEC="${MONITOR_SNAPSHOT_IO_DELAY_SEC:-0}"
 START_JITTER_SEC="${MONITOR_SNAPSHOT_START_JITTER_SEC:-0}"
 SKIP_SERVER_COMPARISON="${MONITOR_SNAPSHOT_SKIP_SERVER_COMPARISON:-0}"
-NOTIFY_ADMIN="${MONITOR_SNAPSHOT_NOTIFY_ADMIN:-0}"
+NOTIFY_ADMIN=0
 ASYNC_MODE="${MONITOR_SNAPSHOT_ASYNC:-1}"
 ASYNC_WAIT_SEC="${MONITOR_SNAPSHOT_ASYNC_WAIT_SEC:-0}"
 WORKER_MODE="${MONITOR_SNAPSHOT_WORKER:-0}"
@@ -319,11 +319,11 @@ print_standard_async_response() {
   local output_file="${3:-}"
 
   echo "[INFO] monitor snapshot async response status=${status} date=${TARGET_DATE} profile=${PROFILE} worker_pid=${worker_pid:-"-"} output_file=${output_file:-"-"}"
-  echo "[HINT] 작업은 백그라운드에서 실행되며 완료 알림은 Telegram으로 전송됩니다."
+  echo "[HINT] 작업은 백그라운드에서 실행되며 완료 상태는 completion artifact와 cron log로 확인합니다."
   if [[ "$status" == "dispatched" ]]; then
-    echo "[HINT] 완료 통보 수신 전까지 다음 작업은 대기 상태로 두고 결과를 기반으로 다음 지시를 이어 주세요."
+    echo "[HINT] completion artifact가 success/failed/skipped로 갱신된 뒤 결과를 기반으로 다음 지시를 이어 주세요."
   else
-    echo "[HINT] 완료 알림이 들어오기 전까지 동일 작업은 중복 실행하지 마세요."
+    echo "[HINT] 기존 completion artifact 또는 worker pid를 확인하기 전까지 동일 작업은 중복 실행하지 마세요."
   fi
   write_completion_artifact "$status" "${output_file:-}" "${worker_pid:-}"
 }
@@ -508,13 +508,6 @@ run_snapshot_once() {
       else
         cat "$output_file"
       fi
-      if [[ "$NOTIFY_ADMIN" == "1" ]]; then
-        env PYTHONPATH=. "$VENV_PY" -m src.engine.notify_monitor_snapshot_admin \
-          --target-date "$TARGET_DATE" \
-          --profile "$PROFILE" \
-          --result-file "$output_file" \
-          --log-file "$LOG_FILE" || true
-      fi
       if [[ "$KEEP_OUTPUT_FILE" != "1" ]]; then
         rm -f "$output_file"
       fi
@@ -525,13 +518,6 @@ run_snapshot_once() {
     fi
 
     print_summary "$output_file"
-    if [[ "$NOTIFY_ADMIN" == "1" ]]; then
-      env PYTHONPATH=. "$VENV_PY" -m src.engine.notify_monitor_snapshot_admin \
-        --target-date "$TARGET_DATE" \
-        --profile "$PROFILE" \
-        --result-file "$output_file" \
-        --log-file "$LOG_FILE" || true
-    fi
     if [[ "$SNAPSHOT_STATUS" -eq 0 && "$snapshot_skipped" -ne 1 ]]; then
       touch "$COOLDOWN_STATE_FILE"
     fi

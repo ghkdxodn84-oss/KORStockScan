@@ -334,7 +334,6 @@ def _build_or_dispatch_heavy_snapshot_report(
     dispatch_info = dispatch_monitor_snapshot_job(
         target_date=target_date,
         profile=profile,
-        notify_admin=True,
     )
     artifact_path = completion_artifact_path(target_date, profile)
 
