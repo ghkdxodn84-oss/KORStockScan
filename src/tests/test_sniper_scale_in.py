@@ -48,6 +48,72 @@ def test_scalping_pyramid_signal():
     assert result["add_type"] == "PYRAMID"
 
 
+def test_swing_pyramid_signal():
+    result = scale_in.evaluate_swing_pyramid(
+        {"strategy": "KOSPI_ML"},
+        profit_rate=4.5,
+        peak_profit=4.8,
+    )
+
+    assert result["should_add"] is True
+    assert result["add_type"] == "PYRAMID"
+    assert result["reason"] == "swing_pyramid_ok"
+
+
+def test_swing_avg_down_simulation_signal():
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(
+        CONFIG,
+        SWING_ENABLE_AVG_DOWN_SIMULATION=True,
+        SWING_AVG_DOWN_MIN_LOSS_PCT=-3.0,
+        SWING_AVG_DOWN_MAX_LOSS_PCT=-0.8,
+        SWING_AVG_DOWN_MIN_HOLD_SEC=300,
+    )
+    try:
+        result = scale_in.evaluate_swing_avg_down(
+            {"strategy": "KOSPI_ML"},
+            profit_rate=-1.2,
+            peak_profit=0.4,
+            current_ai_score=63,
+            held_sec=900,
+        )
+    finally:
+        scale_in.TRADING_RULES = original
+
+    assert result["should_add"] is True
+    assert result["add_type"] == "AVG_DOWN"
+    assert result["reason"] == "swing_avg_down_ok"
+
+
+def test_swing_dynamic_scale_in_qty_uncapped_for_simulation():
+    original = scale_in.TRADING_RULES
+    scale_in.TRADING_RULES = replace(
+        CONFIG,
+        SWING_SCALE_IN_DYNAMIC_QTY_ENABLED=True,
+        SWING_SCALE_IN_EFFECTIVE_QTY_CAP=0,
+        MAX_POSITION_PCT=0.20,
+    )
+    try:
+        details = scale_in.describe_dynamic_scale_in_qty(
+            stock={"buy_qty": 10, "swing_live_order_dry_run": True},
+            resolved_price=10_000,
+            deposit=2_000_000,
+            add_type="PYRAMID",
+            strategy="KOSPI_ML",
+            add_reason="swing_pyramid_ok",
+            price_resolution={"allowed": True},
+            action={"profit_rate": 4.5, "peak_profit": 4.8},
+        )
+    finally:
+        scale_in.TRADING_RULES = original
+
+    assert details["would_qty"] == 3
+    assert details["effective_qty"] == 3
+    assert details["qty"] == 3
+    assert details["qty_reason"] == "swing_dynamic_allowed"
+    assert details["effective_qty_cap"] == 0
+
+
 def test_scalping_pyramid_count_is_attribution_only():
     from src.utils.constants import TRADING_RULES as CONFIG
 
@@ -632,6 +698,223 @@ def test_execute_scalping_pyramid_sends_resolved_best_bid_with_one_share_cap(mon
     assert history[0]["request_price"] == 9_990
     assert any(stage == "scale_in_price_resolved" for stage, _ in logs)
     assert any(stage == "scale_in_price_p2_observe" for stage, _ in logs)
+
+
+def test_execute_swing_sim_scale_in_logs_automation_fields(monkeypatch):
+    rules = replace(
+        CONFIG,
+        SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
+        SWING_SCALE_IN_DYNAMIC_QTY_ENABLED=True,
+        SWING_SCALE_IN_EFFECTIVE_QTY_CAP=0,
+        MAX_POSITION_PCT=0.20,
+    )
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    state_handlers.KIWOOM_TOKEN = "test"
+
+    sent_orders = []
+    logs = []
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 2_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append(args) or {"return_code": "0", "ord_no": "SHOULD_NOT_SEND"},
+    )
+    monkeypatch.setattr(state_handlers, "_is_swing_orderbook_micro_context_enabled", lambda strategy: False)
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 11,
+        "name": "SWING",
+        "strategy": "KOSPI_ML",
+        "buy_qty": 10,
+        "buy_price": 9_800,
+        "swing_live_order_dry_run": True,
+        "swing_intraday_probe": True,
+        "probe_id": "probe-1",
+        "probe_origin_stage": "blocked_gatekeeper_reject",
+        "evidence_quality": "blocked_stage_intraday_probe",
+    }
+    action = {
+        "add_type": "PYRAMID",
+        "reason": "swing_pyramid_ok",
+        "profit_rate": 4.5,
+        "peak_profit": 4.8,
+    }
+
+    result = state_handlers.execute_scale_in_order(
+        stock=stock,
+        code="123456",
+        ws_data={"curr": 10_000},
+        action=action,
+        admin_id=None,
+    )
+
+    assert sent_orders == []
+    assert result["actual_order_submitted"] is False
+    sim_log = [fields for stage, fields in logs if stage == "swing_sim_scale_in_order_assumed_filled"][0]
+    probe_log = [fields for stage, fields in logs if stage == "swing_probe_scale_in_order_assumed_filled"][0]
+    for fields in (sim_log, probe_log):
+        assert fields["actual_order_submitted"] is False
+        assert fields["broker_order_forbidden"] is True
+        assert fields["add_type"] == "PYRAMID"
+        assert fields["scale_in_type"] == "PYRAMID"
+        assert fields["add_trigger"] == "swing_pyramid_ok"
+        assert fields["price_policy"] == "market"
+        assert fields["post_add_outcome"] == "pending_followup"
+        assert fields["scale_in_ratio"] == "0.3000"
+        assert fields["would_qty"] == 3
+        assert fields["effective_qty"] == 3
+
+
+def test_execute_swing_real_canary_pyramid_submits_one_share_limit(monkeypatch):
+    rules = replace(
+        CONFIG,
+        SWING_SCALE_IN_REAL_CANARY_ENABLED=True,
+        SWING_SCALE_IN_REAL_CANARY_ALLOWED_ARMS="PYRAMID,AVG_DOWN",
+        SWING_SCALE_IN_REAL_CANARY_MAX_QTY=1,
+        SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_DAY=1,
+        SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_POSITION=1,
+        SWING_SCALE_IN_REAL_CANARY_MAX_DAILY_NOTIONAL_KRW=100_000,
+        SWING_SCALE_IN_DYNAMIC_QTY_ENABLED=True,
+        MAX_POSITION_PCT=0.20,
+    )
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    state_handlers.KIWOOM_TOKEN = "test"
+
+    sent_orders = []
+    logs = []
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 2_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append(args) or {"return_code": "0", "ord_no": "REALADD1"},
+    )
+    monkeypatch.setattr(state_handlers, "record_add_history_event", lambda *args, **kwargs: True)
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_build_live_orderbook_micro_context",
+        lambda code, curr_price: {
+            "ready": True,
+            "micro_state": "bullish",
+            "observer_healthy": True,
+            "sample_quote_count": 10,
+            "snapshot_age_ms": 50,
+        },
+    )
+
+    stock = {
+        "id": 12,
+        "name": "SWING",
+        "strategy": "KOSPI_ML",
+        "status": "HOLDING",
+        "buy_qty": 10,
+        "buy_price": 9_800,
+        "actual_order_submitted": True,
+        "cohort": "swing_one_share_real_canary",
+    }
+    action = {"add_type": "PYRAMID", "reason": "swing_pyramid_ok", "profit_rate": 4.5, "peak_profit": 4.8}
+    ws_data = {
+        "curr": 10_000,
+        "last_ws_update_ts": time.time(),
+        "orderbook": {"bids": [{"price": 9_990}], "asks": [{"price": 10_010}]},
+    }
+
+    result = state_handlers.execute_scale_in_order(
+        stock=stock,
+        code="123456",
+        ws_data=ws_data,
+        action=action,
+        admin_id=1,
+    )
+
+    assert sent_orders == [("123456", 1, 9_990, "00")]
+    assert result["ord_no"] == "REALADD1"
+    assert stock["pending_add_qty"] == 1
+    assert stock["swing_scale_in_real_canary"] is True
+    submitted = [fields for stage, fields in logs if stage == "swing_scale_in_real_canary_order_submitted"][0]
+    assert submitted["actual_order_submitted"] is True
+    assert submitted["would_qty"] == 3
+    assert submitted["effective_qty"] == 3
+    assert submitted["real_canary_actual_qty"] == 1
+    assert submitted["real_canary_qty_cap"] == 1
+    assert submitted["qty_cap_reason"] == "swing_scale_in_real_canary_phase0"
+
+
+def test_execute_swing_real_canary_blocks_bearish_micro(monkeypatch):
+    rules = replace(
+        CONFIG,
+        SWING_SCALE_IN_REAL_CANARY_ENABLED=True,
+        SWING_SCALE_IN_REAL_CANARY_ALLOWED_ARMS="PYRAMID,AVG_DOWN",
+        MAX_POSITION_PCT=0.20,
+    )
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    state_handlers.KIWOOM_TOKEN = "test"
+
+    sent_orders = []
+    logs = []
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 2_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: sent_orders.append(args) or {"return_code": "0", "ord_no": "SHOULD_NOT_SEND"},
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_build_live_orderbook_micro_context",
+        lambda code, curr_price: {
+            "ready": True,
+            "micro_state": "bearish",
+            "observer_healthy": True,
+            "sample_quote_count": 10,
+            "snapshot_age_ms": 50,
+        },
+    )
+
+    stock = {
+        "id": 13,
+        "name": "SWING",
+        "strategy": "KOSPI_ML",
+        "status": "HOLDING",
+        "buy_qty": 10,
+        "buy_price": 9_800,
+        "actual_order_submitted": True,
+        "cohort": "swing_one_share_real_canary",
+    }
+
+    result = state_handlers.execute_scale_in_order(
+        stock=stock,
+        code="123456",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": time.time(),
+            "orderbook": {"bids": [{"price": 9_990}], "asks": [{"price": 10_010}]},
+        },
+        action={"add_type": "PYRAMID", "reason": "swing_pyramid_ok", "profit_rate": 4.5, "peak_profit": 4.8},
+        admin_id=1,
+    )
+
+    assert result is None
+    assert sent_orders == []
+    blocked = [fields for stage, fields in logs if stage == "swing_scale_in_real_canary_blocked"][0]
+    assert blocked["block_reason"] == "ofi_qi_risk_bearish"
+    assert blocked["actual_order_submitted"] is False
 
 
 def test_execute_scalping_reversal_add_uses_resolved_price_not_curr(monkeypatch):

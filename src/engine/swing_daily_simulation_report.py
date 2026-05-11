@@ -61,7 +61,17 @@ def load_recommendations(path: str | Path = RECO_PATH, target_date: str | None =
     if "date" in df.columns:
         df["date"] = pd.to_datetime(df["date"], errors="coerce").dt.normalize()
         if target_date:
-            df = df[df["date"] == pd.to_datetime(target_date).normalize()].copy()
+            target_ts = pd.to_datetime(target_date).normalize()
+            exact = df[df["date"] == target_ts].copy()
+            if exact.empty:
+                carryover_dates = df.loc[df["date"] <= target_ts, "date"].dropna()
+                if not carryover_dates.empty:
+                    latest_date = carryover_dates.max()
+                    df = df[df["date"] == latest_date].copy()
+                else:
+                    df = exact
+            else:
+                df = exact
     if "code" in df.columns:
         df["code"] = df["code"].astype(str).str.replace(r"\.0$", "", regex=True).str.strip().str.zfill(6)
     return df.reset_index(drop=True)
@@ -69,7 +79,14 @@ def load_recommendations(path: str | Path = RECO_PATH, target_date: str | None =
 
 def filter_live_recommendations(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
     if df.empty:
-        return df.copy(), {"input_rows": 0, "live_rows": 0, "diagnostic_rows": 0, "selection_modes": {}}
+        return df.copy(), {
+            "input_rows": 0,
+            "live_rows": 0,
+            "diagnostic_rows": 0,
+            "selection_modes": {},
+            "recommendation_sources": {},
+            "source_signal_dates": [],
+        }
 
     out = df.copy()
     if "selection_mode" not in out.columns:
@@ -82,6 +99,19 @@ def filter_live_recommendations(df: pd.DataFrame) -> tuple[pd.DataFrame, dict]:
         "live_rows": int(len(live)),
         "diagnostic_rows": int((~live_mask).sum()),
         "selection_modes": modes.replace("", "LEGACY_UNTAGGED").value_counts().to_dict(),
+        "recommendation_sources": (
+            out.get("recommendation_source", pd.Series(["unknown"] * len(out)))
+            .fillna("unknown")
+            .astype(str)
+            .value_counts()
+            .to_dict()
+        ),
+        "source_signal_dates": sorted(
+            {
+                _date_text(value)
+                for value in out.get("date", pd.Series(dtype=object)).dropna().tolist()
+            }
+        ),
     }
 
 
@@ -106,6 +136,80 @@ def fetch_quote_rows(codes: Iterable[str], start_date: str, db_url: str = POSTGR
     df["quote_date"] = pd.to_datetime(df["quote_date"], errors="coerce").dt.normalize()
     df["stock_code"] = df["stock_code"].astype(str).str.replace(r"\.0$", "", regex=True).str.strip().str.zfill(6)
     return df
+
+
+def fetch_db_swing_recommendations(
+    target_date: str,
+    *,
+    db_url: str = POSTGRES_URL,
+    exclude_position_tags: Iterable[str] = ("META_V2",),
+) -> pd.DataFrame:
+    engine = create_engine(db_url)
+    excluded = {str(tag or "").upper() for tag in exclude_position_tags}
+    query = text(
+        """
+        SELECT rec_date, stock_code, stock_name, buy_price, trade_type, strategy, position_tag, prob, status
+        FROM recommendation_history
+        WHERE rec_date = :target_date
+          AND strategy IN ('KOSPI_ML', 'KOSDAQ_ML')
+        ORDER BY id ASC
+        """
+    )
+    with engine.connect() as conn:
+        df = pd.read_sql(query, conn, params={"target_date": target_date})
+    if df.empty:
+        return pd.DataFrame()
+    df["position_tag"] = df["position_tag"].fillna("").astype(str)
+    df = df[~df["position_tag"].str.upper().isin(excluded)].copy()
+    if df.empty:
+        return pd.DataFrame()
+    out = pd.DataFrame(
+        {
+            "date": pd.to_datetime(df["rec_date"], errors="coerce").dt.normalize(),
+            "code": df["stock_code"].astype(str).str.replace(r"\.0$", "", regex=True).str.strip().str.zfill(6),
+            "name": df["stock_name"].fillna("").astype(str),
+            "close": pd.to_numeric(df["buy_price"], errors="coerce").fillna(0),
+            "strategy": df["strategy"].fillna("KOSPI_ML").astype(str),
+            "selection_mode": df["position_tag"].map(
+                lambda tag: "DB_EOD_TOP5" if str(tag).upper() == "EOD_TOP5" else "DB_FINAL_ENSEMBLE"
+            ),
+            "position_tag": df["position_tag"],
+            "trade_type": df["trade_type"].fillna("").astype(str),
+            "prob": pd.to_numeric(df["prob"], errors="coerce").fillna(0),
+            "meta_score": pd.to_numeric(df["prob"], errors="coerce").fillna(0),
+            "hybrid_mean": pd.to_numeric(df["prob"], errors="coerce").fillna(0),
+            "score_rank": 0,
+            "floor_used": 0.0,
+            "bull_regime": 0,
+            "recommendation_source": "recommendation_history",
+            "runtime_status": df["status"].fillna("").astype(str),
+        }
+    )
+    return out.reset_index(drop=True)
+
+
+def merge_recommendation_sources(csv_rows: pd.DataFrame, db_rows: pd.DataFrame) -> pd.DataFrame:
+    frames = []
+    if csv_rows is not None and not csv_rows.empty:
+        csv = csv_rows.copy()
+        if "recommendation_source" not in csv.columns:
+            csv["recommendation_source"] = "daily_recommendations_v2_csv"
+        frames.append(csv)
+    if db_rows is not None and not db_rows.empty:
+        frames.append(db_rows.copy())
+    if not frames:
+        return pd.DataFrame()
+    merged = pd.concat(frames, ignore_index=True, sort=False)
+    if "strategy" not in merged.columns:
+        merged["strategy"] = "KOSPI_ML"
+    merged["_source_rank"] = merged.get("recommendation_source", pd.Series(dtype=object)).map(
+        lambda value: 0 if str(value) == "daily_recommendations_v2_csv" else 1
+    )
+    merged = merged.sort_values(["code", "strategy", "_source_rank"]).drop_duplicates(
+        subset=["code", "strategy"],
+        keep="first",
+    )
+    return merged.drop(columns=["_source_rank"]).reset_index(drop=True)
 
 
 def _normalize_strategy(row: pd.Series | dict) -> str:
@@ -213,6 +317,98 @@ def _runtime_entry_dry_run(row: pd.Series, entry_quote: pd.Series, *, simulation
     return result
 
 
+def _arm_entry_decision(
+    row: pd.Series,
+    entry_quote: pd.Series,
+    *,
+    simulation_cash_krw: int,
+    sim_arm: str,
+) -> dict:
+    if sim_arm == "gatekeeper_pass":
+        decision = _runtime_entry_dry_run(row, entry_quote, simulation_cash_krw=simulation_cash_krw)
+        return {
+            **decision,
+            "sim_arm": sim_arm,
+            "sim_arm_policy": "runtime_guard_proxy_after_gap_score_regime_and_assumed_gatekeeper_pass",
+        }
+
+    strategy = _normalize_strategy(row)
+    bull_regime = _safe_int(row.get("bull_regime"), 0)
+    thresholds = _runtime_swing_thresholds(strategy, bull_regime)
+    curr_price = _safe_float(entry_quote.get("open_price"), 0.0)
+    signal_close = _safe_float(row.get("close"), 0.0)
+    fluctuation = ((curr_price / signal_close) - 1.0) * 100.0 if curr_price > 0 and signal_close > 0 else 0.0
+    ratio = float(thresholds["ratio_min"])
+    target_budget, safe_budget, qty, safety_ratio = kiwoom_orders.describe_buy_capacity(
+        curr_price,
+        simulation_cash_krw,
+        ratio,
+        max_budget=0,
+    )
+    base = {
+        "sim_arm": sim_arm,
+        "strategy": strategy,
+        "entry_runtime_score_proxy": _runtime_score_proxy(row),
+        "entry_runtime_score_source": "daily_proxy_from_hybrid_mean_score_rank",
+        "buy_score_threshold": float(thresholds["buy_score_threshold"]),
+        "gap_pct": fluctuation,
+        "max_gap_pct": thresholds["max_gap_pct"],
+        "gatekeeper_mode": "not_applied_for_counterfactual_arm",
+        "market_regime_mode": "not_applied_for_counterfactual_arm",
+        "actual_order_submitted": False,
+        "order_type_code": "6",
+        "order_type_desc": "최유리지정가",
+        "request_price": 0,
+        "assumed_fill_price": curr_price,
+        "target_pct": thresholds["target_pct"],
+        "max_hold_days": thresholds["max_hold_days"],
+        "ratio": ratio,
+        "simulation_cash_krw": int(simulation_cash_krw),
+        "target_budget": target_budget,
+        "safe_budget": safe_budget,
+        "safety_ratio": safety_ratio,
+        "buy_qty": qty,
+    }
+    if curr_price <= 0:
+        return {
+            **base,
+            "entry_guard": "BLOCKED_BAD_ENTRY_PRICE",
+            "entry_guard_reason": "open_price<=0",
+        }
+    if sim_arm == "gap_pass" and fluctuation >= thresholds["max_gap_pct"]:
+        return {
+            **base,
+            "entry_guard": "BLOCKED_SWING_GAP",
+            "entry_guard_reason": "gap>=runtime_threshold",
+            "sim_arm_policy": "gap_guard_only_then_daily_path_sim",
+        }
+    if qty <= 0:
+        return {
+            **base,
+            "entry_guard": "BLOCKED_ZERO_QTY",
+            "entry_guard_reason": "describe_buy_capacity returned 0",
+            "sim_arm_policy": (
+                "selection_only_next_open_sim"
+                if sim_arm == "selection_only"
+                else "gap_guard_only_then_daily_path_sim"
+            ),
+        }
+    return {
+        **base,
+        "entry_guard": "PASS_SELECTION_ONLY" if sim_arm == "selection_only" else "PASS_GAP_ONLY",
+        "entry_guard_reason": (
+            "recommendation selected; gap/gatekeeper/market gates ignored for opportunity-cost observation"
+            if sim_arm == "selection_only"
+            else "gap guard pass; gatekeeper/score/market gates ignored for opportunity-cost observation"
+        ),
+        "sim_arm_policy": (
+            "selection_only_next_open_sim"
+            if sim_arm == "selection_only"
+            else "gap_guard_only_then_daily_path_sim"
+        ),
+    }
+
+
 def _resolve_runtime_exit(day: pd.Series, *, entry_price: float, peak_price: float, hold_day: int, max_hold_days: int, strategy: str, bull_regime: int):
     open_p = _safe_float(day.get("open_price"), 0.0)
     high_p = _safe_float(day.get("high_price"), 0.0)
@@ -245,6 +441,101 @@ def _resolve_runtime_exit(day: pd.Series, *, entry_price: float, peak_price: flo
     if hold_day >= max_hold_days:
         return close_p, "TIME_STOP", updated_peak
     return None, "", updated_peak
+
+
+def _simulate_path_from_entry(
+    *,
+    base: dict,
+    entry_decision: dict,
+    future: pd.DataFrame,
+    entry_date,
+    as_of,
+    roundtrip_fee_rate: float,
+) -> dict:
+    buy_price = _safe_float(entry_decision.get("assumed_fill_price"), 0.0)
+    if buy_price <= 0:
+        return {
+            **base,
+            **entry_decision,
+            "status": entry_decision.get("entry_guard", "SKIPPED_BAD_ENTRY_PRICE"),
+            "entry_date": _date_text(entry_date),
+            "net_ret": None,
+        }
+    if as_of is not None and entry_date > as_of:
+        return {
+            **base,
+            **entry_decision,
+            "status": "PLANNED_ENTRY",
+            "entry_date": _date_text(entry_date),
+            "buy_price": buy_price,
+            "exit_reason": "",
+            "net_ret": None,
+        }
+    if not str(entry_decision.get("entry_guard", "")).startswith("PASS"):
+        return {
+            **base,
+            **entry_decision,
+            "status": entry_decision.get("entry_guard", "BLOCKED_ENTRY"),
+            "entry_date": _date_text(entry_date),
+            "buy_price": buy_price,
+            "exit_reason": "",
+            "net_ret": None,
+        }
+
+    exit_price = None
+    exit_reason = ""
+    hold_days = 0
+    peak_price = buy_price
+    max_hold_days = int(entry_decision.get("max_hold_days") or 4)
+    exit_date = None
+
+    for _, day in future.iterrows():
+        hold_days += 1
+        if as_of is not None and day["quote_date"] > as_of:
+            break
+        exit_price, exit_reason, peak_price = _resolve_runtime_exit(
+            day,
+            entry_price=buy_price,
+            peak_price=peak_price,
+            hold_day=hold_days,
+            max_hold_days=max_hold_days,
+            strategy=str(entry_decision.get("strategy") or "KOSPI_ML"),
+            bull_regime=base["bull_regime"],
+        )
+        if exit_price is not None:
+            exit_date = day["quote_date"]
+            break
+
+    if exit_price is None:
+        latest = future[future["quote_date"] <= as_of].tail(1) if as_of is not None else future.tail(1)
+        mark_price = _safe_float(latest.iloc[0].get("close_price"), buy_price) if not latest.empty else buy_price
+        return {
+            **base,
+            **entry_decision,
+            "status": "OPEN_SIM",
+            "entry_date": _date_text(entry_date),
+            "buy_price": buy_price,
+            "mark_price": mark_price,
+            "unrealized_ret": (mark_price / buy_price) - 1.0,
+            "hold_days": hold_days,
+            "exit_reason": "",
+            "net_ret": None,
+        }
+
+    gross_ret = (exit_price / buy_price) - 1.0
+    return {
+        **base,
+        **entry_decision,
+        "status": "CLOSED_SIM",
+        "entry_date": _date_text(entry_date),
+        "exit_date": _date_text(exit_date),
+        "hold_days": hold_days,
+        "buy_price": buy_price,
+        "exit_price": exit_price,
+        "gross_ret": gross_ret,
+        "net_ret": gross_ret - roundtrip_fee_rate,
+        "exit_reason": exit_reason,
+    }
 
 
 def simulate_swing_recommendations(
@@ -285,6 +576,9 @@ def simulate_swing_recommendations(
             "meta_score": _safe_float(row.get("meta_score", row.get("score")), 0.0),
             "floor_used": _safe_float(row.get("floor_used"), 0.0),
             "bull_regime": _safe_int(row.get("bull_regime"), 0),
+            "recommendation_source": str(row.get("recommendation_source") or ""),
+            "runtime_status": str(row.get("runtime_status") or ""),
+            "position_tag": str(row.get("position_tag") or ""),
         }
 
         if future.empty:
@@ -302,96 +596,91 @@ def simulate_swing_recommendations(
         entry = future.iloc[0]
         entry_date = entry["quote_date"]
         entry_decision = _runtime_entry_dry_run(row, entry, simulation_cash_krw=simulation_cash_krw)
-        buy_price = _safe_float(entry_decision.get("assumed_fill_price"), 0.0)
-        if buy_price <= 0:
-            rows.append({
-                **base,
-                **entry_decision,
-                "status": entry_decision.get("entry_guard", "SKIPPED_BAD_ENTRY_PRICE"),
-                "entry_date": _date_text(entry_date),
-                "net_ret": None,
-            })
-            continue
-        if as_of is not None and entry_date > as_of:
-            rows.append({
-                **base,
-                **entry_decision,
-                "status": "PLANNED_ENTRY",
-                "entry_date": _date_text(entry_date),
-                "buy_price": buy_price,
-                "exit_reason": "",
-                "net_ret": None,
-            })
-            continue
-        if entry_decision.get("entry_guard") != "PASS_DRY_RUN":
-            rows.append({
-                **base,
-                **entry_decision,
-                "status": entry_decision.get("entry_guard", "BLOCKED_ENTRY"),
-                "entry_date": _date_text(entry_date),
-                "buy_price": buy_price,
-                "exit_reason": "",
-                "net_ret": None,
-            })
-            continue
-
-        exit_price = None
-        exit_reason = ""
-        hold_days = 0
-        peak_price = buy_price
-        max_hold_days = int(entry_decision.get("max_hold_days") or 4)
-
-        for idx, day in future.iterrows():
-            hold_days += 1
-            if as_of is not None and day["quote_date"] > as_of:
-                break
-            exit_price, exit_reason, peak_price = _resolve_runtime_exit(
-                day,
-                entry_price=buy_price,
-                peak_price=peak_price,
-                hold_day=hold_days,
-                max_hold_days=max_hold_days,
-                strategy=str(entry_decision.get("strategy") or "KOSPI_ML"),
-                bull_regime=base["bull_regime"],
+        rows.append(
+            _simulate_path_from_entry(
+                base=base,
+                entry_decision=entry_decision,
+                future=future,
+                entry_date=entry_date,
+                as_of=as_of,
+                roundtrip_fee_rate=roundtrip_fee_rate,
             )
-            if exit_price is not None:
-                exit_date = day["quote_date"]
-                break
-        else:
-            exit_date = None
+        )
 
-        if exit_price is None:
-            latest = future[future["quote_date"] <= as_of].tail(1) if as_of is not None else future.tail(1)
-            mark_price = _safe_float(latest.iloc[0].get("close_price"), buy_price) if not latest.empty else buy_price
-            rows.append({
-                **base,
-                **entry_decision,
-                "status": "OPEN_SIM",
-                "entry_date": _date_text(entry_date),
-                "buy_price": buy_price,
-                "mark_price": mark_price,
-                "unrealized_ret": (mark_price / buy_price) - 1.0,
-                "hold_days": hold_days,
-                "exit_reason": "",
-                "net_ret": None,
-            })
+    return rows
+
+
+def simulate_swing_observation_arms(
+    recommendations: pd.DataFrame,
+    quotes: pd.DataFrame,
+    *,
+    target_date: str | None = None,
+    simulation_cash_krw: int = 10_000_000,
+    roundtrip_fee_rate: float = 0.0023,
+) -> list[dict]:
+    if recommendations.empty:
+        return []
+    quote_df = quotes.copy()
+    if not quote_df.empty:
+        quote_df["quote_date"] = pd.to_datetime(quote_df["quote_date"], errors="coerce").dt.normalize()
+    rows: list[dict] = []
+    as_of = pd.to_datetime(target_date).normalize() if target_date else None
+    arms = ("selection_only", "gap_pass", "gatekeeper_pass")
+
+    for _, row in recommendations.iterrows():
+        signal_date = pd.to_datetime(row.get("date"), errors="coerce").normalize()
+        code = str(row.get("code") or row.get("stock_code") or "").zfill(6)
+        if quote_df.empty or "stock_code" not in quote_df.columns or "quote_date" not in quote_df.columns:
+            future = pd.DataFrame()
+        else:
+            future = quote_df[quote_df["stock_code"] == code].copy()
+        if pd.notna(signal_date) and not future.empty:
+            future = future[future["quote_date"] > signal_date]
+        if not future.empty:
+            future = future.sort_values("quote_date").head(6)
+
+        base = {
+            "signal_date": _date_text(signal_date) if pd.notna(signal_date) else "",
+            "code": code,
+            "name": str(row.get("name") or row.get("stock_name") or ""),
+            "selection_mode": str(row.get("selection_mode") or "LEGACY_UNTAGGED"),
+            "score_rank": _safe_int(row.get("score_rank"), 0),
+            "hybrid_mean": _safe_float(row.get("hybrid_mean"), 0.0),
+            "meta_score": _safe_float(row.get("meta_score", row.get("score")), 0.0),
+            "floor_used": _safe_float(row.get("floor_used"), 0.0),
+            "bull_regime": _safe_int(row.get("bull_regime"), 0),
+            "recommendation_source": str(row.get("recommendation_source") or ""),
+            "runtime_status": str(row.get("runtime_status") or ""),
+            "position_tag": str(row.get("position_tag") or ""),
+        }
+        if future.empty:
+            for arm in arms:
+                rows.append({
+                    **base,
+                    "sim_arm": arm,
+                    "status": "PENDING_ENTRY",
+                    "entry_guard": "WAITING_FOR_NEXT_SESSION_QUOTE",
+                    "entry_guard_reason": "no quote after signal_date yet",
+                    "actual_order_submitted": False,
+                    "exit_reason": "",
+                    "net_ret": None,
+                })
             continue
 
-        gross_ret = (exit_price / buy_price) - 1.0
-        rows.append({
-            **base,
-            **entry_decision,
-            "status": "CLOSED_SIM",
-            "entry_date": _date_text(entry_date),
-            "exit_date": _date_text(exit_date),
-            "hold_days": hold_days,
-            "buy_price": buy_price,
-            "exit_price": exit_price,
-            "gross_ret": gross_ret,
-            "net_ret": gross_ret - roundtrip_fee_rate,
-            "exit_reason": exit_reason,
-        })
-
+        entry = future.iloc[0]
+        entry_date = entry["quote_date"]
+        for arm in arms:
+            entry_decision = _arm_entry_decision(row, entry, simulation_cash_krw=simulation_cash_krw, sim_arm=arm)
+            rows.append(
+                _simulate_path_from_entry(
+                    base=base,
+                    entry_decision=entry_decision,
+                    future=future,
+                    entry_date=entry_date,
+                    as_of=as_of,
+                    roundtrip_fee_rate=roundtrip_fee_rate,
+                )
+            )
     return rows
 
 
@@ -421,6 +710,78 @@ def summarize_simulation(sim_rows: list[dict]) -> dict:
         "sum_net_ret": float(net.sum()) if len(net) else 0.0,
         "status_counts": dict(Counter(df["status"].fillna("UNKNOWN"))),
         "exit_reason_counts": dict(Counter(closed.get("exit_reason", pd.Series(dtype=str)).fillna("UNKNOWN"))),
+    }
+
+
+def summarize_simulation_arms(arm_rows: list[dict]) -> dict:
+    if not arm_rows:
+        return {}
+    out = {}
+    for arm, rows in pd.DataFrame(arm_rows).groupby("sim_arm", dropna=False):
+        out[str(arm or "UNKNOWN")] = summarize_simulation(rows.to_dict("records"))
+    return out
+
+
+def summarize_runtime_entry_funnel(
+    target_date: str,
+    *,
+    pipeline_events_path: str | Path | None = None,
+) -> dict:
+    path = Path(pipeline_events_path) if pipeline_events_path is not None else (
+        Path(DATA_DIR) / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+    )
+    stages = {
+        "blocked_swing_gap",
+        "blocked_gatekeeper_reject",
+        "swing_sim_buy_order_assumed_filled",
+        "swing_sim_holding_started",
+        "swing_sim_order_bundle_assumed_filled",
+        "order_bundle_submitted",
+    }
+    raw = Counter()
+    unique: dict[str, set[str]] = {stage: set() for stage in stages}
+    examples: dict[str, list[str]] = {stage: [] for stage in stages}
+    if not path.exists():
+        return {
+            "available": False,
+            "path": str(path),
+            "raw_counts": {},
+            "unique_record_counts": {},
+            "examples": {},
+        }
+    with path.open(encoding="utf-8", errors="ignore") as fh:
+        for line in fh:
+            try:
+                event = json.loads(line)
+            except Exception:
+                continue
+            if event.get("pipeline") != "ENTRY_PIPELINE":
+                continue
+            stage = str(event.get("stage") or "")
+            if stage not in stages:
+                continue
+            fields = event.get("fields") or {}
+            payload = str(event.get("text_payload") or "")
+            strategy = str(fields.get("strategy") or "")
+            is_swing = (
+                stage.startswith("swing_")
+                or strategy in {"KOSPI_ML", "KOSDAQ_ML"}
+                or "KOSPI_ML" in payload
+                or "KOSDAQ_ML" in payload
+            )
+            if not is_swing:
+                continue
+            raw[stage] += 1
+            record_id = str(event.get("record_id") or fields.get("record_id") or fields.get("sim_parent_record_id") or "-")
+            unique[stage].add(record_id)
+            if len(examples[stage]) < 5:
+                examples[stage].append(f"{event.get('stock_name')}({event.get('stock_code')})")
+    return {
+        "available": True,
+        "path": str(path),
+        "raw_counts": dict(raw),
+        "unique_record_counts": {stage: len(records) for stage, records in unique.items() if raw.get(stage, 0)},
+        "examples": {stage: values for stage, values in examples.items() if values},
     }
 
 
@@ -457,9 +818,22 @@ def build_swing_daily_simulation_report(
     db_url: str = POSTGRES_URL,
     backtest_path: str | Path | None = None,
     simulation_cash_krw: int = 10_000_000,
+    include_runtime_funnel: bool = False,
+    pipeline_events_path: str | Path | None = None,
+    include_db_recommendations: bool = True,
 ) -> dict:
     date_key = _date_text(target_date)
-    rec_df = recommendation_rows if recommendation_rows is not None else load_recommendations(recommendation_path, date_key)
+    if recommendation_rows is not None:
+        rec_df = recommendation_rows
+        db_rec_df = pd.DataFrame()
+    else:
+        csv_rec_df = load_recommendations(recommendation_path, date_key)
+        db_rec_df = (
+            fetch_db_swing_recommendations(date_key, db_url=db_url)
+            if include_db_recommendations
+            else pd.DataFrame()
+        )
+        rec_df = merge_recommendation_sources(csv_rec_df, db_rec_df)
     live_rec_df, rec_summary = filter_live_recommendations(rec_df)
 
     if quote_rows is None and not live_rec_df.empty:
@@ -474,6 +848,12 @@ def build_swing_daily_simulation_report(
         target_date=date_key,
         simulation_cash_krw=simulation_cash_krw,
     )
+    arm_rows = simulate_swing_observation_arms(
+        live_rec_df,
+        quote_rows,
+        target_date=date_key,
+        simulation_cash_krw=simulation_cash_krw,
+    )
     return {
         "schema_version": 1,
         "report_type": "swing_daily_simulation",
@@ -482,9 +862,15 @@ def build_swing_daily_simulation_report(
         "runtime_change": False,
         "recommendation_path": str(recommendation_path),
         "recommendation_summary": rec_summary,
+        "db_recommendation_rows": int(len(db_rec_df)),
         "simulation_params": {
             "mode": "runtime_order_dry_run_daily_proxy",
             "entry": "runtime guard dry-run, no broker order submit",
+            "observation_arms": {
+                "selection_only": "recommendation selected -> next-session open simulated entry; all entry gates ignored",
+                "gap_pass": "gap guard pass -> next-session open simulated entry; gatekeeper/score/market gates ignored",
+                "gatekeeper_pass": "existing runtime dry-run proxy after gap/score/market pass and assumed gatekeeper pass",
+            },
             "entry_order_type_code": "6",
             "entry_order_type_desc": "최유리지정가",
             "assumed_fill": "daily open after runtime guard pass",
@@ -503,8 +889,15 @@ def build_swing_daily_simulation_report(
             ],
         },
         "simulation_summary": summarize_simulation(sim_rows),
+        "simulation_arm_summary": summarize_simulation_arms(arm_rows),
+        "runtime_entry_funnel": (
+            summarize_runtime_entry_funnel(date_key, pipeline_events_path=pipeline_events_path)
+            if include_runtime_funnel
+            else {"available": False, "reason": "not_requested"}
+        ),
         "model_backtest_summary": summarize_backtest(backtest_path),
         "simulated_trades": sim_rows,
+        "simulation_arm_trades": arm_rows,
     }
 
 
@@ -517,6 +910,9 @@ def render_markdown(report: dict) -> str:
         "",
         f"- runtime_change: `{report['runtime_change']}`",
         f"- recommendation_rows: `{rec.get('input_rows')}` / live `{rec.get('live_rows')}` / diagnostic `{rec.get('diagnostic_rows')}`",
+        f"- recommendation_sources: `{rec.get('recommendation_sources', {})}`",
+        f"- db_recommendation_rows: `{report.get('db_recommendation_rows', 0)}`",
+        f"- source_signal_dates: `{rec.get('source_signal_dates', [])}`",
         f"- simulated_count: `{sim.get('simulated_count')}`",
         f"- closed_count: `{sim.get('closed_count')}`",
         f"- planned_or_open_count: `{sim.get('planned_or_open_count')}`",
@@ -547,16 +943,52 @@ def render_markdown(report: dict) -> str:
         f"- order_type: `{params.get('entry_order_type_desc')}` (`{params.get('entry_order_type_code')}`)",
         f"- simulation_cash_krw: `{params.get('simulation_cash_krw')}`",
         "",
+        "## Observation Arms",
+        "",
+        "| arm | simulated | closed | win_rate | avg_net_ret | status_counts |",
+        "| --- | ---: | ---: | ---: | ---: | --- |",
+    ])
+    for arm, summary in (report.get("simulation_arm_summary") or {}).items():
+        lines.append(
+            f"| `{arm}` | {summary.get('simulated_count', 0)} | {summary.get('closed_count', 0)} | "
+            f"{summary.get('win_rate', 0.0):.2%} | {summary.get('avg_net_ret', 0.0):.2%} | "
+            f"`{summary.get('status_counts', {})}` |"
+        )
+    runtime_funnel = report.get("runtime_entry_funnel") or {}
+    lines.extend([
+        "",
+        "## Runtime Entry Funnel",
+        "",
+    ])
+    if runtime_funnel.get("available"):
+        lines.extend([
+            f"- source: `{runtime_funnel.get('path')}`",
+            "",
+            "| stage | raw | unique_records | examples |",
+            "| --- | ---: | ---: | --- |",
+        ])
+        raw_counts = runtime_funnel.get("raw_counts") or {}
+        unique_counts = runtime_funnel.get("unique_record_counts") or {}
+        examples = runtime_funnel.get("examples") or {}
+        for stage, count in sorted(raw_counts.items(), key=lambda item: (-int(item[1]), item[0])):
+            lines.append(
+                f"| `{stage}` | {int(count)} | {int(unique_counts.get(stage, 0))} | "
+                f"{', '.join(examples.get(stage, []))} |"
+            )
+    else:
+        lines.append(f"- unavailable: `{runtime_funnel.get('reason') or runtime_funnel.get('path') or '-'}`")
+    lines.extend([
+        "",
         "## Simulated Trades",
         "",
-        "| code | name | status | guard | qty | entry | exit | net_ret | reason |",
-        "| --- | --- | --- | --- | ---: | --- | --- | ---: | --- |",
+        "| code | name | source | status | guard | qty | entry | exit | net_ret | reason |",
+        "| --- | --- | --- | --- | --- | ---: | --- | --- | ---: | --- |",
     ])
     for row in report.get("simulated_trades", []):
         net_ret = row.get("net_ret")
         net_txt = "" if net_ret is None else f"{float(net_ret):.2%}"
         lines.append(
-            f"| `{row.get('code')}` | {row.get('name', '')} | `{row.get('status')}` | "
+            f"| `{row.get('code')}` | {row.get('name', '')} | `{row.get('recommendation_source', '')}` | `{row.get('status')}` | "
             f"`{row.get('entry_guard', '-')}` | {int(row.get('buy_qty') or 0)} | "
             f"{row.get('entry_date', '')} | {row.get('exit_date', '')} | {net_txt} | {row.get('exit_reason', '')} |"
         )
@@ -571,6 +1003,7 @@ def write_swing_daily_simulation_report(
     **kwargs,
 ) -> dict:
     date_key = _date_text(target_date)
+    kwargs.setdefault("include_runtime_funnel", True)
     report = build_swing_daily_simulation_report(date_key, **kwargs)
     out_dir = Path(output_dir) if output_dir is not None else REPORT_DIR
     out_dir.mkdir(parents=True, exist_ok=True)

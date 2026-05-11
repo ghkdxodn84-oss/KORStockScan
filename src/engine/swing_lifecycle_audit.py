@@ -37,6 +37,7 @@ SWING_LIFECYCLE_AUDIT_DIR = Path(DATA_DIR) / "report" / "swing_lifecycle_audit"
 SWING_THRESHOLD_AI_REVIEW_DIR = Path(DATA_DIR) / "report" / "swing_threshold_ai_review"
 SWING_IMPROVEMENT_AUTOMATION_DIR = Path(DATA_DIR) / "report" / "swing_improvement_automation"
 SWING_RUNTIME_APPROVAL_DIR = Path(DATA_DIR) / "report" / "swing_runtime_approval"
+SWING_DAILY_SIMULATION_DIR = Path(DATA_DIR) / "report" / "swing_daily_simulation"
 SWING_TRADEOFF_SCORE_THRESHOLD = 0.68
 SWING_RUNTIME_APPROVAL_LIVE_FAMILIES = {
     "swing_model_floor",
@@ -86,8 +87,41 @@ def swing_one_share_real_canary_phase0_policy() -> dict[str, Any]:
         ],
     }
 
+
+def swing_scale_in_real_canary_phase0_policy() -> dict[str, Any]:
+    return {
+        "policy_id": "swing_scale_in_real_canary_phase0",
+        "policy_state": "approval_required",
+        "runtime_apply_allowed": False,
+        "separate_user_approval_artifact_required": True,
+        "broker_order_submission_scope": "approved_real_holding_scale_in_only",
+        "allowed_actions": ["PYRAMID", "AVG_DOWN"],
+        "max_order_qty": 1,
+        "max_orders_per_day": 1,
+        "max_orders_per_position": 1,
+        "max_daily_notional_krw": 100000,
+        "order_type_policy": "limit_only_best_bid_or_defensive",
+        "blocked_contexts": ["sim", "probe", "dry_run", "stale_quote", "ofi_qi_risk_bearish"],
+        "required_provenance": {
+            "cohort": "swing_scale_in_real_canary_phase0",
+            "actual_order_submitted": True,
+            "real_canary_actual_qty": 1,
+            "real_canary_qty_cap": 1,
+            "simulation_book": None,
+        },
+        "rollback_triggers": [
+            "unauthorized_arm_submitted",
+            "qty_cap_breach",
+            "sim_or_probe_real_order_attempted",
+            "receipt_order_lifecycle_mismatch",
+            "price_stale_submit",
+            "ofi_qi_risk_bearish_submitted",
+        ],
+    }
+
 ENTRY_STAGES = {
     "blocked_swing_gap",
+    "blocked_swing_score_vpw",
     "gatekeeper_fast_reuse",
     "gatekeeper_fast_reuse_bypass",
     "blocked_gatekeeper_reject",
@@ -96,6 +130,9 @@ ENTRY_STAGES = {
     "market_regime_block",
     "market_regime_pass",
     "swing_entry_micro_context_observed",
+    "swing_probe_entry_candidate",
+    "swing_probe_holding_started",
+    "swing_probe_discarded",
     "order_bundle_submitted",
     "order_submitted",
     "buy_order_submitted",
@@ -108,12 +145,17 @@ EXIT_STAGE_TOKENS = ("sell", "exit", "trim", "time_stop", "trailing")
 SIMULATED_STAGES = {
     "swing_sim_buy_order_assumed_filled",
     "swing_sim_order_bundle_assumed_filled",
+    "swing_probe_holding_started",
     "swing_sim_scale_in_order_assumed_filled",
+    "swing_probe_scale_in_order_assumed_filled",
     "swing_sim_sell_order_assumed_filled",
+    "swing_probe_sell_order_assumed_filled",
 }
 SUBMITTED_STAGES = {"order_bundle_submitted", "order_submitted", "buy_order_submitted"}
 SELL_STAGES = {
     "swing_sim_sell_order_assumed_filled",
+    "swing_probe_exit_signal",
+    "swing_probe_sell_order_assumed_filled",
     "sell_order_sent",
     "sell_order_submitted",
     "sell_order_failed",
@@ -341,6 +383,152 @@ def _safe_read_json(path: str | Path) -> dict[str, Any]:
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _swing_daily_simulation_path(date_key: str) -> Path:
+    return SWING_DAILY_SIMULATION_DIR / f"swing_daily_simulation_{date_key}.json"
+
+
+def load_swing_daily_simulation_report(target_date: str | date | datetime) -> dict[str, Any]:
+    return _safe_read_json(_swing_daily_simulation_path(_date_text(target_date)))
+
+
+def _outcome_bucket(net_ret: float | None) -> str:
+    if net_ret is None:
+        return "open_or_unscored"
+    if net_ret > 0:
+        return "winner"
+    if net_ret < 0:
+        return "loser"
+    return "flat"
+
+
+def _simulation_family_for_row(row: dict[str, Any]) -> str:
+    arm = str(row.get("sim_arm") or "")
+    status = str(row.get("status") or "")
+    guard = str(row.get("entry_guard") or "")
+    reason = str(row.get("entry_guard_reason") or "")
+    text = f"{status} {guard} {reason}".upper()
+    if "GATEKEEPER" in text or arm == "gatekeeper_pass":
+        return "swing_gatekeeper_reject_cooldown"
+    if "GAP" in text or "REGIME" in text or arm == "gap_pass":
+        return "swing_market_regime_sensitivity"
+    if arm == "selection_only":
+        source = str(row.get("recommendation_source") or "")
+        if source == "recommendation_history":
+            return "swing_selection_top_k"
+        return "swing_model_floor"
+    return "swing_selection_top_k"
+
+
+def _group_simulation_rows(rows: list[dict[str, Any]], key: str) -> dict[str, dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        group = str(row.get(key) or "UNKNOWN")
+        item = grouped.setdefault(
+            group,
+            {
+                "rows": 0,
+                "closed_count": 0,
+                "winner_count": 0,
+                "loser_count": 0,
+                "flat_count": 0,
+                "pending_or_blocked_count": 0,
+                "net_ret_sum": 0.0,
+                "net_ret_values": [],
+                "status_counts": Counter(),
+            },
+        )
+        item["rows"] += 1
+        item["status_counts"][str(row.get("status") or "UNKNOWN")] += 1
+        net_ret = _safe_float(row.get("net_ret"), default=None)
+        bucket = _outcome_bucket(net_ret)
+        if bucket == "open_or_unscored":
+            item["pending_or_blocked_count"] += 1
+            continue
+        item["closed_count"] += 1
+        item[f"{bucket}_count"] += 1
+        item["net_ret_sum"] += float(net_ret or 0.0)
+        item["net_ret_values"].append(float(net_ret or 0.0))
+    for item in grouped.values():
+        values = item.pop("net_ret_values", [])
+        item["avg_net_ret"] = round(float(sum(values) / len(values)), 6) if values else None
+        item["status_counts"] = _counter_dict(item["status_counts"])
+        item["net_ret_sum"] = round(float(item["net_ret_sum"]), 6)
+    return grouped
+
+
+def summarize_simulation_opportunity(simulation_report: dict[str, Any]) -> dict[str, Any]:
+    if not simulation_report:
+        return {"available": False, "reason": "swing_daily_simulation_report_missing"}
+    rows = [
+        row
+        for row in (simulation_report.get("simulation_arm_trades") or [])
+        if isinstance(row, dict)
+    ]
+    if not rows:
+        return {
+            "available": True,
+            "reason": "no_simulation_arm_trades",
+            "rows": 0,
+            "closed_count": 0,
+            "winner_count": 0,
+            "loser_count": 0,
+            "family_opportunity": {},
+            "arm_summary": simulation_report.get("simulation_arm_summary") or {},
+            "runtime_entry_funnel": simulation_report.get("runtime_entry_funnel") or {},
+        }
+
+    enriched = [{**row, "mapped_family": _simulation_family_for_row(row)} for row in rows]
+    closed = [row for row in enriched if _safe_float(row.get("net_ret"), default=None) is not None]
+    winner_count = sum(1 for row in closed if float(row.get("net_ret") or 0.0) > 0)
+    loser_count = sum(1 for row in closed if float(row.get("net_ret") or 0.0) < 0)
+    family_opportunity = _group_simulation_rows(enriched, "mapped_family")
+    source_opportunity = _group_simulation_rows(enriched, "recommendation_source")
+    position_tag_opportunity = _group_simulation_rows(enriched, "position_tag")
+    entry_guard_opportunity = _group_simulation_rows(enriched, "entry_guard")
+    rows_by_family: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for row in enriched:
+        rows_by_family[str(row.get("mapped_family") or "UNKNOWN")].append(row)
+    family_examples = {
+        family: [
+            {
+                "code": row.get("code"),
+                "name": row.get("name"),
+                "sim_arm": row.get("sim_arm"),
+                "status": row.get("status"),
+                "entry_guard": row.get("entry_guard"),
+                "net_ret": row.get("net_ret"),
+                "recommendation_source": row.get("recommendation_source"),
+                "position_tag": row.get("position_tag"),
+            }
+            for row in values[:5]
+        ]
+        for family, values in rows_by_family.items()
+    }
+    return {
+        "available": True,
+        "source_report_type": simulation_report.get("report_type"),
+        "target_date": simulation_report.get("target_date"),
+        "rows": int(len(enriched)),
+        "closed_count": int(len(closed)),
+        "winner_count": int(winner_count),
+        "loser_count": int(loser_count),
+        "sample_state": "closed" if closed else "hold_sample",
+        "arm_summary": simulation_report.get("simulation_arm_summary") or {},
+        "runtime_entry_funnel": simulation_report.get("runtime_entry_funnel") or {},
+        "family_opportunity": family_opportunity,
+        "source_opportunity": source_opportunity,
+        "position_tag_opportunity": position_tag_opportunity,
+        "entry_guard_opportunity": entry_guard_opportunity,
+        "family_examples": family_examples,
+        "policy": {
+            "runtime_change": False,
+            "broker_order_submission": False,
+            "mapped_to_existing_families": True,
+            "new_threshold_family_created": False,
+        },
+    }
 
 
 def _read_jsonl(path: str | Path) -> list[dict[str, Any]]:
@@ -579,12 +767,18 @@ def summarize_lifecycle_events(events: Iterable[dict[str, Any]]) -> dict[str, An
     add_types = Counter()
     exit_sources = Counter()
     actual_order_flags = Counter()
+    evidence_quality_counts = Counter()
     scale_in_actions = Counter()
     scale_in_triggers = Counter()
     scale_in_price_policies = Counter()
     scale_in_post_add_outcomes = Counter()
     scale_in_guard_blockers = Counter()
     scale_in_ratios: list[float] = []
+    scale_in_arm_returns: dict[str, list[float]] = defaultdict(list)
+    scale_in_arm_delta_vs_exit_only: dict[str, list[float]] = defaultdict(list)
+    scale_in_arm_mae: dict[str, list[float]] = defaultdict(list)
+    scale_in_arm_loser_extension = Counter()
+    scale_in_real_canary_receipts = Counter()
     ai_schema_valid = 0
     ai_schema_invalid = 0
     ai_parse_fail = 0
@@ -689,12 +883,35 @@ def summarize_lifecycle_events(events: Iterable[dict[str, Any]]) -> dict[str, An
             ratio_value = _safe_float(ratio, default=None)
             if ratio_value is not None:
                 scale_in_ratios.append(float(ratio_value))
+            final_return = _first_present(fields, ("final_exit_return_pct", "final_return_pct", "profit_rate"))
+            final_return_value = _safe_float(final_return, default=None)
+            if final_return_value is not None:
+                scale_in_arm_returns[scale_action].append(float(final_return_value))
+            delta_vs_exit_only = _first_present(
+                fields,
+                ("post_add_delta_vs_exit_only", "delta_vs_exit_only", "exit_only_delta_pct"),
+            )
+            delta_value = _safe_float(delta_vs_exit_only, default=None)
+            if delta_value is not None:
+                scale_in_arm_delta_vs_exit_only[scale_action].append(float(delta_value))
+            post_add_mae = _first_present(fields, ("post_add_mae_pct", "mae_pct", "mae"))
+            mae_value = _safe_float(post_add_mae, default=None)
+            if mae_value is not None:
+                scale_in_arm_mae[scale_action].append(float(mae_value))
+            loser_extension = _first_present(fields, ("loser_extension", "loss_extension", "post_add_loser_extension"))
+            if loser_extension not in (None, "") and _safe_bool(loser_extension):
+                scale_in_arm_loser_extension[scale_action] += 1
+            if stage.startswith("swing_scale_in_real_canary_"):
+                scale_in_real_canary_receipts[stage] += 1
         exit_source = _first_present(fields, ("exit_source", "sell_reason", "reason", "decision_source"))
         if exit_source not in (None, "") and group == "exit":
             exit_sources[str(exit_source)] += 1
         actual_order = fields.get("actual_order_submitted")
         if actual_order not in (None, ""):
             actual_order_flags[str(_safe_bool(actual_order)).lower()] += 1
+        evidence_quality = fields.get("evidence_quality")
+        if evidence_quality not in (None, ""):
+            evidence_quality_counts[str(evidence_quality)] += 1
 
         schema_valid = _first_present(fields, ("ai_schema_valid", "schema_valid", "structured_output_valid"))
         if schema_valid not in (None, ""):
@@ -750,6 +967,7 @@ def summarize_lifecycle_events(events: Iterable[dict[str, Any]]) -> dict[str, An
         "add_types": dict(add_types),
         "exit_sources": dict(exit_sources),
         "actual_order_submitted_flags": dict(actual_order_flags),
+        "evidence_quality_counts": dict(evidence_quality_counts),
         "scale_in_observation": {
             "action_groups": _counter_dict(scale_in_actions),
             "add_triggers": _counter_dict(scale_in_triggers),
@@ -757,6 +975,25 @@ def summarize_lifecycle_events(events: Iterable[dict[str, Any]]) -> dict[str, An
             "add_ratio_summary": _summarize_numeric(scale_in_ratios),
             "post_add_outcomes": _counter_dict(scale_in_post_add_outcomes),
             "guard_blockers": _counter_dict(scale_in_guard_blockers),
+            "arm_outcomes": {
+                arm: {
+                    "sample_count": int(scale_in_actions.get(arm, 0)),
+                    "final_exit_return_summary": _summarize_numeric(scale_in_arm_returns.get(arm, [])),
+                    "post_add_delta_vs_exit_only_summary": _summarize_numeric(
+                        scale_in_arm_delta_vs_exit_only.get(arm, [])
+                    ),
+                    "post_add_mae_summary": _summarize_numeric(scale_in_arm_mae.get(arm, [])),
+                    "post_add_mae_p90": _percentile(scale_in_arm_mae.get(arm, []), 0.90),
+                    "loser_extension_count": int(scale_in_arm_loser_extension.get(arm, 0)),
+                    "loser_extension_rate": round(
+                        float(scale_in_arm_loser_extension.get(arm, 0) or 0)
+                        / max(1, int(scale_in_actions.get(arm, 0) or 0)),
+                        4,
+                    ),
+                }
+                for arm in sorted(set(scale_in_actions) | {"PYRAMID", "AVG_DOWN"})
+            },
+            "real_canary_receipt_quality": _counter_dict(scale_in_real_canary_receipts),
             "zero_sample_reason": _scale_in_zero_sample_reason(
                 scale_in_raw_count, scale_in_guard_blockers, swing_event_count
             ),
@@ -846,6 +1083,7 @@ def build_observation_axes(
             "threshold_family": "swing_gatekeeper_accept_reject",
             "sample_count": int(
                 unique_counts.get("blocked_gatekeeper_reject", 0)
+                + unique_counts.get("swing_probe_entry_candidate", 0)
                 + unique_counts.get("market_regime_pass", 0)
                 + unique_counts.get("swing_sim_buy_order_assumed_filled", 0)
                 + unique_counts.get("swing_sim_order_bundle_assumed_filled", 0)
@@ -861,6 +1099,8 @@ def build_observation_axes(
             "threshold_family": "swing_market_regime_sensitivity",
             "sample_count": int(
                 unique_counts.get("blocked_swing_gap", 0)
+                + unique_counts.get("blocked_swing_score_vpw", 0)
+                + unique_counts.get("swing_probe_entry_candidate", 0)
                 + unique_counts.get("market_regime_block", 0)
                 + unique_counts.get("market_regime_pass", 0)
                 + lifecycle_events.get("submitted_unique_records", 0)
@@ -1013,6 +1253,7 @@ def _source_paths(date_key: str, paths: dict[str, str | None] | None = None) -> 
         "recommendations_csv": str(RECO_PATH),
         "recommendation_diagnostic_json": str(RECO_DIAGNOSTIC_JSON_PATH),
         "pipeline_events": str(Path(DATA_DIR) / "pipeline_events" / f"pipeline_events_{date_key}.jsonl"),
+        "swing_daily_simulation": str(_swing_daily_simulation_path(date_key)),
     }
     if paths:
         base.update(paths)
@@ -1026,6 +1267,7 @@ def build_swing_lifecycle_audit_report(
     diagnostic_summary: dict[str, Any] | None = None,
     db_rows: Iterable[dict[str, Any]] | None = None,
     event_rows: Iterable[dict[str, Any]] | None = None,
+    daily_simulation_report: dict[str, Any] | None = None,
     recommendation_path: str | Path = RECO_PATH,
     diagnostic_json_path: str | Path = RECO_DIAGNOSTIC_JSON_PATH,
     db_url: str = POSTGRES_URL,
@@ -1048,6 +1290,8 @@ def build_swing_lifecycle_audit_report(
     if event_rows is None:
         event_rows = load_pipeline_event_rows(date_key)
     event_rows = list(event_rows or [])
+    if daily_simulation_report is None:
+        daily_simulation_report = load_swing_daily_simulation_report(date_key)
 
     model_selection = _model_selection_summary(diagnostic_summary or {})
     recommendation_csv = summarize_recommendation_rows(recommendation_rows)
@@ -1059,6 +1303,7 @@ def build_swing_lifecycle_audit_report(
     )
     pipeline_summary = summarize_pipeline_events(event_rows)
     lifecycle_events = summarize_lifecycle_events(event_rows)
+    simulation_opportunity = summarize_simulation_opportunity(daily_simulation_report or {})
     observation_axes = build_observation_axes(
         model_selection=model_selection,
         recommendation_csv=recommendation_csv,
@@ -1089,6 +1334,7 @@ def build_swing_lifecycle_audit_report(
         "db_lifecycle": db_summary,
         "pipeline_events": pipeline_summary,
         "lifecycle_events": lifecycle_events,
+        "simulation_opportunity": simulation_opportunity,
         "observation_axes": observation_axes,
         "observation_axis_summary": {
             "axis_count": len(observation_axes),
@@ -1124,39 +1370,55 @@ def _family_metric_snapshot(audit_report: dict[str, Any], family: str) -> dict[s
     db = audit_report.get("db_lifecycle") or {}
     db_load = audit_report.get("recommendation_db_load") or {}
     ofi_qi = events.get("ofi_qi_summary") or {}
+    sim_opportunity = audit_report.get("simulation_opportunity") or {}
+    sim_family = (sim_opportunity.get("family_opportunity") or {}).get(family) or {}
     if family == "swing_model_floor":
         return {
-            "sample_count": int(model.get("selected_count") or 0),
+            "sample_count": int(model.get("selected_count") or 0) + int(sim_family.get("closed_count") or 0),
             "selected_count": model.get("selected_count"),
             "safe_pool_count": model.get("safe_pool_count"),
             "fallback_written_to_recommendations": model.get("fallback_written_to_recommendations"),
+            "simulation_opportunity": sim_family,
         }
     if family == "swing_selection_top_k":
         return {
-            "sample_count": int(csv.get("csv_rows") or 0),
+            "sample_count": int(csv.get("csv_rows") or 0) + int(sim_family.get("closed_count") or 0),
             "csv_rows": csv.get("csv_rows"),
             "db_rows": db.get("db_rows"),
             "selection_modes": csv.get("selection_modes"),
             "db_load_gap": db_load.get("db_load_gap"),
             "db_load_skip_reason": db_load.get("db_load_skip_reason"),
+            "simulation_opportunity": sim_family,
         }
     if family == "swing_gatekeeper_accept_reject":
         return {
-            "sample_count": int(unique.get("blocked_gatekeeper_reject", 0)),
+            "sample_count": int(
+                unique.get("blocked_gatekeeper_reject", 0)
+                + unique.get("swing_probe_entry_candidate", 0)
+            ),
             "blocked_gatekeeper_reject": raw.get("blocked_gatekeeper_reject", 0),
             "gatekeeper_actions": events.get("gatekeeper_actions"),
+            "evidence_quality_counts": events.get("evidence_quality_counts"),
         }
     if family == "swing_gatekeeper_reject_cooldown":
         return {
-            "sample_count": int(unique.get("blocked_gatekeeper_reject", 0)),
+            "sample_count": int(unique.get("blocked_gatekeeper_reject", 0)) + int(sim_family.get("closed_count") or 0),
             "cooldown_policies": events.get("cooldown_policies"),
             "gatekeeper_actions": events.get("gatekeeper_actions"),
+            "simulation_opportunity": sim_family,
         }
     if family == "swing_market_regime_sensitivity":
         return {
-            "sample_count": int(unique.get("market_regime_block", 0) + unique.get("market_regime_pass", 0)),
+            "sample_count": int(
+                unique.get("market_regime_block", 0)
+                + unique.get("market_regime_pass", 0)
+                + unique.get("swing_probe_entry_candidate", 0)
+                + int(sim_family.get("closed_count") or 0)
+            ),
             "market_regime_block": raw.get("market_regime_block", 0),
             "market_regime_pass": raw.get("market_regime_pass", 0),
+            "evidence_quality_counts": events.get("evidence_quality_counts"),
+            "simulation_opportunity": sim_family,
         }
     if family in {"swing_pyramid_trigger", "swing_avg_down_eligibility"}:
         return {
@@ -1335,6 +1597,158 @@ def _target_env_plan_for_family(
     return {"target_env_keys": [], "current_values": {}, "recommended_values": {}}
 
 
+def _scale_in_real_canary_arm_blockers(
+    audit_report: dict[str, Any],
+    arm: str,
+    *,
+    sample_floor: int,
+) -> list[str]:
+    arm = str(arm or "").upper()
+    events = audit_report.get("lifecycle_events") if isinstance(audit_report.get("lifecycle_events"), dict) else {}
+    scale_obs = events.get("scale_in_observation") if isinstance(events.get("scale_in_observation"), dict) else {}
+    axis_summary = (
+        audit_report.get("observation_axis_summary")
+        if isinstance(audit_report.get("observation_axis_summary"), dict)
+        else {}
+    )
+    db_load = (
+        audit_report.get("recommendation_db_load")
+        if isinstance(audit_report.get("recommendation_db_load"), dict)
+        else {}
+    )
+    model = audit_report.get("model_selection") if isinstance(audit_report.get("model_selection"), dict) else {}
+    ofi_qi = events.get("ofi_qi_summary") if isinstance(events.get("ofi_qi_summary"), dict) else {}
+    ev_summary = _completed_ev_summary(audit_report)
+    p10 = _safe_float(ev_summary.get("p10_profit_rate"), default=None)
+    action_groups = scale_obs.get("action_groups") if isinstance(scale_obs.get("action_groups"), dict) else {}
+    arm_outcomes = scale_obs.get("arm_outcomes") if isinstance(scale_obs.get("arm_outcomes"), dict) else {}
+    arm_metrics = arm_outcomes.get(arm) if isinstance(arm_outcomes.get(arm), dict) else {}
+    return_summary = (
+        arm_metrics.get("final_exit_return_summary")
+        if isinstance(arm_metrics.get("final_exit_return_summary"), dict)
+        else {}
+    )
+    delta_summary = (
+        arm_metrics.get("post_add_delta_vs_exit_only_summary")
+        if isinstance(arm_metrics.get("post_add_delta_vs_exit_only_summary"), dict)
+        else {}
+    )
+    mae_summary = (
+        arm_metrics.get("post_add_mae_summary")
+        if isinstance(arm_metrics.get("post_add_mae_summary"), dict)
+        else {}
+    )
+    blockers: list[str] = []
+    sample_count = int(action_groups.get(arm, 0) or 0)
+    if sample_count < sample_floor:
+        blockers.append(f"{arm.lower()}_sample_floor_not_met")
+    if int(sum((ofi_qi.get("scale_in_micro_state_counts") or {}).values())) < 5:
+        blockers.append("scale_in_ofi_qi_sample_floor_not_met")
+    if _safe_int(axis_summary.get("instrumentation_gap_count"), 0) > 0:
+        blockers.append("critical_instrumentation_gap")
+    if bool(db_load.get("db_load_gap")):
+        blockers.append("db_load_gap")
+    selection_modes = db_load.get("selection_modes") if isinstance(db_load.get("selection_modes"), dict) else {}
+    if bool(model.get("fallback_written_to_recommendations")) or "FALLBACK_DIAGNOSTIC" in selection_modes:
+        blockers.append("fallback_diagnostic_contamination")
+    if p10 is not None and p10 < -4.0:
+        blockers.append("severe_downside_guard")
+    if not (scale_obs.get("post_add_outcomes") or {}):
+        blockers.append("post_add_outcome_field_missing")
+    if _safe_int(return_summary.get("count"), 0) <= 0:
+        blockers.append("final_exit_return_missing")
+    elif _safe_float(return_summary.get("avg"), 0.0) <= 0:
+        blockers.append("final_exit_return_non_positive")
+    if _safe_int(delta_summary.get("count"), 0) <= 0:
+        blockers.append("exit_only_delta_missing")
+    elif _safe_float(delta_summary.get("avg"), 0.0) < 0:
+        blockers.append("exit_only_delta_negative")
+    if _safe_int(mae_summary.get("count"), 0) <= 0:
+        blockers.append("post_add_mae_missing")
+    else:
+        if _safe_float(mae_summary.get("p50"), 0.0) < -2.0:
+            blockers.append("post_add_mae_p50_breach")
+        mae_p90 = _safe_float(arm_metrics.get("post_add_mae_p90"), 0.0)
+        if mae_p90 < -4.0:
+            blockers.append("post_add_mae_p90_breach")
+    if _safe_float(arm_metrics.get("loser_extension_rate"), 0.0) > 0.35:
+        blockers.append("loser_extension_rate_breach")
+    return blockers
+
+
+def _build_swing_scale_in_real_canary_request(audit_report: dict[str, Any]) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
+    date_key = str(audit_report.get("date") or "")
+    policy = swing_scale_in_real_canary_phase0_policy()
+    arm_floors = {"PYRAMID": 5, "AVG_DOWN": 8}
+    arm_decisions: list[dict[str, Any]] = []
+    allowed_actions: list[str] = []
+    for arm, floor in arm_floors.items():
+        blockers = _scale_in_real_canary_arm_blockers(audit_report, arm, sample_floor=floor)
+        arm_decisions.append(
+            {
+                "arm": arm,
+                "sample_floor": floor,
+                "approved_for_request": not blockers,
+                "block_reasons": blockers,
+            }
+        )
+        if not blockers:
+            allowed_actions.append(arm)
+    if not allowed_actions:
+        return None, arm_decisions
+    approval_id = f"swing_scale_in_real_canary:{date_key}:phase0"
+    request = {
+        "approval_id": approval_id,
+        "policy_id": policy["policy_id"],
+        "family": policy["policy_id"],
+        "stage": "scale_in",
+        "calibration_state": "approval_required",
+        "approval_reason": "scale-in arm hard floor 통과 및 별도 사용자 approval artifact 필요",
+        "human_approval_required": True,
+        "tradeoff_score": None,
+        "sample_count": sum(
+            int((audit_report.get("lifecycle_events") or {}).get("group_unique_counts", {}).get("scale_in", 0) or 0)
+            for _ in [0]
+        ),
+        "sample_floor": min(arm_floors.values()),
+        "allowed_actions": allowed_actions,
+        "target_env_keys": [
+            "SWING_SCALE_IN_REAL_CANARY_ENABLED",
+            "SWING_SCALE_IN_REAL_CANARY_ALLOWED_ARMS",
+            "SWING_SCALE_IN_REAL_CANARY_MAX_QTY",
+            "SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_DAY",
+            "SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_POSITION",
+            "SWING_SCALE_IN_REAL_CANARY_MAX_DAILY_NOTIONAL_KRW",
+            "SWING_SCALE_IN_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT",
+        ],
+        "current_values": {
+            "enabled": False,
+            "allowed_arms": "",
+            "max_order_qty": 1,
+            "max_orders_per_day": 1,
+            "max_orders_per_position": 1,
+            "max_daily_notional_krw": 100000,
+            "require_approval_artifact": True,
+        },
+        "recommended_values": {
+            "enabled": True,
+            "allowed_arms": ",".join(allowed_actions),
+            "max_order_qty": 1,
+            "max_orders_per_day": 1,
+            "max_orders_per_position": 1,
+            "max_daily_notional_krw": 100000,
+            "require_approval_artifact": True,
+        },
+        "actual_order_submitted": False,
+        "dry_run_required": False,
+        "real_order_canary_required": True,
+        "real_canary_policy_ref": policy["policy_id"],
+        "real_order_allowed_actions": allowed_actions,
+        "blocked_contexts": policy["blocked_contexts"],
+    }
+    return request, arm_decisions
+
+
 def _tradeoff_components(audit_report: dict[str, Any], sample_count: int, sample_floor: int) -> dict[str, Any]:
     ev_summary = _completed_ev_summary(audit_report)
     avg_ev = _safe_float(ev_summary.get("avg_profit_rate"), default=0.0) or 0.0
@@ -1511,6 +1925,8 @@ def build_swing_runtime_approval_report(
     date_key = str(audit_report.get("date") or "")
     candidates = build_swing_threshold_candidates(audit_report)
     real_canary_policy = swing_one_share_real_canary_phase0_policy()
+    scale_in_real_canary_policy = swing_scale_in_real_canary_phase0_policy()
+    scale_in_request, scale_in_arm_decisions = _build_swing_scale_in_real_canary_request(audit_report)
     requests = [
         {
             "approval_id": item.get("approval_id"),
@@ -1541,6 +1957,8 @@ def build_swing_runtime_approval_report(
         for item in candidates
         if bool(item.get("human_approval_required"))
     ]
+    if scale_in_request is not None:
+        requests.append(scale_in_request)
     blocked = [
         {
             "family": item.get("family"),
@@ -1552,6 +1970,21 @@ def build_swing_runtime_approval_report(
         for item in candidates
         if not bool(item.get("human_approval_required"))
     ]
+    if scale_in_request is None:
+        blocked.append(
+            {
+                "family": scale_in_real_canary_policy["policy_id"],
+                "stage": "scale_in",
+                "calibration_state": "freeze",
+                "tradeoff_score": None,
+                "block_reasons": [
+                    reason
+                    for arm in scale_in_arm_decisions
+                    for reason in (arm.get("block_reasons") or [])
+                ] or ["scale_in_real_canary_no_eligible_arm"],
+                "arm_decisions": scale_in_arm_decisions,
+            }
+        )
     db = audit_report.get("db_lifecycle") if isinstance(audit_report.get("db_lifecycle"), dict) else {}
     events = audit_report.get("lifecycle_events") if isinstance(audit_report.get("lifecycle_events"), dict) else {}
     return {
@@ -1578,6 +2011,10 @@ def build_swing_runtime_approval_report(
             "runtime_apply_requires_user_approval_artifact": True,
         },
         "real_canary_policy": real_canary_policy,
+        "scale_in_real_canary_policy": {
+            **scale_in_real_canary_policy,
+            "arm_decisions": scale_in_arm_decisions,
+        },
         "rolling_source_bundle": {
             "source_authority": {
                 "real": "required_for_broker_execution_quality_and_order_receipt",
@@ -1603,6 +2040,9 @@ def build_swing_runtime_approval_report(
             "sim": {
                 "entered_records": events.get("simulated_order_unique_records"),
                 "sell_stage_count": (events.get("raw_counts") or {}).get("swing_sim_sell_order_assumed_filled", 0),
+                "probe_entered_records": (events.get("unique_record_counts") or {}).get("swing_probe_holding_started", 0),
+                "probe_sell_stage_count": (events.get("raw_counts") or {}).get("swing_probe_sell_order_assumed_filled", 0),
+                "evidence_quality_counts": events.get("evidence_quality_counts"),
             },
             "combined": _completed_ev_summary(audit_report),
             "funnel": {
@@ -1983,6 +2423,7 @@ def build_swing_improvement_automation_report(
     axis_summary = audit_report.get("observation_axis_summary") or {}
     scale_in_observation = events.get("scale_in_observation") or {}
     ai_contract_metrics = events.get("ai_contract_metrics") or {}
+    sim_opportunity = audit_report.get("simulation_opportunity") or {}
 
     findings: list[dict[str, Any]] = []
     orders: list[dict[str, Any]] = []
@@ -2153,6 +2594,95 @@ def build_swing_improvement_automation_report(
                 improvement_type="threshold_family_input",
             )
         )
+
+    sim_family_opportunity = sim_opportunity.get("family_opportunity") if isinstance(sim_opportunity, dict) else {}
+    if isinstance(sim_family_opportunity, dict):
+        for family, order_meta in (
+            (
+                "swing_selection_top_k",
+                {
+                    "finding_id": "swing_selection_source_counterfactual_opportunity",
+                    "order_id": "order_swing_selection_source_counterfactual_review",
+                    "title": "swing selection source counterfactual review",
+                    "stage": "selection",
+                    "subsystem": "swing_selection",
+                    "priority": 3,
+                    "intent": "Use selection_only simulation winners/losers by recommendation source before changing model floor or top-k.",
+                    "ev": "source/arm winner-loser split is visible in lifecycle audit and daily EV workorder input.",
+                    "files": ["src/model/recommend_daily_v2.py", "src/engine/swing_daily_simulation_report.py"],
+                },
+            ),
+            (
+                "swing_market_regime_sensitivity",
+                {
+                    "finding_id": "swing_gap_regime_counterfactual_opportunity",
+                    "order_id": "order_swing_gap_regime_counterfactual_review",
+                    "title": "swing gap/regime counterfactual review",
+                    "stage": "entry",
+                    "subsystem": "swing_entry",
+                    "priority": 3,
+                    "intent": "Review gap/regime blocked candidates that later closed as winners before proposing sensitivity changes.",
+                    "ev": "gap_pass and blocked-stage outcomes are mapped to swing_market_regime_sensitivity.",
+                    "files": ["src/engine/sniper_state_handlers.py", "src/engine/swing_lifecycle_audit.py"],
+                },
+            ),
+            (
+                "swing_gatekeeper_reject_cooldown",
+                {
+                    "finding_id": "swing_gatekeeper_counterfactual_opportunity",
+                    "order_id": "order_swing_gatekeeper_counterfactual_review",
+                    "title": "swing gatekeeper counterfactual review",
+                    "stage": "entry",
+                    "subsystem": "swing_entry",
+                    "priority": 3,
+                    "intent": "Review gatekeeper-blocked candidates that later closed as winners before changing reject cooldown.",
+                    "ev": "gatekeeper_pass arm outcomes are mapped to swing_gatekeeper_reject_cooldown.",
+                    "files": ["src/engine/sniper_state_handlers.py", "src/engine/swing_lifecycle_audit.py"],
+                },
+            ),
+        ):
+            family_summary = sim_family_opportunity.get(family) if isinstance(sim_family_opportunity.get(family), dict) else {}
+            closed_count = int(family_summary.get("closed_count") or 0)
+            winner_count = int(family_summary.get("winner_count") or 0)
+            loser_count = int(family_summary.get("loser_count") or 0)
+            if closed_count <= 0 or winner_count <= 0:
+                continue
+            findings.append(
+                {
+                    "finding_id": order_meta["finding_id"],
+                    "title": order_meta["title"],
+                    "confidence": "consensus",
+                    "route": "existing_family",
+                    "mapped_family": family,
+                    "target_subsystem": order_meta["subsystem"],
+                    "lifecycle_stage": order_meta["stage"],
+                }
+            )
+            orders.append(
+                _order(
+                    order_id=order_meta["order_id"],
+                    title=order_meta["title"],
+                    lifecycle_stage=order_meta["stage"],
+                    target_subsystem=order_meta["subsystem"],
+                    priority=order_meta["priority"],
+                    route="existing_family",
+                    mapped_family=family,
+                    intent=order_meta["intent"],
+                    expected_ev_effect=order_meta["ev"],
+                    files_likely_touched=order_meta["files"],
+                    acceptance_tests=[
+                        "pytest swing model selection funnel tests",
+                        "swing lifecycle audit report includes simulation_opportunity",
+                    ],
+                    evidence=[
+                        f"simulation_closed_count={closed_count}",
+                        f"simulation_winner_count={winner_count}",
+                        f"simulation_loser_count={loser_count}",
+                        f"simulation_avg_net_ret={family_summary.get('avg_net_ret')}",
+                    ],
+                    improvement_type="threshold_family_input",
+                )
+            )
 
     if int(ofi_qi.get("stale_missing_count") or 0) > 0:
         findings.append(
@@ -2356,6 +2886,7 @@ def build_swing_improvement_automation_report(
         },
         "source_reports": {
             "swing_lifecycle_audit": str(SWING_LIFECYCLE_AUDIT_DIR / f"swing_lifecycle_audit_{date_key}.json"),
+            "swing_daily_simulation": str(SWING_DAILY_SIMULATION_DIR / f"swing_daily_simulation_{date_key}.json"),
             "swing_threshold_ai_review": str(
                 SWING_THRESHOLD_AI_REVIEW_DIR / f"swing_threshold_ai_review_{date_key}.json"
             ),
@@ -2371,6 +2902,10 @@ def build_swing_improvement_automation_report(
             "scale_in_zero_sample_reason": scale_in_observation.get("zero_sample_reason"),
             "ai_contract_schema_valid_rate": ai_contract_metrics.get("schema_valid_rate"),
             "ai_contract_parse_fail_count": ai_contract_metrics.get("parse_fail_count"),
+            "simulation_opportunity_available": sim_opportunity.get("available"),
+            "simulation_opportunity_sample_state": sim_opportunity.get("sample_state"),
+            "simulation_opportunity_closed_count": sim_opportunity.get("closed_count"),
+            "simulation_opportunity_winner_count": sim_opportunity.get("winner_count"),
         },
         "consensus_findings": [item for item in findings if item.get("confidence") != "solo"],
         "solo_findings": [item for item in findings if item.get("confidence") == "solo"],
@@ -2452,6 +2987,41 @@ def render_swing_lifecycle_audit_markdown(report: dict[str, Any]) -> str:
         ]
     )
 
+    sim_opportunity = report.get("simulation_opportunity") or {}
+    lines.extend(
+        [
+            "",
+            "## Simulation Opportunity",
+            "",
+            f"- available: `{sim_opportunity.get('available')}`",
+            f"- sample_state: `{sim_opportunity.get('sample_state')}`",
+            f"- rows: `{sim_opportunity.get('rows', 0)}`",
+            f"- closed_count: `{sim_opportunity.get('closed_count', 0)}`",
+            f"- winner_count: `{sim_opportunity.get('winner_count', 0)}`",
+            f"- loser_count: `{sim_opportunity.get('loser_count', 0)}`",
+            "",
+            "| family | rows | closed | winner | loser | avg_net_ret |",
+            "| --- | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for family, summary in sorted((sim_opportunity.get("family_opportunity") or {}).items()):
+        if not isinstance(summary, dict):
+            continue
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    f"`{family}`",
+                    str(summary.get("rows", 0)),
+                    str(summary.get("closed_count", 0)),
+                    str(summary.get("winner_count", 0)),
+                    str(summary.get("loser_count", 0)),
+                    str(summary.get("avg_net_ret")),
+                ]
+            )
+            + " |"
+        )
+
     lines.extend(["", "## Observation Axes", "", "| axis | stage | family | sample | status |", "| --- | --- | --- | ---: | --- |"])
     for axis in report.get("observation_axes") or []:
         lines.append(
@@ -2524,11 +3094,14 @@ def render_swing_threshold_ai_review_markdown(report: dict[str, Any]) -> str:
 
 
 def render_swing_improvement_automation_markdown(report: dict[str, Any]) -> str:
+    ev = report.get("ev_report_summary") if isinstance(report.get("ev_report_summary"), dict) else {}
     lines = [
         f"# Swing Improvement Automation - {report.get('date')}",
         "",
         "- Runtime change: `false`",
         "- Generated orders are inputs for `build_code_improvement_workorder`; implementation is manual.",
+        f"- simulation_opportunity_sample_state: `{ev.get('simulation_opportunity_sample_state')}`",
+        f"- simulation_opportunity_closed/winner: `{ev.get('simulation_opportunity_closed_count')}` / `{ev.get('simulation_opportunity_winner_count')}`",
         "",
         "## Orders",
         "",
@@ -2569,6 +3142,8 @@ def render_swing_runtime_approval_markdown(report: dict[str, Any]) -> str:
         f"- real canary policy: `{(report.get('real_canary_policy') or {}).get('policy_id')}`",
         f"- real canary allowed actions: `{', '.join((report.get('real_canary_policy') or {}).get('real_order_allowed_actions') or [])}`",
         f"- sim-only actions: `{', '.join((report.get('real_canary_policy') or {}).get('sim_only_actions') or [])}`",
+        f"- scale-in real canary policy: `{(report.get('scale_in_real_canary_policy') or {}).get('policy_id')}`",
+        f"- scale-in allowed actions: `{', '.join((report.get('scale_in_real_canary_policy') or {}).get('allowed_actions') or [])}`",
         f"- requested/blocked/approved: `{summary.get('requested')}` / `{summary.get('blocked')}` / `{summary.get('approved')}`",
         "",
         "## Approval Requests",

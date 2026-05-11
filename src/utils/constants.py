@@ -81,16 +81,39 @@ class TradingConfig:
     # 3.3 추가매수(스윙) 설정
     # ==========================================
     SWING_ENABLE_PYRAMID: bool = True
+    SWING_ENABLE_AVG_DOWN_SIMULATION: bool = True  # dry-run/probe 전용 물타기 후보 관찰
     SWING_MAX_AVG_DOWN_COUNT: int = 0  # DEPRECATED: historical AVG_DOWN receipt attribution only
     SWING_MAX_PYRAMID_COUNT: int = 0  # DEPRECATED: runtime count gate removed; counter remains for attribution
     SWING_PYRAMID_MIN_PROFIT_PCT: float = 4.0
+    SWING_AVG_DOWN_MIN_LOSS_PCT: float = -3.0  # simulation-only AVG_DOWN 손실 하한
+    SWING_AVG_DOWN_MAX_LOSS_PCT: float = -0.8  # simulation-only AVG_DOWN 손실 상한
+    SWING_AVG_DOWN_MAX_PEAK_PROFIT_PCT: float = 1.0  # 이미 충분히 green이었던 표본 제외
+    SWING_AVG_DOWN_MIN_HOLD_SEC: int = 300  # 너무 이른 스윙 물타기 관찰 방지
+    SWING_SCALE_IN_DYNAMIC_QTY_ENABLED: bool = True  # 스윙 sim/probe scale-in 수량 provenance
+    SWING_SCALE_IN_EFFECTIVE_QTY_CAP: int = 0  # 0 이하는 sim/probe 수량 cap 없음
+    SWING_SCALE_IN_REAL_CANARY_ENABLED: bool = False  # 별도 approval artifact 없이는 스윙 추가매수 실주문 금지
+    SWING_SCALE_IN_REAL_CANARY_ALLOWED_ARMS: str = "PYRAMID,AVG_DOWN"
+    SWING_SCALE_IN_REAL_CANARY_MAX_QTY: int = 1
+    SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_DAY: int = 1
+    SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_POSITION: int = 1
+    SWING_SCALE_IN_REAL_CANARY_MAX_DAILY_NOTIONAL_KRW: int = 100000
+    SWING_SCALE_IN_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT: bool = True
     SWING_LIVE_ORDER_DRY_RUN_ENABLED: bool = True  # 스윙 live 로직은 동일 실행, 실제 주문 접수만 차단
     SWING_LIVE_ORDER_DRY_RUN_OWNER: str = "SwingLiveOrderDryRunSimulation0511"
+    SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED: bool = True  # 스윙 차단 stage 이후 live-equivalent observe-only probe
+    SWING_INTRADAY_PROBE_OWNER: str = "SwingIntradayLiveEquivalentProbe0511"
+    SWING_INTRADAY_PROBE_MAX_OPEN: int = 10
+    SWING_INTRADAY_PROBE_MAX_DAILY: int = 30
+    SWING_INTRADAY_PROBE_MAX_PER_SYMBOL: int = 1
+    SWING_INTRADAY_PROBE_SCORE_VPW_MAX_OPEN: int = 4
+    SWING_INTRADAY_PROBE_DISCARD_LOG_MIN_INTERVAL_SEC: int = 60
+    SWING_INTRADAY_PROBE_PERSIST_ENABLED: bool = True
+    SWING_INTRADAY_PROBE_COUNTERFACTUAL_GATEKEEPER_ENABLED: bool = True
     SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED: bool = True  # 스윙 OFI/QI observe/proposal-only context
     SCALP_LIVE_SIMULATOR_ENABLED: bool = True  # 스캘핑 AI BUY 전체 대상 live simulator 기본 ON
     SCALP_LIVE_SIMULATOR_OWNER: str = "ScalpAiBuyAllLiveSimulator0511"
     SCALP_LIVE_SIMULATOR_FILL_POLICY: str = "signal_inclusive_best_ask_v1"
-    SCALP_LIVE_SIMULATOR_QTY: int = 1  # BUY 신호당 가상 진입 수량
+    SCALP_LIVE_SIMULATOR_QTY: int = 0  # 0 이하는 BUY 신호당 uncapped 동적 산식 수량 사용
     SCALP_LIVE_SIMULATOR_ENTRY_TIMEOUT_SEC: int = 90  # deprecated: BUY signal inclusion no longer expires on quote touch
 
     # [매매 비중 설정] 전략별 주문 가능 현금 대비 1회 매수 투입 비율
@@ -1155,11 +1178,43 @@ def _build_trading_rules() -> TradingConfig:
     env_scalping_max_avg_down_count = _env_int("KORSTOCKSCAN_SCALPING_MAX_AVG_DOWN_COUNT")
     env_scalping_max_pyramid_count = _env_int("KORSTOCKSCAN_SCALPING_MAX_PYRAMID_COUNT")
     env_swing_enable_pyramid = _env_bool("KORSTOCKSCAN_SWING_ENABLE_PYRAMID")
+    env_swing_enable_avg_down_simulation = _env_bool("KORSTOCKSCAN_SWING_ENABLE_AVG_DOWN_SIMULATION")
     env_swing_max_avg_down_count = _env_int("KORSTOCKSCAN_SWING_MAX_AVG_DOWN_COUNT")
     env_swing_max_pyramid_count = _env_int("KORSTOCKSCAN_SWING_MAX_PYRAMID_COUNT")
+    env_swing_scale_in_dynamic_qty_enabled = _env_bool("KORSTOCKSCAN_SWING_SCALE_IN_DYNAMIC_QTY_ENABLED")
+    env_swing_scale_in_effective_qty_cap = _env_int("KORSTOCKSCAN_SWING_SCALE_IN_EFFECTIVE_QTY_CAP")
+    env_swing_scale_in_real_canary_enabled = _env_bool("KORSTOCKSCAN_SWING_SCALE_IN_REAL_CANARY_ENABLED")
+    env_swing_scale_in_real_canary_allowed_arms = _env_str(
+        "KORSTOCKSCAN_SWING_SCALE_IN_REAL_CANARY_ALLOWED_ARMS"
+    )
+    env_swing_scale_in_real_canary_max_qty = _env_int("KORSTOCKSCAN_SWING_SCALE_IN_REAL_CANARY_MAX_QTY")
+    env_swing_scale_in_real_canary_max_orders_per_day = _env_int(
+        "KORSTOCKSCAN_SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_DAY"
+    )
+    env_swing_scale_in_real_canary_max_orders_per_position = _env_int(
+        "KORSTOCKSCAN_SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_POSITION"
+    )
+    env_swing_scale_in_real_canary_max_daily_notional = _env_int(
+        "KORSTOCKSCAN_SWING_SCALE_IN_REAL_CANARY_MAX_DAILY_NOTIONAL_KRW"
+    )
+    env_swing_scale_in_real_canary_require_approval = _env_bool(
+        "KORSTOCKSCAN_SWING_SCALE_IN_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT"
+    )
     env_ml_gatekeeper_reject_cooldown = _env_int("KORSTOCKSCAN_ML_GATEKEEPER_REJECT_COOLDOWN")
     env_swing_live_order_dry_run_enabled = _env_bool(
         "KORSTOCKSCAN_SWING_LIVE_ORDER_DRY_RUN_ENABLED"
+    )
+    env_swing_intraday_probe_enabled = _env_bool(
+        "KORSTOCKSCAN_SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED"
+    )
+    env_swing_intraday_probe_max_open = _env_int("KORSTOCKSCAN_SWING_INTRADAY_PROBE_MAX_OPEN")
+    env_swing_intraday_probe_max_daily = _env_int("KORSTOCKSCAN_SWING_INTRADAY_PROBE_MAX_DAILY")
+    env_swing_intraday_probe_max_per_symbol = _env_int("KORSTOCKSCAN_SWING_INTRADAY_PROBE_MAX_PER_SYMBOL")
+    env_swing_intraday_probe_score_vpw_max_open = _env_int(
+        "KORSTOCKSCAN_SWING_INTRADAY_PROBE_SCORE_VPW_MAX_OPEN"
+    )
+    env_swing_intraday_probe_discard_log_min_interval = _env_int(
+        "KORSTOCKSCAN_SWING_INTRADAY_PROBE_DISCARD_LOG_MIN_INTERVAL_SEC"
     )
     env_swing_orderbook_micro_context_enabled = _env_bool(
         "KORSTOCKSCAN_SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED"
@@ -1208,10 +1263,24 @@ def _build_trading_rules() -> TradingConfig:
         or env_scalping_max_avg_down_count is not None
         or env_scalping_max_pyramid_count is not None
         or env_swing_enable_pyramid is not None
+        or env_swing_enable_avg_down_simulation is not None
         or env_swing_max_avg_down_count is not None
         or env_swing_max_pyramid_count is not None
+        or env_swing_scale_in_dynamic_qty_enabled is not None
+        or env_swing_scale_in_effective_qty_cap is not None
+        or env_swing_scale_in_real_canary_enabled is not None
+        or env_swing_scale_in_real_canary_allowed_arms is not None
+        or env_swing_scale_in_real_canary_max_qty is not None
+        or env_swing_scale_in_real_canary_max_orders_per_day is not None
+        or env_swing_scale_in_real_canary_max_orders_per_position is not None
+        or env_swing_scale_in_real_canary_max_daily_notional is not None
+        or env_swing_scale_in_real_canary_require_approval is not None
         or env_ml_gatekeeper_reject_cooldown is not None
         or env_swing_live_order_dry_run_enabled is not None
+        or env_swing_intraday_probe_enabled is not None
+        or env_swing_intraday_probe_max_open is not None
+        or env_swing_intraday_probe_max_daily is not None
+        or env_swing_intraday_probe_max_per_symbol is not None
         or env_swing_orderbook_micro_context_enabled is not None
         or env_scalp_live_simulator_enabled is not None
         or env_scalp_live_simulator_owner is not None
@@ -1259,18 +1328,66 @@ def _build_trading_rules() -> TradingConfig:
             SWING_ENABLE_PYRAMID=env_swing_enable_pyramid
             if env_swing_enable_pyramid is not None
             else config.SWING_ENABLE_PYRAMID,
+            SWING_ENABLE_AVG_DOWN_SIMULATION=env_swing_enable_avg_down_simulation
+            if env_swing_enable_avg_down_simulation is not None
+            else config.SWING_ENABLE_AVG_DOWN_SIMULATION,
             SWING_MAX_AVG_DOWN_COUNT=env_swing_max_avg_down_count
             if env_swing_max_avg_down_count is not None
             else config.SWING_MAX_AVG_DOWN_COUNT,
             SWING_MAX_PYRAMID_COUNT=env_swing_max_pyramid_count
             if env_swing_max_pyramid_count is not None
             else config.SWING_MAX_PYRAMID_COUNT,
+            SWING_SCALE_IN_DYNAMIC_QTY_ENABLED=env_swing_scale_in_dynamic_qty_enabled
+            if env_swing_scale_in_dynamic_qty_enabled is not None
+            else config.SWING_SCALE_IN_DYNAMIC_QTY_ENABLED,
+            SWING_SCALE_IN_EFFECTIVE_QTY_CAP=env_swing_scale_in_effective_qty_cap
+            if env_swing_scale_in_effective_qty_cap is not None
+            else config.SWING_SCALE_IN_EFFECTIVE_QTY_CAP,
+            SWING_SCALE_IN_REAL_CANARY_ENABLED=env_swing_scale_in_real_canary_enabled
+            if env_swing_scale_in_real_canary_enabled is not None
+            else config.SWING_SCALE_IN_REAL_CANARY_ENABLED,
+            SWING_SCALE_IN_REAL_CANARY_ALLOWED_ARMS=env_swing_scale_in_real_canary_allowed_arms
+            if env_swing_scale_in_real_canary_allowed_arms is not None
+            else config.SWING_SCALE_IN_REAL_CANARY_ALLOWED_ARMS,
+            SWING_SCALE_IN_REAL_CANARY_MAX_QTY=env_swing_scale_in_real_canary_max_qty
+            if env_swing_scale_in_real_canary_max_qty is not None
+            else config.SWING_SCALE_IN_REAL_CANARY_MAX_QTY,
+            SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_DAY=env_swing_scale_in_real_canary_max_orders_per_day
+            if env_swing_scale_in_real_canary_max_orders_per_day is not None
+            else config.SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_DAY,
+            SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_POSITION=env_swing_scale_in_real_canary_max_orders_per_position
+            if env_swing_scale_in_real_canary_max_orders_per_position is not None
+            else config.SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_POSITION,
+            SWING_SCALE_IN_REAL_CANARY_MAX_DAILY_NOTIONAL_KRW=env_swing_scale_in_real_canary_max_daily_notional
+            if env_swing_scale_in_real_canary_max_daily_notional is not None
+            else config.SWING_SCALE_IN_REAL_CANARY_MAX_DAILY_NOTIONAL_KRW,
+            SWING_SCALE_IN_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT=env_swing_scale_in_real_canary_require_approval
+            if env_swing_scale_in_real_canary_require_approval is not None
+            else config.SWING_SCALE_IN_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT,
             ML_GATEKEEPER_REJECT_COOLDOWN=env_ml_gatekeeper_reject_cooldown
             if env_ml_gatekeeper_reject_cooldown is not None
             else config.ML_GATEKEEPER_REJECT_COOLDOWN,
             SWING_LIVE_ORDER_DRY_RUN_ENABLED=env_swing_live_order_dry_run_enabled
             if env_swing_live_order_dry_run_enabled is not None
             else config.SWING_LIVE_ORDER_DRY_RUN_ENABLED,
+            SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED=env_swing_intraday_probe_enabled
+            if env_swing_intraday_probe_enabled is not None
+            else config.SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED,
+            SWING_INTRADAY_PROBE_MAX_OPEN=env_swing_intraday_probe_max_open
+            if env_swing_intraday_probe_max_open is not None
+            else config.SWING_INTRADAY_PROBE_MAX_OPEN,
+            SWING_INTRADAY_PROBE_MAX_DAILY=env_swing_intraday_probe_max_daily
+            if env_swing_intraday_probe_max_daily is not None
+            else config.SWING_INTRADAY_PROBE_MAX_DAILY,
+            SWING_INTRADAY_PROBE_MAX_PER_SYMBOL=env_swing_intraday_probe_max_per_symbol
+            if env_swing_intraday_probe_max_per_symbol is not None
+            else config.SWING_INTRADAY_PROBE_MAX_PER_SYMBOL,
+            SWING_INTRADAY_PROBE_SCORE_VPW_MAX_OPEN=env_swing_intraday_probe_score_vpw_max_open
+            if env_swing_intraday_probe_score_vpw_max_open is not None
+            else config.SWING_INTRADAY_PROBE_SCORE_VPW_MAX_OPEN,
+            SWING_INTRADAY_PROBE_DISCARD_LOG_MIN_INTERVAL_SEC=env_swing_intraday_probe_discard_log_min_interval
+            if env_swing_intraday_probe_discard_log_min_interval is not None
+            else config.SWING_INTRADAY_PROBE_DISCARD_LOG_MIN_INTERVAL_SEC,
             SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED=env_swing_orderbook_micro_context_enabled
             if env_swing_orderbook_micro_context_enabled is not None
             else config.SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED,

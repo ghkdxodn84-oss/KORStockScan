@@ -22,6 +22,7 @@ from src.utils.constants import DATA_DIR, POSTGRES_URL
 SWING_STRATEGIES = {"KOSPI_ML", "KOSDAQ_ML", "MAIN"}
 SWING_EVENT_STAGES = {
     "blocked_swing_gap",
+    "blocked_swing_score_vpw",
     "gatekeeper_fast_reuse",
     "gatekeeper_fast_reuse_bypass",
     "blocked_gatekeeper_reject",
@@ -39,6 +40,12 @@ SWING_EVENT_STAGES = {
     "holding_flow_ofi_smoothing_applied",
     "swing_sim_sell_order_assumed_filled",
     "swing_sim_sell_blocked_zero_qty",
+    "swing_probe_entry_candidate",
+    "swing_probe_holding_started",
+    "swing_probe_exit_signal",
+    "swing_probe_sell_order_assumed_filled",
+    "swing_probe_scale_in_order_assumed_filled",
+    "swing_probe_discarded",
     "order_bundle_submitted",
     "order_submitted",
     "buy_order_submitted",
@@ -49,6 +56,9 @@ SIMULATED_ORDER_STAGES = {
     "swing_sim_order_bundle_assumed_filled",
     "swing_sim_scale_in_order_assumed_filled",
     "swing_sim_sell_order_assumed_filled",
+    "swing_probe_holding_started",
+    "swing_probe_sell_order_assumed_filled",
+    "swing_probe_scale_in_order_assumed_filled",
 }
 
 
@@ -177,6 +187,11 @@ def summarize_pipeline_events(events: Iterable[dict]) -> dict:
     unique_records = defaultdict(set)
     gatekeeper_actions = Counter()
     by_code_stage = Counter()
+    discard_reason_counts = Counter()
+    discard_origin_reason_counts = Counter()
+    discard_reason_unique = defaultdict(set)
+    discard_origin_reason_unique = defaultdict(set)
+    discard_by_record = Counter()
 
     for event in events:
         if not _is_swing_event(event):
@@ -193,6 +208,14 @@ def summarize_pipeline_events(events: Iterable[dict]) -> dict:
 
         if stage == "blocked_gatekeeper_reject":
             gatekeeper_actions[str(fields.get("action", "UNKNOWN") or "UNKNOWN")] += 1
+        if stage == "swing_probe_discarded":
+            reason = str(fields.get("discard_reason") or "UNKNOWN")
+            origin = str(fields.get("probe_origin_stage") or "UNKNOWN")
+            discard_reason_counts[reason] += 1
+            discard_origin_reason_counts[(origin, reason)] += 1
+            discard_reason_unique[reason].add(identity)
+            discard_origin_reason_unique[(origin, reason)].add(identity)
+            discard_by_record[(identity[0], identity[1], identity[2], origin, reason)] += 1
 
     key_stages = sorted(set(raw_counts) | SWING_EVENT_STAGES)
     return {
@@ -210,6 +233,33 @@ def summarize_pipeline_events(events: Iterable[dict]) -> dict:
             }
             for (code, name, stage), count in by_code_stage.most_common(20)
         ],
+        "swing_probe_discard_summary": {
+            "raw_count": int(raw_counts.get("swing_probe_discarded", 0)),
+            "unique_records": int(len(unique_records.get("swing_probe_discarded", set()))),
+            "reason_counts": dict(discard_reason_counts),
+            "reason_unique_record_counts": {
+                reason: int(len(records)) for reason, records in discard_reason_unique.items()
+            },
+            "origin_reason_counts": {
+                f"{origin}:{reason}": int(count)
+                for (origin, reason), count in discard_origin_reason_counts.most_common()
+            },
+            "origin_reason_unique_record_counts": {
+                f"{origin}:{reason}": int(len(records))
+                for (origin, reason), records in discard_origin_reason_unique.items()
+            },
+            "top_records": [
+                {
+                    "record_id": record_id,
+                    "code": code,
+                    "name": name,
+                    "probe_origin_stage": origin,
+                    "discard_reason": reason,
+                    "raw_count": int(count),
+                }
+                for (record_id, code, name, origin, reason), count in discard_by_record.most_common(20)
+            ],
+        },
         "submitted_raw_count": int(sum(raw_counts.get(stage, 0) for stage in SUBMITTED_STAGES)),
         "submitted_unique_records": int(
             len(set().union(*(unique_records.get(stage, set()) for stage in SUBMITTED_STAGES)))

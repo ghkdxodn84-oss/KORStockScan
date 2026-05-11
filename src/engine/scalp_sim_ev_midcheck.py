@@ -94,6 +94,248 @@ def _metrics(values: list[float]) -> dict:
     }
 
 
+def _sim_record_id(row: dict) -> str | None:
+    fields = row.get("fields") or {}
+    value = fields.get("sim_record_id")
+    if value:
+        return str(value)
+    return None
+
+
+def _boolish_false(value) -> bool:
+    return str(value).strip().lower() in {"false", "0", "no", "none", ""}
+
+
+def _position_template(row: dict) -> dict:
+    fields = row.get("fields") or {}
+    return {
+        "sim_record_id": fields.get("sim_record_id"),
+        "sim_parent_record_id": fields.get("sim_parent_record_id"),
+        "stock_name": row.get("stock_name"),
+        "stock_code": row.get("stock_code"),
+        "events": [],
+        "scale_in_filled": [],
+        "scale_in_unfilled": [],
+        "entry": None,
+        "entry_fill": None,
+        "completed": None,
+        "actual_order_submitted_values": [],
+    }
+
+
+def _position_arm(position: dict) -> str:
+    add_types = {str(event.get("add_type") or "").upper() for event in position.get("scale_in_filled", [])}
+    has_avg_down = bool(add_types & {"AVG_DOWN", "REVERSAL_ADD"})
+    has_pyramid = "PYRAMID" in add_types
+    if has_avg_down and has_pyramid:
+        return "mixed_scale_in"
+    if has_avg_down:
+        return "avg_down"
+    if has_pyramid:
+        return "pyramid"
+    return "exit_only"
+
+
+def _scale_in_event_row(row: dict) -> dict:
+    fields = row.get("fields") or {}
+    return {
+        "emitted_at": row.get("emitted_at"),
+        "stock_name": row.get("stock_name"),
+        "stock_code": row.get("stock_code"),
+        "sim_record_id": fields.get("sim_record_id"),
+        "add_type": fields.get("add_type"),
+        "qty": _as_float(fields.get("qty")),
+        "template_qty": _as_float(fields.get("template_qty")),
+        "would_qty": _as_float(fields.get("would_qty")),
+        "effective_qty": _as_float(fields.get("effective_qty")),
+        "cap_qty": _as_float(fields.get("cap_qty")),
+        "qty_reason": fields.get("qty_reason"),
+        "actual_order_submitted": fields.get("actual_order_submitted"),
+        "runtime_effect": fields.get("runtime_effect"),
+    }
+
+
+def _post_add_metrics(position: dict) -> dict:
+    filled = position.get("scale_in_filled") or []
+    if not filled:
+        return {
+            "sample": 0,
+            "mfe_after_add_pct": None,
+            "mae_after_add_pct": None,
+            "final_exit_profit_pct": None,
+            "source": "no_scale_in",
+        }
+    first_add_at = min(str(event.get("emitted_at") or "") for event in filled)
+    samples: list[float] = []
+    for event in position.get("events") or []:
+        if str(event.get("emitted_at") or "") < first_add_at:
+            continue
+        fields = event.get("fields") or {}
+        for key in ("profit_rate", "trigger_profit_rate"):
+            value = _as_float(fields.get(key))
+            if value is not None:
+                samples.append(value)
+    completed = position.get("completed") or {}
+    final_profit = _as_float((completed.get("fields") or {}).get("profit_rate"))
+    return {
+        "sample": len(samples),
+        "mfe_after_add_pct": round(max(samples), 4) if samples else None,
+        "mae_after_add_pct": round(min(samples), 4) if samples else None,
+        "final_exit_profit_pct": final_profit,
+        "source": "sim_record_profit_fields" if samples else "no_post_add_profit_fields",
+    }
+
+
+def _build_scale_in_analysis(positions: dict[str, dict]) -> dict:
+    arm_values: dict[str, list[float]] = {
+        "exit_only": [],
+        "avg_down": [],
+        "pyramid": [],
+        "mixed_scale_in": [],
+    }
+    rows: list[dict] = []
+    completed_filled_events: list[dict] = []
+    completed_unfilled_events: list[dict] = []
+    all_filled_events: list[dict] = []
+    all_unfilled_events: list[dict] = []
+    actual_order_values: list[str] = []
+
+    for position in positions.values():
+        all_filled_events.extend(position.get("scale_in_filled") or [])
+        all_unfilled_events.extend(position.get("scale_in_unfilled") or [])
+        actual_order_values.extend(str(v) for v in position.get("actual_order_submitted_values") or [])
+        completed = position.get("completed")
+        if not completed:
+            continue
+        fields = completed.get("fields") or {}
+        profit = _as_float(fields.get("profit_rate"))
+        arm = _position_arm(position)
+        if profit is not None:
+            arm_values.setdefault(arm, []).append(profit)
+        completed_filled_events.extend(position.get("scale_in_filled") or [])
+        completed_unfilled_events.extend(position.get("scale_in_unfilled") or [])
+        post_add = _post_add_metrics(position)
+        rows.append(
+            {
+                "sim_record_id": position.get("sim_record_id"),
+                "stock_name": position.get("stock_name"),
+                "stock_code": position.get("stock_code"),
+                "arm": arm,
+                "scale_in_filled_count": len(position.get("scale_in_filled") or []),
+                "scale_in_unfilled_count": len(position.get("scale_in_unfilled") or []),
+                "add_types": sorted(
+                    {
+                        str(event.get("add_type") or "-")
+                        for event in position.get("scale_in_filled", [])
+                    }
+                ),
+                "final_exit_profit_pct": profit,
+                "exit_rule": fields.get("exit_rule"),
+                "actual_order_submitted": fields.get("actual_order_submitted"),
+                **post_add,
+            }
+        )
+
+    by_add_type: Counter[str] = Counter()
+    for event in all_filled_events:
+        by_add_type[str(event.get("add_type") or "-")] += 1
+    unfilled_by_add_type: Counter[str] = Counter()
+    for event in all_unfilled_events:
+        unfilled_by_add_type[str(event.get("add_type") or "-")] += 1
+
+    unexpected_actual = sorted({value for value in actual_order_values if not _boolish_false(value)})
+    return {
+        "arm_metrics": {arm: _metrics(values) for arm, values in sorted(arm_values.items())},
+        "scale_in_counts": {
+            "positions_completed": len(rows),
+            "positions_with_scale_in": sum(1 for row in rows if row["scale_in_filled_count"] > 0),
+            "positions_without_scale_in": sum(1 for row in rows if row["scale_in_filled_count"] == 0),
+            "filled_events": len(all_filled_events),
+            "unfilled_events": len(all_unfilled_events),
+            "completed_filled_events": len(completed_filled_events),
+            "completed_unfilled_events": len(completed_unfilled_events),
+            "filled_by_add_type": dict(sorted(by_add_type.items())),
+            "unfilled_by_add_type": dict(sorted(unfilled_by_add_type.items())),
+        },
+        "actual_order_submission_check": {
+            "passed": not unexpected_actual,
+            "unexpected_values": unexpected_actual,
+            "checked_values": len(actual_order_values),
+        },
+        "positions": sorted(
+            rows,
+            key=lambda row: row["final_exit_profit_pct"] if row["final_exit_profit_pct"] is not None else -999,
+            reverse=True,
+        ),
+        "filled_events": all_filled_events,
+        "unfilled_events": all_unfilled_events,
+    }
+
+
+def _as_int(value, default=0) -> int:
+    numeric = _as_float(value)
+    if numeric is None:
+        return default
+    return int(numeric)
+
+
+def _build_initial_qty_provenance(positions: dict[str, dict]) -> dict:
+    rows: list[dict] = []
+    summary = {
+        "sample": 0,
+        "qty_sum": 0,
+        "uncapped_qty_sum": 0,
+        "cap_applied_count": 0,
+        "uncapped_qty_source_count": 0,
+        "fixed_qty_source_count": 0,
+    }
+    for position in positions.values():
+        completed = position.get("completed")
+        if not completed:
+            continue
+        completed_fields = completed.get("fields") or {}
+        entry = position.get("entry") or {}
+        entry_fields = entry.get("fields") or {}
+        entry_fill = position.get("entry_fill") or {}
+        entry_fill_fields = entry_fill.get("fields") or {}
+        profit_rate = _as_float(completed_fields.get("profit_rate"))
+        buy_price = _as_float(completed_fields.get("buy_price") or entry_fill_fields.get("assumed_fill_price"))
+
+        sim_qty = _as_int(entry_fields.get("qty") or entry_fill_fields.get("qty") or completed_fields.get("qty"), 1)
+        uncapped_qty = _as_int(entry_fields.get("uncapped_qty") or entry_fields.get("qty") or sim_qty, sim_qty)
+        qty_source = str(entry_fields.get("qty_source") or "-")
+        cap_applied = not _boolish_false(entry_fields.get("cap_applied"))
+        row = {
+            "sim_record_id": position.get("sim_record_id"),
+            "stock_name": position.get("stock_name"),
+            "stock_code": position.get("stock_code"),
+            "profit_rate": profit_rate,
+            "buy_price": buy_price,
+            "sim_qty": sim_qty,
+            "uncapped_qty": uncapped_qty,
+            "cap_applied": cap_applied,
+            "qty_source": qty_source,
+            "qty_reason": entry_fields.get("qty_reason") or "-",
+        }
+        rows.append(row)
+        summary["sample"] += 1
+        summary["qty_sum"] += sim_qty
+        summary["uncapped_qty_sum"] += uncapped_qty
+        summary["cap_applied_count"] += int(cap_applied)
+        summary["uncapped_qty_source_count"] += int(qty_source == "uncapped_buy_capacity")
+        summary["fixed_qty_source_count"] += int(qty_source == "fixed_config")
+
+    return {
+        "summary": summary,
+        "positions": sorted(
+            rows,
+            key=lambda row: row["profit_rate"] if row["profit_rate"] is not None else -999,
+            reverse=True,
+        ),
+        "method": "actual_sim_qty_provenance_only",
+    }
+
+
 def build_report(target_date: str) -> dict:
     path = DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
     rows = _load_jsonl(path)
@@ -101,6 +343,7 @@ def build_report(target_date: str) -> dict:
     completed: list[dict] = []
     expired: list[dict] = []
     real_completed: list[dict] = []
+    positions: dict[str, dict] = {}
     latest = None
     synthetic_excluded = 0
 
@@ -114,6 +357,25 @@ def build_report(target_date: str) -> dict:
             continue
         if is_sim:
             sim_counts[stage] += 1
+            sim_id = _sim_record_id(row)
+            if sim_id:
+                position = positions.setdefault(sim_id, _position_template(row))
+                position["events"].append(row)
+                position["stock_name"] = position.get("stock_name") or row.get("stock_name")
+                position["stock_code"] = position.get("stock_code") or row.get("stock_code")
+                actual_order_submitted = fields.get("actual_order_submitted")
+                if actual_order_submitted is not None:
+                    position["actual_order_submitted_values"].append(actual_order_submitted)
+                if stage == "scalp_sim_scale_in_order_assumed_filled":
+                    position["scale_in_filled"].append(_scale_in_event_row(row))
+                if stage == "scalp_sim_scale_in_order_unfilled":
+                    position["scale_in_unfilled"].append(_scale_in_event_row(row))
+                if stage == "scalp_sim_entry_armed":
+                    position["entry"] = row
+                if stage == "scalp_sim_buy_order_assumed_filled":
+                    position["entry_fill"] = row
+                if stage == "scalp_sim_sell_order_assumed_filled":
+                    position["completed"] = row
         if stage == "scalp_sim_sell_order_assumed_filled" and is_sim:
             completed.append(
                 {
@@ -152,6 +414,8 @@ def build_report(target_date: str) -> dict:
             )
 
     profit_values = [row["profit_rate"] for row in completed if row["profit_rate"] is not None]
+    scale_in_analysis = _build_scale_in_analysis(positions)
+    initial_qty_provenance = _build_initial_qty_provenance(positions)
     return {
         "target_date": target_date,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -160,6 +424,8 @@ def build_report(target_date: str) -> dict:
         "synthetic_excluded": synthetic_excluded,
         "sim_counts": dict(sorted(sim_counts.items())),
         "metrics": _metrics(profit_values),
+        "scale_in_analysis": scale_in_analysis,
+        "initial_qty_provenance": initial_qty_provenance,
         "completed": sorted(completed, key=lambda row: row["profit_rate"] if row["profit_rate"] is not None else -999, reverse=True),
         "expired": expired,
         "real_completed": real_completed,
@@ -207,6 +473,80 @@ def write_outputs(report: dict, output_dir: Path) -> tuple[Path, Path]:
     ]
     for stage, count in report["sim_counts"].items():
         lines.append(f"- `{stage}`: `{count}`")
+    scale = report.get("scale_in_analysis") or {}
+    scale_counts = scale.get("scale_in_counts") or {}
+    submission_check = scale.get("actual_order_submission_check") or {}
+    lines.extend(
+        [
+            "",
+            "## Arm Split",
+            "",
+            "| arm | completed | avg | median | win_rate | sum |",
+            "| --- | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for arm, metrics in (scale.get("arm_metrics") or {}).items():
+        lines.append(
+            f"| `{arm}` | {metrics.get('sample', 0)} | {_fmt_pct(metrics.get('avg_profit_pct'))} | "
+            f"{_fmt_pct(metrics.get('median_profit_pct'))} | "
+            f"{metrics.get('win_rate_pct') if metrics.get('win_rate_pct') is not None else '-'}% | "
+            f"{_fmt_pct(metrics.get('sum_profit_pct'))} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Scale-In Summary",
+            "",
+            f"- positions_completed: `{scale_counts.get('positions_completed', 0)}`",
+            f"- positions_with_scale_in: `{scale_counts.get('positions_with_scale_in', 0)}`",
+            f"- positions_without_scale_in: `{scale_counts.get('positions_without_scale_in', 0)}`",
+            f"- filled_events: `{scale_counts.get('filled_events', 0)}`",
+            f"- unfilled_events: `{scale_counts.get('unfilled_events', 0)}`",
+            f"- completed_filled_events: `{scale_counts.get('completed_filled_events', 0)}`",
+            f"- completed_unfilled_events: `{scale_counts.get('completed_unfilled_events', 0)}`",
+            f"- filled_by_add_type: `{scale_counts.get('filled_by_add_type', {})}`",
+            f"- unfilled_by_add_type: `{scale_counts.get('unfilled_by_add_type', {})}`",
+            f"- actual_order_submitted_false_only: `{str(submission_check.get('passed', False)).lower()}`",
+            f"- actual_order_checked_values: `{submission_check.get('checked_values', 0)}`",
+            "",
+            "## Scale-In Position Outcomes",
+            "",
+            "| 종목 | arm | add filled/unfilled | post-add MFE | post-add MAE | final exit | actual_order |",
+            "| --- | --- | ---: | ---: | ---: | ---: | --- |",
+        ]
+    )
+    for row in scale.get("positions") or []:
+        lines.append(
+            f"| {row['stock_name']}({row['stock_code']}) | `{row.get('arm')}` | "
+            f"{row.get('scale_in_filled_count', 0)}/{row.get('scale_in_unfilled_count', 0)} | "
+            f"{_fmt_pct(row.get('mfe_after_add_pct'))} | {_fmt_pct(row.get('mae_after_add_pct'))} | "
+            f"{_fmt_pct(row.get('final_exit_profit_pct'))} | {row.get('actual_order_submitted') or '-'} |"
+        )
+    qty_prov = report.get("initial_qty_provenance") or {}
+    qty_summary = qty_prov.get("summary") or {}
+    lines.extend(
+        [
+            "",
+            "## Initial Qty Provenance",
+            "",
+            f"- method: `{qty_prov.get('method', '-')}`",
+            f"- sample: `{qty_summary.get('sample', 0)}`",
+            f"- qty_sum: `{qty_summary.get('qty_sum', 0)}`",
+            f"- uncapped_qty_sum: `{qty_summary.get('uncapped_qty_sum', 0)}`",
+            f"- cap_applied_count: `{qty_summary.get('cap_applied_count', 0)}`",
+            f"- uncapped_qty_source_count: `{qty_summary.get('uncapped_qty_source_count', 0)}`",
+            f"- fixed_qty_source_count: `{qty_summary.get('fixed_qty_source_count', 0)}`",
+            "",
+            "| 종목 | sim_qty | uncapped_qty | qty_source | cap_applied | final exit |",
+            "| --- | ---: | ---: | --- | --- | ---: |",
+        ]
+    )
+    for row in qty_prov.get("positions") or []:
+        lines.append(
+            f"| {row['stock_name']}({row['stock_code']}) | {row.get('sim_qty', '-')} | "
+            f"{row.get('uncapped_qty', '-')} | `{row.get('qty_source') or '-'}` | "
+            f"{str(row.get('cap_applied', False)).lower()} | {_fmt_pct(row.get('profit_rate'))} |"
+        )
     lines.extend(["", "## Completed Rows", "", "| 종목 | 수익률 | exit_rule | source |", "| --- | ---: | --- | --- |"])
     for row in report["completed"]:
         lines.append(

@@ -11,7 +11,7 @@
 - 장중 threshold runtime mutation은 금지한다. 장중 산출물은 다음 장전 apply 후보 입력으로만 쓴다.
 - AI correction은 수정안 제안 layer다. 최종 threshold state/value는 deterministic guard가 결정한다.
 - Pattern lab은 `code_improvement_order`와 `auto_family_candidate`만 생성한다. runtime/code를 직접 변경하지 않는다.
-- 스윙은 `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True` 기본값에서 live 선정-진입-보유-추가매수-청산 로직을 실행하되 브로커 주문 접수만 차단한다. `swing_sim_*` stage와 `actual_order_submitted=false`는 실제 `order_bundle_submitted`/`sell_order_sent`와 분리해서 본다.
+- 스윙은 `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True` 기본값에서 live 선정-진입-보유-추가매수-청산 로직을 실행하되 브로커 주문 접수만 차단한다. `SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED=True`이면 진입 전 block stage에서 `swing_probe_*` virtual holding을 생성해 live 보유 이후 데이터를 observe-only로 수집한다. `SWING_ENABLE_AVG_DOWN_SIMULATION=True`와 `SWING_SCALE_IN_DYNAMIC_QTY_ENABLED=True`는 dry-run/probe 안에서 AVG_DOWN/PYRAMID 후보와 `would_qty`/`effective_qty`를 남긴다. `swing_scale_in_real_canary_phase0`는 별도 approval artifact가 있을 때만 승인된 real swing holding의 AVG_DOWN/PYRAMID 추가매수 1주 주문을 허용하며, sim/probe/dry-run 포지션과 OFI/QI `RISK_BEARISH`/stale quote는 fail-closed로 차단한다. `swing_sim_*`/`swing_probe_*` stage와 `actual_order_submitted=false`는 실제 `order_bundle_submitted`/`sell_order_sent`와 분리해서 본다.
 - 스윙 self-improvement는 `selection -> db_load -> entry -> holding -> scale_in -> exit -> attribution` 전체 lifecycle을 대상으로 하며, DB load gap, OFI/QI, AI contract, AVG_DOWN/PYRAMID 관찰축은 report-only/proposal-only다.
 - 스윙 runtime 반영은 `proposal -> approval_required -> approved_live(dry-run)`만 허용한다. `swing_runtime_approval`이 hard floor와 EV trade-off score로 승인 요청을 만들 수 있지만, `approval_required`만으로 env를 쓰지 않는다. 사용자가 approval artifact를 남긴 경우에만 다음 장전 preopen apply가 env를 생성하며, 이때도 `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True`와 브로커 주문 차단은 유지한다.
 - 스윙 1주 real canary는 별도 approval-required 축이다. 전체 dry-run 해제가 아니라 승인된 극소수 스윙 후보에만 실제 1주 BUY/SELL을 보내 broker execution 품질을 수집하는 경로이며, phase0에서는 추가매수/AVG_DOWN/PYRAMID 실주문을 열지 않는다.
@@ -374,7 +374,7 @@ tmux ls
 1. Sentinel은 상태 확인용이다. BUY/HOLD-EXIT 이상치가 보여도 runtime threshold를 바꾸지 않는다.
 2. `12:05` 장중 calibration은 anomaly correction 후보와 source freshness만 확인한다. `cron_completion` 기준 완료 marker는 `logs/threshold_cycle_calibration_intraday_cron.log`의 `[DONE] threshold-cycle calibration target_date=YYYY-MM-DD phase=intraday`다. 산출물이 존재하고 marker만 없으면 runtime 장애가 아니라 wrapper/log 계약 결함으로 분류한다.
 3. `pipeline_events_YYYY-MM-DD.jsonl` append가 멈추지 않았는지 확인한다. `threshold_events_YYYY-MM-DD.jsonl`는 threshold-family 대상 stage만 남는 sparse compact stream이므로, stale은 fatal runtime 중단이 아니라 source coverage warning으로 분류한다.
-4. 스윙 dry-run은 실전 판단 흐름 관찰용이다. `swing_sim_*`, `swing_entry_micro_context_observed`, `swing_scale_in_micro_context_observed`, `holding_flow_ofi_smoothing_applied`가 보이면 주문 제출 여부와 별도로 provenance만 본다.
+4. 스윙 dry-run은 실전 판단 흐름 관찰용이다. `swing_sim_*`, `swing_probe_*`, `blocked_swing_score_vpw`, `swing_entry_micro_context_observed`, `swing_scale_in_micro_context_observed`, `swing_sim_scale_in_order_assumed_filled`, `swing_probe_scale_in_order_assumed_filled`, `holding_flow_ofi_smoothing_applied`가 보이면 주문 제출 여부와 별도로 provenance만 본다. `swing_probe_*`는 `data/runtime/swing_intraday_probe_state.json`에서 재시작 복원되며, open cap/일일 cap 초과 시 `swing_probe_discarded`로 닫힌다.
 5. 스캘핑 live simulator는 실전 주문이 아니라 BUY 신호 전체 관측용 `signal_inclusive_best_ask_v1` 가상 체결이다. quote touch/timeout은 진입 허들이 아니라 `would_limit_fill`, `fill_source`, `limit_fill_price` 진단 필드로만 본다. 장중에는 `scalp_sim_*` stage와 Kiwoom WS 유지 여부만 확인하고, sim 손익만으로 당일 threshold를 바꾸지 않는다.
 6. `RUNTIME_OPS`, snapshot failure, model call timeout, 주문 receipt/provenance 손상이 있으면 전략 threshold 문제가 아니라 운영 장애로 분류한다.
 7. safety breach가 아니라 목표 미달이면 rollback이 아니라 postclose calibration 입력으로 넘긴다.
@@ -485,6 +485,21 @@ PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print
 | rollback | approval artifact 밖 실주문 1건, qty > 1, global dry-run 해제, receipt/order number mismatch, sell failure, price guard breach, daily/open/notional cap 초과, provenance 누락 |
 
 운영자는 이 기준이 충족되어도 스윙 전체 실주문 전환으로 해석하지 않는다. real canary가 통과한 뒤 전체 dry-run 해제를 검토하려면 별도 2차 계획, broker execution guard, 사용자 승인이 필요하다.
+
+### 스윙 Scale-In Real Canary 진행 기준
+
+`swing_scale_in_real_canary_phase0`는 initial BUY/SELL real canary와 분리된 별도 approval-required 축이다. 이 축은 전체 스윙 실매매 전환이 아니라 이미 승인된 real swing holding에서 AVG_DOWN/PYRAMID 추가매수 주문 품질을 1주 cap으로 수집한다.
+
+| 항목 | phase0 기준 |
+| --- | --- |
+| 기본 상태 | OFF / `KORSTOCKSCAN_SWING_SCALE_IN_REAL_CANARY_ENABLED=false` |
+| 승인 artifact | `data/threshold_cycle/approvals/swing_scale_in_real_canary_YYYY-MM-DD.json` |
+| 허용 arm | `PYRAMID`, `AVG_DOWN` 중 arm별 hard floor를 통과하고 artifact의 `allowed_actions`에 포함된 arm만 허용 |
+| 수량/노출 | `real_canary_actual_qty=1`, `max_orders_per_day=1`, `max_orders_per_position=1`, `max_daily_notional_krw=100000` |
+| 주문 방식 | 시장가 금지. best bid 또는 defensive limit resolver 가격만 허용 |
+| block | sim/probe/dry-run 포지션, 승인되지 않은 arm, stale quote, `orderbook_micro_ready=false`, OFI/QI `RISK_BEARISH`, pending add/sell, cap 초과 |
+| provenance | `cohort=swing_scale_in_real_canary_phase0`, `actual_order_submitted=true`, `would_qty`, `effective_qty`, `real_canary_actual_qty=1`, `real_canary_qty_cap=1`, `qty_cap_reason=swing_scale_in_real_canary_phase0` |
+| rollback | 승인 밖 주문, qty > 1, sim/probe real order attempt, receipt lifecycle mismatch, stale submit, OFI/QI bearish submit |
 
 ## 신규 Code Improvement Order 처리 절차
 

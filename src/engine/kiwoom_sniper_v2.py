@@ -1200,6 +1200,7 @@ def run_sniper(is_test_mode=False):
         t['position_tag'] = normalize_position_tag(t['strategy'], t.get('position_tag'))
     _restore_holding_runtime_state(ACTIVE_TARGETS)
     sniper_state_handlers.restore_scalp_simulator_targets(ACTIVE_TARGETS)
+    sniper_state_handlers.restore_swing_intraday_probe_targets(ACTIVE_TARGETS)
 
     targets = ACTIVE_TARGETS
     last_db_poll_time = time.time()
@@ -1263,6 +1264,7 @@ def run_sniper(is_test_mode=False):
                     if not any(
                         target_identity(t.get('code', ''), t.get('strategy', '')) == identity
                         and not sniper_state_handlers._is_scalp_simulator_target(t)
+                        and not sniper_state_handlers._is_swing_intraday_probe_target(t)
                         for t in targets
                     ):
                         dt['added_time'] = now_ts

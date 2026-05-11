@@ -1,5 +1,6 @@
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
@@ -12,6 +13,8 @@ from src.engine.swing_selection_funnel_report import (
 from src.engine.swing_daily_simulation_report import (
     build_swing_daily_simulation_report,
     filter_live_recommendations,
+    load_recommendations,
+    merge_recommendation_sources,
     simulate_swing_recommendations,
 )
 from src.engine.swing_lifecycle_audit import (
@@ -25,6 +28,15 @@ from src.engine.swing_lifecycle_audit import (
 from src.model import common_v2
 from src.model.common_v2 import daily_selection_stats, select_daily_candidates
 from src.scanners.final_ensemble_scanner import classify_v2_csv_pick
+from src.utils.constants import TRADING_RULES as CONFIG
+
+
+class FakeEventBus:
+    def __init__(self):
+        self.published = []
+
+    def publish(self, topic, payload):
+        self.published.append((topic, payload))
 
 
 def _score_rows():
@@ -202,6 +214,59 @@ def test_swing_funnel_report_separates_raw_and_unique_event_counts():
     assert summary["ofi_qi_summary"]["stale_missing_count"] == 1
 
 
+def test_swing_lifecycle_audit_separates_intraday_probe_evidence_quality():
+    report = build_swing_lifecycle_audit_report(
+        "2026-05-11",
+        recommendation_rows=[],
+        diagnostic_summary={"selected_count": 0},
+        db_rows=[],
+        event_rows=[
+            {
+                "stage": "swing_probe_entry_candidate",
+                "stock_code": "000001",
+                "stock_name": "A",
+                "record_id": 1,
+                "fields": {
+                    "strategy": "KOSPI_ML",
+                    "probe_origin_stage": "blocked_gatekeeper_reject",
+                    "evidence_quality": "blocked_stage_intraday_probe",
+                    "actual_order_submitted": False,
+                },
+            },
+            {
+                "stage": "swing_probe_sell_order_assumed_filled",
+                "stock_code": "000001",
+                "stock_name": "A",
+                "record_id": 1,
+                "fields": {
+                    "strategy": "KOSPI_ML",
+                    "evidence_quality": "blocked_stage_intraday_probe",
+                    "actual_order_submitted": False,
+                    "profit_rate": "+2.10",
+                },
+            },
+            {
+                "stage": "swing_daily_simulation_proxy",
+                "stock_code": "000002",
+                "stock_name": "B",
+                "record_id": 2,
+                "fields": {
+                    "strategy": "KOSPI_ML",
+                    "evidence_quality": "daily_next_open_proxy",
+                    "actual_order_submitted": False,
+                },
+            },
+        ],
+    )
+
+    events = report["lifecycle_events"]
+    assert events["raw_counts"]["swing_probe_entry_candidate"] == 1
+    assert events["raw_counts"]["swing_probe_sell_order_assumed_filled"] == 1
+    assert events["evidence_quality_counts"]["blocked_stage_intraday_probe"] == 2
+    assert events["evidence_quality_counts"]["daily_next_open_proxy"] == 1
+    assert events["actual_order_submitted_flags"]["false"] == 3
+
+
 def test_swing_micro_context_advice_is_observe_only():
     bullish = state_handlers._build_swing_micro_log_fields(
         {
@@ -246,6 +311,425 @@ def test_swing_micro_context_advice_is_observe_only():
     assert avg_down["swing_micro_recovery_support_observed"] is True
 
 
+def test_swing_intraday_probe_starts_virtual_holding_without_real_order(monkeypatch, tmp_path):
+    rules = replace(
+        CONFIG,
+        SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
+        SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED=True,
+        SWING_INTRADAY_PROBE_MAX_OPEN=10,
+        SWING_INTRADAY_PROBE_MAX_DAILY=30,
+        SWING_INTRADAY_PROBE_MAX_PER_SYMBOL=1,
+    )
+    logs = []
+    event_bus = FakeEventBus()
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "ACTIVE_TARGETS", [])
+    monkeypatch.setattr(state_handlers, "EVENT_BUS", event_bus)
+    monkeypatch.setattr(state_handlers, "HIGHEST_PRICES", {})
+    monkeypatch.setattr(state_handlers, "SWING_INTRADAY_PROBE_STATE_PATH", tmp_path / "swing_probe_state.json")
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("real buy order must not be called")),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 501,
+        "name": "SWING",
+        "code": "000001",
+        "strategy": "KOSPI_ML",
+        "position_tag": "META_V2",
+        "date": "2026-05-08",
+    }
+
+    assert state_handlers.maybe_start_swing_intraday_probe(
+        stock=stock,
+        code="000001",
+        ws_data={"curr": 10_000, "v_pw": 95.0, "orderbook": {"asks": [{"price": 10_010}], "bids": [{"price": 9_990}]}},
+        origin_stage="blocked_gatekeeper_reject",
+        runtime={
+            "strategy": "KOSPI_ML",
+            "now_ts": 1_768_090_000.0,
+            "ratio": 0.10,
+            "current_ai_score": 72.0,
+            "current_vpw": 95.0,
+        },
+        extra_fields={"gatekeeper_action": "WAIT", "gatekeeper_allow_entry": False, "score": 72.0},
+    )
+
+    assert len(state_handlers.ACTIVE_TARGETS) == 1
+    probe = state_handlers.ACTIVE_TARGETS[0]
+    assert probe["status"] == "HOLDING"
+    assert probe["swing_intraday_probe"] is True
+    assert probe["swing_live_order_dry_run"] is True
+    assert probe["actual_order_submitted"] is False
+    assert probe["broker_order_forbidden"] is True
+    assert probe["simulation_book"] == "swing_intraday_live_equiv_probe"
+    assert probe["source_record_id"] == 501
+    assert probe["buy_price"] == 10_000
+    assert probe["buy_qty"] > 0
+    assert [stage for stage, _ in logs] == ["swing_probe_entry_candidate", "swing_probe_holding_started"]
+    assert event_bus.published == [("COMMAND_WS_REG", {"codes": ["000001"], "source": "swing_intraday_probe"})]
+    assert (tmp_path / "swing_probe_state.json").exists()
+
+
+def test_swing_probe_discard_classifies_symbol_cap_before_global_open_cap(monkeypatch, tmp_path):
+    rules = replace(
+        CONFIG,
+        SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
+        SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED=True,
+        SWING_INTRADAY_PROBE_MAX_OPEN=1,
+        SWING_INTRADAY_PROBE_MAX_PER_SYMBOL=1,
+        SWING_INTRADAY_PROBE_DISCARD_LOG_MIN_INTERVAL_SEC=60,
+    )
+    logs = []
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "_SWING_PROBE_DISCARD_LOG_TS", {})
+    monkeypatch.setattr(state_handlers, "EVENT_BUS", FakeEventBus())
+    monkeypatch.setattr(state_handlers, "SWING_INTRADAY_PROBE_STATE_PATH", tmp_path / "swing_probe_state.json")
+    monkeypatch.setattr(
+        state_handlers,
+        "ACTIVE_TARGETS",
+        [
+            {
+                "code": "000001",
+                "name": "SWING",
+                "strategy": "KOSPI_ML",
+                "status": "HOLDING",
+                "swing_intraday_probe": True,
+                "simulation_book": "swing_intraday_live_equiv_probe",
+                "probe_origin_stage": "blocked_swing_score_vpw",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    assert not state_handlers.maybe_start_swing_intraday_probe(
+        stock={"id": 501, "name": "SWING", "code": "000001", "strategy": "KOSPI_ML"},
+        code="000001",
+        ws_data={"curr": 10_000},
+        origin_stage="blocked_swing_score_vpw",
+        runtime={"strategy": "KOSPI_ML", "now_ts": 1_768_090_000.0},
+    )
+
+    assert logs == [
+        (
+            "swing_probe_discarded",
+            {
+                "simulation_book": "swing_intraday_live_equiv_probe",
+                "simulation_owner": "SwingIntradayLiveEquivalentProbe0511",
+                "swing_intraday_probe": True,
+                "simulated_order": True,
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "runtime_effect": "in_memory_probe_only",
+                "probe_id": None,
+                "probe_origin_stage": "blocked_swing_score_vpw",
+                "probe_arm": None,
+                "evidence_quality": None,
+                "evidence_quality_weight": None,
+                "source_record_id": None,
+                "discard_reason": "max_per_symbol_reached",
+                "strategy": "KOSPI_ML",
+                "active_symbol_probes": 1,
+            },
+        )
+    ]
+
+
+def test_swing_probe_discard_rate_limits_repeated_global_cap_logs(monkeypatch, tmp_path):
+    rules = replace(
+        CONFIG,
+        SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
+        SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED=True,
+        SWING_INTRADAY_PROBE_MAX_OPEN=1,
+        SWING_INTRADAY_PROBE_MAX_PER_SYMBOL=1,
+        SWING_INTRADAY_PROBE_DISCARD_LOG_MIN_INTERVAL_SEC=60,
+    )
+    logs = []
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "_SWING_PROBE_DISCARD_LOG_TS", {})
+    monkeypatch.setattr(state_handlers, "EVENT_BUS", FakeEventBus())
+    monkeypatch.setattr(state_handlers, "SWING_INTRADAY_PROBE_STATE_PATH", tmp_path / "swing_probe_state.json")
+    monkeypatch.setattr(
+        state_handlers,
+        "ACTIVE_TARGETS",
+        [
+            {
+                "code": "999999",
+                "name": "OTHER",
+                "strategy": "KOSPI_ML",
+                "status": "HOLDING",
+                "swing_intraday_probe": True,
+                "simulation_book": "swing_intraday_live_equiv_probe",
+                "probe_origin_stage": "blocked_swing_gap",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {"id": 502, "name": "NEXT", "code": "000002", "strategy": "KOSPI_ML"}
+    for now_ts in (1_768_090_000.0, 1_768_090_030.0, 1_768_090_061.0):
+        assert not state_handlers.maybe_start_swing_intraday_probe(
+            stock=stock,
+            code="000002",
+            ws_data={"curr": 10_000},
+            origin_stage="blocked_swing_gap",
+            runtime={"strategy": "KOSPI_ML", "now_ts": now_ts},
+        )
+
+    assert [fields["discard_reason"] for _, fields in logs] == ["max_open_reached", "max_open_reached"]
+    assert [fields["open_count"] for _, fields in logs] == [1, 1]
+
+
+def test_swing_probe_score_vpw_origin_quota_preserves_other_origin_slots(monkeypatch, tmp_path):
+    rules = replace(
+        CONFIG,
+        SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
+        SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED=True,
+        SWING_INTRADAY_PROBE_MAX_OPEN=10,
+        SWING_INTRADAY_PROBE_MAX_PER_SYMBOL=1,
+        SWING_INTRADAY_PROBE_SCORE_VPW_MAX_OPEN=1,
+        SWING_INTRADAY_PROBE_DISCARD_LOG_MIN_INTERVAL_SEC=0,
+    )
+    logs = []
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "_SWING_PROBE_DISCARD_LOG_TS", {})
+    monkeypatch.setattr(state_handlers, "EVENT_BUS", FakeEventBus())
+    monkeypatch.setattr(state_handlers, "SWING_INTRADAY_PROBE_STATE_PATH", tmp_path / "swing_probe_state.json")
+    monkeypatch.setattr(
+        state_handlers,
+        "ACTIVE_TARGETS",
+        [
+            {
+                "code": "000001",
+                "name": "SCORE",
+                "strategy": "KOSPI_ML",
+                "status": "HOLDING",
+                "swing_intraday_probe": True,
+                "simulation_book": "swing_intraday_live_equiv_probe",
+                "probe_origin_stage": "blocked_swing_score_vpw",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    assert not state_handlers.maybe_start_swing_intraday_probe(
+        stock={"id": 503, "name": "SCORE2", "code": "000003", "strategy": "KOSPI_ML"},
+        code="000003",
+        ws_data={"curr": 10_000},
+        origin_stage="blocked_swing_score_vpw",
+        runtime={"strategy": "KOSPI_ML", "now_ts": 1_768_090_000.0},
+    )
+
+    assert logs[-1][1]["discard_reason"] == "origin_quota_reached"
+    assert logs[-1][1]["origin_open_count"] == 1
+    assert logs[-1][1]["origin_open_cap"] == 1
+
+
+def test_restore_swing_intraday_probe_targets_skips_synthetic(monkeypatch, tmp_path):
+    state_path = tmp_path / "swing_probe_state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "active_positions": [
+                    {
+                        "code": "123456",
+                        "name": "TEST",
+                        "strategy": "KOSPI_ML",
+                        "status": "HOLDING",
+                        "probe_id": "SKIP",
+                    },
+                    {
+                        "code": "005930",
+                        "name": "삼성전자",
+                        "strategy": "KOSPI_ML",
+                        "status": "HOLDING",
+                        "probe_id": "KEEP",
+                        "buy_price": 10000,
+                        "buy_qty": 1,
+                    },
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    rules = replace(CONFIG, SWING_LIVE_ORDER_DRY_RUN_ENABLED=True, SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED=True)
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "SWING_INTRADAY_PROBE_STATE_PATH", state_path)
+    targets = []
+
+    restored = state_handlers.restore_swing_intraday_probe_targets(targets)
+
+    assert restored == 1
+    assert targets[0]["code"] == "005930"
+    assert targets[0]["swing_intraday_probe"] is True
+    assert targets[0]["actual_order_submitted"] is False
+    assert targets[0]["broker_order_forbidden"] is True
+
+
+def test_swing_probe_state_blocks_accidental_empty_overwrite(monkeypatch, tmp_path):
+    state_path = tmp_path / "swing_probe_state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "active_positions": [
+                    {
+                        "code": "005930",
+                        "name": "삼성전자",
+                        "strategy": "KOSPI_ML",
+                        "status": "HOLDING",
+                        "probe_id": "KEEP",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    rules = replace(CONFIG, SWING_LIVE_ORDER_DRY_RUN_ENABLED=True, SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED=True)
+    events = []
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "SWING_INTRADAY_PROBE_STATE_PATH", state_path)
+    monkeypatch.setattr(state_handlers, "ACTIVE_TARGETS", [])
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_swing_probe_state_event",
+        lambda stage, **fields: events.append((stage, fields)),
+    )
+
+    state_handlers.persist_swing_intraday_probe_state(reason="db_refresh_snapshot")
+
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    assert len(payload["active_positions"]) == 1
+    assert events[-1][0] == "swing_probe_state_empty_overwrite_blocked"
+    assert events[-1][1]["existing_active_count"] == 1
+
+
+def test_swing_probe_state_allows_empty_overwrite_on_explicit_exit(monkeypatch, tmp_path):
+    state_path = tmp_path / "swing_probe_state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "active_positions": [
+                    {
+                        "code": "005930",
+                        "name": "삼성전자",
+                        "strategy": "KOSPI_ML",
+                        "status": "HOLDING",
+                        "probe_id": "KEEP",
+                    }
+                ]
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    rules = replace(CONFIG, SWING_LIVE_ORDER_DRY_RUN_ENABLED=True, SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED=True)
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "SWING_INTRADAY_PROBE_STATE_PATH", state_path)
+    monkeypatch.setattr(state_handlers, "ACTIVE_TARGETS", [])
+    monkeypatch.setattr(state_handlers, "_log_swing_probe_state_event", lambda *args, **kwargs: None)
+
+    state_handlers.persist_swing_intraday_probe_state(
+        allow_empty_overwrite=True,
+        reason="probe_exit",
+    )
+
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    assert payload["active_positions"] == []
+    assert payload["persist_reason"] == "probe_exit"
+
+
+def test_swing_probe_holding_exit_logs_probe_only_sell(monkeypatch, tmp_path):
+    rules = replace(
+        CONFIG,
+        SWING_LIVE_ORDER_DRY_RUN_ENABLED=True,
+        SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED=True,
+        TRAILING_START_PCT=2.0,
+    )
+    logs = []
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers, "DB", None)
+    monkeypatch.setattr(state_handlers, "HIGHEST_PRICES", {"swing_probe:PROBE1": 10_300})
+    monkeypatch.setattr(state_handlers, "COOLDOWNS", {})
+    monkeypatch.setattr(state_handlers, "ALERTED_STOCKS", set())
+    monkeypatch.setattr(state_handlers, "LAST_AI_CALL_TIMES", {})
+    monkeypatch.setattr(state_handlers, "LAST_LOG_TIMES", {})
+    monkeypatch.setattr(state_handlers, "SWING_INTRADAY_PROBE_STATE_PATH", tmp_path / "swing_probe_state.json")
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_smart_sell_order",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("real sell order must not be called")),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 501,
+        "name": "SWING",
+        "code": "000001",
+        "strategy": "KOSPI_ML",
+        "position_tag": "META_V2",
+        "status": "HOLDING",
+        "date": "2026-05-11",
+        "buy_price": 10_000,
+        "buy_qty": 1,
+        "buy_time": 1_768_090_000.0,
+        "holding_started_at": 1_768_090_000.0,
+        "swing_live_order_dry_run": True,
+        "swing_intraday_probe": True,
+        "simulation_book": "swing_intraday_live_equiv_probe",
+        "simulation_owner": "SwingIntradayLiveEquivalentProbe0511",
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "probe_id": "PROBE1",
+        "probe_origin_stage": "blocked_gatekeeper_reject",
+        "probe_arm": "blocked_gatekeeper_reject",
+        "evidence_quality": "blocked_stage_intraday_probe",
+        "evidence_quality_weight": 0.7,
+        "source_record_id": 501,
+    }
+
+    state_handlers.handle_holding_state(
+        stock,
+        "000001",
+        {"curr": 10_300, "orderbook": {"asks": [{"price": 10_310}], "bids": [{"price": 10_290}]}},
+        admin_id=None,
+        market_regime="BULL",
+        now_ts=1_768_090_180.0,
+    )
+
+    stages = [stage for stage, _ in logs]
+    assert "exit_signal" in stages
+    assert "swing_probe_exit_signal" in stages
+    assert "swing_probe_sell_order_assumed_filled" in stages
+    assert stock["status"] == "COMPLETED"
+    assert stock["actual_order_submitted"] is False
+
+
 def test_build_swing_selection_funnel_report_from_injected_sources():
     report = build_swing_selection_funnel_report(
         "2026-05-08",
@@ -279,6 +763,55 @@ def test_build_swing_selection_funnel_report_from_injected_sources():
     assert report["db_recommendations"]["by_position_status"]["META_V2:WATCHING"] == 1
     assert report["recommendation_db_load"]["db_load_skip_reason"] == "loaded"
     json.dumps(report, ensure_ascii=False)
+
+
+def test_swing_pipeline_summary_splits_probe_discard_raw_and_unique():
+    events = [
+        {
+            "stage": "swing_probe_discarded",
+            "stock_code": "000001",
+            "stock_name": "A",
+            "record_id": 1,
+            "fields": {
+                "strategy": "KOSPI_ML",
+                "discard_reason": "max_open_reached",
+                "probe_origin_stage": "blocked_swing_score_vpw",
+            },
+        },
+        {
+            "stage": "swing_probe_discarded",
+            "stock_code": "000001",
+            "stock_name": "A",
+            "record_id": 1,
+            "fields": {
+                "strategy": "KOSPI_ML",
+                "discard_reason": "max_open_reached",
+                "probe_origin_stage": "blocked_swing_score_vpw",
+            },
+        },
+        {
+            "stage": "swing_probe_discarded",
+            "stock_code": "000002",
+            "stock_name": "B",
+            "record_id": 2,
+            "fields": {
+                "strategy": "KOSPI_ML",
+                "discard_reason": "origin_quota_reached",
+                "probe_origin_stage": "blocked_swing_score_vpw",
+            },
+        },
+    ]
+
+    summary = summarize_pipeline_events(events)["swing_probe_discard_summary"]
+
+    assert summary["raw_count"] == 3
+    assert summary["unique_records"] == 2
+    assert summary["reason_counts"] == {"max_open_reached": 2, "origin_quota_reached": 1}
+    assert summary["reason_unique_record_counts"] == {"max_open_reached": 1, "origin_quota_reached": 1}
+    assert summary["origin_reason_unique_record_counts"] == {
+        "blocked_swing_score_vpw:max_open_reached": 1,
+        "blocked_swing_score_vpw:origin_quota_reached": 1,
+    }
 
 
 def test_swing_daily_simulation_skips_fallback_diagnostics():
@@ -347,6 +880,147 @@ def test_build_swing_daily_simulation_report_from_injected_sources():
     assert report["report_type"] == "swing_daily_simulation"
     assert report["recommendation_summary"]["live_rows"] == 1
     assert report["simulation_summary"]["status_counts"]["PENDING_ENTRY"] == 1
+    assert report["simulation_arm_summary"]["selection_only"]["status_counts"]["PENDING_ENTRY"] == 1
+    assert report["simulation_arm_summary"]["gap_pass"]["status_counts"]["PENDING_ENTRY"] == 1
+    assert report["simulation_arm_summary"]["gatekeeper_pass"]["status_counts"]["PENDING_ENTRY"] == 1
+
+
+def test_swing_daily_recommendations_use_latest_prior_signal_date(tmp_path):
+    reco = tmp_path / "daily_recommendations_v2.csv"
+    reco.write_text(
+        "date,code,name,selection_mode\n"
+        "2026-05-08,000001,A,SELECTED\n",
+        encoding="utf-8",
+    )
+
+    loaded = load_recommendations(reco, target_date="2026-05-11")
+
+    assert loaded["code"].tolist() == ["000001"]
+    assert str(loaded.iloc[0]["date"].date()) == "2026-05-08"
+
+
+def test_swing_daily_recommendations_merge_db_non_csv_sources():
+    csv_rows = pd.DataFrame(
+        [
+            {
+                "date": "2026-05-08",
+                "code": "000001",
+                "name": "CSV",
+                "strategy": "KOSPI_ML",
+                "selection_mode": "SELECTED",
+            }
+        ]
+    )
+    db_rows = pd.DataFrame(
+        [
+            {
+                "date": "2026-05-11",
+                "code": "000001",
+                "name": "CSV_DUP",
+                "strategy": "KOSPI_ML",
+                "selection_mode": "DB_FINAL_ENSEMBLE",
+                "recommendation_source": "recommendation_history",
+            },
+            {
+                "date": "2026-05-11",
+                "code": "000002",
+                "name": "DB",
+                "strategy": "KOSDAQ_ML",
+                "selection_mode": "DB_FINAL_ENSEMBLE",
+                "recommendation_source": "recommendation_history",
+            },
+        ]
+    )
+
+    merged = merge_recommendation_sources(csv_rows, db_rows)
+
+    assert merged["code"].tolist() == ["000001", "000002"]
+    assert merged.loc[merged["code"] == "000001", "name"].iloc[0] == "CSV"
+    assert set(merged["recommendation_source"]) == {"daily_recommendations_v2_csv", "recommendation_history"}
+
+
+def test_swing_daily_simulation_reports_selection_and_gate_counterfactual_arms():
+    report = build_swing_daily_simulation_report(
+        "2026-05-11",
+        recommendation_rows=pd.DataFrame(
+            [
+                {
+                    "date": "2026-05-08",
+                    "code": "000001",
+                    "name": "A",
+                    "selection_mode": "SELECTED",
+                    "close": 100.0,
+                    "bull_regime": 1,
+                    "hybrid_mean": 0.50,
+                    "score_rank": 1,
+                }
+            ]
+        ),
+        quote_rows=pd.DataFrame(
+            [
+                {
+                    "quote_date": "2026-05-09",
+                    "stock_code": "000001",
+                    "stock_name": "A",
+                    "open_price": 104.0,
+                    "high_price": 110.0,
+                    "low_price": 103.0,
+                    "close_price": 109.0,
+                }
+            ]
+        ),
+    )
+
+    arms = {row["sim_arm"]: row for row in report["simulation_arm_trades"]}
+    assert arms["selection_only"]["status"] == "CLOSED_SIM"
+    assert arms["selection_only"]["entry_guard"] == "PASS_SELECTION_ONLY"
+    assert arms["gap_pass"]["status"] == "BLOCKED_SWING_GAP"
+    assert arms["gatekeeper_pass"]["status"] == "BLOCKED_SWING_GAP"
+    assert report["simulation_arm_summary"]["selection_only"]["closed_count"] == 1
+
+
+def test_swing_daily_simulation_runtime_funnel_summary(tmp_path):
+    events = tmp_path / "pipeline_events_2026-05-11.jsonl"
+    events.write_text(
+        json.dumps(
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "blocked_swing_gap",
+                "stock_name": "A",
+                "stock_code": "000001",
+                "record_id": 11,
+                "fields": {"strategy": "KOSPI_ML"},
+            },
+            ensure_ascii=False,
+        )
+        + "\n"
+        + json.dumps(
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "blocked_gatekeeper_reject",
+                "stock_name": "B",
+                "stock_code": "000002",
+                "record_id": 12,
+                "fields": {"strategy": "KOSDAQ_ML"},
+            },
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    report = build_swing_daily_simulation_report(
+        "2026-05-11",
+        recommendation_rows=pd.DataFrame(),
+        quote_rows=pd.DataFrame(),
+        include_runtime_funnel=True,
+        pipeline_events_path=events,
+    )
+
+    funnel = report["runtime_entry_funnel"]
+    assert funnel["available"] is True
+    assert funnel["raw_counts"]["blocked_swing_gap"] == 1
+    assert funnel["unique_record_counts"]["blocked_gatekeeper_reject"] == 1
 
 
 def test_swing_lifecycle_audit_tracks_full_funnel_and_observation_axes():
@@ -531,6 +1205,86 @@ def test_swing_lifecycle_audit_reports_db_gap_and_report_only_zero_sample_reason
     assert automation["ev_report_summary"]["scale_in_zero_sample_reason"] == "no_candidate"
 
 
+def test_swing_lifecycle_audit_ingests_daily_simulation_opportunity():
+    daily_simulation = {
+        "report_type": "swing_daily_simulation",
+        "target_date": "2026-05-08",
+        "simulation_arm_summary": {
+            "selection_only": {"closed_count": 1, "win_rate": 1.0},
+            "gap_pass": {"closed_count": 1, "win_rate": 1.0},
+            "gatekeeper_pass": {"closed_count": 1, "win_rate": 1.0},
+        },
+        "runtime_entry_funnel": {
+            "available": True,
+            "raw_counts": {"blocked_swing_gap": 1, "blocked_gatekeeper_reject": 1},
+            "unique_record_counts": {"blocked_swing_gap": 1, "blocked_gatekeeper_reject": 1},
+        },
+        "simulation_arm_trades": [
+            {
+                "code": "000001",
+                "name": "A",
+                "recommendation_source": "recommendation_history",
+                "position_tag": "BREAKOUT",
+                "selection_mode": "DB_FINAL_ENSEMBLE",
+                "runtime_status": "WATCHING",
+                "sim_arm": "selection_only",
+                "status": "CLOSED_SIM",
+                "entry_guard": "PASS_SELECTION_ONLY",
+                "net_ret": 0.04,
+                "actual_order_submitted": False,
+            },
+            {
+                "code": "000002",
+                "name": "B",
+                "recommendation_source": "daily_recommendations_v2_csv",
+                "position_tag": "PULLBACK",
+                "selection_mode": "SELECTED",
+                "runtime_status": "WATCHING",
+                "sim_arm": "gap_pass",
+                "status": "BLOCKED_SWING_GAP",
+                "entry_guard": "BLOCKED_SWING_GAP",
+                "net_ret": 0.03,
+                "actual_order_submitted": False,
+            },
+            {
+                "code": "000003",
+                "name": "C",
+                "recommendation_source": "daily_recommendations_v2_csv",
+                "position_tag": "BREAKOUT",
+                "selection_mode": "SELECTED",
+                "runtime_status": "WATCHING",
+                "sim_arm": "gatekeeper_pass",
+                "status": "BLOCKED_GATEKEEPER_REJECT",
+                "entry_guard": "BLOCKED_GATEKEEPER_REJECT",
+                "net_ret": 0.02,
+                "actual_order_submitted": False,
+            },
+        ],
+    }
+    audit = build_swing_lifecycle_audit_report(
+        "2026-05-08",
+        recommendation_rows=[{"selection_mode": "SELECTED", "position_tag": "META_V2"}],
+        diagnostic_summary={"selected_count": 1},
+        db_rows=[],
+        event_rows=[],
+        daily_simulation_report=daily_simulation,
+    )
+    automation = build_swing_improvement_automation_report(audit)
+    orders = {order["order_id"]: order for order in automation["code_improvement_orders"]}
+
+    assert audit["simulation_opportunity"]["available"] is True
+    assert audit["simulation_opportunity"]["closed_count"] == 3
+    assert audit["simulation_opportunity"]["winner_count"] == 3
+    assert audit["simulation_opportunity"]["family_opportunity"]["swing_selection_top_k"]["winner_count"] == 1
+    assert audit["simulation_opportunity"]["family_opportunity"]["swing_market_regime_sensitivity"]["winner_count"] == 1
+    assert audit["simulation_opportunity"]["family_opportunity"]["swing_gatekeeper_reject_cooldown"]["winner_count"] == 1
+    assert orders["order_swing_selection_source_counterfactual_review"]["threshold_family"] == "swing_selection_top_k"
+    assert orders["order_swing_gap_regime_counterfactual_review"]["threshold_family"] == "swing_market_regime_sensitivity"
+    assert orders["order_swing_gatekeeper_counterfactual_review"]["threshold_family"] == "swing_gatekeeper_reject_cooldown"
+    assert automation["ev_report_summary"]["simulation_opportunity_closed_count"] == 3
+    assert automation["ev_report_summary"]["simulation_opportunity_winner_count"] == 3
+
+
 def test_swing_threshold_ai_review_is_proposal_only_and_guarded():
     audit = build_swing_lifecycle_audit_report(
         "2026-05-08",
@@ -669,6 +1423,59 @@ def test_swing_runtime_approval_report_emits_machine_readable_requests():
         report["rolling_source_bundle"]["source_authority"]["combined"]
         == "primary_tradeoff_view_for_approval_request_generation"
     )
+
+
+def test_swing_runtime_approval_emits_scale_in_real_canary_request_when_arm_ready():
+    audit = _approval_ready_audit(
+        lifecycle_events={
+            "raw_counts": {},
+            "unique_record_counts": {},
+            "group_unique_counts": {"entry": 5, "exit": 3, "holding": 0, "scale_in": 8},
+            "submitted_unique_records": 0,
+            "simulated_order_unique_records": 5,
+            "ofi_qi_summary": {
+                "scale_in_micro_state_counts": {"bullish": 5},
+                "scale_in_micro_advice_counts": {"SUPPORT_ENTRY": 5},
+            },
+            "scale_in_observation": {
+                "action_groups": {"PYRAMID": 5, "AVG_DOWN": 8},
+                "post_add_outcomes": {"closed_win": 8},
+                "arm_outcomes": {
+                    "PYRAMID": {
+                        "sample_count": 5,
+                        "final_exit_return_summary": {"count": 5, "avg": 1.2},
+                        "post_add_delta_vs_exit_only_summary": {"count": 5, "avg": 0.3},
+                        "post_add_mae_summary": {"count": 5, "p50": -1.0},
+                        "post_add_mae_p90": -1.5,
+                        "loser_extension_rate": 0.1,
+                    },
+                    "AVG_DOWN": {
+                        "sample_count": 8,
+                        "final_exit_return_summary": {"count": 8, "avg": 0.8},
+                        "post_add_delta_vs_exit_only_summary": {"count": 8, "avg": 0.2},
+                        "post_add_mae_summary": {"count": 8, "p50": -1.2},
+                        "post_add_mae_p90": -2.5,
+                        "loser_extension_rate": 0.2,
+                    },
+                },
+            },
+            "record_timeline_sample": [],
+        },
+    )
+
+    report = build_swing_runtime_approval_report(audit)
+    request = next(
+        item
+        for item in report["approval_requests"]
+        if item.get("policy_id") == "swing_scale_in_real_canary_phase0"
+    )
+
+    assert request["family"] == "swing_scale_in_real_canary_phase0"
+    assert request["allowed_actions"] == ["PYRAMID", "AVG_DOWN"]
+    assert request["recommended_values"]["max_order_qty"] == 1
+    assert request["recommended_values"]["enabled"] is True
+    assert request["dry_run_required"] is False
+    assert report["scale_in_real_canary_policy"]["policy_id"] == "swing_scale_in_real_canary_phase0"
 
 
 def test_swing_improvement_automation_emits_workorder_ready_orders():

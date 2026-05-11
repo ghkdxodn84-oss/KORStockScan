@@ -4,6 +4,7 @@ import pytest
 
 import src.engine.kiwoom_sniper_v2 as sniper_runtime
 import src.engine.sniper_performance_tuning_report as perf_report
+import src.engine.sniper_scale_in as scale_in
 import src.engine.sniper_state_handlers as state_handlers
 from src.engine.daily_threshold_cycle_report import build_daily_threshold_cycle_report
 from src.utils.constants import TRADING_RULES as CONFIG
@@ -116,6 +117,47 @@ def test_scalp_simulator_arms_and_fills_without_real_buy_order(monkeypatch):
     fill_event = next(fields for stage, fields in logs if stage == "scalp_sim_buy_order_assumed_filled")
     assert fill_event["fill_source"] == "best_ask"
     assert fill_event["would_limit_fill"] is True
+
+
+def test_scalp_simulator_entry_uses_uncapped_dynamic_qty(monkeypatch):
+    logs = []
+    rules = replace(CONFIG, SCALP_LIVE_SIMULATOR_QTY=0, SCALPING_MAX_BUY_BUDGET_KRW=1_200_000)
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 10_000_000)
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 101,
+        "name": "TEST",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "target_buy_price": 10_000,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "is_trigger": True,
+        "now_ts": 1_000.0,
+        "current_ai_score": 82.0,
+        "ratio": 0.22,
+    }
+
+    assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
+        stock,
+        "123456",
+        {"curr": 10_000, "orderbook": {"asks": [{"price": 10_000}], "bids": [{"price": 9_990}]}},
+        runtime,
+    )
+
+    sim_target = state_handlers.ACTIVE_TARGETS[0]
+    assert sim_target["buy_qty"] == 114
+    assert sim_target["scalp_sim_entry_qty_source"] == "uncapped_buy_capacity"
+    armed = next(fields for stage, fields in logs if stage == "scalp_sim_entry_armed")
+    assert armed["qty"] == 114
+    assert armed["qty_reason"] == "sim_unrestricted_by_1share_cap"
 
 
 def test_scalp_simulator_signal_inclusive_fill_does_not_wait_for_limit_touch(monkeypatch):
@@ -417,6 +459,40 @@ def test_scalp_simulator_scale_in_does_not_call_real_buy(monkeypatch):
     assert stock["buy_qty"] == 2
     assert stock["actual_order_submitted"] is False
     assert any(stage == "scalp_sim_scale_in_order_assumed_filled" for stage, _ in holding_logs)
+
+
+def test_scalp_simulator_scale_in_dynamic_qty_ignores_real_one_share_cap(monkeypatch):
+    rules = replace(CONFIG, SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED=True, SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP=1)
+    monkeypatch.setattr(scale_in, "TRADING_RULES", rules)
+    stock = {
+        "name": "TEST",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_price": 10_000,
+        "buy_qty": 10,
+        "hard_stop_price": 9_000,
+        "simulation_book": "scalp_ai_buy_all",
+        "scalp_live_simulator": True,
+        "actual_order_submitted": False,
+    }
+
+    details = scale_in.describe_dynamic_scale_in_qty(
+        stock=stock,
+        resolved_price=10_000,
+        deposit=10_000_000,
+        add_type="AVG_DOWN",
+        strategy="SCALPING",
+        add_reason="reversal_add_ok",
+        price_resolution={"allowed": True},
+        action={"reason": "reversal_add_ok"},
+    )
+
+    assert details["sim_uncapped_qty"] is True
+    assert details["effective_qty_cap"] == 0
+    assert details["would_qty"] == 3
+    assert details["effective_qty"] == 3
+    assert details["qty"] == 3
 
 
 def test_scalp_simulator_threshold_stages_are_included():

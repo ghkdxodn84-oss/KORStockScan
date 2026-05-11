@@ -215,6 +215,43 @@ def evaluate_swing_pyramid(stock, profit_rate, peak_profit):
     return result
 
 
+def evaluate_swing_avg_down(stock, profit_rate, peak_profit, current_ai_score=50, held_sec=0):
+    """
+    스윙 물타기(AVG_DOWN) 관찰 평가.
+    실주문 전환용이 아니라 dry-run/probe가 live-equivalent 후행 데이터를 모으기 위한 후보다.
+    """
+    result = _base_result()
+
+    if not bool(getattr(TRADING_RULES, 'SWING_ENABLE_AVG_DOWN_SIMULATION', True)):
+        result["reason"] = "swing_avg_down_sim_disabled"
+        return result
+
+    loss_min = float(getattr(TRADING_RULES, 'SWING_AVG_DOWN_MIN_LOSS_PCT', -3.0))
+    loss_max = float(getattr(TRADING_RULES, 'SWING_AVG_DOWN_MAX_LOSS_PCT', -0.8))
+    if not (loss_min <= profit_rate <= loss_max):
+        result["reason"] = "loss_not_in_avg_down_band"
+        return result
+
+    max_peak = float(getattr(TRADING_RULES, 'SWING_AVG_DOWN_MAX_PEAK_PROFIT_PCT', 1.0))
+    if peak_profit > max_peak:
+        result["reason"] = "prior_green_too_high"
+        return result
+
+    min_hold_sec = int(getattr(TRADING_RULES, 'SWING_AVG_DOWN_MIN_HOLD_SEC', 300))
+    if int(held_sec or 0) < min_hold_sec:
+        result["reason"] = "hold_sec_not_enough"
+        return result
+
+    result["should_add"] = True
+    result["add_type"] = "AVG_DOWN"
+    result["reason"] = "swing_avg_down_ok"
+    result["profit_rate"] = profit_rate
+    result["peak_profit"] = peak_profit
+    result["current_ai_score"] = current_ai_score
+    result["held_sec"] = held_sec
+    return result
+
+
 def _check_reversal_add_pnl_range(profit_rate):
     pnl_min = float(getattr(TRADING_RULES, 'REVERSAL_ADD_PNL_MIN', -0.45))
     pnl_max = float(getattr(TRADING_RULES, 'REVERSAL_ADD_PNL_MAX', -0.10))
@@ -621,7 +658,7 @@ def describe_dynamic_scale_in_qty(
     price_resolution=None,
     action=None,
 ):
-    """SCALPING 추가매수 live 수량을 safety guard와 position cap 안에서 결정한다."""
+    """추가매수 수량을 safety guard와 position cap 안에서 결정하고 provenance를 남긴다."""
     legacy = describe_scale_in_qty(
         stock=stock,
         curr_price=resolved_price,
@@ -638,17 +675,32 @@ def describe_dynamic_scale_in_qty(
             "qty_reason": "legacy_template",
             "dynamic_enabled": bool(getattr(TRADING_RULES, "SCALPING_SCALE_IN_DYNAMIC_QTY_ENABLED", True)),
             "effective_qty_cap": int(getattr(TRADING_RULES, "SCALPING_SCALE_IN_EFFECTIVE_QTY_CAP", 0) or 0),
+            "sim_uncapped_qty": bool(
+                stock.get("scalp_live_simulator")
+                or str(stock.get("simulation_book") or "") == "scalp_ai_buy_all"
+            ),
         }
     )
 
     raw_strategy = (strategy or "").upper()
     normalized_strategy = "SCALPING" if raw_strategy in {"SCALPING", "SCALP"} else raw_strategy
     add_type = (add_type or "").upper()
-    if normalized_strategy != "SCALPING" or not details["dynamic_enabled"]:
+    if normalized_strategy in {"KOSPI_ML", "KOSDAQ_ML", "MAIN"}:
+        details["dynamic_enabled"] = bool(getattr(TRADING_RULES, "SWING_SCALE_IN_DYNAMIC_QTY_ENABLED", True))
+        details["effective_qty_cap"] = int(getattr(TRADING_RULES, "SWING_SCALE_IN_EFFECTIVE_QTY_CAP", 0) or 0)
+        details["sim_uncapped_qty"] = bool(
+            stock.get("swing_live_order_dry_run")
+            or stock.get("swing_intraday_probe")
+            or str(stock.get("simulation_book") or "").startswith("swing")
+        )
+    if normalized_strategy not in {"SCALPING", "KOSPI_ML", "KOSDAQ_ML", "MAIN"} or not details["dynamic_enabled"]:
         return details
 
     cap_qty = int(details.get("cap_qty", 0) or 0)
     configured_effective_cap = int(details.get("effective_qty_cap", 0) or 0)
+    if details["sim_uncapped_qty"]:
+        configured_effective_cap = 0
+        details["effective_qty_cap"] = 0
     effective_cap = configured_effective_cap if configured_effective_cap > 0 else cap_qty
     if resolved_price <= 0 or deposit <= 0:
         details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "invalid_price_or_deposit"})
@@ -658,6 +710,29 @@ def describe_dynamic_scale_in_qty(
         return details
     if not (price_resolution or {}).get("allowed", False):
         details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "price_resolution_blocked"})
+        return details
+
+    if normalized_strategy in {"KOSPI_ML", "KOSDAQ_ML", "MAIN"}:
+        if add_type not in {"AVG_DOWN", "PYRAMID"}:
+            details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "invalid_add_type"})
+            return details
+        if add_type == "AVG_DOWN" and add_reason != "swing_avg_down_ok":
+            details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "swing_avg_down_probe_missing"})
+            return details
+        if add_type == "PYRAMID" and add_reason != "swing_pyramid_ok":
+            details.update({"would_qty": 0, "effective_qty": 0, "qty": 0, "qty_reason": "swing_pyramid_probe_missing"})
+            return details
+        would_qty = max(1, int(legacy.get("template_qty", 0) or legacy.get("qty", 0) or 0))
+        effective_qty = max(0, min(would_qty, cap_qty, effective_cap))
+        qty_reason = "swing_dynamic_allowed" if configured_effective_cap <= 0 else "swing_dynamic_capped_allowed"
+        details.update(
+            {
+                "would_qty": would_qty,
+                "effective_qty": effective_qty,
+                "qty": effective_qty,
+                "qty_reason": qty_reason if effective_qty > 0 else "effective_qty_cap_zero",
+            }
+        )
         return details
 
     action = action or {}

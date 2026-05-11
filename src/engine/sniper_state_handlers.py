@@ -32,6 +32,7 @@ from src.engine.sniper_scale_in import (
     describe_dynamic_scale_in_qty,
     describe_scale_in_qty,
     evaluate_scalping_pyramid,
+    evaluate_swing_avg_down,
     evaluate_swing_pyramid,
     evaluate_scalping_reversal_add,
     resolve_scale_in_order_price,
@@ -142,6 +143,10 @@ _HOLDING_FLOW_OVERRIDE_EXIT_RULES = {
 SCALP_SIMULATION_BOOK = "scalp_ai_buy_all"
 SCALP_SIM_PENDING_STATUS = "SCALP_SIM_PENDING_BUY"
 SCALP_SIM_STATE_PATH = DATA_DIR / "runtime" / "scalp_live_simulator_state.json"
+SWING_INTRADAY_PROBE_BOOK = "swing_intraday_live_equiv_probe"
+SWING_INTRADAY_PROBE_STATE_PATH = DATA_DIR / "runtime" / "swing_intraday_probe_state.json"
+_SWING_PROBE_DAILY_CREATED: dict[str, int] = {}
+_SWING_PROBE_DISCARD_LOG_TS: dict[tuple[str, str, str, str], float] = {}
 
 
 def _mutate_stock_state(stock, set_fields: dict | None = None, pop_fields: list | tuple = ()):
@@ -226,11 +231,179 @@ def _swing_live_order_dry_run_owner() -> str:
     return str(_rule("SWING_LIVE_ORDER_DRY_RUN_OWNER", "SwingLiveOrderDryRunSimulation0511") or "")
 
 
+def _swing_intraday_probe_owner() -> str:
+    return str(_rule("SWING_INTRADAY_PROBE_OWNER", "SwingIntradayLiveEquivalentProbe0511") or "")
+
+
+def _is_swing_intraday_probe_enabled() -> bool:
+    return (
+        _rule_bool("SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED", True)
+        and _rule_bool("SWING_LIVE_ORDER_DRY_RUN_ENABLED", True)
+    )
+
+
+def _is_swing_intraday_probe_target(stock: dict | None) -> bool:
+    if not isinstance(stock, dict):
+        return False
+    return (
+        bool(stock.get("swing_intraday_probe"))
+        or str(stock.get("simulation_book") or "") == SWING_INTRADAY_PROBE_BOOK
+    )
+
+
 def _is_swing_simulated_position(stock: dict | None, strategy: str | None = None) -> bool:
     if not isinstance(stock, dict):
         return False
     resolved_strategy = strategy or stock.get("strategy")
     return _is_swing_strategy(resolved_strategy) and bool(stock.get("swing_live_order_dry_run"))
+
+
+def _swing_scale_in_real_canary_allowed_arms() -> set[str]:
+    raw = str(_rule("SWING_SCALE_IN_REAL_CANARY_ALLOWED_ARMS", "PYRAMID,AVG_DOWN") or "")
+    return {part.strip().upper() for part in raw.split(",") if part.strip()}
+
+
+def _is_swing_scale_in_real_canary_holding(stock: dict | None, strategy: str | None = None) -> bool:
+    if not isinstance(stock, dict):
+        return False
+    if not _is_swing_strategy(strategy or stock.get("strategy")):
+        return False
+    if stock.get("actual_order_submitted") is not True:
+        return False
+    if stock.get("simulation_book") or stock.get("simulation_owner") or stock.get("simulated_order"):
+        return False
+    cohort = str(stock.get("cohort") or stock.get("real_canary_cohort") or "").strip()
+    return bool(
+        cohort in {"swing_one_share_real_canary", "swing_scale_in_real_canary_phase0"}
+        or stock.get("swing_one_share_real_canary")
+        or stock.get("swing_real_canary")
+    )
+
+
+def _swing_scale_in_real_canary_daily_key(now_ts: float | None = None) -> str:
+    try:
+        return datetime.fromtimestamp(float(now_ts or time.time())).date().isoformat()
+    except Exception:
+        return datetime.now().date().isoformat()
+
+
+def _swing_scale_in_real_canary_daily_usage(day_key: str) -> tuple[int, int]:
+    count = 0
+    notional = 0
+    for target in ACTIVE_TARGETS or []:
+        if not isinstance(target, dict):
+            continue
+        if str(target.get("swing_scale_in_real_canary_order_date") or "") != day_key:
+            continue
+        count += int(target.get("swing_scale_in_real_canary_order_count", 0) or 0)
+        notional += int(target.get("swing_scale_in_real_canary_notional_krw", 0) or 0)
+    return count, notional
+
+
+def _evaluate_swing_scale_in_real_canary(
+    stock: dict,
+    code: str,
+    *,
+    add_type: str,
+    qty: int,
+    final_price: int,
+    curr_price: int,
+    ws_data: dict,
+    price_resolution: dict,
+    swing_scale_micro_fields: dict,
+    template_qty: int,
+    would_qty: int,
+    effective_qty: int,
+    cap_qty: int,
+    floor_applied: bool,
+    qty_reason: str,
+) -> dict:
+    day_key = _swing_scale_in_real_canary_daily_key()
+    common = {
+        "policy_id": "swing_scale_in_real_canary_phase0",
+        "cohort": "swing_scale_in_real_canary_phase0",
+        "add_type": add_type,
+        "curr_price": curr_price,
+        "would_qty": would_qty,
+        "effective_qty": effective_qty,
+        "template_qty": template_qty,
+        "cap_qty": cap_qty,
+        "floor_applied": floor_applied,
+        "qty_reason": qty_reason,
+        **(swing_scale_micro_fields or {}),
+    }
+    if not _rule_bool("SWING_SCALE_IN_REAL_CANARY_ENABLED", False):
+        return {"allowed": False, "reason": "real_canary_disabled", "fields": common}
+    if _rule_bool("SWING_SCALE_IN_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT", True) and not _rule_bool(
+        "SWING_SCALE_IN_REAL_CANARY_ENABLED", False
+    ):
+        return {"allowed": False, "reason": "approval_artifact_env_missing", "fields": common}
+    if not _is_swing_scale_in_real_canary_holding(stock, stock.get("strategy")):
+        return {"allowed": False, "reason": "not_approved_real_canary_holding", "fields": common}
+    if add_type not in _swing_scale_in_real_canary_allowed_arms():
+        return {"allowed": False, "reason": "arm_not_approved", "fields": common}
+    if _is_any_simulated_position(stock, stock.get("strategy")):
+        return {"allowed": False, "reason": "sim_or_probe_real_order_forbidden", "fields": common}
+
+    best_ask, best_bid = _get_best_levels_from_ws(ws_data or {})
+    ws_age_sec = _get_ws_snapshot_age_sec(ws_data or {})
+    max_ws_age_sec = _rule_float("AI_GATEKEEPER_FAST_REUSE_MAX_WS_AGE_SEC", 2.0)
+    if ws_age_sec is not None and ws_age_sec > max_ws_age_sec:
+        return {
+            "allowed": False,
+            "reason": "stale_quote",
+            "fields": {**common, "best_bid": best_bid, "best_ask": best_ask, "ws_age_sec": f"{ws_age_sec:.2f}"},
+        }
+    if best_bid <= 0:
+        return {"allowed": False, "reason": "missing_best_bid", "fields": {**common, "best_bid": best_bid, "best_ask": best_ask}}
+    if not bool((swing_scale_micro_fields or {}).get("orderbook_micro_ready")):
+        return {"allowed": False, "reason": "orderbook_micro_not_ready", "fields": {**common, "best_bid": best_bid, "best_ask": best_ask}}
+    if bool((swing_scale_micro_fields or {}).get("swing_micro_stale")):
+        return {"allowed": False, "reason": "orderbook_micro_stale", "fields": {**common, "best_bid": best_bid, "best_ask": best_ask}}
+    if str((swing_scale_micro_fields or {}).get("swing_micro_advice") or "") == "RISK_BEARISH":
+        return {"allowed": False, "reason": "ofi_qi_risk_bearish", "fields": {**common, "best_bid": best_bid, "best_ask": best_ask}}
+
+    max_qty = max(1, _rule_int("SWING_SCALE_IN_REAL_CANARY_MAX_QTY", 1))
+    actual_qty = max(0, min(int(qty or 0), int(effective_qty or 0), max_qty))
+    if actual_qty <= 0:
+        return {"allowed": False, "reason": "real_canary_qty_zero", "fields": {**common, "best_bid": best_bid, "best_ask": best_ask}}
+
+    daily_count, daily_notional = _swing_scale_in_real_canary_daily_usage(day_key)
+    max_orders_day = max(1, _rule_int("SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_DAY", 1))
+    if daily_count >= max_orders_day:
+        return {"allowed": False, "reason": "daily_order_cap_reached", "fields": {**common, "daily_count": daily_count}}
+    max_orders_position = max(1, _rule_int("SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_POSITION", 1))
+    position_count = int(stock.get("swing_scale_in_real_canary_order_count", 0) or 0)
+    if position_count >= max_orders_position:
+        return {"allowed": False, "reason": "position_order_cap_reached", "fields": {**common, "position_count": position_count}}
+    max_daily_notional = max(1, _rule_int("SWING_SCALE_IN_REAL_CANARY_MAX_DAILY_NOTIONAL_KRW", 100000))
+    order_notional = int(best_bid * actual_qty)
+    if daily_notional + order_notional > max_daily_notional:
+        return {
+            "allowed": False,
+            "reason": "daily_notional_cap_reached",
+            "fields": {**common, "daily_notional": daily_notional, "order_notional": order_notional},
+        }
+    return {
+        "allowed": True,
+        "reason": "swing_scale_in_real_canary_allowed",
+        "qty": actual_qty,
+        "order_price": best_bid,
+        "order_type_code": "00",
+        "fields": {
+            **common,
+            "best_bid": best_bid,
+            "best_ask": best_ask,
+            "source_final_price": final_price,
+            "source_price_reason": price_resolution.get("reason"),
+            "source_price_policy": price_resolution.get("price_source"),
+            "real_canary_actual_qty": actual_qty,
+            "real_canary_qty_cap": max_qty,
+            "qty_cap_reason": "swing_scale_in_real_canary_phase0",
+            "order_notional_krw": order_notional,
+            "day_key": day_key,
+        },
+    }
 
 
 def _is_scalp_strategy(strategy: str | None) -> bool:
@@ -294,6 +467,10 @@ def _active_runtime_status(stock: dict | None) -> bool:
 
 
 def _price_tracking_key(stock: dict | None, code: str) -> str:
+    if _is_swing_intraday_probe_target(stock):
+        probe_id = str((stock or {}).get("probe_id") or "").strip()
+        if probe_id:
+            return f"swing_probe:{probe_id}"
     if _is_scalp_simulator_target(stock):
         sim_id = str((stock or {}).get("sim_record_id") or "").strip()
         if sim_id:
@@ -391,8 +568,503 @@ def restore_scalp_simulator_targets(targets=None) -> int:
     return restored
 
 
+def _swing_probe_active_targets(targets=None) -> list[dict]:
+    source = targets if targets is not None else ACTIVE_TARGETS
+    return [
+        t for t in (source or [])
+        if _is_swing_intraday_probe_target(t) and _active_runtime_status(t)
+    ]
+
+
+def _read_swing_intraday_probe_state_active_count() -> int:
+    if not SWING_INTRADAY_PROBE_STATE_PATH.exists():
+        return 0
+    try:
+        payload = json.loads(SWING_INTRADAY_PROBE_STATE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+    rows = payload.get("active_positions") if isinstance(payload, dict) else []
+    if not isinstance(rows, list):
+        return 0
+    return sum(1 for row in rows if isinstance(row, dict) and _active_runtime_status(row))
+
+
+def _log_swing_probe_state_event(stage: str, **fields) -> None:
+    try:
+        emit_pipeline_event(
+            "ENTRY_PIPELINE",
+            "SWING_PROBE_STATE",
+            "-",
+            stage,
+            fields={
+                "simulation_book": SWING_INTRADAY_PROBE_BOOK,
+                "simulation_owner": _swing_intraday_probe_owner(),
+                **fields,
+            },
+        )
+    except Exception as exc:
+        log_error(f"[SWING_PROBE_STATE] event emit failed stage={stage}: {exc}")
+
+
+def persist_swing_intraday_probe_state(targets=None, *, allow_empty_overwrite: bool = False, reason: str = "snapshot") -> None:
+    if not _rule_bool("SWING_INTRADAY_PROBE_PERSIST_ENABLED", True):
+        return
+    try:
+        active_positions = [
+            _json_safe_value(dict(target))
+            for target in _swing_probe_active_targets(targets)
+        ]
+        existing_active_count = _read_swing_intraday_probe_state_active_count()
+        if (
+            not active_positions
+            and existing_active_count > 0
+            and not allow_empty_overwrite
+        ):
+            _log_swing_probe_state_event(
+                "swing_probe_state_empty_overwrite_blocked",
+                reason=reason,
+                existing_active_count=existing_active_count,
+                new_active_count=0,
+            )
+            return
+        payload = {
+            "schema_version": 1,
+            "simulation_book": SWING_INTRADAY_PROBE_BOOK,
+            "owner": _swing_intraday_probe_owner(),
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+            "persist_reason": reason,
+            "active_positions": active_positions,
+        }
+        SWING_INTRADAY_PROBE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = SWING_INTRADAY_PROBE_STATE_PATH.with_suffix(".tmp")
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp_path.replace(SWING_INTRADAY_PROBE_STATE_PATH)
+        if reason != "snapshot":
+            _log_swing_probe_state_event(
+                "swing_probe_state_persisted",
+                reason=reason,
+                active_count=len(active_positions),
+                allow_empty_overwrite=allow_empty_overwrite,
+            )
+    except Exception as exc:
+        log_error(f"[SWING_PROBE_STATE] persist failed: {exc}")
+
+
+def restore_swing_intraday_probe_targets(targets=None) -> int:
+    if (
+        not _is_swing_intraday_probe_enabled()
+        or not _rule_bool("SWING_INTRADAY_PROBE_PERSIST_ENABLED", True)
+        or not SWING_INTRADAY_PROBE_STATE_PATH.exists()
+    ):
+        return 0
+    target_list = targets if targets is not None else ACTIVE_TARGETS
+    if target_list is None:
+        return 0
+    try:
+        payload = json.loads(SWING_INTRADAY_PROBE_STATE_PATH.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log_error(f"[SWING_PROBE_STATE] restore failed: {exc}")
+        return 0
+    rows = payload.get("active_positions") if isinstance(payload, dict) else []
+    if not isinstance(rows, list):
+        return 0
+    stored_count = sum(1 for row in rows if isinstance(row, dict) and _active_runtime_status(row))
+    restored = 0
+    existing_ids = {
+        str((t or {}).get("probe_id") or "").strip()
+        for t in target_list
+        if _is_swing_intraday_probe_target(t)
+    }
+    for row in rows:
+        if not isinstance(row, dict) or not _active_runtime_status(row):
+            continue
+        probe_id = str(row.get("probe_id") or "").strip()
+        if probe_id and probe_id in existing_ids:
+            continue
+        code = str(row.get("code") or "").strip()[:6]
+        if not code:
+            continue
+        name = str(row.get("name") or "").strip().upper()
+        if code == "123456" or name in {"TEST", "DUMMY", "MOCK"}:
+            log_info(f"[SWING_PROBE_STATE] skipped synthetic probe target code={code} name={name or '-'}")
+            continue
+        strategy = normalize_strategy(row.get("strategy") or "KOSPI_ML")
+        if not _is_swing_strategy(strategy):
+            continue
+        row["code"] = code
+        row["strategy"] = strategy
+        row["simulation_book"] = SWING_INTRADAY_PROBE_BOOK
+        row["simulation_owner"] = row.get("simulation_owner") or _swing_intraday_probe_owner()
+        row["swing_intraday_probe"] = True
+        row["swing_live_order_dry_run"] = True
+        row["actual_order_submitted"] = False
+        row["simulated_order"] = True
+        row["broker_order_forbidden"] = True
+        row["msg_audience"] = "ADMIN_ONLY"
+        row["added_time"] = _safe_float(row.get("added_time"), time.time())
+        target_list.append(row)
+        if probe_id:
+            existing_ids.add(probe_id)
+        restored += 1
+    if restored or stored_count:
+        log_info(f"[SWING_PROBE_STATE] restored active probe targets={restored}")
+        _log_swing_probe_state_event(
+            "swing_probe_state_restored",
+            restored_count=restored,
+            stored_active_count=stored_count,
+            target_count_after=len(_swing_probe_active_targets(target_list)),
+        )
+    return restored
+
+
 def _simulated_order_no(prefix: str, code: str) -> str:
     return f"{prefix}-{code}-{int(time.time() * 1000)}-{uuid4().hex[:6]}"
+
+
+def _swing_probe_event_fields(stock: dict | None = None, **extra) -> dict:
+    stock = stock or {}
+    fields = {
+        "simulation_book": SWING_INTRADAY_PROBE_BOOK,
+        "simulation_owner": _swing_intraday_probe_owner(),
+        "swing_intraday_probe": True,
+        "simulated_order": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "runtime_effect": "in_memory_probe_only",
+        "probe_id": stock.get("probe_id"),
+        "probe_origin_stage": stock.get("probe_origin_stage"),
+        "probe_arm": stock.get("probe_arm"),
+        "evidence_quality": stock.get("evidence_quality"),
+        "evidence_quality_weight": stock.get("evidence_quality_weight"),
+        "source_record_id": stock.get("source_record_id"),
+    }
+    fields.update(extra)
+    return fields
+
+
+def _swing_probe_daily_key(now_ts: float | None = None) -> str:
+    try:
+        return datetime.fromtimestamp(float(now_ts or time.time())).date().isoformat()
+    except Exception:
+        return datetime.now().date().isoformat()
+
+
+def _active_swing_probe_count_for_symbol(code: str, strategy: str | None = None) -> int:
+    norm = str(code or "").strip()[:6]
+    strategy_norm = normalize_strategy(strategy or "")
+    return sum(
+        1
+        for target in (ACTIVE_TARGETS or [])
+        if _is_swing_intraday_probe_target(target)
+        and _active_runtime_status(target)
+        and str((target or {}).get("code") or "").strip()[:6] == norm
+        and (not strategy_norm or normalize_strategy((target or {}).get("strategy")) == strategy_norm)
+    )
+
+
+def _active_swing_probe_count_for_origin(origin_stage: str) -> int:
+    stage = str(origin_stage or "").strip()
+    if not stage:
+        return 0
+    return sum(
+        1
+        for target in (ACTIVE_TARGETS or [])
+        if _is_swing_intraday_probe_target(target)
+        and _active_runtime_status(target)
+        and str((target or {}).get("probe_origin_stage") or "").strip() == stage
+    )
+
+
+def _has_duplicate_swing_probe(code: str, strategy: str, origin_stage: str) -> bool:
+    norm = str(code or "").strip()[:6]
+    stage = str(origin_stage or "").strip()
+    strategy_norm = normalize_strategy(strategy)
+    return any(
+        _is_swing_intraday_probe_target(target)
+        and _active_runtime_status(target)
+        and str((target or {}).get("code") or "").strip()[:6] == norm
+        and normalize_strategy((target or {}).get("strategy")) == strategy_norm
+        and str((target or {}).get("probe_origin_stage") or "").strip() == stage
+        for target in (ACTIVE_TARGETS or [])
+    )
+
+
+def _log_swing_probe_discard(stock, code, origin_stage: str, reason: str, **fields) -> None:
+    now_ts = _safe_float(fields.pop("_now_ts", None), time.time())
+    min_interval = max(0, _rule_int("SWING_INTRADAY_PROBE_DISCARD_LOG_MIN_INTERVAL_SEC", 60))
+    record_id = str(
+        (stock or {}).get("id")
+        or (stock or {}).get("source_record_id")
+        or fields.get("source_record_id")
+        or ""
+    )
+    key = (str(code or "").strip()[:6], record_id, str(origin_stage or ""), str(reason or ""))
+    last_ts = _SWING_PROBE_DISCARD_LOG_TS.get(key)
+    if min_interval > 0 and last_ts is not None and (now_ts - last_ts) < min_interval:
+        return
+    _SWING_PROBE_DISCARD_LOG_TS[key] = now_ts
+    _log_entry_pipeline(
+        stock,
+        code,
+        "swing_probe_discarded",
+        **_swing_probe_event_fields(
+            stock,
+            probe_origin_stage=origin_stage,
+            discard_reason=reason,
+            **fields,
+        ),
+    )
+
+
+def _resolve_swing_probe_qty(stock: dict, curr_price: int, ratio: float) -> dict:
+    if curr_price <= 0:
+        return {"qty": 1, "qty_source": "fallback_min_qty", "qty_reason": "missing_curr_price"}
+    try:
+        deposit = _safe_int(kiwoom_orders.get_deposit(KIWOOM_TOKEN), 0)
+    except Exception:
+        deposit = 0
+    if deposit <= 0 or ratio <= 0:
+        return {
+            "qty": 1,
+            "qty_source": "fallback_min_qty",
+            "qty_reason": "missing_deposit_or_ratio",
+            "deposit": deposit,
+            "ratio": f"{float(ratio or 0.0):.4f}",
+        }
+    target_budget, safe_budget, qty, safety_ratio = kiwoom_orders.describe_buy_capacity(
+        curr_price,
+        deposit,
+        ratio,
+        max_budget=0,
+    )
+    qty = max(1, _safe_int(qty, 1))
+    return {
+        "qty": qty,
+        "qty_source": "live_equivalent_buy_capacity",
+        "qty_reason": "probe_uses_live_budget_formula",
+        "deposit": deposit,
+        "ratio": f"{float(ratio or 0.0):.4f}",
+        "target_budget": target_budget,
+        "safe_budget": safe_budget,
+        "safety_ratio": f"{float(safety_ratio or 0.0):.4f}",
+    }
+
+
+def maybe_start_swing_intraday_probe(
+    *,
+    stock: dict,
+    code: str,
+    ws_data: dict,
+    origin_stage: str,
+    runtime: dict | None = None,
+    evidence_quality: str = "blocked_stage_intraday_probe",
+    probe_arm: str | None = None,
+    extra_fields: dict | None = None,
+) -> bool:
+    """Create an observe-only swing virtual holding from a blocked live-runtime stage."""
+    runtime = runtime or {}
+    extra_fields = extra_fields or {}
+    strategy = normalize_strategy(runtime.get("strategy") or stock.get("strategy"))
+    if not _is_swing_strategy(strategy):
+        return False
+    if not _is_swing_intraday_probe_enabled():
+        return False
+    if ACTIVE_TARGETS is None:
+        _log_swing_probe_discard(
+            stock,
+            code,
+            origin_stage,
+            "active_targets_unbound",
+            strategy=strategy,
+            _now_ts=runtime.get("now_ts"),
+        )
+        return False
+
+    norm_code = str(code or stock.get("code") or "").strip()[:6]
+    curr_price = _safe_int((ws_data or {}).get("curr") or runtime.get("curr_price"), 0)
+    if not norm_code or curr_price <= 0:
+        _log_swing_probe_discard(
+            stock,
+            norm_code or code,
+            origin_stage,
+            "missing_code_or_price",
+            strategy=strategy,
+            curr_price=curr_price,
+            _now_ts=runtime.get("now_ts"),
+        )
+        return False
+
+    max_per_symbol = max(0, _rule_int("SWING_INTRADAY_PROBE_MAX_PER_SYMBOL", 1))
+    symbol_count = _active_swing_probe_count_for_symbol(norm_code, strategy)
+    if max_per_symbol > 0 and symbol_count >= max_per_symbol:
+        _log_swing_probe_discard(
+            stock,
+            norm_code,
+            origin_stage,
+            "max_per_symbol_reached",
+            strategy=strategy,
+            active_symbol_probes=symbol_count,
+            _now_ts=runtime.get("now_ts"),
+        )
+        return False
+
+    if _has_duplicate_swing_probe(norm_code, strategy, origin_stage):
+        _log_swing_probe_discard(
+            stock,
+            norm_code,
+            origin_stage,
+            "duplicate_origin_stage",
+            strategy=strategy,
+            _now_ts=runtime.get("now_ts"),
+        )
+        return False
+
+    if str(origin_stage or "").strip() == "blocked_swing_score_vpw":
+        score_open_cap = max(0, _rule_int("SWING_INTRADAY_PROBE_SCORE_VPW_MAX_OPEN", 4))
+        score_open_count = _active_swing_probe_count_for_origin("blocked_swing_score_vpw")
+        if score_open_cap > 0 and score_open_count >= score_open_cap:
+            _log_swing_probe_discard(
+                stock,
+                norm_code,
+                origin_stage,
+                "origin_quota_reached",
+                strategy=strategy,
+                origin_open_count=score_open_count,
+                origin_open_cap=score_open_cap,
+                _now_ts=runtime.get("now_ts"),
+            )
+            return False
+
+    max_open = max(0, _rule_int("SWING_INTRADAY_PROBE_MAX_OPEN", 10))
+    open_count = len(_swing_probe_active_targets())
+    if max_open > 0 and open_count >= max_open:
+        _log_swing_probe_discard(
+            stock,
+            norm_code,
+            origin_stage,
+            "max_open_reached",
+            strategy=strategy,
+            open_count=open_count,
+            _now_ts=runtime.get("now_ts"),
+        )
+        return False
+
+    day_key = _swing_probe_daily_key(runtime.get("now_ts"))
+    restored_today = sum(
+        1
+        for target in _swing_probe_active_targets()
+        if str((target or {}).get("probe_date") or "") == day_key
+    )
+    created_today = max(int(_SWING_PROBE_DAILY_CREATED.get(day_key, 0) or 0), restored_today)
+    max_daily = max(0, _rule_int("SWING_INTRADAY_PROBE_MAX_DAILY", 30))
+    if max_daily > 0 and created_today >= max_daily:
+        _log_swing_probe_discard(
+            stock,
+            norm_code,
+            origin_stage,
+            "max_daily_reached",
+            strategy=strategy,
+            created_today=created_today,
+            _now_ts=runtime.get("now_ts"),
+        )
+        return False
+
+    ratio = _safe_float(runtime.get("ratio"), 0.0)
+    if ratio <= 0:
+        if strategy == "KOSDAQ_ML":
+            ratio = _rule_float("INVEST_RATIO_KOSDAQ_MIN", 0.05)
+        else:
+            ratio = _rule_float("INVEST_RATIO_KOSPI_MIN", 0.10)
+    qty_details = _resolve_swing_probe_qty(stock, curr_price, ratio)
+    qty = max(1, _safe_int(qty_details.get("qty"), 1))
+    best_ask, best_bid = _get_best_levels_from_ws(ws_data or {})
+    now_ts = _safe_float(runtime.get("now_ts"), time.time())
+    probe_id = _simulated_order_no("SWINGPROBE", norm_code)
+    source_signal_date = stock.get("date")
+    entry_date = datetime.fromtimestamp(now_ts).date().isoformat()
+    probe_target = dict(stock)
+    probe_target.update(
+        {
+            "code": norm_code,
+            "strategy": strategy,
+            "position_tag": normalize_position_tag(strategy, stock.get("position_tag")),
+            "status": "HOLDING",
+            "date": entry_date,
+            "source_signal_date": source_signal_date,
+            "entry_mode": f"swing_probe_{origin_stage}",
+            "order_time": now_ts,
+            "order_price": curr_price,
+            "requested_buy_qty": qty,
+            "entry_requested_qty": qty,
+            "entry_filled_qty": qty,
+            "entry_fill_amount": int(curr_price * qty),
+            "buy_price": curr_price,
+            "buy_qty": qty,
+            "buy_time": now_ts,
+            "holding_started_at": now_ts,
+            "swing_live_order_dry_run": True,
+            "swing_intraday_probe": True,
+            "simulation_book": SWING_INTRADAY_PROBE_BOOK,
+            "simulation_owner": _swing_intraday_probe_owner(),
+            "simulated_order": True,
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "probe_id": probe_id,
+            "source_record_id": stock.get("id"),
+            "probe_origin_stage": origin_stage,
+            "probe_arm": probe_arm or origin_stage,
+            "evidence_quality": evidence_quality,
+            "evidence_quality_weight": _safe_float(extra_fields.get("evidence_quality_weight"), 0.70),
+            "probe_date": day_key,
+            "msg_audience": "ADMIN_ONLY",
+        }
+    )
+    for key in ("pending_buy_msg", "pending_sell_msg", "pending_entry_orders", "odno", "sell_odno", "add_odno", "pending_add_order"):
+        probe_target.pop(key, None)
+
+    with ENTRY_LOCK:
+        ACTIVE_TARGETS.append(probe_target)
+        if isinstance(HIGHEST_PRICES, dict):
+            HIGHEST_PRICES[_price_tracking_key(probe_target, norm_code)] = curr_price
+        _SWING_PROBE_DAILY_CREATED[day_key] = created_today + 1
+    if EVENT_BUS is not None:
+        EVENT_BUS.publish("COMMAND_WS_REG", {"codes": [norm_code], "source": "swing_intraday_probe"})
+
+    common_fields = _swing_probe_event_fields(
+        probe_target,
+        strategy=strategy,
+        position_tag=probe_target.get("position_tag"),
+        curr_price=curr_price,
+        assumed_fill_price=curr_price,
+        best_ask=best_ask,
+        best_bid=best_bid,
+        would_qty=qty,
+        qty=qty,
+        qty_source=qty_details.get("qty_source"),
+        qty_reason=qty_details.get("qty_reason"),
+        gap_pct=extra_fields.get("gap_pct", extra_fields.get("fluctuation", runtime.get("fluctuation"))),
+        runtime_score_proxy=extra_fields.get("runtime_score_proxy", runtime.get("current_ai_score")),
+        score=extra_fields.get("score"),
+        v_pw=extra_fields.get("v_pw", runtime.get("current_vpw")),
+        gatekeeper_action=extra_fields.get("gatekeeper_action"),
+        gatekeeper_allow_entry=extra_fields.get("gatekeeper_allow_entry"),
+        gatekeeper_eval_ms=extra_fields.get("gatekeeper_eval_ms"),
+        market_regime=extra_fields.get("market_regime"),
+        market_regime_block_reason=extra_fields.get("market_regime_block_reason"),
+        counterfactual_after_gap=bool(extra_fields.get("counterfactual_after_gap", False)),
+        source_signal_date=source_signal_date,
+        entry_date=entry_date,
+        **{k: v for k, v in qty_details.items() if k not in {"qty", "qty_source", "qty_reason"}},
+    )
+    _log_entry_pipeline(stock, norm_code, "swing_probe_entry_candidate", **common_fields)
+    _log_entry_pipeline(
+        probe_target,
+        norm_code,
+        "swing_probe_holding_started",
+        **common_fields,
+    )
+    persist_swing_intraday_probe_state(reason="probe_holding_started")
+    return True
 
 
 def _mark_swing_simulated_holding(stock, code, curr_price, requested_qty, entry_mode, entry_orders):
@@ -683,6 +1355,67 @@ def handle_scalp_simulator_pending_entry(stock: dict, code: str, ws_data: dict, 
     return True
 
 
+def _resolve_scalp_sim_entry_qty(stock: dict, ws_data: dict, runtime: dict) -> dict:
+    configured_qty = _rule_int("SCALP_LIVE_SIMULATOR_QTY", 0)
+    if configured_qty > 0:
+        return {
+            "qty": configured_qty,
+            "qty_source": "fixed_config",
+            "uncapped_qty": configured_qty,
+            "cap_applied": False,
+            "qty_reason": "fixed_config",
+        }
+
+    curr_price = _safe_int(
+        (ws_data or {}).get("curr")
+        or stock.get("target_buy_price")
+        or stock.get("entry_armed_target_buy_price"),
+        0,
+    )
+    ratio = _safe_float((runtime or {}).get("ratio"), 0.0)
+    deposit = _safe_int((runtime or {}).get("deposit"), 0)
+    if deposit <= 0:
+        try:
+            deposit = _safe_int(kiwoom_orders.get_deposit(KIWOOM_TOKEN), 0)
+        except Exception:
+            deposit = 0
+    budget_cap = int(_rule("SCALPING_MAX_BUY_BUDGET_KRW", 0) or 0)
+    if curr_price <= 0 or ratio <= 0 or deposit <= 0:
+        return {
+            "qty": 1,
+            "qty_source": "uncapped_fallback_min_qty",
+            "uncapped_qty": 1,
+            "cap_applied": False,
+            "qty_reason": "missing_price_ratio_or_deposit",
+            "curr_price": curr_price,
+            "ratio": f"{ratio:.4f}",
+            "deposit": deposit,
+            "budget_cap": budget_cap if budget_cap > 0 else "-",
+        }
+
+    target_budget, safe_budget, qty, safety_ratio = kiwoom_orders.describe_buy_capacity(
+        curr_price,
+        deposit,
+        ratio,
+        max_budget=budget_cap,
+    )
+    qty = max(1, _safe_int(qty, 0))
+    return {
+        "qty": qty,
+        "qty_source": "uncapped_buy_capacity",
+        "uncapped_qty": qty,
+        "cap_applied": False,
+        "qty_reason": "sim_unrestricted_by_1share_cap",
+        "curr_price": curr_price,
+        "ratio": f"{ratio:.4f}",
+        "deposit": deposit,
+        "target_budget": target_budget,
+        "safe_budget": safe_budget,
+        "safety_ratio": f"{float(safety_ratio or 0.0):.4f}",
+        "budget_cap": budget_cap if budget_cap > 0 else "-",
+    }
+
+
 def maybe_arm_scalp_live_simulator_from_buy_signal(stock: dict, code: str, ws_data: dict, runtime: dict) -> bool:
     if not _is_scalp_live_simulator_enabled():
         return False
@@ -709,7 +1442,9 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(stock: dict, code: str, ws_da
         stock.get("target_buy_price") or stock.get("entry_armed_target_buy_price"),
         0,
     )
-    qty = max(1, _rule_int("SCALP_LIVE_SIMULATOR_QTY", 1) or 1)
+    qty_details = _resolve_scalp_sim_entry_qty(stock, ws_data or {}, runtime or {})
+    qty = max(1, _safe_int(qty_details.get("qty"), 1))
+    qty_log_fields = {k: v for k, v in qty_details.items() if k != "qty"}
     sim_record_id = _simulated_order_no("SCALPSIM", code)
     sim_ord_no = _simulated_order_no("SIMBUY", code)
     sim_target = dict(stock)
@@ -729,6 +1464,9 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(stock: dict, code: str, ws_da
             "sim_parent_record_id": stock.get("id"),
             "scalp_sim_entry_limit_price": limit_price,
             "scalp_sim_entry_qty": qty,
+            "scalp_sim_entry_qty_source": qty_details.get("qty_source"),
+            "scalp_sim_entry_uncapped_qty": qty_details.get("uncapped_qty", qty),
+            "scalp_sim_entry_qty_reason": qty_details.get("qty_reason"),
             "scalp_sim_entry_armed_at": now_ts,
             "scalp_sim_pending_ord_no": sim_ord_no,
             "order_time": now_ts,
@@ -762,6 +1500,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(stock: dict, code: str, ws_da
             ai_score=f"{current_ai_score:.1f}",
             limit_price=limit_price,
             qty=qty,
+            **qty_log_fields,
         ),
     )
     _log_entry_pipeline(
@@ -775,6 +1514,7 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(stock: dict, code: str, ws_da
             ord_no=sim_ord_no,
             limit_price=limit_price,
             qty=qty,
+            **qty_log_fields,
             would_submit_stage="order_leg_sent",
             runtime_effect="pending_virtual_fill",
         ),
@@ -5456,6 +6196,25 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     marcap=marcap,
                     cap_bucket=swing_gap.get('bucket_label'),
                 )
+                if _rule_bool("SWING_INTRADAY_PROBE_COUNTERFACTUAL_GATEKEEPER_ENABLED", True):
+                    maybe_start_swing_intraday_probe(
+                        stock=stock,
+                        code=code,
+                        ws_data=ws_data,
+                        origin_stage="blocked_swing_gap",
+                        runtime=runtime,
+                        evidence_quality="counterfactual_after_gap",
+                        probe_arm="counterfactual_after_gap",
+                        extra_fields={
+                            "fluctuation": f"{fluctuation:.2f}",
+                            "gap_pct": f"{fluctuation:.2f}",
+                            "threshold": f"{max_gap:.2f}",
+                            "marcap": marcap,
+                            "cap_bucket": swing_gap.get('bucket_label'),
+                            "counterfactual_after_gap": True,
+                            "evidence_quality_weight": 0.60,
+                        },
+                    )
                 return False
 
             vpw_limit_base = int(config["VPW_KOSDAQ_LIMIT"])
@@ -5485,6 +6244,25 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     marcap=marcap,
                     cap_bucket=swing_gap.get('bucket_label'),
                 )
+                if _rule_bool("SWING_INTRADAY_PROBE_COUNTERFACTUAL_GATEKEEPER_ENABLED", True):
+                    maybe_start_swing_intraday_probe(
+                        stock=stock,
+                        code=code,
+                        ws_data=ws_data,
+                        origin_stage="blocked_swing_gap",
+                        runtime=runtime,
+                        evidence_quality="counterfactual_after_gap",
+                        probe_arm="counterfactual_after_gap",
+                        extra_fields={
+                            "fluctuation": f"{fluctuation:.2f}",
+                            "gap_pct": f"{fluctuation:.2f}",
+                            "threshold": f"{max_gap:.2f}",
+                            "marcap": marcap,
+                            "cap_bucket": swing_gap.get('bucket_label'),
+                            "counterfactual_after_gap": True,
+                            "evidence_quality_weight": 0.60,
+                        },
+                    )
                 return False
 
             vpw_limit_base = 100
@@ -5680,6 +6458,24 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     gatekeeper_model_call_ms=stock.get('last_gatekeeper_model_call_ms', 0),
                     gatekeeper_total_internal_ms=stock.get('last_gatekeeper_total_internal_ms', 0),
                 )
+                maybe_start_swing_intraday_probe(
+                    stock=stock,
+                    code=code,
+                    ws_data=ws_data,
+                    origin_stage="blocked_gatekeeper_reject",
+                    runtime=runtime,
+                    evidence_quality="blocked_stage_intraday_probe",
+                    extra_fields={
+                        "score": round(float(score), 2),
+                        "runtime_score_proxy": round(float(score), 2),
+                        "gatekeeper_action": action_label,
+                        "gatekeeper_allow_entry": False,
+                        "gatekeeper_eval_ms": gatekeeper_eval_ms,
+                        "gatekeeper_cache": stock.get('last_gatekeeper_cache_mode', 'miss'),
+                        "cooldown_sec": gatekeeper_reject_cd,
+                        "cooldown_policy": gatekeeper_cd_policy,
+                    },
+                )
                 return False
 
             blocked, block_reason = _should_block_swing_entry(stock.get('strategy', ''))
@@ -5691,7 +6487,31 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                 )
             if blocked:
                 log_info(f"⛔ [시장환경필터] {stock['name']}({code}) 스윙 진입 보류 - {block_reason}")
-                _log_entry_pipeline(stock, code, "market_regime_block", strategy=strategy, **swing_regime_micro_fields)
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "market_regime_block",
+                    strategy=strategy,
+                    market_regime_block_reason=block_reason,
+                    **swing_regime_micro_fields,
+                )
+                maybe_start_swing_intraday_probe(
+                    stock=stock,
+                    code=code,
+                    ws_data=ws_data,
+                    origin_stage="market_regime_block",
+                    runtime=runtime,
+                    evidence_quality="blocked_stage_intraday_probe",
+                    extra_fields={
+                        "score": round(float(score), 2),
+                        "runtime_score_proxy": round(float(score), 2),
+                        "gatekeeper_action": action_label,
+                        "gatekeeper_allow_entry": True,
+                        "gatekeeper_eval_ms": gatekeeper_eval_ms,
+                        "market_regime_block_reason": block_reason,
+                        **swing_regime_micro_fields,
+                    },
+                )
                 return False
 
             _log_entry_pipeline(
@@ -5718,6 +6538,39 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                 },
             )
             _publish_gatekeeper_report_proxy(stock, code, gatekeeper, allowed=True)
+        else:
+            _log_entry_pipeline(
+                stock,
+                code,
+                "blocked_swing_score_vpw",
+                strategy=strategy,
+                score=round(float(score), 2),
+                buy_threshold=buy_threshold,
+                current_vpw=f"{current_vpw:.1f}",
+                vpw_condition=bool(vpw_condition),
+                v_pw_limit=v_pw_limit,
+                is_shooting=bool(is_shooting),
+                ai_prob=f"{float(ai_prob or 0.0):.4f}",
+                conclusion=conclusion,
+            )
+            maybe_start_swing_intraday_probe(
+                stock=stock,
+                code=code,
+                ws_data=ws_data,
+                origin_stage="blocked_swing_score_vpw",
+                runtime=runtime,
+                evidence_quality="blocked_stage_intraday_probe",
+                extra_fields={
+                    "score": round(float(score), 2),
+                    "runtime_score_proxy": round(float(score), 2),
+                    "buy_threshold": buy_threshold,
+                    "current_vpw": f"{current_vpw:.1f}",
+                    "v_pw": f"{current_vpw:.1f}",
+                    "vpw_condition": bool(vpw_condition),
+                    "v_pw_limit": v_pw_limit,
+                    "is_shooting": bool(is_shooting),
+                },
+            )
 
     runtime.update(
         {
@@ -5745,6 +6598,16 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
     if not admin_id:
         log_info(f"⚠️ [매수보류] {stock['name']}: 관리자 ID가 없습니다.")
         _log_entry_pipeline(stock, code, "blocked_no_admin")
+        if _is_swing_strategy(strategy):
+            maybe_start_swing_intraday_probe(
+                stock=stock,
+                code=code,
+                ws_data=ws_data,
+                origin_stage="blocked_no_admin",
+                runtime=runtime,
+                evidence_quality="blocked_stage_intraday_probe",
+                extra_fields={"block_reason": "no_admin"},
+            )
         return False
 
     deposit = kiwoom_orders.get_deposit(KIWOOM_TOKEN)
@@ -5791,6 +6654,24 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             auth_return_code=(auth_failure or {}).get("return_code", "-"),
             auth_return_msg=(auth_failure or {}).get("return_msg", "-"),
         )
+        if _is_swing_strategy(strategy):
+            maybe_start_swing_intraday_probe(
+                stock=stock,
+                code=code,
+                ws_data=ws_data,
+                origin_stage=zero_qty_stage,
+                runtime=runtime,
+                evidence_quality="blocked_stage_intraday_probe",
+                extra_fields={
+                    "deposit": deposit,
+                    "ratio": f"{ratio:.4f}",
+                    "target_budget": target_budget,
+                    "safe_budget": safe_budget,
+                    "safety_ratio": f"{used_safety_ratio:.4f}",
+                    "curr_price": curr_price,
+                    "budget_cap": budget_cap if budget_cap_applied else "-",
+                },
+            )
         return False
 
     _log_entry_pipeline(
@@ -5892,6 +6773,27 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             ),
             **swing_entry_micro_fields,
         )
+        if _is_swing_strategy(strategy):
+            maybe_start_swing_intraday_probe(
+                stock=stock,
+                code=code,
+                ws_data=ws_data,
+                origin_stage="latency_block",
+                runtime=runtime,
+                evidence_quality="blocked_stage_intraday_probe",
+                extra_fields={
+                    "decision": latency_gate.get('decision'),
+                    "latency_state": latency_gate.get('latency_state'),
+                    "latency_reason": latency_gate.get('reason'),
+                    "ws_age_ms": latency_gate.get('ws_age_ms'),
+                    "ws_jitter_ms": latency_gate.get('ws_jitter_ms'),
+                    "spread_ratio": f"{float(latency_gate.get('spread_ratio', 0.0) or 0.0):.6f}",
+                    "quote_stale": bool(latency_gate.get('quote_stale')),
+                    "signal_price": int(latency_gate.get('signal_price', 0) or 0),
+                    "latest_price": int(latency_gate.get('latest_price', 0) or 0),
+                    **swing_entry_micro_fields,
+                },
+            )
         return False
 
     requested_qty = int(real_buy_qty or 0)
@@ -6029,6 +6931,16 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
         clear_signal_reference(stock)
         _log_entry_pipeline(stock, code, "blocked_pause", strategy=strategy)
+        if _is_swing_strategy(strategy):
+            maybe_start_swing_intraday_probe(
+                stock=stock,
+                code=code,
+                ws_data=ws_data,
+                origin_stage="blocked_pause",
+                runtime=runtime,
+                evidence_quality="blocked_stage_intraday_probe",
+                extra_fields={"pause_state": get_pause_state_label()},
+            )
         return False
 
     big_bite_summary = ""
@@ -6158,6 +7070,23 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         log_info(f"❌ [{stock['name']}] 매수 주문 전송 실패 (성공 주문 없음)")
         clear_signal_reference(stock)
         _log_entry_pipeline(stock, code, "order_bundle_failed")
+        if _is_swing_strategy(strategy):
+            maybe_start_swing_intraday_probe(
+                stock=stock,
+                code=code,
+                ws_data=ws_data,
+                origin_stage="order_bundle_failed",
+                runtime=runtime,
+                evidence_quality="blocked_stage_intraday_probe",
+                extra_fields={
+                    "entry_mode": entry_mode,
+                    "planned_order_count": len(planned_orders or []),
+                    "latency_state": latency_gate.get('latency_state'),
+                    "entry_price_guard": latency_gate.get('entry_price_guard'),
+                    "order_price": int(latency_gate.get('order_price', 0) or 0),
+                    **swing_entry_micro_fields,
+                },
+            )
         return False
 
     if swing_order_dry_run:
@@ -8569,6 +9498,28 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             buy_price=buy_p,
             buy_qty=_safe_int(stock.get("buy_qty"), 0),
         )
+        if _is_swing_intraday_probe_target(stock):
+            _log_holding_pipeline(
+                stock,
+                code,
+                "swing_probe_exit_signal",
+                **_swing_probe_event_fields(
+                    stock,
+                    sell_reason_type=sell_reason_type,
+                    reason=reason,
+                    exit_rule=exit_rule or "-",
+                    exit_decision_source=exit_decision_source,
+                    profit_rate=f"{profit_rate:+.2f}",
+                    peak_profit=f"{peak_profit:+.2f}",
+                    current_ai_score=f"{current_ai_score:.0f}",
+                    held_sec=int(held_time_min * 60),
+                    curr_price=curr_p,
+                    buy_price=buy_p,
+                    buy_qty=_safe_int(stock.get("buy_qty"), 0),
+                    mfe_pct=f"{peak_profit:+.2f}",
+                    mae_pct="-",
+                ),
+            )
         if _has_open_pending_entry_orders(stock):
             cancel_state = _cancel_pending_entry_orders(stock, code, force=False)
             if cancel_state == 'failed':
@@ -8637,18 +9588,32 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             if buy_qty <= 0:
                 buy_qty = mem_buy_qty
             if buy_qty <= 0:
+                zero_stage = "swing_probe_discarded" if _is_swing_intraday_probe_target(stock) else "swing_sim_sell_blocked_zero_qty"
                 _log_holding_pipeline(
                     stock,
                     code,
-                    "swing_sim_sell_blocked_zero_qty",
-                    sell_reason_type=sell_reason_type,
-                    exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
-                    profit_rate=f"{profit_rate:+.2f}",
-                    simulation_owner=_swing_live_order_dry_run_owner(),
-                    actual_order_submitted=False,
+                    zero_stage,
+                    **(
+                        _swing_probe_event_fields(
+                            stock,
+                            discard_reason="zero_sell_qty",
+                            sell_reason_type=sell_reason_type,
+                            exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
+                            profit_rate=f"{profit_rate:+.2f}",
+                        )
+                        if _is_swing_intraday_probe_target(stock)
+                        else {
+                            "sell_reason_type": sell_reason_type,
+                            "exit_rule": exit_rule or stock.get("last_exit_rule") or "-",
+                            "profit_rate": f"{profit_rate:+.2f}",
+                            "simulation_owner": _swing_live_order_dry_run_owner(),
+                            "actual_order_submitted": False,
+                        }
+                    ),
                 )
                 return
 
+            simulated_profit_rate = calculate_net_profit_rate(stock.get("buy_price"), curr_p)
             _mutate_stock_state(
                 stock,
                 set_fields={
@@ -8658,10 +9623,11 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     "sell_time": now_ts,
                     "simulated_sell_order": True,
                     "actual_order_submitted": False,
+                    "profit_rate": simulated_profit_rate,
                 },
             )
             with ENTRY_LOCK:
-                HIGHEST_PRICES.pop(code, None)
+                HIGHEST_PRICES.pop(_price_tracking_key(stock, code), None)
             log_info(
                 f"[SWING_LIVE_ORDER_DRY_RUN] {stock.get('name')}({code}) "
                 f"sell skipped qty={buy_qty} assumed_price={curr_p} reason={sell_reason_type}"
@@ -8677,19 +9643,48 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
             _log_holding_pipeline(
                 stock,
                 code,
-                "swing_sim_sell_order_assumed_filled",
-                sell_reason_type=sell_reason_type,
-                exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
-                exit_decision_source=stock.get("last_exit_decision_source") or "MANUAL",
-                qty=buy_qty,
-                assumed_fill_price=curr_p,
-                profit_rate=f"{profit_rate:+.2f}",
-                simulation_owner=_swing_live_order_dry_run_owner(),
-                actual_order_submitted=False,
-                would_submit_stage="sell_order_sent",
-                runtime_effect="in_memory_completed_only",
-                **swing_sell_micro_fields,
+                "swing_probe_sell_order_assumed_filled"
+                if _is_swing_intraday_probe_target(stock)
+                else "swing_sim_sell_order_assumed_filled",
+                **(
+                    _swing_probe_event_fields(
+                        stock,
+                        sell_reason_type=sell_reason_type,
+                        exit_rule=exit_rule or stock.get("last_exit_rule") or "-",
+                        exit_decision_source=stock.get("last_exit_decision_source") or "MANUAL",
+                        qty=buy_qty,
+                        assumed_fill_price=curr_p,
+                        buy_price=stock.get("buy_price"),
+                        profit_rate=f"{simulated_profit_rate:+.2f}",
+                        trigger_profit_rate=f"{profit_rate:+.2f}",
+                        final_exit_return_pct=f"{simulated_profit_rate:+.2f}",
+                        mfe_pct=f"{peak_profit:+.2f}",
+                        mae_pct="-",
+                        would_submit_stage="sell_order_sent",
+                        runtime_effect="in_memory_completed_only",
+                        **swing_sell_micro_fields,
+                    )
+                    if _is_swing_intraday_probe_target(stock)
+                    else {
+                        "sell_reason_type": sell_reason_type,
+                        "exit_rule": exit_rule or stock.get("last_exit_rule") or "-",
+                        "exit_decision_source": stock.get("last_exit_decision_source") or "MANUAL",
+                        "qty": buy_qty,
+                        "assumed_fill_price": curr_p,
+                        "profit_rate": f"{profit_rate:+.2f}",
+                        "simulation_owner": _swing_live_order_dry_run_owner(),
+                        "actual_order_submitted": False,
+                        "would_submit_stage": "sell_order_sent",
+                        "runtime_effect": "in_memory_completed_only",
+                        **swing_sell_micro_fields,
+                    }
+                ),
             )
+            if _is_swing_intraday_probe_target(stock):
+                persist_swing_intraday_probe_state(
+                    allow_empty_overwrite=True,
+                    reason="probe_exit",
+                )
             return
 
         if buy_qty <= 0:
@@ -9122,7 +10117,11 @@ def can_consider_scale_in(
             return {"allowed": False, "reason": "scalping_scale_in_disabled"}
     elif raw_strategy in ('KOSPI_ML', 'KOSDAQ_ML'):
         allow_pyr = _rule_bool('SWING_ENABLE_PYRAMID', True)
-        if not allow_pyr:
+        allow_avg_down_sim = (
+            _rule_bool('SWING_ENABLE_AVG_DOWN_SIMULATION', True)
+            and _is_swing_live_order_dry_run(raw_strategy)
+        )
+        if not (allow_pyr or allow_avg_down_sim):
             return {"allowed": False, "reason": "swing_scale_in_disabled"}
     else:
         return {"allowed": False, "reason": "unknown_strategy"}
@@ -9238,6 +10237,18 @@ def _cancel_or_reconcile_pending_add(stock, reason):
     res = kiwoom_orders.send_cancel_order(code=code, orig_ord_no=ord_no, token=KIWOOM_TOKEN, qty=0)
     if _is_ok_response(res):
         now_ts = time.time()
+        if stock.get("swing_scale_in_real_canary"):
+            _log_holding_pipeline(
+                stock,
+                code,
+                "swing_scale_in_real_canary_cancel_requested",
+                policy_id="swing_scale_in_real_canary_phase0",
+                cohort="swing_scale_in_real_canary_phase0",
+                add_type=stock.get("pending_add_type"),
+                ord_no=ord_no,
+                reason=reason,
+                actual_order_submitted=True,
+            )
         record_add_history_event(
             DB,
             recommendation_id=stock.get('id'),
@@ -9374,7 +10385,26 @@ def _evaluate_scale_in_signal(
     elif raw_strategy in ('KOSPI_ML', 'KOSDAQ_ML'):
         _ = market_regime
         pyramid = evaluate_swing_pyramid(stock, profit_rate, peak_profit)
-        return pyramid if pyramid.get("should_add") else None
+        if pyramid.get("should_add"):
+            pyramid.update(
+                {
+                    "profit_rate": profit_rate,
+                    "peak_profit": peak_profit,
+                    "current_ai_score": current_ai_score,
+                    "held_sec": held_sec,
+                }
+            )
+            return pyramid
+        avg_down = evaluate_swing_avg_down(
+            stock,
+            profit_rate=profit_rate,
+            peak_profit=peak_profit,
+            current_ai_score=current_ai_score,
+            held_sec=held_sec,
+        )
+        if avg_down.get("should_add"):
+            return avg_down
+        return None
     else:
         return None
 
@@ -9521,10 +10551,14 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         code,
         "scale_in_price_resolved",
         add_type=add_type,
+        scale_in_type=add_type,
+        add_trigger=action.get("reason"),
+        scale_in_trigger=action.get("reason"),
         reason=price_resolution.get("reason"),
         curr_price=curr_price,
         resolved_price=resolved_price,
         price_source=price_resolution.get("price_source"),
+        price_policy=price_resolution.get("price_source") or price_resolution.get("reason"),
         best_bid=price_resolution.get("best_bid"),
         best_ask=price_resolution.get("best_ask"),
         spread_bps="-" if price_resolution.get("spread_bps") is None else f"{price_resolution.get('spread_bps'):.2f}",
@@ -9556,6 +10590,53 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             f"state={get_pause_state_label()}"
         )
         return None
+
+    swing_real_canary_fields = None
+    if _is_swing_strategy(strategy) and not _is_any_simulated_position(stock, strategy):
+        real_canary_decision = _evaluate_swing_scale_in_real_canary(
+            stock,
+            code,
+            add_type=add_type,
+            qty=qty,
+            final_price=final_price,
+            curr_price=curr_price,
+            ws_data=ws_data or {},
+            price_resolution=price_resolution,
+            swing_scale_micro_fields=swing_scale_micro_fields,
+            template_qty=template_qty,
+            would_qty=would_qty,
+            effective_qty=effective_qty,
+            cap_qty=cap_qty,
+            floor_applied=floor_applied,
+            qty_reason=qty_reason,
+        )
+        if not bool(real_canary_decision.get("allowed")):
+            fields = real_canary_decision.get("fields") if isinstance(real_canary_decision.get("fields"), dict) else {}
+            _log_holding_pipeline(
+                stock,
+                code,
+                "swing_scale_in_real_canary_blocked",
+                block_reason=real_canary_decision.get("reason"),
+                actual_order_submitted=False,
+                **fields,
+            )
+            log_info(
+                f"[ADD_BLOCKED] {stock.get('name')}({code}) "
+                f"reason=swing_scale_in_real_canary_{real_canary_decision.get('reason')} "
+                f"add_type={add_type}"
+            )
+            return None
+        swing_real_canary_fields = real_canary_decision.get("fields") or {}
+        qty = int(real_canary_decision.get("qty") or 1)
+        final_price = int(real_canary_decision.get("order_price") or 0)
+        order_type_code = str(real_canary_decision.get("order_type_code") or "00")
+        _log_holding_pipeline(
+            stock,
+            code,
+            "swing_scale_in_real_canary_candidate",
+            actual_order_submitted=False,
+            **swing_real_canary_fields,
+        )
 
     if _is_scalp_simulated_position(stock, strategy):
         touched, fill_price, best_ask, best_bid = _scalp_sim_buy_quote_touch(ws_data or {}, final_price)
@@ -9658,6 +10739,9 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         prev_price = _safe_int(stock.get("buy_price"), curr_price)
         assumed_price = curr_price if final_price <= 0 else final_price
         new_qty = prev_qty + qty
+        scale_in_ratio = (float(qty) / float(prev_qty)) if prev_qty > 0 else 0.0
+        price_policy = price_resolution.get("price_source") or price_resolution.get("reason") or "-"
+        add_trigger = action.get("reason") or "-"
         new_avg_price = (
             int(round(((prev_price * prev_qty) + (assumed_price * qty)) / new_qty))
             if new_qty > 0
@@ -9685,6 +10769,9 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             code,
             "swing_sim_scale_in_order_assumed_filled",
             add_type=add_type,
+            scale_in_type=add_type,
+            add_trigger=add_trigger,
+            scale_in_trigger=add_trigger,
             qty=qty,
             ord_no=ord_no,
             assumed_fill_price=assumed_price,
@@ -9693,9 +10780,15 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             prev_buy_price=prev_price,
             new_buy_price=new_avg_price,
             order_type=order_type_code,
+            price_policy=price_policy,
+            add_price_policy=price_policy,
+            scale_in_ratio=f"{scale_in_ratio:.4f}",
+            add_ratio=f"{scale_in_ratio:.4f}",
+            post_add_outcome="pending_followup",
             would_submit_stage="add_order_sent",
             simulation_owner=_swing_live_order_dry_run_owner(),
             actual_order_submitted=False,
+            broker_order_forbidden=True,
             template_qty=template_qty,
             would_qty=would_qty,
             effective_qty=effective_qty,
@@ -9704,6 +10797,40 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             qty_reason=qty_reason,
             **swing_scale_micro_fields,
         )
+        if _is_swing_intraday_probe_target(stock):
+            _log_holding_pipeline(
+                stock,
+                code,
+                "swing_probe_scale_in_order_assumed_filled",
+                **_swing_probe_event_fields(
+                    stock,
+                    add_type=add_type,
+                    scale_in_type=add_type,
+                    add_trigger=add_trigger,
+                    scale_in_trigger=add_trigger,
+                    qty=qty,
+                    ord_no=ord_no,
+                    assumed_fill_price=assumed_price,
+                    prev_buy_qty=prev_qty,
+                    new_buy_qty=new_qty,
+                    prev_buy_price=prev_price,
+                    new_buy_price=new_avg_price,
+                    price_policy=price_policy,
+                    add_price_policy=price_policy,
+                    scale_in_ratio=f"{scale_in_ratio:.4f}",
+                    add_ratio=f"{scale_in_ratio:.4f}",
+                    post_add_outcome="pending_followup",
+                    would_submit_stage="add_order_sent",
+                    template_qty=template_qty,
+                    would_qty=would_qty,
+                    effective_qty=effective_qty,
+                    cap_qty=cap_qty,
+                    floor_applied=floor_applied,
+                    qty_reason=qty_reason,
+                    **swing_scale_micro_fields,
+                ),
+            )
+            persist_swing_intraday_probe_state(reason="probe_scale_in")
         return {
             "return_code": "0",
             "ord_no": ord_no,
@@ -9739,6 +10866,23 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 'pending_add_requested_at': now_ts,
                 'add_order_time': now_ts,
             }
+            if swing_real_canary_fields is not None:
+                day_key = str(swing_real_canary_fields.get("day_key") or _swing_scale_in_real_canary_daily_key(now_ts))
+                previous_count = int(stock.get("swing_scale_in_real_canary_order_count", 0) or 0)
+                previous_notional = int(stock.get("swing_scale_in_real_canary_notional_krw", 0) or 0)
+                order_notional = int(swing_real_canary_fields.get("order_notional_krw", 0) or 0)
+                set_fields.update(
+                    {
+                        "cohort": "swing_scale_in_real_canary_phase0",
+                        "swing_scale_in_real_canary": True,
+                        "swing_scale_in_real_canary_order_date": day_key,
+                        "swing_scale_in_real_canary_order_count": previous_count + 1,
+                        "swing_scale_in_real_canary_notional_krw": previous_notional + order_notional,
+                        "last_swing_scale_in_real_canary_arm": add_type,
+                        "last_swing_scale_in_real_canary_order_price": final_price,
+                        "last_swing_scale_in_real_canary_qty": qty,
+                    }
+                )
             if ord_no:
                 set_fields['add_odno'] = ord_no
             _mutate_stock_state(stock, set_fields=set_fields)
@@ -9753,8 +10897,20 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 f"type={add_type} qty={qty} ord_no={ord_no} "
                 f"template_qty={template_qty} would_qty={would_qty} effective_qty={effective_qty} "
                 f"cap_qty={cap_qty} floor_applied={floor_applied} "
-                f"request_price={final_price if strategy == 'SCALPING' else '-'} qty_reason={qty_reason}"
+                f"request_price={final_price if strategy in {'SCALPING', 'KOSPI_ML', 'KOSDAQ_ML'} else '-'} qty_reason={qty_reason}"
             )
+            if swing_real_canary_fields is not None:
+                _log_holding_pipeline(
+                    stock,
+                    code,
+                    "swing_scale_in_real_canary_order_submitted",
+                    ord_no=ord_no,
+                    actual_order_submitted=True,
+                    request_qty=qty,
+                    request_price=final_price,
+                    order_type=order_type_code,
+                    **swing_real_canary_fields,
+                )
             record_add_history_event(
                 DB,
                 recommendation_id=stock.get('id'),
@@ -9765,7 +10921,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 event_type='ORDER_SENT',
                 order_no=ord_no,
                 request_qty=qty,
-                request_price=resolved_price if strategy == 'SCALPING' else None,
+                request_price=final_price if swing_real_canary_fields is not None else resolved_price if strategy == 'SCALPING' else None,
                 prev_buy_price=stock.get('buy_price'),
                 prev_buy_qty=stock.get('buy_qty', 0),
                 add_count_after=stock.get('add_count', 0),
