@@ -322,7 +322,10 @@ class ArtifactFreshnessDetector(BaseDetector):
                 details[f"{aid}_window"] = f"{ws[0]:02d}:{ws[1]:02d}"
                 continue
 
-            past_window_end = we_total is not None and now_total > we_total
+            past_window_end = False
+            if we is not None:
+                window_end = now_dt.replace(hour=we[0], minute=we[1], second=0, microsecond=0)
+                past_window_end = now_dt >= window_end
             grace_sec = int(artifact.get("window_grace_sec") or 0)
             if grace_sec > 0 and ws and not past_window_end:
                 window_start = now_dt.replace(hour=ws[0], minute=ws[1], second=0, microsecond=0)

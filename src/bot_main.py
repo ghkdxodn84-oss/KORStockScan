@@ -38,7 +38,7 @@ from src.engine.daily_report_service import save_daily_report, build_daily_repor
 from src.engine.log_archive_service import archive_target_date_logs, save_monitor_snapshots_for_date
 from src.engine.strategy_position_performance_report import sync_trade_performance_for_date
 from src.utils.constants import RESTART_FLAG_PATH, TRADING_RULES
-from src.engine.error_detectors.process_health import write_heartbeat
+from src.engine.error_detectors.process_health import reset_heartbeat, write_heartbeat
 from src.engine.error_detector import ErrorDetectionEngine, REPORT_DIR as ERROR_REPORT_DIR
 
 # ==========================================
@@ -175,6 +175,7 @@ def crisis_monitor_loop():
 def error_detection_loop(interval: int, event_bus):
     """60초 주기로 시스템 에러 탐지를 실행하는 데몬 루프."""
     from src.utils.logger import log_error as ed_log_error
+    from src.utils.logger import log_info as ed_log_info
     alert_state: dict[str, dict] = {}
     ALERT_COOLDOWN_SEC = 600
     while True:
@@ -209,7 +210,7 @@ def error_detection_loop(interval: int, event_bus):
                         )
                         alert_state[did] = {"severity": "fail", "summary_hash": curr_summary_hash, "ts": now_ts}
                 elif r.severity == "pass" and prev_severity == "fail":
-                    ed_log_error(f"[ERROR_DETECTION] {r.detector_id}: recovered to pass")
+                    ed_log_info(f"[ERROR_DETECTION] {r.detector_id}: recovered to pass")
                     alert_state[did] = {"severity": "pass", "summary_hash": "", "ts": now_ts}
         except Exception as e:
             ed_log_error(f"[ERROR_DETECTION] Daemon loop error: {e}")
@@ -310,9 +311,16 @@ if __name__ == '__main__':
         )
 
     # 💡 [신규] 에러 탐지 heartbeat initial write
+    reset_heartbeat()
     write_heartbeat("main_loop")
     write_heartbeat("telegram")
     write_heartbeat("crisis_monitor")
+
+    # 🚀 영업일 체크
+    is_open, reason = kiwoom_utils.is_trading_day()
+    if is_open:
+        write_heartbeat("sniper_engine")
+        write_heartbeat("scalping_scanner")
 
     # 💡 [신규] 에러 탐지 데몬 스레드
     ed_enabled = bool(getattr(TRADING_RULES, "ERROR_DETECTOR_ENABLED", True))
@@ -331,9 +339,6 @@ if __name__ == '__main__':
     crisis_thread = threading.Thread(target=crisis_monitor_loop, daemon=True)
     crisis_thread.start()
     print("🌍 [시스템] 글로벌 위기 감지 모니터 (30분 주기) 가동 완료.")
-
-    # 🚀 영업일 체크
-    is_open, reason = kiwoom_utils.is_trading_day()
 
     if is_open:
         # 💡 [아키텍처 포인트 3] 콜백(broadcast_alert) 파라미터 완전 제거!

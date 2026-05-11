@@ -20,6 +20,15 @@ HEARTBEAT_PATH = PROJECT_ROOT / "tmp" / "error_detector_heartbeat.json"
 _HEARTBEAT_LOCK = threading.Lock()
 
 
+def reset_heartbeat():
+    """Start a new bot_main heartbeat session and discard stale thread entries."""
+    HEARTBEAT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = HEARTBEAT_PATH.with_suffix(HEARTBEAT_PATH.suffix + ".tmp")
+    with _HEARTBEAT_LOCK:
+        tmp_path.write_text("{}", encoding="utf-8")
+        os.replace(tmp_path, HEARTBEAT_PATH)
+
+
 def write_heartbeat(component: str, alive: bool = True):
     HEARTBEAT_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = HEARTBEAT_PATH.with_suffix(HEARTBEAT_PATH.suffix + ".tmp")

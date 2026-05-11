@@ -167,6 +167,29 @@ class TestArtifactFreshnessDetector:
             result = detector.check()
             assert result.details.get("test_past_window_status") == "pass_after_window"
 
+    def test_window_end_boundary_existing_artifact_passes_after_window(self, tmp_path):
+        log_file = tmp_path / "window_end_boundary.log"
+        log_file.write_text("content", encoding="utf-8")
+        stale_ts = time.time() - 901
+        os.utime(log_file, (stale_ts, stale_ts))
+        now = datetime.now()
+        artifact = {
+            "id": "test_window_end_boundary",
+            "path_template": str(log_file),
+            "max_staleness_sec": 900,
+            "critical": True,
+            "window_start": (0, 0),
+            "window_end": (now.hour, now.minute),
+        }
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+        ):
+            detector = ArtifactFreshnessDetector()
+            result = detector.check()
+            assert result.severity == "pass"
+            assert result.details.get("test_window_end_boundary_status") == "pass_after_window"
+
     def test_one_shot_artifact_exists_passes_even_when_stale_inside_window(self, tmp_path):
         report_file = tmp_path / "threshold_cycle_ev.json"
         report_file.write_text("{}", encoding="utf-8")

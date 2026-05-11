@@ -10,6 +10,7 @@ import pytest
 
 from src.engine.error_detectors.process_health import (
     ProcessHealthDetector,
+    reset_heartbeat,
     write_heartbeat,
     HEARTBEAT_PATH,
 )
@@ -46,6 +47,15 @@ class TestProcessHealthDetector:
         data = json.loads(HEARTBEAT_PATH.read_text(encoding="utf-8"))
         assert "main_loop" in data
         assert "crisis_monitor" in data["threads"]
+
+    def test_reset_heartbeat_discards_stale_threads(self):
+        write_heartbeat("main_loop")
+        write_heartbeat("scalping_scanner")
+        reset_heartbeat()
+        write_heartbeat("main_loop")
+        data = json.loads(HEARTBEAT_PATH.read_text(encoding="utf-8"))
+        assert "main_loop" in data
+        assert "scalping_scanner" not in data.get("threads", {})
 
     def test_detector_pass_when_heartbeat_fresh(self):
         write_heartbeat("main_loop")
