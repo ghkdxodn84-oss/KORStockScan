@@ -1,7 +1,7 @@
 # Gemini Scalping Pattern Lab Final Review
 
-- generated_at: `2026-05-08 16:14:02`
-- analysis_period: `2026-04-21 ~ 2026-05-08`
+- generated_at: `2026-05-11 16:16:30`
+- analysis_period: `2026-04-21 ~ 2026-05-11`
 
 ## 1. 판정
 
@@ -10,14 +10,14 @@
 | 코호트 | 거래수 | 승률 | 손익 중앙값 | 손익 평균값 | 기여손익 합 | 표본충분 |
 |---|---:|---:|---:|---:|---:|---|
 | split-entry | 58 | 46.6% | -0.785% | -0.383% | -22.240% | ✓ |
-| full_fill | 8 | 37.5% | -0.785% | -0.613% | -4.900% | ⚠️부족 |
+| full_fill | 9 | 33.3% | -1.470% | -0.717% | -6.450% | ⚠️부족 |
 
 ### 1-2. Plan Rebase 관찰축 요약
 
-- `WAIT65~79 total_candidates=511`, `recovery_check=0`, `promoted=0`, `submitted=1`
-- `blocked_ai_score_share=90.2%`, `budget_pass_to_submitted_rate=1.4%`, `gatekeeper_eval_ms_p95=11428ms`
+- `WAIT65~79 total_candidates=128`, `recovery_check=0`, `promoted=0`, `submitted=0`
+- `blocked_ai_score_share=60.9%`, `budget_pass_to_submitted_rate=0.4%`, `gatekeeper_eval_ms_p95=10495ms`
 
-- `AI threshold dominance`: 경고 — `blocked_ai_score_share=90.2%`로 WAIT/BLOCK 비중이 높아 BUY drought 해석을 지지한다.
+- `No acute observability alert`: 중립 — 주요 관찰축에서 즉시 경고할 단일 병목이 두드러지지 않는다.
 
 ### 1-3. 손실 패턴 Top 5
 
@@ -41,15 +41,15 @@
 - 보유시간 중앙값: 172465.0초
 - 선행 조건: 없음
 
-**#5** — 코호트: `split-entry` / 청산규칙: `scalp_preset_hard_stop_pct`
-- 빈도: 1건 | 중앙손익: -0.830% | 평균손익: -0.830% | 기여손익: -0.830%
-- 보유시간 중앙값: 116.0초
+**#5** — 코호트: `full_fill` / 청산규칙: `scalp_preset_hard_stop_pct`
+- 빈도: 1건 | 중앙손익: -1.550% | 평균손익: -1.550% | 기여손익: -1.550%
+- 보유시간 중앙값: 225.0초
 - 선행 조건: 없음
 
 ### 1-4. 수익 패턴 Top 5
 
 **#1** — 코호트: `split-entry` / 청산규칙: `scalp_trailing_take_profit` / 진입모드: `nan`
-- 빈도: 22건 | 중앙손익: +0.760% | 평균손익: +1.015% | 기여손익: +22.340%
+- 빈도: 23건 | 중앙손익: +0.780% | 평균손익: +1.028% | 기여손익: +23.640%
 
 **#2** — 코호트: `split-entry` / 청산규칙: `scalp_ai_momentum_decay` / 진입모드: `nan`
 - 빈도: 3건 | 중앙손익: +2.470% | 평균손익: +1.950% | 기여손익: +5.850%
@@ -57,25 +57,22 @@
 **#3** — 코호트: `full_fill` / 청산규칙: `scalp_trailing_take_profit` / 진입모드: `nan`
 - 빈도: 3건 | 중앙손익: +0.590% | 평균손익: +0.913% | 기여손익: +2.740%
 
-**#4** — 코호트: `split-entry` / 청산규칙: `scalp_trailing_take_profit` / 진입모드: `normal`
-- 빈도: 1건 | 중앙손익: +1.300% | 평균손익: +1.300% | 기여손익: +1.300%
-
-**#5** — 코호트: `split-entry` / 청산규칙: `protect_trailing_stop` / 진입모드: `nan`
+**#4** — 코호트: `split-entry` / 청산규칙: `protect_trailing_stop` / 진입모드: `nan`
 - 빈도: 1건 | 중앙손익: +0.190% | 평균손익: +0.190% | 기여손익: +0.190%
 
 ### 1-5. 기회비용 회수 후보 Top 5
 
 **#1** — `AI threshold miss`
-- 차단 건수 합계: 2546880건 | 차단 비율: 100.0% | 관찰 일수: 16일
+- 차단 건수 합계: 2788187건 | 차단 비율: 100.0% | 관찰 일수: 19일
 
 **#2** — `overbought gate miss`
-- 차단 건수 합계: 818347건 | 차단 비율: 100.0% | 관찰 일수: 16일
+- 차단 건수 합계: 900577건 | 차단 비율: 100.0% | 관찰 일수: 19일
 
 **#3** — `latency guard miss`
-- 차단 건수 합계: 58907건 | 차단 비율: 99.5% | 관찰 일수: 16일
+- 차단 건수 합계: 59632건 | 차단 비율: 99.5% | 관찰 일수: 19일
 
 **#4** — `liquidity gate miss`
-- 차단 건수 합계: 44016건 | 차단 비율: 99.3% | 관찰 일수: 16일
+- 차단 건수 합계: 47301건 | 차단 비율: 99.4% | 관찰 일수: 19일
 
 ---
 
@@ -103,9 +100,9 @@
 - `split-entry / scalp_soft_stop_pct 손실패턴 분해`
   검증지표: 빈도=26, 중앙손익=-1.745%, 기여손익=-47.910%
 - `AI threshold miss EV 회수 조건 점검`
-  검증지표: 차단건수=2546880, 차단비율=100.0%
+  검증지표: 차단건수=2788187, 차단비율=100.0%
 - `overbought gate miss EV 회수 조건 점검`
-  검증지표: 차단건수=818347, 차단비율=100.0%
+  검증지표: 차단건수=900577, 차단비율=100.0%
 
 ### 3-2. Plan Rebase 연계 관찰
 

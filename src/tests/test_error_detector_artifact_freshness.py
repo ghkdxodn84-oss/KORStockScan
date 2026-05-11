@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import time
 import tempfile
 from datetime import datetime
 from pathlib import Path
@@ -102,6 +104,33 @@ class TestArtifactFreshnessDetector:
             assert result.severity == "pass"
             assert result.details.get("test_startup_grace_status") == "startup_grace"
 
+    def test_missing_critical_artifact_warns_when_upstream_cron_in_progress(self, tmp_path):
+        now = datetime.now()
+        today = now.strftime("%Y-%m-%d")
+        cron_log = tmp_path / "postclose.log"
+        cron_log.write_text(f"[START] threshold-cycle postclose target_date={today}\n", encoding="utf-8")
+        artifact = {
+            "id": "threshold_postclose_report",
+            "path_template": str(tmp_path / "missing_threshold_ev.json"),
+            "max_staleness_sec": 600,
+            "critical": True,
+            "window_start": (now.hour, now.minute),
+            "window_end": (23, 59),
+            "suppress_missing_while_cron_in_progress": {
+                "id": "threshold_cycle_postclose",
+                "log": str(cron_log),
+            },
+        }
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+        ):
+            detector = ArtifactFreshnessDetector()
+            result = detector.check()
+            assert result.severity == "warning"
+            assert result.details.get("threshold_postclose_report_status") == "warning"
+            assert result.details.get("threshold_postclose_report_upstream_status") == "in_progress"
+
     def test_non_trading_day_skips(self):
         artifact = {
             "id": "test_skip",
@@ -137,6 +166,31 @@ class TestArtifactFreshnessDetector:
             detector = ArtifactFreshnessDetector()
             result = detector.check()
             assert result.details.get("test_past_window_status") == "pass_after_window"
+
+    def test_one_shot_artifact_exists_passes_even_when_stale_inside_window(self, tmp_path):
+        report_file = tmp_path / "threshold_cycle_ev.json"
+        report_file.write_text("{}", encoding="utf-8")
+        stale_ts = time.time() - 7200
+        os.utime(report_file, (stale_ts, stale_ts))
+        now = datetime.now()
+        artifact = {
+            "id": "threshold_postclose_report",
+            "path_template": str(report_file),
+            "max_staleness_sec": 1800,
+            "critical": True,
+            "one_shot": True,
+            "window_start": (now.hour, now.minute),
+            "window_end": (23, 59),
+        }
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+        ):
+            detector = ArtifactFreshnessDetector()
+            result = detector.check()
+            assert result.severity == "pass"
+            assert result.details.get("threshold_postclose_report_status") == "pass_one_shot"
+            assert result.details.get("threshold_postclose_report_age_sec", 0) > 1800
 
     def test_past_window_end_missing_fails(self):
         artifact = {
@@ -207,3 +261,4 @@ class TestArtifactFreshnessDetector:
         assert registry["pipeline_events"]["window_grace_sec"] == 300
         assert registry["threshold_events"]["critical"] is False
         assert registry["threshold_events"]["window_grace_sec"] == 300
+        assert registry["threshold_postclose_report"]["one_shot"] is True

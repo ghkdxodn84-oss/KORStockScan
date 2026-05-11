@@ -11,9 +11,9 @@
 
 - pattern_lab_automation: `/home/ubuntu/KORStockScan/data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_2026-05-11.json`
 - swing_improvement_automation: `/home/ubuntu/KORStockScan/data/report/swing_improvement_automation/swing_improvement_automation_2026-05-11.json`
-- swing_pattern_lab_automation: `-`
+- swing_pattern_lab_automation: `/home/ubuntu/KORStockScan/data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_2026-05-11.json`
 - threshold_cycle_ev: `-`
-- generated_at: `2026-05-11T13:59:59+09:00`
+- generated_at: `2026-05-11T16:20:47+09:00`
 
 ## 운영 원칙
 
@@ -25,18 +25,18 @@
 
 ## Summary
 
-- source_order_count: `7`
-- scalping_source_order_count: `0`
-- swing_source_order_count: `7`
+- source_order_count: `20`
+- scalping_source_order_count: `14`
+- swing_source_order_count: `6`
 - swing_lab_source_order_count: `0`
-- selected_order_count: `7`
-- decision_counts: `{'implement_now': 2, 'attach_existing_family': 3, 'design_family_candidate': 2}`
-- gemini_fresh: `None`
-- claude_fresh: `None`
+- selected_order_count: `12`
+- decision_counts: `{'implement_now': 3, 'attach_existing_family': 4, 'design_family_candidate': 4, 'defer_evidence': 5, 'reject': 4}`
+- gemini_fresh: `True`
+- claude_fresh: `True`
 - swing_lifecycle_audit_available: `True`
-- swing_pattern_lab_automation_available: `False`
-- swing_pattern_lab_fresh: `None`
-- swing_threshold_ai_status: `unavailable`
+- swing_pattern_lab_automation_available: `True`
+- swing_pattern_lab_fresh: `False`
+- swing_threshold_ai_status: `parsed`
 - daily_ev_available: `False`
 
 ## Codex 실행 지시
@@ -116,7 +116,63 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - runtime 판단값을 직접 바꾸지 않는다.
 - 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
 
-### 3. `order_swing_gatekeeper_reject_threshold_review`
+### 3. `order_latency_guard_miss_ev_recovery`
+
+- title: latency guard miss EV recovery
+- decision: `implement_now`
+- decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
+- source_report_type: `scalping_pattern_lab_automation`
+- lifecycle_stage: `-`
+- target_subsystem: `runtime_instrumentation`
+- route: `instrumentation_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `-`
+- confidence: `consensus`
+- priority: `3`
+- runtime_effect: `False`
+- expected_ev_effect: Improve EV attribution and prepare bounded calibration input.
+- evidence: `{'total_blocked': 59632, 'block_ratio': 99.5, 'days': 19}`, `{'total_blocked': 50878, 'block_ratio': 99.5, 'days': 20}`
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/sniper_performance_tuning_report.py`, `src/engine/daily_threshold_cycle_report.py`
+- acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
+- automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 4. `order_ai_threshold_miss_ev_recovery`
+
+- title: AI threshold miss EV recovery
+- decision: `attach_existing_family`
+- decision_reason: finding maps to an existing threshold family and should strengthen source metrics/provenance
+- source_report_type: `scalping_pattern_lab_automation`
+- lifecycle_stage: `-`
+- target_subsystem: `entry_funnel`
+- route: `existing_family`
+- mapped_family: `score65_74_recovery_probe`
+- threshold_family: `score65_74_recovery_probe`
+- improvement_type: `-`
+- confidence: `consensus`
+- priority: `1`
+- runtime_effect: `False`
+- expected_ev_effect: Improve EV attribution and prepare bounded calibration input.
+- evidence: `{'total_blocked': 2788187, 'block_ratio': 100.0, 'days': 19}`, `{'total_blocked': 3369732, 'block_ratio': 100.0, 'days': 20}`
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_missed_entry_counterfactual.py`
+- acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
+- automation_reentry: After implementation, intraday/postclose calibration should include the updated family input.
+
+실행 기준:
+
+- 기존 threshold family의 source metric/provenance를 보강한다.
+- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
+- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
+
+### 5. `order_swing_gatekeeper_reject_threshold_review`
 
 - title: swing gatekeeper reject threshold review
 - decision: `attach_existing_family`
@@ -144,7 +200,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 4. `order_swing_ofi_qi_stale_or_missing_context`
+### 6. `order_swing_ofi_qi_stale_or_missing_context`
 
 - title: swing OFI/QI stale or missing context
 - decision: `attach_existing_family`
@@ -160,7 +216,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - priority: `4`
 - runtime_effect: `False`
 - expected_ev_effect: stale_missing_ratio decreases while submitted/simulated entry quality remains attributable.
-- evidence: `stale_missing_count=62`, `stale_missing_ratio=1.0`
+- evidence: `stale_missing_count=68`, `stale_missing_ratio=0.9189`
 - next_postclose_metric: stale_missing_ratio decreases while submitted/simulated entry quality remains attributable.
 - files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/orderbook_stability.py`, `src/engine/swing_lifecycle_audit.py`
 - acceptance_tests: `pytest orderbook stability tests`, `pytest swing lifecycle audit tests`
@@ -172,7 +228,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 5. `order_swing_exit_ofi_qi_smoothing_distribution`
+### 7. `order_swing_exit_ofi_qi_smoothing_distribution`
 
 - title: swing exit OFI/QI smoothing distribution
 - decision: `attach_existing_family`
@@ -200,7 +256,91 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
 - family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
-### 6. `order_swing_ai_contract_structured_output_eval`
+### 8. `order_no_acute_observability_alert`
+
+- title: No acute observability alert
+- decision: `design_family_candidate`
+- decision_reason: finding needs family design; allowed_runtime_apply remains false until metadata/tests/guards are closed
+- source_report_type: `scalping_pattern_lab_automation`
+- lifecycle_stage: `-`
+- target_subsystem: `scalping_logic`
+- route: `auto_family_candidate`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `-`
+- confidence: `consensus`
+- priority: `2`
+- runtime_effect: `False`
+- expected_ev_effect: Improve EV attribution and prepare bounded calibration input.
+- evidence: `{'judgment': '중립', 'why': '주요 관찰축에서 즉시 경고할 단일 병목이 두드러지지 않는다.'}`, `{'judgment': '중립', 'why': '주요 관찰축에서 즉시 경고할 단일 병목이 두드러지지 않는다.'}`
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/daily_threshold_cycle_report.py`
+- acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
+- automation_reentry: Create report-only family metadata first; only later can auto_bounded_live consider it.
+
+실행 기준:
+
+- 새 family 후보 metadata와 report-only source를 설계한다.
+- `allowed_runtime_apply=false`를 유지한다.
+- sample floor, safety guard, target env key, tests가 닫히기 전 runtime 적용 금지.
+
+### 9. `order_liquidity_gate_miss_ev_recovery`
+
+- title: liquidity gate miss EV recovery
+- decision: `design_family_candidate`
+- decision_reason: finding needs family design; allowed_runtime_apply remains false until metadata/tests/guards are closed
+- source_report_type: `scalping_pattern_lab_automation`
+- lifecycle_stage: `-`
+- target_subsystem: `entry_filter_quality`
+- route: `auto_family_candidate`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `-`
+- confidence: `consensus`
+- priority: `4`
+- runtime_effect: `False`
+- expected_ev_effect: Improve EV attribution and prepare bounded calibration input.
+- evidence: `{'total_blocked': 47301, 'block_ratio': 99.4, 'days': 19}`, `{'total_blocked': 0, 'block_ratio': 0.0, 'days': 20}`
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
+- acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
+- automation_reentry: Create report-only family metadata first; only later can auto_bounded_live consider it.
+
+실행 기준:
+
+- 새 family 후보 metadata와 report-only source를 설계한다.
+- `allowed_runtime_apply=false`를 유지한다.
+- sample floor, safety guard, target env key, tests가 닫히기 전 runtime 적용 금지.
+
+### 10. `order_overbought_gate_miss_ev_recovery`
+
+- title: overbought gate miss EV recovery
+- decision: `design_family_candidate`
+- decision_reason: finding needs family design; allowed_runtime_apply remains false until metadata/tests/guards are closed
+- source_report_type: `scalping_pattern_lab_automation`
+- lifecycle_stage: `-`
+- target_subsystem: `entry_filter_quality`
+- route: `auto_family_candidate`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `-`
+- confidence: `consensus`
+- priority: `5`
+- runtime_effect: `False`
+- expected_ev_effect: Improve EV attribution and prepare bounded calibration input.
+- evidence: `{'total_blocked': 900577, 'block_ratio': 100.0, 'days': 19}`, `{'total_blocked': 830040, 'block_ratio': 100.0, 'days': 20}`
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_state_handlers.py`
+- acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
+- automation_reentry: Create report-only family metadata first; only later can auto_bounded_live consider it.
+
+실행 기준:
+
+- 새 family 후보 metadata와 report-only source를 설계한다.
+- `allowed_runtime_apply=false`를 유지한다.
+- sample floor, safety guard, target env key, tests가 닫히기 전 runtime 적용 금지.
+
+### 11. `order_swing_ai_contract_structured_output_eval`
 
 - title: swing AI contract structured output eval
 - decision: `design_family_candidate`
@@ -228,39 +368,64 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - `allowed_runtime_apply=false`를 유지한다.
 - sample floor, safety guard, target env key, tests가 닫히기 전 runtime 적용 금지.
 
-### 7. `order_swing_scale_in_avg_down_pyramid_observation`
+### 12. `order_latency_canary_tag_완화_1축_canary_승인`
 
-- title: swing scale-in AVG_DOWN/PYRAMID observation
-- decision: `design_family_candidate`
-- decision_reason: finding needs family design; allowed_runtime_apply remains false until metadata/tests/guards are closed
-- source_report_type: `swing_improvement_automation`
-- lifecycle_stage: `scale_in`
-- target_subsystem: `swing_scale_in`
-- route: `auto_family_candidate`
+- title: latency canary tag 완화 1축 canary 승인
+- decision: `defer_evidence`
+- decision_reason: single-lab finding; keep as low-confidence backlog until repeated by fresh lab or EV report
+- source_report_type: `scalping_pattern_lab_automation`
+- lifecycle_stage: `-`
+- target_subsystem: `runtime_instrumentation`
+- route: `instrumentation_order`
 - mapped_family: `-`
 - threshold_family: `-`
-- improvement_type: `lifecycle_logic_observation`
-- confidence: `-`
+- improvement_type: `-`
+- confidence: `solo`
 - priority: `6`
 - runtime_effect: `False`
-- expected_ev_effect: scale_in group coverage and add_type/post_add outcome fields appear in lifecycle audit.
-- evidence: `scale_in_unique_records=0`, `zero_sample_reason=no_candidate`
-- next_postclose_metric: scale_in group coverage and add_type/post_add outcome fields appear in lifecycle audit.
-- files_likely_touched: `src/engine/sniper_scale_in.py`, `src/engine/sniper_state_handlers.py`
-- acceptance_tests: `pytest sniper scale-in tests`, `pytest swing lifecycle audit tests`
-- automation_reentry: Create report-only family metadata first; only later can auto_bounded_live consider it.
+- expected_ev_effect: Improve EV attribution and prepare bounded calibration input.
+- evidence: `{'expected_effect': 'tag_not_allowed blocker 감소로 진입 기회 확대', 'risk': 'bugfix-only 실표본 관찰 전 추가 완화는 해석 가능성 저하', 'required_sample': 'bugfix-only canary_applied 건수 50건 이상 (현재 19건)', 'metric': 'latency_canary_applied 증가, low_signal / tag_not_allowed 감소', 'apply_stage': 'canary'}`
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/sniper_performance_tuning_report.py`, `src/engine/daily_threshold_cycle_report.py`
+- acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
+- automation_reentry: Re-evaluate in the next postclose pattern lab automation and daily EV report.
 
 실행 기준:
 
-- 새 family 후보 metadata와 report-only source를 설계한다.
-- `allowed_runtime_apply=false`를 유지한다.
-- sample floor, safety guard, target env key, tests가 닫히기 전 runtime 적용 금지.
+- 구현하지 말고 부족한 evidence와 다음 확인 artifact를 명시한다.
+- 필요한 경우 report warning 또는 다음 pattern lab 재평가 항목으로만 남긴다.
 
 ## 자동화체인 재투입
 
 - 구현 결과는 `2026-05-12` 이후 postclose `threshold_cycle`, `scalping_pattern_lab_automation`, `threshold_cycle_ev`가 자동으로 다시 읽는다.
 - 구현자가 수동으로 threshold 값을 바꾸는 것이 아니라, source/report/provenance를 닫아 다음 calibration이 판단하게 한다.
 - 다음 Codex 세션 입력 문구: `paste generated markdown into a Codex session and request implementation`
+
+## 구현 결과 (`2026-05-11 17:05 KST`)
+
+### 1. `order_swing_lifecycle_observation_coverage`
+
+- 판정: `implemented`, runtime 변경 없음.
+- 근거: [swing_lifecycle_audit.py](/home/ubuntu/KORStockScan/src/engine/swing_lifecycle_audit.py)에 `observation_axis_coverage` summary를 추가해 lifecycle stage/status/gap axis를 별도 provenance로 남긴다.
+- 다음 액션: 다음 postclose `swing_lifecycle_audit`에서 `observation_axis_coverage.instrumentation_gap_count`, `gap_axes`, `stage_counts`를 확인한다.
+
+### 2. `order_swing_recommendation_db_load_gap`
+
+- 판정: `implemented`, runtime 변경 없음.
+- 근거: `recommendation_history` DB load가 optional column(`sell_qty`) 누락으로 실패하지 않도록 `SELECT *` 기반으로 바꿨고, schema 차이를 회귀 테스트로 고정했다.
+- 다음 액션: 다음 postclose에서 `recommendation_db_load.db_load_skip_reason=loaded`와 `csv_rows/db_rows` divergence warning 감소를 확인한다.
+
+### 3. `order_latency_guard_miss_ev_recovery`
+
+- 판정: `implemented`, runtime 변경 없음.
+- 근거: [sniper_performance_tuning_report.py](/home/ubuntu/KORStockScan/src/engine/sniper_performance_tuning_report.py)에 `latency_guard_miss_ev_recovery` section을 추가했다. `runtime_effect=false`, `allowed_runtime_apply=false`, `threshold_family=pre_submit_price_guard`로 닫고, block/pass/quote-fresh/submitted conversion 지표를 다음 calibration source로 노출한다.
+- 다음 액션: 다음 postclose `performance_tuning`과 `threshold_cycle`에서 `latency_guard_miss_ev_recovery.evaluated_candidates`, `latency_block_rate`, `quote_fresh_latency_pass_rate`를 확인한다. threshold 값 변경은 deterministic guard/auto_bounded_live 체인 외에는 금지한다.
+
+검증:
+
+```bash
+PYTHONPATH=. .venv/bin/pytest -q src/tests/test_performance_tuning_report.py::test_performance_tuning_report_builds_metrics src/tests/test_swing_model_selection_funnel_repair.py::test_swing_lifecycle_audit_tracks_full_funnel_and_observation_axes src/tests/test_swing_model_selection_funnel_repair.py::test_swing_lifecycle_audit_reports_db_gap_and_report_only_zero_sample_reason src/tests/test_swing_model_selection_funnel_repair.py::test_swing_lifecycle_db_load_accepts_missing_optional_sell_qty
+```
 
 ## Project/Calendar 동기화
 

@@ -7,9 +7,9 @@
 
 ## 2. Plan Rebase 관찰축 요약
 
-- `WAIT65~79 total_candidates=511`
-- `recovery_check=0`, `promoted=0`, `submitted=1`
-- `blocked_ai_score_share=90.2%`, `gatekeeper_eval_ms_p95=11428ms`
+- `WAIT65~79 total_candidates=128`
+- `recovery_check=0`, `promoted=0`, `submitted=0`
+- `blocked_ai_score_share=60.9%`, `gatekeeper_eval_ms_p95=10495ms`
 
 ## 3. 손실 패턴 (Top 5)
 
@@ -33,16 +33,16 @@
 - 근거: 발생 1건, 중앙손익 -2.250%, 평균손익 -2.250%, 기여손익 -2.250%
 - 다음 액션: 전역 조정이 아니라 해당 코호트/패턴을 분리해 shadow 점검
 
-### 5. split-entry / scalp_preset_hard_stop_pct
+### 5. full_fill / scalp_preset_hard_stop_pct
 - 판정: 음수 EV 기여 패턴
-- 근거: 발생 1건, 중앙손익 -0.830%, 평균손익 -0.830%, 기여손익 -0.830%
+- 근거: 발생 1건, 중앙손익 -1.550%, 평균손익 -1.550%, 기여손익 -1.550%
 - 다음 액션: 전역 조정이 아니라 해당 코호트/패턴을 분리해 shadow 점검
 
 ## 4. 수익 패턴 (Top 5)
 
 ### 1. split-entry / scalp_trailing_take_profit / nan
 - 판정: 양수 EV 기여 패턴
-- 근거: 발생 22건, 중앙손익 +0.760%, 평균손익 +1.015%, 기여손익 +22.340%
+- 근거: 발생 23건, 중앙손익 +0.780%, 평균손익 +1.028%, 기여손익 +23.640%
 - 다음 액션: 해당 패턴을 훼손하지 않는 범위에서 병목 해소 우선
 
 ### 2. split-entry / scalp_ai_momentum_decay / nan
@@ -55,12 +55,7 @@
 - 근거: 발생 3건, 중앙손익 +0.590%, 평균손익 +0.913%, 기여손익 +2.740%
 - 다음 액션: 해당 패턴을 훼손하지 않는 범위에서 병목 해소 우선
 
-### 4. split-entry / scalp_trailing_take_profit / normal
-- 판정: 양수 EV 기여 패턴
-- 근거: 발생 1건, 중앙손익 +1.300%, 평균손익 +1.300%, 기여손익 +1.300%
-- 다음 액션: 해당 패턴을 훼손하지 않는 범위에서 병목 해소 우선
-
-### 5. split-entry / protect_trailing_stop / nan
+### 4. split-entry / protect_trailing_stop / nan
 - 판정: 양수 EV 기여 패턴
 - 근거: 발생 1건, 중앙손익 +0.190%, 평균손익 +0.190%, 기여손익 +0.190%
 - 다음 액션: 해당 패턴을 훼손하지 않는 범위에서 병목 해소 우선
@@ -69,20 +64,20 @@
 
 ### 1. AI threshold miss
 - 판정: EV 회수 우선 후보
-- 근거: 차단건수 2546880건, 차단비율 100.0%, 관찰일수 16일
+- 근거: 차단건수 2788187건, 차단비율 100.0%, 관찰일수 19일
 - 다음 액션: blocker 성격을 관찰축과 연결해 원인 귀속
 
 ### 2. overbought gate miss
 - 판정: EV 회수 우선 후보
-- 근거: 차단건수 818347건, 차단비율 100.0%, 관찰일수 16일
+- 근거: 차단건수 900577건, 차단비율 100.0%, 관찰일수 19일
 - 다음 액션: blocker 성격을 관찰축과 연결해 원인 귀속
 
 ### 3. latency guard miss
 - 판정: EV 회수 우선 후보
-- 근거: 차단건수 58907건, 차단비율 99.5%, 관찰일수 16일
+- 근거: 차단건수 59632건, 차단비율 99.5%, 관찰일수 19일
 - 다음 액션: blocker 성격을 관찰축과 연결해 원인 귀속
 
 ### 4. liquidity gate miss
 - 판정: EV 회수 우선 후보
-- 근거: 차단건수 44016건, 차단비율 99.3%, 관찰일수 16일
+- 근거: 차단건수 47301건, 차단비율 99.4%, 관찰일수 19일
 - 다음 액션: blocker 성격을 관찰축과 연결해 원인 귀속

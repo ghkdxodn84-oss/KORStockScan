@@ -2357,6 +2357,11 @@ def test_entry_ai_price_canary_improves_live_order_price(monkeypatch):
                 "max_wait_sec": 45,
                 "ai_parse_ok": True,
                 "ai_parse_fail": False,
+                "openai_transport_mode": "responses_ws",
+                "openai_ws_used": True,
+                "openai_ws_http_fallback": False,
+                "openai_endpoint_name": "entry_price",
+                "openai_ws_roundtrip_ms": 1200,
             }
 
     latency_gate = {
@@ -2387,8 +2392,12 @@ def test_entry_ai_price_canary_improves_live_order_price(monkeypatch):
     assert adjusted[0]["price"] == 10010
     assert latency_gate["order_price"] == 10010
     assert latency_gate["price_resolution_reason"] == "ai_tier2_improve_limit"
+    assert latency_gate["openai_endpoint_name"] == "entry_price"
+    assert latency_gate["openai_transport_mode"] == "responses_ws"
     assert stock["entry_timeout_sec_override"] == 45
-    assert any(stage == "entry_ai_price_canary_applied" for stage, _ in logs)
+    applied = [fields for stage, fields in logs if stage == "entry_ai_price_canary_applied"][0]
+    assert applied["openai_endpoint_name"] == "entry_price"
+    assert applied["openai_ws_roundtrip_ms"] == 1200
 
 
 def test_entry_ai_price_canary_falls_back_on_guard_block(monkeypatch):

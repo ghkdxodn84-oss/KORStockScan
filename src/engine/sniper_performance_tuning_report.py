@@ -48,7 +48,7 @@ _STRATEGY_LABELS = {
     "other": "기타",
 }
 _STRATEGY_ORDER = ("scalping", "swing")
-PERFORMANCE_TUNING_SCHEMA_VERSION = 6
+PERFORMANCE_TUNING_SCHEMA_VERSION = 7
 _BLOCKER_LABELS = {
     "blocked_strength_momentum": "동적 체결강도",
     "blocked_liquidity": "유동성",
@@ -1618,6 +1618,36 @@ def _build_watch_items(metrics: dict) -> list[dict]:
     return items
 
 
+def _build_latency_guard_miss_ev_recovery_section(metrics: dict, breakdowns: dict) -> dict:
+    latency_block_events = int(metrics.get("latency_block_events", 0) or 0)
+    latency_pass_events = int(metrics.get("latency_pass_events", 0) or 0)
+    total_latency_decisions = latency_block_events + latency_pass_events
+    budget_pass_events = int(metrics.get("budget_pass_events", 0) or 0)
+    submitted_events = int(metrics.get("order_bundle_submitted_events", 0) or 0)
+    quote_fresh_blocks = int(metrics.get("quote_fresh_latency_blocks", 0) or 0)
+    quote_fresh_passes = int(metrics.get("quote_fresh_latency_passes", 0) or 0)
+
+    return {
+        "runtime_effect": False,
+        "allowed_runtime_apply": False,
+        "threshold_family": "pre_submit_price_guard",
+        "evaluated_candidates": latency_block_events,
+        "latency_block_events": latency_block_events,
+        "latency_pass_events": latency_pass_events,
+        "latency_block_rate": _ratio(latency_block_events, total_latency_decisions),
+        "quote_fresh_latency_blocks": quote_fresh_blocks,
+        "quote_fresh_latency_passes": quote_fresh_passes,
+        "quote_fresh_latency_pass_rate": float(metrics.get("quote_fresh_latency_pass_rate", 0.0) or 0.0),
+        "budget_pass_events": budget_pass_events,
+        "order_bundle_submitted_events": submitted_events,
+        "budget_pass_to_submitted_rate": float(metrics.get("budget_pass_to_submitted_rate", 0.0) or 0.0),
+        "gatekeeper_eval_ms_p95": float(metrics.get("gatekeeper_eval_ms_p95", 0.0) or 0.0),
+        "latency_reason_breakdown": list(breakdowns.get("latency_reason_breakdown") or [])[:10],
+        "automation_reentry": "threshold_cycle.source_metrics.latency_guard_miss_ev_recovery",
+        "next_postclose_metric": "source freshness/warning reduction and latency block attribution coverage",
+    }
+
+
 def _build_judgment_gate(metrics: dict) -> dict:
     # audited validation-axis 권고 기본값
     n_min = 50
@@ -2291,5 +2321,6 @@ def build_performance_tuning_report(
             **sections,
             "flow_bottleneck_lane": _build_flow_bottleneck_lane(metrics, breakdowns, sections),
             "observation_axis_coverage": _build_observation_axis_coverage(metrics, breakdowns, sections),
+            "latency_guard_miss_ev_recovery": _build_latency_guard_miss_ev_recovery_section(metrics, breakdowns),
         },
     }

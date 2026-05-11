@@ -425,6 +425,12 @@ def test_performance_tuning_report_builds_metrics(monkeypatch):
     assert report["strategy_rows"][0]["outcomes"]["realized_pnl_krw"] == -8000
     assert report["metrics"]["dual_persona_shadow_samples"] == 2
     assert report["metrics"]["latency_guard_miss_events"] == 1
+    latency_ev = report["sections"]["latency_guard_miss_ev_recovery"]
+    assert latency_ev["runtime_effect"] is False
+    assert latency_ev["allowed_runtime_apply"] is False
+    assert latency_ev["threshold_family"] == "pre_submit_price_guard"
+    assert latency_ev["evaluated_candidates"] == 1
+    assert latency_ev["latency_block_events"] == 1
     assert report["metrics"]["entry_blocked_liquidity_events"] == 1
     assert report["metrics"]["entry_blocked_overbought_events"] == 1
     terminal_blockers = {item["label"]: item for item in report["breakdowns"]["entry_terminal_blocker_breakdown"]}

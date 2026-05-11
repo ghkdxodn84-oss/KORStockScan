@@ -265,6 +265,22 @@ def generate_monitor_archive_job(target_date: str | None = None):
         print(f"⚠️ [시스템] 모니터 스냅샷/로그 아카이브 실패: {e}")
         return None
 
+
+def run_scheduler_job_async(job_name: str, func, *args, **kwargs):
+    """Run slow scheduled jobs away from the main heartbeat loop."""
+    def _runner():
+        try:
+            func(*args, **kwargs)
+        except Exception as e:
+            from src.utils.logger import log_error
+
+            log_error(f"스케줄러 비동기 작업 실패: {job_name}: {e}")
+
+    thread = threading.Thread(target=_runner, name=f"scheduler:{job_name}", daemon=True)
+    thread.start()
+    return thread
+
+
 # ==========================================
 # 🎯 메인 실행부 (Main Thread)
 # ==========================================
@@ -384,8 +400,8 @@ if __name__ == '__main__':
 
             # [스케줄러 1-1] 장 마감 후 모니터 요약/로그 아카이브 저장
             if now.hour == 15 and now.minute == 45 and not monitor_archive_sent:
-                generate_monitor_archive_job()
                 monitor_archive_sent = True
+                run_scheduler_job_async("monitor_archive", generate_monitor_archive_job)
 
             # [스케줄러 2] 야간(23:50) 시스템 자동 재시작
             if now.hour == 23 and now.minute == 50:

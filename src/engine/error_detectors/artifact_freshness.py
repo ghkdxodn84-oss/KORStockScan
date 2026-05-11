@@ -101,9 +101,14 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "path_template": "data/report/threshold_cycle_ev/threshold_cycle_ev_{date}.json",
         "max_staleness_sec": 1800,
         "critical": True,
+        "one_shot": True,
         "trading_day_only": True,
         "window_start": (16, 10),
         "window_end": (17, 0),
+        "suppress_missing_while_cron_in_progress": {
+            "id": "threshold_cycle_postclose",
+            "log": "logs/threshold_cycle_postclose_cron.log",
+        },
     },
     {
         "id": "code_improvement_workorder",
@@ -331,6 +336,15 @@ class ArtifactFreshnessDetector(BaseDetector):
             exists = artifact_path.exists()
 
             if not exists:
+                in_progress_cron = self._is_upstream_cron_in_progress(
+                    artifact.get("suppress_missing_while_cron_in_progress"),
+                    today,
+                )
+                if in_progress_cron and not past_window_end:
+                    warnings.append(f"{aid}: upstream cron in progress; artifact not generated yet")
+                    details[f"{aid}_status"] = "warning"
+                    details[f"{aid}_upstream_status"] = "in_progress"
+                    continue
                 if past_window_end:
                     if critical:
                         issues.append(f"{aid}: missing after window end")
@@ -354,6 +368,10 @@ class ArtifactFreshnessDetector(BaseDetector):
             if status_warning:
                 warnings.append(status_warning)
                 details[f"{aid}_status"] = "warning"
+                continue
+
+            if artifact.get("one_shot"):
+                details[f"{aid}_status"] = "pass_one_shot"
                 continue
 
             if past_window_end:
@@ -395,6 +413,32 @@ class ArtifactFreshnessDetector(BaseDetector):
         if severity == "warning":
             return "Non-critical artifacts missing/stale. Monitor next cycle."
         return ""
+
+    @staticmethod
+    def _is_upstream_cron_in_progress(config: Any, today: str) -> bool:
+        if not isinstance(config, dict):
+            return False
+        log_value = str(config.get("log") or "").strip()
+        if not log_value:
+            return False
+        log_path = PROJECT_ROOT / log_value
+        if not log_path.exists():
+            return False
+        try:
+            lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-200:]
+        except OSError:
+            return False
+        today_lines = [line for line in lines if today in line or f"target_date={today}" in line]
+        if not today_lines:
+            return False
+        has_start = any("[START]" in line or "[BEGIN]" in line for line in today_lines)
+        has_done = any("[DONE]" in line or "[OK]" in line or "[SUCCESS]" in line or "[COMPLETED]" in line for line in today_lines)
+        has_fail = any("[FAIL]" in line or "[ERROR]" in line or "[CRITICAL]" in line for line in today_lines)
+        if not has_start or has_done:
+            return False
+        if has_fail:
+            return False
+        return True
 
     @staticmethod
     def _validate_json_status(

@@ -39,6 +39,16 @@
 - swing_threshold_ai_status: `unavailable`
 - daily_ev_available: `True`
 
+## 적용 이력 확인
+
+- 판정: `1~2번 적용 완료`, `3~4번 report-only 설계/관찰축 반영 완료`, `runtime live 전환 없음`.
+- 근거:
+  - `order_swing_lifecycle_observation_coverage`와 `order_swing_recommendation_db_load_gap`는 `2026-05-09 17:38 KST` 커밋 `a4e5f37 Add DeepSeek swing pattern lab automation, Phase 3 P1/P2 instrumentation, and Phase 2 hardening`에서 `swing_lifecycle_audit`, `swing_selection_funnel_report`, `swing_improvement_automation`, `threshold_cycle_ev_report`에 반영됐다.
+  - `swing_lifecycle_audit_2026-05-09`에는 stage별 raw/unique count, field coverage, `swing_recommendation_db_load` axis가 생성됐다. `2026-05-11` 후속 산출물에는 `recommendation_db_load.db_load_gap`, `db_load_skip_reason`, `db_load_error`, `selection_modes`가 machine-readable로 남는다.
+  - `order_swing_ai_contract_structured_output_eval`와 `order_swing_scale_in_avg_down_pyramid_observation`은 `ai_contract_metrics`, `scale_in_observation`, `AVG_DOWN/PYRAMID/NONE`, add trigger/price policy/post-add outcome을 report-only로 남기는 쪽까지 반영됐다. 이후 `2026-05-11` `SwingSimScaleInArms0511`/`SwingScaleInRealCanaryPhase0Policy0511`에서 dry-run/probe scale-in 수량 provenance와 별도 real canary approval-required guard가 보강됐다.
+  - 테스트 흔적은 `src/tests/test_swing_model_selection_funnel_repair.py`의 `recommendation_db_load`, `scale_in_observation`, `swing_scale_in_real_canary_phase0` 검증과 `src/tests/test_threshold_cycle_ev_report.py`의 workorder/daily EV 반영 검증으로 확인한다.
+- 다음 액션: 남은 이슈는 미적용이 아니라 다음 postclose 품질 확인이다. `db_load_gap`, `instrumentation_gap_count`, `ai_contract_schema_valid_rate`, `scale_in_action_groups`, `post_add_outcome` coverage가 다음 산출물에서 개선되는지 본다. 사용자 approval artifact 없이 스윙 live 주문, 숫자 floor, scale-in real canary는 열지 않는다.
+
 ## Codex 실행 지시
 
 아래 order를 위에서부터 순서대로 처리한다. 각 order는 `판정 -> 근거 -> 다음 액션`으로 닫고, 코드 변경 시 관련 문서와 테스트를 함께 갱신한다.

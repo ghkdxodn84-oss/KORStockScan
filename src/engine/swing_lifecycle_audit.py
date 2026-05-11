@@ -703,9 +703,7 @@ def load_db_lifecycle_rows(target_date: str, db_url: str = POSTGRES_URL) -> list
     engine = create_engine(db_url)
     query = text(
         """
-        SELECT rec_date, stock_code, stock_name, strategy, trade_type, position_tag,
-               status, prob, buy_price, buy_qty, buy_time, sell_price, sell_qty,
-               sell_time, profit_rate, profit, updated_at
+        SELECT *
         FROM recommendation_history
         WHERE rec_date = :target_date
           AND strategy IN ('KOSPI_ML', 'KOSDAQ_ML', 'MAIN')
@@ -1226,6 +1224,39 @@ def build_observation_axes(
     return axes
 
 
+def summarize_observation_axis_coverage(axes: Iterable[dict[str, Any]]) -> dict[str, Any]:
+    axes = list(axes or [])
+    by_status = Counter(str(axis.get("status") or "unknown") for axis in axes)
+    stage_counts = Counter(str(axis.get("lifecycle_stage") or "unknown") for axis in axes)
+    gap_axes = [
+        {
+            "axis_id": axis.get("axis_id"),
+            "lifecycle_stage": axis.get("lifecycle_stage"),
+            "threshold_family": axis.get("threshold_family"),
+            "sample_count": int(axis.get("sample_count") or 0),
+            "required_fields": list(axis.get("required_fields") or []),
+            "observed_field_count": int(
+                len(axis.get("observed_fields"))
+                if isinstance(axis.get("observed_fields"), list)
+                else axis.get("observed_field_count") or 0
+            ),
+            "status": axis.get("status"),
+        }
+        for axis in axes
+        if str(axis.get("status") or "") == "instrumentation_gap"
+    ]
+    ready_axes = [axis for axis in axes if str(axis.get("status") or "") == "ready"]
+    return {
+        "axis_count": int(len(axes)),
+        "stage_counts": {str(key): int(value) for key, value in stage_counts.items()},
+        "status_counts": {str(key): int(value) for key, value in by_status.items()},
+        "ready_count": int(len(ready_axes)),
+        "instrumentation_gap_count": int(len(gap_axes)),
+        "gap_axes": gap_axes,
+        "runtime_change": False,
+    }
+
+
 def _model_selection_summary(diagnostic_summary: dict[str, Any]) -> dict[str, Any]:
     latest_stats = diagnostic_summary.get("latest_stats")
     if isinstance(latest_stats, list) and latest_stats:
@@ -1311,6 +1342,7 @@ def build_swing_lifecycle_audit_report(
         lifecycle_events=lifecycle_events,
         recommendation_db_load=recommendation_db_load,
     )
+    observation_axis_coverage = summarize_observation_axis_coverage(observation_axes)
     status_counts = Counter(axis["status"] for axis in observation_axes)
 
     return {
@@ -1336,6 +1368,7 @@ def build_swing_lifecycle_audit_report(
         "lifecycle_events": lifecycle_events,
         "simulation_opportunity": simulation_opportunity,
         "observation_axes": observation_axes,
+        "observation_axis_coverage": observation_axis_coverage,
         "observation_axis_summary": {
             "axis_count": len(observation_axes),
             "status_counts": dict(status_counts),

@@ -4,6 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pandas as pd
+from sqlalchemy import create_engine, text
 
 import src.engine.sniper_state_handlers as state_handlers
 from src.engine.swing_selection_funnel_report import (
@@ -23,6 +24,8 @@ from src.engine.swing_lifecycle_audit import (
     build_swing_runtime_approval_report,
     build_swing_threshold_candidates,
     build_swing_threshold_ai_review_report,
+    load_db_lifecycle_rows,
+    summarize_db_lifecycle_rows,
     write_swing_lifecycle_outputs,
 )
 from src.model import common_v2
@@ -1158,6 +1161,9 @@ def test_swing_lifecycle_audit_tracks_full_funnel_and_observation_axes():
     assert report["lifecycle_events"]["ofi_qi_summary"]["scale_in_micro_advice_counts"]["RISK_BEARISH"] == 1
     assert report["lifecycle_events"]["ofi_qi_summary"]["exit_smoothing_action_counts"]["NO_CHANGE"] == 1
     assert report["db_lifecycle"]["completed_rows"] == 1
+    assert report["observation_axis_coverage"]["runtime_change"] is False
+    assert report["observation_axis_coverage"]["instrumentation_gap_count"] == report["observation_axis_summary"]["instrumentation_gap_count"]
+    assert report["observation_axis_coverage"]["stage_counts"]
     axis_status = {axis["axis_id"]: axis["status"] for axis in report["observation_axes"]}
     assert axis_status["swing_scale_in_avg_down_pyramid"] == "ready"
     assert axis_status["swing_scale_in_ofi_qi_confirmation"] == "ready"
@@ -1203,6 +1209,55 @@ def test_swing_lifecycle_audit_reports_db_gap_and_report_only_zero_sample_reason
     assert "zero_sample_reason=no_candidate" in orders["order_swing_scale_in_avg_down_pyramid_observation"]["evidence"]
     assert automation["ev_report_summary"]["db_load_gap"] is True
     assert automation["ev_report_summary"]["scale_in_zero_sample_reason"] == "no_candidate"
+
+
+def test_swing_lifecycle_db_load_accepts_missing_optional_sell_qty(tmp_path):
+    db_path = tmp_path / "recommendation_history.sqlite"
+    db_url = f"sqlite:///{db_path}"
+    engine = create_engine(db_url)
+    with engine.begin() as conn:
+        conn.execute(text("""
+            CREATE TABLE recommendation_history (
+                rec_date TEXT,
+                stock_code TEXT,
+                stock_name TEXT,
+                strategy TEXT,
+                trade_type TEXT,
+                position_tag TEXT,
+                status TEXT,
+                prob REAL,
+                buy_price REAL,
+                buy_qty INTEGER,
+                buy_time TEXT,
+                sell_price REAL,
+                sell_time TEXT,
+                profit_rate REAL,
+                profit REAL,
+                updated_at TEXT
+            )
+        """))
+        conn.execute(
+            text("""
+                INSERT INTO recommendation_history (
+                    rec_date, stock_code, stock_name, strategy, trade_type, position_tag,
+                    status, prob, buy_price, buy_qty, buy_time, sell_price, sell_time,
+                    profit_rate, profit, updated_at
+                )
+                VALUES (
+                    '2026-05-11', '000001', 'A', 'KOSPI_ML', 'BUY', 'META_V2',
+                    'COMPLETED', 0.41, 10000, 1, '2026-05-11 09:00:00',
+                    10100, '2026-05-11 10:00:00', 1.0, 100, '2026-05-11 10:00:00'
+                )
+            """)
+        )
+
+    rows = load_db_lifecycle_rows("2026-05-11", db_url=db_url)
+    summary = summarize_db_lifecycle_rows(rows)
+
+    assert len(rows) == 1
+    assert "sell_qty" not in rows[0]
+    assert summary["completed_rows"] == 1
+    assert summary["status_counts"]["COMPLETED"] == 1
 
 
 def test_swing_lifecycle_audit_ingests_daily_simulation_opportunity():

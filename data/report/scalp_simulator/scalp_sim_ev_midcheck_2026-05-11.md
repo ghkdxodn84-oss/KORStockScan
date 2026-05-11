@@ -1,11 +1,11 @@
 # Scalp Sim EV Midcheck 2026-05-11
 
-- generated_at: `2026-05-11T15:14:34`
-- latest_event_at: `2026-05-11T15:14:33.522280`
+- generated_at: `2026-05-11T16:27:46`
+- latest_event_at: `2026-05-11T16:25:08.609917`
 - source: `/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-05-11.jsonl`
 - judgement: `positive_ev_midcheck`
 - runtime_mutation: `false`
-- synthetic_excluded: `48`
+- synthetic_excluded: `52`
 
 ## Summary
 

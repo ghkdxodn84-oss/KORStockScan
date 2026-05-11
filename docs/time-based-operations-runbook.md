@@ -397,6 +397,8 @@ ls -l data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_$(TZ=Asia/
 
 1. `threshold_cycle_postclose`가 완료됐는지 먼저 확인한다.
 2. 제출 기준은 `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.md`다.
+   - `cron_completion`이 `threshold_cycle_postclose=in_progress`인 동안 `artifact_freshness`가 `threshold_cycle_ev` missing을 먼저 보고하면 job 완료 전 조기 확인으로 분류하고 `warning`으로 둔다. 완료 marker 후에도 산출물이 없으면 `fail`이다.
+   - `threshold_cycle_ev`는 장후 1회성 제출 artifact다. 파일이 생성되고 JSON 검증이 끝난 뒤에는 장중 stream처럼 계속 갱신되지 않아도 `pass_one_shot`으로 본다. 생성 후 age가 `max_staleness_sec`를 넘었다는 이유만으로 재실행/재기동하지 않는다.
 3. threshold 후보의 상세 원인은 `threshold_cycle_YYYY-MM-DD.json`, AI correction은 `threshold_cycle_ai_review_*_postclose.md`, lab order는 `scalping_pattern_lab_automation_YYYY-MM-DD.md`, 스윙 lifecycle order는 `swing_improvement_automation_YYYY-MM-DD.json`, 스윙 승인 요청은 `swing_runtime_approval_YYYY-MM-DD.json`을 본다.
 4. `threshold_cycle_ev_YYYY-MM-DD.{json,md}`에서 `real`, `sim`, `combined` split을 확인한다. combined는 tuning 후보 산출용 통합 EV view이고, broker execution 품질과 주문 실패율은 real만으로 별도 판정한다.
 5. 스윙 postclose는 `recommendation_db_load`, `scale_in_observation`, `ai_contract_metrics`, `ofi_qi_summary`, `runtime_effect=false`, `allowed_runtime_apply=false`, `approval_requests`, `blocked_requests`를 확인한다.

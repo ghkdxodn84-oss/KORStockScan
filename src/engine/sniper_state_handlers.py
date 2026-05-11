@@ -4233,17 +4233,23 @@ def _apply_entry_ai_price_canary(
     parse_ok = bool((result or {}).get("ai_parse_ok", True))
     parse_fail = bool((result or {}).get("ai_parse_fail", False))
     source = str((result or {}).get("ai_result_source") or (result or {}).get("result_source") or "live")
+    openai_transport_fields = {
+        str(key): value
+        for key, value in (result or {}).items()
+        if str(key).startswith("openai_")
+    }
 
     if parse_fail or not parse_ok:
         _log_entry_pipeline(
             stock, code, "entry_ai_price_canary_fallback", reason="parse_or_ai_fail",
-            action=action, confidence=confidence, source=source, **micro_log_fields,
+            action=action, confidence=confidence, source=source, **openai_transport_fields, **micro_log_fields,
         )
         return planned_orders, False
     if confidence < min_confidence:
         _log_entry_pipeline(
             stock, code, "entry_ai_price_canary_fallback", reason="low_confidence",
-            action=action, confidence=confidence, min_confidence=min_confidence, **micro_log_fields,
+            action=action, confidence=confidence, min_confidence=min_confidence,
+            **openai_transport_fields, **micro_log_fields,
         )
         return planned_orders, False
 
@@ -4280,6 +4286,7 @@ def _apply_entry_ai_price_canary(
                 confidence=confidence,
                 reason=reason[:160],
                 demotion_path="P1_USE_DEFENSIVE",
+                **openai_transport_fields,
                 **skip_policy_fields,
                 **ofi_log_fields,
                 **micro_log_fields,
@@ -4307,6 +4314,7 @@ def _apply_entry_ai_price_canary(
             action=action,
             confidence=confidence,
             reason=reason[:160],
+            **openai_transport_fields,
             **skip_policy_fields,
             **ofi_log_fields,
             **micro_log_fields,
@@ -4323,25 +4331,29 @@ def _apply_entry_ai_price_canary(
 
     if candidate_price <= 0:
         _log_entry_pipeline(
-            stock, code, "entry_ai_price_canary_fallback", reason="invalid_price", action=action, **micro_log_fields
+            stock, code, "entry_ai_price_canary_fallback", reason="invalid_price", action=action,
+            **openai_transport_fields, **micro_log_fields
         )
         return planned_orders, False
     candidate_price = clamp_price_to_tick(candidate_price)
     if candidate_price <= 0:
         _log_entry_pipeline(
-            stock, code, "entry_ai_price_canary_fallback", reason="invalid_price", action=action, **micro_log_fields
+            stock, code, "entry_ai_price_canary_fallback", reason="invalid_price", action=action,
+            **openai_transport_fields, **micro_log_fields
         )
         return planned_orders, False
     if best_ask > 0 and candidate_price > best_ask:
         _log_entry_pipeline(
             stock, code, "entry_ai_price_canary_fallback", reason="above_best_ask",
-            action=action, candidate_price=candidate_price, best_ask=best_ask, **micro_log_fields,
+            action=action, candidate_price=candidate_price, best_ask=best_ask,
+            **openai_transport_fields, **micro_log_fields,
         )
         return planned_orders, False
     if _is_pre_submit_price_guard_block(strategy, candidate_price, best_bid):
         _log_entry_pipeline(
             stock, code, "entry_ai_price_canary_fallback", reason="pre_submit_price_guard",
-            action=action, candidate_price=candidate_price, best_bid=best_bid, **micro_log_fields,
+            action=action, candidate_price=candidate_price, best_bid=best_bid,
+            **openai_transport_fields, **micro_log_fields,
         )
         return planned_orders, False
 
@@ -4366,6 +4378,7 @@ def _apply_entry_ai_price_canary(
                 action=action,
                 candidate_price=candidate_price,
                 best_bid=best_bid,
+                **openai_transport_fields,
                 **passive_fields,
                 **micro_log_fields,
             )
@@ -4395,6 +4408,7 @@ def _apply_entry_ai_price_canary(
     latency_gate["ai_entry_price_canary_context_age_ms"] = context_age_ms
     latency_gate["ai_entry_price_canary_context_best_bid"] = _coerce_int_value(best_bid)
     latency_gate["ai_entry_price_canary_context_best_ask"] = _coerce_int_value(best_ask)
+    latency_gate.update(openai_transport_fields)
     if passive_fields:
         latency_gate.update(passive_fields)
     _mutate_stock_state(stock, set_fields={"entry_timeout_sec_override": max_wait_sec})
@@ -4412,6 +4426,7 @@ def _apply_entry_ai_price_canary(
         max_wait_sec=max_wait_sec,
         ai_eval_ms=ai_eval_ms,
         price_decision_context_age_ms=context_age_ms,
+        **openai_transport_fields,
         **passive_fields,
         **micro_log_fields,
     )
