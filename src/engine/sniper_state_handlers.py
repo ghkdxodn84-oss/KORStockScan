@@ -3846,6 +3846,11 @@ def _build_ai_ops_log_fields(
         if field_name in payload:
             out[field_name] = str(payload.get(field_name, "-") or "-")
     for field_name in (
+        "openai_transport_mode",
+        "openai_request_id",
+        "openai_endpoint_name",
+        "openai_schema_name",
+        "openai_ws_error_type",
         "openai_input_tokens",
         "openai_output_tokens",
         "openai_total_tokens",
@@ -3853,7 +3858,26 @@ def _build_ai_ops_log_fields(
         "openai_reasoning_tokens",
     ):
         if field_name in payload:
+            if field_name.startswith("openai_") and field_name.endswith("_tokens"):
+                out[field_name] = int(payload.get(field_name, 0) or 0)
+            else:
+                out[field_name] = str(payload.get(field_name, "-") or "-")
+    for field_name in (
+        "openai_ws_queue_wait_ms",
+        "openai_ws_roundtrip_ms",
+    ):
+        if field_name in payload:
             out[field_name] = int(payload.get(field_name, 0) or 0)
+    for field_name in (
+        "openai_ws_used",
+        "openai_ws_http_fallback",
+    ):
+        if field_name in payload:
+            raw_value = payload.get(field_name)
+            if isinstance(raw_value, bool):
+                out[field_name] = raw_value
+            else:
+                out[field_name] = str(raw_value).strip().lower() in {"1", "true", "yes", "y"}
     if "holding_exit_matrix_feature_enabled" in payload:
         out["holding_exit_matrix_feature_enabled"] = bool(payload.get("holding_exit_matrix_feature_enabled"))
     if "holding_exit_matrix_applied" in payload:

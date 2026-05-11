@@ -6,6 +6,7 @@ import pandas as pd
 import holidays
 from pathlib import Path
 from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # 1. KORStockScan 프로젝트 루트 경로 추가
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -16,6 +17,21 @@ from src.database.db_manager import DBManager
 from src.database.models import RecommendationHistory
 from src.core.event_bus import EventBus
 from src.utils.constants import CONFIG_PATH, DEV_PATH
+
+
+KST = ZoneInfo("Asia/Seoul")
+
+
+def _marker_now() -> datetime:
+    return datetime.now(KST)
+
+
+def _marker_ts() -> str:
+    return _marker_now().isoformat(timespec="seconds")
+
+
+def _marker_date() -> str:
+    return _marker_now().date().isoformat()
 
 def load_config():
     """환경에 맞는 설정 파일(JSON)을 로드합니다."""
@@ -186,7 +202,9 @@ def extract_eod_candidates(db_manager):
     
     return report_text
 
-if __name__ == "__main__":
+def main() -> int:
+    marker_target_date = _marker_date()
+    print(f"[START] eod_analyzer target_date={marker_target_date} started_at={_marker_ts()}")
     print("🌙 [종가베팅 분석기] 장 마감 후 데이터 기반 분석 시작...")
     
     # 1. 설정 및 DB 로드
@@ -198,7 +216,8 @@ if __name__ == "__main__":
     
     if not candidates_text:
         print("⚠️ 조건을 만족하는 주도주 후보군이 없습니다. (오늘 장이 매우 안 좋았거나 데이터 갱신 필요)")
-        sys.exit(0)
+        print(f"[DONE] eod_analyzer target_date={marker_target_date} status=no_candidates finished_at={_marker_ts()}")
+        return 0
         
     print("✅ 1차 필터링 완료! Gemini 3.0 Pro 수석 애널리스트에게 분석을 요청합니다...")
     
@@ -207,7 +226,8 @@ if __name__ == "__main__":
     
     if not api_keys:
         print("🚨 설정 파일(json)에 GEMINI_API_KEY가 없습니다.")
-        sys.exit(1)
+        print(f"[FAIL] eod_analyzer target_date={marker_target_date} reason=missing_gemini_api_key finished_at={_marker_ts()}")
+        return 1
         
     try:
         from src.engine.ai_engine import GeminiSniperEngine
@@ -248,6 +268,14 @@ if __name__ == "__main__":
             }
         )
         print("🚀 텔레그램 VIP 채널로 마감 브리핑 전송 완료!")
+        print(f"[DONE] eod_analyzer target_date={marker_target_date} status=completed finished_at={_marker_ts()}")
+        return 0
         
     except Exception as e:
         print(f"🚨 AI 분석 또는 전송 중 에러 발생: {e}")
+        print(f"[FAIL] eod_analyzer target_date={marker_target_date} reason=exception finished_at={_marker_ts()}")
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -422,9 +422,9 @@ JSON/JSONL이 canonical data이며, 사람이 장후 판정에 바로 읽어야 
 | 자동화 | 경로 | 설명 |
 | --- | --- | --- |
 | threshold PREOPEN | `deploy/run_threshold_cycle_preopen.sh` | 전일 report/AI correction guard 기반 `auto_bounded_live` apply plan과 runtime env 생성 |
-| threshold INTRADAY calibration | `deploy/run_threshold_cycle_calibration.sh` | 12:05 KST 장중 calibration/AI correction artifact 생성. runtime mutation 없음 |
+| threshold INTRADAY calibration | `deploy/run_threshold_cycle_calibration.sh` | 12:05 KST 장중 calibration/AI correction artifact 생성. runtime mutation 없음. `cron_completion` 기준 완료 marker는 `[DONE] threshold-cycle calibration target_date=YYYY-MM-DD phase=intraday` |
 | swing live dry-run POSTCLOSE | `deploy/run_swing_live_dry_run_report.sh` | 15:45 KST 스윙 selection funnel, lifecycle audit, threshold AI review, improvement automation 생성 |
-| threshold POSTCLOSE | `deploy/run_threshold_cycle_postclose.sh` | compact backfill, postclose calibration/AI correction, swing lifecycle automation, pattern lab automation, code improvement workorder, daily EV report 생성 |
+| threshold POSTCLOSE | `deploy/run_threshold_cycle_postclose.sh` | compact backfill, postclose calibration/AI correction, swing lifecycle automation, pattern lab automation, code improvement workorder, daily EV report 생성. `cron_completion` 기준 완료 marker는 `[DONE] threshold-cycle postclose target_date=YYYY-MM-DD` |
 | swing model retrain POSTCLOSE | `auto_retrain_pipeline.sh`, `deploy/install_swing_model_retrain_cron.sh` | 17:30 KST 스윙 ML v2 재학습 필요성 진단과 staging 재학습/평가/자동 artifact 승격. 실주문 전환 없음 |
 | tuning monitoring POSTCLOSE | `deploy/run_tuning_monitoring_postclose.sh` | Parquet/DuckDB refresh와 shadow diff. pattern lab은 기본 skip하고 `THRESHOLD_CYCLE_POSTCLOSE`를 canonical runner로 둠 |
 | nightly KOSPI update | `src/utils/update_kospi.py` | 21:00 KST 원천 DB 업데이트 후 status JSON을 남깁니다. 후속 스윙 추천/시뮬레이션 리포트는 별도 artifact freshness로 확인합니다. |
@@ -455,6 +455,8 @@ JSON/JSONL이 canonical data이며, 사람이 장후 판정에 바로 읽어야 
 | 장기 실행 thread/daemon | `write_heartbeat(component=...)`와 `REQUIRED_HEARTBEAT_COMPONENTS` |
 | 새 health domain | `@register_detector` detector와 `error_detector.py` import |
 | 감시 제외 대상 | `DETECTOR_COVERAGE_EXEMPTIONS`에 제외 사유 |
+
+`cron_completion` 대상 cron/wrapper는 log redirect 이후 stdout/stderr에 표준 marker를 남겨야 한다: `[START] <job_id> target_date=YYYY-MM-DD started_at=...`, `[DONE] <job_id> target_date=YYYY-MM-DD finished_at=...`, `[FAIL] <job_id> target_date=YYYY-MM-DD ...`. 실행은 성공했지만 wrapper log에 `[DONE]`과 `target_date`가 없으면 detector는 `no completion marker`로 판정한다.
 
 detector coverage 검증:
 

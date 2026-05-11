@@ -35,6 +35,22 @@ def _reset_state(monkeypatch, tmp_path):
     monkeypatch.setattr(state_handlers, "ALERTED_STOCKS", set())
     monkeypatch.setattr(state_handlers, "LAST_LOG_TIMES", {})
     monkeypatch.setattr(state_handlers, "SCALP_SIM_STATE_PATH", tmp_path / "scalp_live_sim_state.json")
+    captured_pipeline_events = []
+    monkeypatch.setattr(
+        state_handlers,
+        "emit_pipeline_event",
+        lambda pipeline, name, code, stage, record_id=None, fields=None: captured_pipeline_events.append(
+            {
+                "pipeline": pipeline,
+                "stock_name": name,
+                "stock_code": code,
+                "stage": stage,
+                "record_id": record_id,
+                "fields": fields or {},
+            }
+        ),
+    )
+    return captured_pipeline_events
 
 
 def test_scalp_simulator_arms_and_fills_without_real_buy_order(monkeypatch):

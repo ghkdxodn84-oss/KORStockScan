@@ -242,6 +242,14 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
             "ai_prompt_type": "scalping_shared",
             "ai_prompt_version": "split_v1",
             "ai_result_source": "live",
+            "openai_transport_mode": "responses_ws",
+            "openai_request_id": "analyze_target:005930:1:abcd",
+            "openai_endpoint_name": "analyze_target",
+            "openai_schema_name": "entry_v1",
+            "openai_ws_used": True,
+            "openai_ws_http_fallback": False,
+            "openai_ws_queue_wait_ms": 7,
+            "openai_ws_roundtrip_ms": 234,
             "openai_input_tokens": 1234,
             "openai_output_tokens": 56,
             "openai_total_tokens": 1290,
@@ -262,6 +270,14 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
     assert fields["ai_prompt_type"] == "scalping_shared"
     assert fields["ai_prompt_version"] == "split_v1"
     assert fields["ai_result_source"] == "live"
+    assert fields["openai_transport_mode"] == "responses_ws"
+    assert fields["openai_request_id"] == "analyze_target:005930:1:abcd"
+    assert fields["openai_endpoint_name"] == "analyze_target"
+    assert fields["openai_schema_name"] == "entry_v1"
+    assert fields["openai_ws_used"] is True
+    assert fields["openai_ws_http_fallback"] is False
+    assert fields["openai_ws_queue_wait_ms"] == 7
+    assert fields["openai_ws_roundtrip_ms"] == 234
     assert fields["openai_input_tokens"] == 1234
     assert fields["openai_output_tokens"] == 56
     assert fields["openai_total_tokens"] == 1290

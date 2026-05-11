@@ -23,7 +23,10 @@ RUN_DEEPSEEK_SWING_LAB="${THRESHOLD_CYCLE_RUN_DEEPSEEK_SWING_LAB:-true}"
 mkdir -p "$PROJECT_DIR/logs"
 cd "$PROJECT_DIR"
 
-echo "[threshold-cycle] postclose start target_date=$TARGET_DATE max_iterations=$MAX_ITERATIONS"
+trap 'failed_at="$(TZ=Asia/Seoul date +%FT%T%z)"; echo "[FAIL] threshold-cycle postclose target_date=$TARGET_DATE failed_at=$failed_at"' ERR
+
+started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
+echo "[START] threshold-cycle postclose target_date=$TARGET_DATE max_iterations=$MAX_ITERATIONS started_at=$started_at"
 
 SOURCE_ARGS=()
 if [ "$USE_SNAPSHOT" = "true" ]; then
@@ -113,4 +116,5 @@ if [ "$BUILD_CODE_IMPROVEMENT_WORKORDER" = "true" ] || [ "$BUILD_CODE_IMPROVEMEN
     --max-orders "$CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS"
 fi
 PYTHONPATH=. "$VENV_PY" -m src.engine.threshold_cycle_ev_report --date "$TARGET_DATE"
-echo "[threshold-cycle] postclose report complete target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER pattern_labs=$RUN_PATTERN_LABS deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true"
+finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
+echo "[DONE] threshold-cycle postclose target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER pattern_labs=$RUN_PATTERN_LABS deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true finished_at=$finished_at"

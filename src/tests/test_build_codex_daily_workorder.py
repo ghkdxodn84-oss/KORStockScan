@@ -5,6 +5,7 @@ from src.engine.build_codex_daily_workorder import (
     build_runbook_operational_checks,
     _filter_stale_same_day_managed_tasks,
     _graphql_request,
+    _local_backlog_project_tasks,
     _parse_project_item,
     _matches_slot,
     _resolve_slot_filters_for_target_date,
@@ -157,7 +158,11 @@ def test_build_runbook_operational_checks_skips_completed_slot(monkeypatch):
     assert [check.slot for check in all_checks] == ["INTRADAY", "POSTCLOSE"]
 
 
-def test_render_markdown_includes_runbook_operational_checks():
+def test_render_markdown_includes_runbook_operational_checks(monkeypatch):
+    monkeypatch.setattr(
+        "src.engine.build_codex_daily_workorder._completed_runbook_slots",
+        lambda due_date: set(),
+    )
     checks = build_runbook_operational_checks(target_date="2026-05-11", slots=["INTRADAY"])
     md = render_markdown(
         owner="JaehwanPark",
@@ -249,6 +254,46 @@ def test_parse_project_item_defaults_apply_target_without_postprocessing():
     assert parsed.apply_target == "-"
 
 
+def test_parse_project_item_uses_title_track_prefix_when_field_missing():
+    node = {
+        "id": "PVTI_prefixed",
+        "isArchived": False,
+        "content": {
+            "__typename": "DraftIssue",
+            "title": "[Checklist0511] [OpenAIResponsesWSCanaryDecision0511] analyze_target WS canary",
+            "body": "Source: `docs/checklist.md`\nSection: `장중 체크리스트`",
+            "state": "OPEN",
+            "assignees": {"nodes": []},
+        },
+        "fieldValues": {
+            "nodes": [
+                {
+                    "__typename": "ProjectV2ItemFieldDateValue",
+                    "date": "2026-05-11",
+                    "field": {"name": "Due"},
+                },
+                {
+                    "__typename": "ProjectV2ItemFieldSingleSelectValue",
+                    "name": "Todo",
+                    "field": {"name": "Status"},
+                },
+            ]
+        },
+    }
+
+    parsed = _parse_project_item(
+        node,
+        due_field_name="Due",
+        status_field_name="Status",
+        track_field_name="Track",
+        slot_field_name="Slot",
+        time_window_field_name="TimeWindow",
+    )
+
+    assert parsed is not None
+    assert parsed.track == "Checklist0511"
+
+
 def test_filter_stale_same_day_managed_tasks_uses_docs_as_source_of_truth(monkeypatch):
     live_task = ProjectTask(
         item_id="1",
@@ -312,6 +357,46 @@ def test_filter_stale_same_day_managed_tasks_uses_docs_as_source_of_truth(monkey
         "2026-04-27",
     )
     assert [task.item_id for task in filtered] == ["1", "3"]
+
+
+def test_local_backlog_project_tasks_include_intraday_before_project_sync(monkeypatch):
+    class DummyTask:
+        def __init__(self, title: str, due_date: str, track: str, source: str = "docs/checklist.md"):
+            self.title = title
+            self.due_date = due_date
+            self.track = track
+            self.source = source
+            self.section = "장중 체크리스트 (09:00~15:20) / 체크박스 미완료"
+            self.apply_target = "-"
+
+    monkeypatch.setattr(
+        "src.engine.build_codex_daily_workorder.collect_backlog_tasks",
+        lambda: [
+            DummyTask(
+                "[OpenAIResponsesWSCanaryDecision0511] analyze_target WS canary 1차 판정 및 즉시 액션 "
+                "(Due: 2026-05-11, Slot: INTRADAY, TimeWindow: 12:45~13:05, Track: RuntimeStability)",
+                "2026-05-11",
+                "Checklist0511",
+            )
+        ],
+    )
+
+    tasks = _local_backlog_project_tasks(
+        target_date="2026-05-11",
+        include_slots=["INTRADAY"],
+        include_statuses=["Todo", "In Progress"],
+        include_overdue=True,
+        default_duration_min=30,
+    )
+
+    assert len(tasks) == 1
+    assert tasks[0].content_type == "LocalDoc"
+    assert tasks[0].item_id.startswith("DOC:")
+    assert tasks[0].status == "Todo"
+    assert tasks[0].slot == "INTRADAY"
+    assert tasks[0].time_window == "12:45~13:05"
+    assert tasks[0].track == "Checklist0511"
+    assert "[Checklist0511]" in tasks[0].title
 
 
 def test_graphql_request_retries_retryable_http_error(monkeypatch):

@@ -19,6 +19,8 @@ STARTED_AT="$(TZ=Asia/Seoul date --iso-8601=seconds)"
 
 mkdir -p "$LOG_DIR" "$STATUS_DIR" "$LOCK_ROOT"
 exec > >(tee -a "$LOG_PATH") 2>&1
+echo "[START] swing_model_retrain target_date=${TARGET_DATE} started_at=${STARTED_AT}"
+trap 'failed_at="$(TZ=Asia/Seoul date --iso-8601=seconds)"; echo "[FAIL] swing_model_retrain target_date=${TARGET_DATE} failed_at=${failed_at}"' ERR
 
 write_status() {
   local status="$1"
@@ -90,7 +92,11 @@ set -e
 
 if [[ "$rc" -eq 0 ]]; then
   write_status "succeeded" 0 "completed"
+  finished_at="$(TZ=Asia/Seoul date --iso-8601=seconds)"
+  echo "[DONE] swing_model_retrain target_date=${TARGET_DATE} finished_at=${finished_at}"
 else
   write_status "failed" "$rc" "pipeline_failed"
+  finished_at="$(TZ=Asia/Seoul date --iso-8601=seconds)"
+  echo "[FAIL] swing_model_retrain target_date=${TARGET_DATE} exit_code=${rc} reason=pipeline_failed finished_at=${finished_at}"
 fi
 exit "$rc"

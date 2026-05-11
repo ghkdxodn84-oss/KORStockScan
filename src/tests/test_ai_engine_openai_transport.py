@@ -542,6 +542,57 @@ def test_openai_call_falls_back_from_ws_to_http(monkeypatch):
     assert meta["openai_transport_mode"] == "http"
 
 
+def test_openai_ws_hot_path_does_not_take_http_api_lock(monkeypatch):
+    engine = _build_engine()
+
+    class FailingLock:
+        def __enter__(self):
+            raise AssertionError("WS hot path must not take the HTTP API lock")
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    engine.api_call_lock = FailingLock()
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_TRANSPORT_MODE="responses_ws",
+            OPENAI_RESPONSES_WS_ENABLED=True,
+        ),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_responses_ws",
+        lambda request: OpenAITransportResult(
+            payload={"action": "BUY", "score": 91, "reason": "ws path"},
+            transport_mode="responses_ws",
+            ws_used=True,
+            ws_http_fallback=False,
+            queue_wait_ms=3,
+            roundtrip_ms=120,
+        ),
+    )
+
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="test",
+        schema_name="entry_v1",
+        endpoint_name="analyze_target",
+        symbol="005930",
+    )
+    meta = engine._consume_last_transport_meta()
+
+    assert result["action"] == "BUY"
+    assert meta["openai_transport_mode"] == "responses_ws"
+    assert meta["openai_ws_used"] is True
+    assert meta["openai_ws_roundtrip_ms"] == 120
+
+
 def test_openai_invalid_prompt_retries_with_minimal_numeric_prompt(monkeypatch):
     engine = _build_engine()
     calls = []

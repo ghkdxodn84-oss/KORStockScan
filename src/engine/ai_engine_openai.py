@@ -343,7 +343,7 @@ class OpenAIResponsesWSWorker:
     def _ensure_connection(self):
         if self._connection is not None:
             return self._connection
-        manager = self._client.responses.connect(on_reconnecting=self._on_reconnecting)
+        manager = self._client.responses.connect()
         self._connection = manager.enter()
         return self._connection
 
@@ -1362,119 +1362,120 @@ class GPTSniperEngine:
         cache_key="-",
     ):
         """Responses API HTTP/WS transport와 예외 처리를 전담하는 중앙 호출기."""
-        with self.api_call_lock:
-            target_model = model_override if model_override else self.current_model_name
-            target_temp = self._resolve_openai_temperature(
-                require_json=bool(require_json),
-                temperature_override=temperature_override,
-                model_name=target_model,
-            )
-            max_output_tokens = self._resolve_openai_max_output_tokens(require_json=bool(require_json))
-            reasoning_effort = self._resolve_openai_reasoning_effort(model_name=target_model)
-            request = self._build_openai_response_request(
-                prompt=prompt,
-                user_input=user_input,
-                require_json=bool(require_json),
-                context_name=context_name,
-                model_name=target_model,
-                temperature=target_temp,
-                max_output_tokens=max_output_tokens,
-                reasoning_effort=reasoning_effort,
-                schema_name=schema_name,
-                endpoint_name=endpoint_name,
-                symbol=symbol,
-                cache_key=cache_key,
-            )
-            transport_meta = {
-                "openai_transport_mode": "http",
-                "openai_ws_used": False,
-                "openai_ws_http_fallback": False,
-                "openai_ws_queue_wait_ms": 0,
-                "openai_ws_roundtrip_ms": 0,
-                "openai_request_id": request.request_id,
-                "openai_endpoint_name": request.endpoint_name,
-                "openai_schema_name": request.schema_name or "-",
-            }
-            result = None
-            if self._should_use_responses_ws(request):
-                try:
-                    result = self._call_openai_responses_ws(request)
-                    transport_meta.update(
-                        {
-                            "openai_transport_mode": result.transport_mode,
-                            "openai_ws_used": bool(result.ws_used),
-                            "openai_ws_http_fallback": bool(result.ws_http_fallback),
-                            "openai_ws_queue_wait_ms": int(result.queue_wait_ms),
-                            "openai_ws_roundtrip_ms": int(result.roundtrip_ms),
-                        }
-                    )
-                except Exception as e:
-                    remaining = request.remaining_timeout_sec()
-                    if isinstance(e, TimeoutError):
-                        self._record_ws_metric("openai_ws_timeout_reject", 1)
-                    transport_meta.update(
-                        {
-                            "openai_transport_mode": "responses_ws",
-                            "openai_ws_used": True,
-                            "openai_ws_http_fallback": False,
-                            "openai_ws_error_type": type(e).__name__,
-                        }
-                    )
-                    if isinstance(e, (OpenAIWSRequestIdMismatchError, OpenAIWSLateResponseError)):
-                        self._set_last_transport_meta(transport_meta)
-                        log_error(f"🚨 [OpenAI WS fail-closed] {context_name}: {e}")
-                        raise
-                    if remaining <= 0.05:
-                        self._set_last_transport_meta(transport_meta)
-                        raise
-                    self._record_ws_metric("openai_ws_http_fallback", 1)
-                    fallback_request = OpenAIResponseRequest(
-                        prompt=request.prompt,
-                        user_input=request.user_input,
-                        require_json=request.require_json,
-                        context_name=request.context_name,
-                        model_name=request.model_name,
-                        temperature=request.temperature,
-                        max_output_tokens=request.max_output_tokens,
-                        reasoning_effort=request.reasoning_effort,
-                        schema_name=request.schema_name,
-                        endpoint_name=request.endpoint_name,
-                        request_id=request.request_id,
-                        symbol=request.symbol,
-                        cache_key=request.cache_key,
-                        submitted_at_perf=time.perf_counter(),
-                        timeout_ms=max(50, int(remaining * 1000)),
-                        metadata=dict(request.metadata or {}),
-                    )
+        target_model = model_override if model_override else self.current_model_name
+        target_temp = self._resolve_openai_temperature(
+            require_json=bool(require_json),
+            temperature_override=temperature_override,
+            model_name=target_model,
+        )
+        max_output_tokens = self._resolve_openai_max_output_tokens(require_json=bool(require_json))
+        reasoning_effort = self._resolve_openai_reasoning_effort(model_name=target_model)
+        request = self._build_openai_response_request(
+            prompt=prompt,
+            user_input=user_input,
+            require_json=bool(require_json),
+            context_name=context_name,
+            model_name=target_model,
+            temperature=target_temp,
+            max_output_tokens=max_output_tokens,
+            reasoning_effort=reasoning_effort,
+            schema_name=schema_name,
+            endpoint_name=endpoint_name,
+            symbol=symbol,
+            cache_key=cache_key,
+        )
+        transport_meta = {
+            "openai_transport_mode": "http",
+            "openai_ws_used": False,
+            "openai_ws_http_fallback": False,
+            "openai_ws_queue_wait_ms": 0,
+            "openai_ws_roundtrip_ms": 0,
+            "openai_request_id": request.request_id,
+            "openai_endpoint_name": request.endpoint_name,
+            "openai_schema_name": request.schema_name or "-",
+        }
+        result = None
+        if self._should_use_responses_ws(request):
+            try:
+                result = self._call_openai_responses_ws(request)
+                transport_meta.update(
+                    {
+                        "openai_transport_mode": result.transport_mode,
+                        "openai_ws_used": bool(result.ws_used),
+                        "openai_ws_http_fallback": bool(result.ws_http_fallback),
+                        "openai_ws_queue_wait_ms": int(result.queue_wait_ms),
+                        "openai_ws_roundtrip_ms": int(result.roundtrip_ms),
+                    }
+                )
+            except Exception as e:
+                remaining = request.remaining_timeout_sec()
+                if isinstance(e, TimeoutError):
+                    self._record_ws_metric("openai_ws_timeout_reject", 1)
+                transport_meta.update(
+                    {
+                        "openai_transport_mode": "responses_ws",
+                        "openai_ws_used": True,
+                        "openai_ws_http_fallback": False,
+                        "openai_ws_error_type": type(e).__name__,
+                    }
+                )
+                if isinstance(e, (OpenAIWSRequestIdMismatchError, OpenAIWSLateResponseError)):
+                    self._set_last_transport_meta(transport_meta)
+                    log_error(f"🚨 [OpenAI WS fail-closed] {context_name}: {e}")
+                    raise
+                if remaining <= 0.05:
+                    self._set_last_transport_meta(transport_meta)
+                    raise
+                self._record_ws_metric("openai_ws_http_fallback", 1)
+                fallback_request = OpenAIResponseRequest(
+                    prompt=request.prompt,
+                    user_input=request.user_input,
+                    require_json=request.require_json,
+                    context_name=request.context_name,
+                    model_name=request.model_name,
+                    temperature=request.temperature,
+                    max_output_tokens=request.max_output_tokens,
+                    reasoning_effort=request.reasoning_effort,
+                    schema_name=request.schema_name,
+                    endpoint_name=request.endpoint_name,
+                    request_id=request.request_id,
+                    symbol=request.symbol,
+                    cache_key=request.cache_key,
+                    submitted_at_perf=time.perf_counter(),
+                    timeout_ms=max(50, int(remaining * 1000)),
+                    metadata=dict(request.metadata or {}),
+                )
+                with self.api_call_lock:
                     result = self._call_openai_responses_http(fallback_request)
-                    result.ws_http_fallback = True
-                    transport_meta.update(
-                        {
-                            "openai_transport_mode": result.transport_mode,
-                            "openai_ws_used": False,
-                            "openai_ws_http_fallback": True,
-                            "openai_ws_queue_wait_ms": transport_meta.get("openai_ws_queue_wait_ms", 0),
-                            "openai_ws_roundtrip_ms": int(result.roundtrip_ms),
-                        }
-                    )
-                    log_error(f"⚠️ [OpenAI WS fallback] {context_name}: {e}")
-            else:
-                result = self._call_openai_responses_http(request)
+                result.ws_http_fallback = True
                 transport_meta.update(
                     {
                         "openai_transport_mode": result.transport_mode,
                         "openai_ws_used": False,
-                        "openai_ws_http_fallback": False,
-                        "openai_ws_queue_wait_ms": 0,
+                        "openai_ws_http_fallback": True,
+                        "openai_ws_queue_wait_ms": transport_meta.get("openai_ws_queue_wait_ms", 0),
                         "openai_ws_roundtrip_ms": int(result.roundtrip_ms),
                     }
                 )
-            if getattr(result, "usage_meta", None):
-                transport_meta.update(result.usage_meta)
-            self._set_last_transport_meta(transport_meta)
-            if isinstance(result.payload, dict):
-                return result.payload
-            return str(result.payload or "").strip()
+                log_error(f"⚠️ [OpenAI WS fallback] {context_name}: {e}")
+        else:
+            with self.api_call_lock:
+                result = self._call_openai_responses_http(request)
+            transport_meta.update(
+                {
+                    "openai_transport_mode": result.transport_mode,
+                    "openai_ws_used": False,
+                    "openai_ws_http_fallback": False,
+                    "openai_ws_queue_wait_ms": 0,
+                    "openai_ws_roundtrip_ms": int(result.roundtrip_ms),
+                }
+            )
+        if getattr(result, "usage_meta", None):
+            transport_meta.update(result.usage_meta)
+        self._set_last_transport_meta(transport_meta)
+        if isinstance(result.payload, dict):
+            return result.payload
+        return str(result.payload or "").strip()
 
     # ==========================================
     # 데이터 포맷팅 (ai_engine.py 동일 복사)

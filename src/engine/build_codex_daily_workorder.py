@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -16,6 +17,8 @@ from zoneinfo import ZoneInfo
 
 from src.engine.sync_docs_backlog_to_project import (
     _completed_runbook_slots,
+    _infer_slot_label,
+    _infer_time_window,
     _is_managed_project_title,
     _managed_title_key,
     collect_backlog_tasks,
@@ -298,6 +301,17 @@ def _parse_body_metadata(body: str) -> tuple[str, str, str]:
             apply_target = line.split(":", 1)[1].strip().strip("`")
     return source, section, apply_target
 
+
+def _track_from_title_prefix(title: str) -> str:
+    match = re.match(r"^\s*\[([A-Za-z0-9_-]+)\]", title)
+    if not match:
+        return ""
+    value = match.group(1).strip()
+    if value.startswith(("Checklist", "RunbookOps", "RuntimeStability", "ScalpingLogic", "AIPrompt", "Plan")):
+        return value
+    return ""
+
+
 def _parse_project_item(
     node: dict[str, Any],
     *,
@@ -347,6 +361,9 @@ def _parse_project_item(
             slot = str(fv.get("text") or "").strip()
         elif kind == "ProjectV2ItemFieldTextValue" and field_name == time_window_field_name and not time_window:
             time_window = str(fv.get("text") or "").strip()
+
+    if not track:
+        track = _track_from_title_prefix(title)
 
     return ProjectTask(
         item_id=str(node.get("id") or "").strip(),
@@ -524,6 +541,70 @@ def _filter_stale_same_day_managed_tasks(tasks: list[ProjectTask], target_date: 
             continue
         filtered.append(task)
     return filtered
+
+
+def _project_title_for_backlog_task(task: Any) -> str:
+    return " ".join(f"[{task.track}] {task.title}".split()).strip()
+
+
+def _doc_task_id(task: Any) -> str:
+    title_key = _managed_title_key(_project_title_for_backlog_task(task))
+    return f"DOC:{title_key}"
+
+
+def _local_backlog_project_tasks(
+    *,
+    target_date: str,
+    include_slots: list[str],
+    include_statuses: list[str],
+    include_overdue: bool,
+    default_duration_min: int,
+) -> list[ProjectTask]:
+    """Return local checklist/runbook tasks so workorders do not depend on Project sync freshness."""
+
+    status = "Todo"
+    include_set = {_norm(s) for s in include_statuses if s.strip()}
+    if include_set and _norm(status) not in include_set:
+        return []
+    slot_set = {_norm(s) for s in include_slots if s.strip()}
+    out: list[ProjectTask] = []
+    for task in collect_backlog_tasks():
+        due_date = str(getattr(task, "due_date", "") or "").strip()
+        if target_date:
+            if not due_date:
+                continue
+            if include_overdue:
+                if due_date > target_date:
+                    continue
+            elif due_date != target_date:
+                continue
+        slot = _infer_slot_label(task)
+        if not _matches_slot(slot, slot_set):
+            continue
+        time_window = _infer_time_window(
+            task,
+            slot_label=slot,
+            default_duration_min=default_duration_min,
+        )
+        out.append(
+            ProjectTask(
+                item_id=_doc_task_id(task),
+                content_type="LocalDoc",
+                title=_project_title_for_backlog_task(task),
+                url="",
+                due_date=due_date,
+                status=status,
+                track=str(getattr(task, "track", "") or ""),
+                slot=slot,
+                time_window=time_window,
+                assignees="",
+                state="OPEN",
+                source=str(getattr(task, "source", "") or ""),
+                section=str(getattr(task, "section", "") or ""),
+                apply_target=str(getattr(task, "apply_target", "") or "-"),
+            )
+        )
+    return out
 
 
 def _target_date_compact(target_date: str | None) -> str:
@@ -831,6 +912,8 @@ def build_daily_workorder(
     time_window_field_name = _env("GH_PROJECT_TIME_WINDOW_FIELD_NAME", "TimeWindow")
     statuses = _split_csv(os.getenv("GH_CODEX_WORKORDER_STATUSES", "Todo,In Progress"))
     configured_slots = _split_csv(os.getenv("GH_CODEX_WORKORDER_SLOTS", ""))
+    include_local_docs = _env_bool("CODEX_WORKORDER_INCLUDE_LOCAL_DOCS", True)
+    default_duration_min = _env_int("GH_PROJECT_DEFAULT_TIME_WINDOW_MINUTES", 30, minimum=5)
     selected_slots = slots if slots is not None else configured_slots
     resolved_target_date = target_date or _local_today_iso()
     resolved_include_overdue = (
@@ -855,6 +938,16 @@ def build_daily_workorder(
         target_date=resolved_target_date,
         include_overdue=resolved_include_overdue,
     )
+    local_doc_tasks: list[ProjectTask] = []
+    if include_local_docs:
+        local_doc_tasks = _local_backlog_project_tasks(
+            target_date=resolved_target_date,
+            include_slots=effective_slots,
+            include_statuses=statuses,
+            include_overdue=resolved_include_overdue,
+            default_duration_min=default_duration_min,
+        )
+        tasks.extend(local_doc_tasks)
     tasks = _filter_stale_same_day_managed_tasks(tasks, resolved_target_date)
     runbook_checks = build_runbook_operational_checks(target_date=resolved_target_date, slots=effective_slots)
     generated_at = datetime.now().astimezone().isoformat(timespec="seconds")
@@ -886,6 +979,7 @@ def build_daily_workorder(
         "holiday_override": holiday_override,
         "holiday_reason": holiday_reason,
         "candidate_tasks": len(tasks),
+        "local_doc_tasks": len(local_doc_tasks),
         "runbook_operational_checks": len(runbook_checks),
         "output": str(output),
         "max_items": max_items,

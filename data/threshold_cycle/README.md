@@ -17,6 +17,8 @@ report 기반 자동화의 전체 추적성은 [report-based-automation-traceabi
 | INTRADAY 12:05 | `deploy/run_threshold_cycle_calibration.sh` | 기존 report source bundle을 읽어 장중 calibration 및 AI correction artifact 생성 | `data/report/threshold_cycle_calibration/threshold_cycle_calibration_YYYY-MM-DD_intraday.json`, `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_intraday.{json,md}` |
 | PREOPEN 07:35 | `deploy/run_threshold_cycle_preopen.sh` | 최신 threshold report와 AI correction guard를 읽어 auto bounded runtime env 생성 | `apply_plans/threshold_apply_YYYY-MM-DD.json`, `runtime_env/threshold_runtime_env_YYYY-MM-DD.{env,json}` |
 
+cron completion detector는 wrapper log의 terminal marker를 source of truth로 본다. Threshold cycle wrapper는 같은 `target_date`를 포함해 `[START]`, `[DONE]`, `[FAIL]` marker를 남겨야 한다. 장중 calibration의 완료 marker는 `logs/threshold_cycle_calibration_intraday_cron.log`의 `[DONE] threshold-cycle calibration target_date=YYYY-MM-DD phase=intraday`이며, postclose wrapper는 `[DONE] threshold-cycle postclose target_date=YYYY-MM-DD`를 남긴다. artifact가 생성됐지만 marker가 없으면 threshold/runtime 실패가 아니라 wrapper/log 계약 결함으로 분류하고 marker 계약을 먼저 보강한다.
+
 ## 현재 적용 정책
 
 - `THRESHOLD_CYCLE_APPLY_MODE` 기본값은 `auto_bounded_live`다.

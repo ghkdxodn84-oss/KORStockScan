@@ -18,6 +18,9 @@ PATTERN_LAB_START_DATE="${PATTERN_LAB_ANALYSIS_START_DATE:-2026-04-21}"
 
 mkdir -p "$PROJECT_DIR/logs" "$PROJECT_DIR/tmp" "$STATUS_DIR"
 cd "$PROJECT_DIR"
+started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
+echo "[START] tuning_monitoring_postclose target_date=${TARGET_DATE} started_at=${started_at}"
+trap 'failed_at="$(TZ=Asia/Seoul date +%FT%T%z)"; echo "[FAIL] tuning_monitoring_postclose target_date=${TARGET_DATE} failed_at=${failed_at}"' ERR
 
 START_DATE="$(TZ=Asia/Seoul date -d "$TARGET_DATE -$((DIFF_DAYS - 1)) days" +%F)"
 
@@ -177,5 +180,9 @@ set -e
 if [[ "$RUN_STATUS" -ne 0 ]]; then
   write_status "failed" "see_steps" "$RUN_STATUS" 1
   echo "[ERROR] tuning monitoring postclose failed status=${RUN_STATUS} status_file=$STATUS_FILE"
+  finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
+  echo "[FAIL] tuning_monitoring_postclose target_date=${TARGET_DATE} exit_code=${RUN_STATUS} finished_at=${finished_at}"
   exit "$RUN_STATUS"
 fi
+finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
+echo "[DONE] tuning_monitoring_postclose target_date=${TARGET_DATE} finished_at=${finished_at}"
