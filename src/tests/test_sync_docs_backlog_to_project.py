@@ -556,6 +556,56 @@ def test_sync_backlog_updates_due_for_existing_item(monkeypatch):
     assert any(call.get("value") == {"date": "2026-04-12"} for call in calls)
 
 
+def test_sync_backlog_skips_status_update_when_already_current(monkeypatch):
+    existing_title = "[Checklist0423] already closed task"
+
+    monkeypatch.setenv("GH_PROJECT_TOKEN", "token")
+    monkeypatch.setenv("GH_PROJECT_OWNER", "JaehwanPark")
+    monkeypatch.setenv("GH_PROJECT_NUMBER", "1")
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project.collect_backlog_tasks",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        "src.engine.sync_docs_backlog_to_project._fetch_project_metadata",
+        lambda *args, **kwargs: (
+            "PROJECT_1",
+            {
+                "Status": {
+                    "id": "FIELD_STATUS",
+                    "__typename": "ProjectV2SingleSelectField",
+                    "options": [
+                        {"id": "TODO", "name": "Todo"},
+                        {"id": "DONE", "name": "Done"},
+                    ],
+                },
+            },
+            {existing_title},
+            [
+                ProjectItem(
+                    item_id="ITEM_DONE",
+                    title=existing_title,
+                    content_type="DraftIssue",
+                    status="Done",
+                )
+            ],
+        ),
+    )
+
+    calls = []
+
+    def _fake_graphql_request(token, query, variables):
+        calls.append(variables)
+        return {}
+
+    monkeypatch.setattr("src.engine.sync_docs_backlog_to_project._graphql_request", _fake_graphql_request)
+
+    summary = sync_backlog_to_project(dry_run=False, limit=10)
+    assert summary["status_already_current"] == 1
+    assert summary["status_synced_done"] == 0
+    assert calls == []
+
+
 def test_sync_backlog_deletes_duplicate_managed_project_items(monkeypatch):
     task = BacklogTask(
         title="[OpsEODSplit0423] 관찰축 정리 완료 시 KRX/NXT 분리 EOD 청산 시간/실행경로 확정 (Due: 2026-04-23, Slot: POSTCLOSE, TimeWindow: 16:50~17:00, Track: ScalpingLogic)",

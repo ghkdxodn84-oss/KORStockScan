@@ -271,7 +271,7 @@ ls -l data/report/error_detection/error_detection_$(TZ=Asia/Seoul date +%F).json
 | `process_health` | main loop, daemon thread heartbeat stale 또는 PID 불일치 | heartbeat owner와 실제 tmux/process 상태 확인. 장애면 운영 복구 playbook으로 분리 | 자동 restart, threshold 변경 |
 | `cron_completion` | 필수 cron log의 당일 DONE 누락 또는 FAIL 최신 marker | 해당 cron log와 산출물 재확인 후 같은 date 재실행 여부 판단 | 실패를 threshold 성과로 해석 |
 | `log_scanner` | error log burst 또는 신규 error pattern | stack trace/source artifact 확인 후 incident 또는 code workorder로 분리 | 에러만 보고 live guard 완화 |
-| `artifact_freshness` | 시간창 기준 필수 report/artifact stale/누락 또는 JSON status 값 비정상 | window, trading_day skip, upstream cron 실패, status JSON의 `failed_steps` 확인 | 누락 artifact를 수동 값으로 대체 |
+| `artifact_freshness` | 시간창 기준 필수 report/artifact stale/누락 또는 JSON status 값 비정상. 장중 `pipeline_events`는 09:00~09:05 startup grace를 두고, `threshold_events` compact stream은 sparse stream이라 stale을 warning으로 본다 | window, startup grace, trading_day skip, upstream cron 실패, status JSON의 `failed_steps` 확인 | 누락 artifact를 수동 값으로 대체 |
 | `resource_usage` | CPU/memory/swap/load/disk threshold 위반, sampler stale | resource pressure 원인 확인. disk-low면 log rotate 결과와 cooldown state 확인 | 전략 runtime parameter 변경 |
 | `stale_lock` | 오래된 lock 발견 또는 cleanup 실패 | active lock인지 확인. 반복되면 wrapper lock lifecycle 보강 | 실행 중인 process lock 강제 삭제 |
 
@@ -369,7 +369,7 @@ tmux ls
 
 1. Sentinel은 상태 확인용이다. BUY/HOLD-EXIT 이상치가 보여도 runtime threshold를 바꾸지 않는다.
 2. `12:05` 장중 calibration은 anomaly correction 후보와 source freshness만 확인한다.
-3. `pipeline_events_YYYY-MM-DD.jsonl`와 `threshold_events_YYYY-MM-DD.jsonl` append가 멈추지 않았는지 확인한다.
+3. `pipeline_events_YYYY-MM-DD.jsonl` append가 멈추지 않았는지 확인한다. `threshold_events_YYYY-MM-DD.jsonl`는 threshold-family 대상 stage만 남는 sparse compact stream이므로, stale은 fatal runtime 중단이 아니라 source coverage warning으로 분류한다.
 4. 스윙 dry-run은 실전 판단 흐름 관찰용이다. `swing_sim_*`, `swing_entry_micro_context_observed`, `swing_scale_in_micro_context_observed`, `holding_flow_ofi_smoothing_applied`가 보이면 주문 제출 여부와 별도로 provenance만 본다.
 5. 스캘핑 live simulator는 실전 주문이 아니라 quote-based 가상 체결이다. 장중에는 `scalp_sim_*` stage와 Kiwoom WS 유지 여부만 확인하고, sim 손익만으로 당일 threshold를 바꾸지 않는다.
 6. `RUNTIME_OPS`, snapshot failure, model call timeout, 주문 receipt/provenance 손상이 있으면 전략 threshold 문제가 아니라 운영 장애로 분류한다.

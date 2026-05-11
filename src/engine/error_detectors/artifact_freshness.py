@@ -17,8 +17,8 @@ from src.engine.error_detectors.base import (
 )
 
 
-def _today_kst_str() -> str:
-    return datetime.now().strftime("%Y-%m-%d")
+def _today_kst_str(now_kst: datetime | None = None) -> str:
+    return (now_kst or datetime.now()).strftime("%Y-%m-%d")
 
 
 ARTIFACT_REGISTRY: list[dict[str, Any]] = [
@@ -30,15 +30,17 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "trading_day_only": True,
         "window_start": (9, 0),
         "window_end": (15, 30),
+        "window_grace_sec": 300,
     },
     {
         "id": "threshold_events",
         "path_template": "data/threshold_cycle/threshold_events_{date}.jsonl",
         "max_staleness_sec": 600,
-        "critical": True,
+        "critical": False,
         "trading_day_only": True,
         "window_start": (9, 0),
         "window_end": (15, 30),
+        "window_grace_sec": 300,
     },
     {
         "id": "daily_recommendations_csv",
@@ -283,11 +285,12 @@ class ArtifactFreshnessDetector(BaseDetector):
     category = "artifact"
 
     def check(self) -> DetectionResult:
+        now_dt = datetime.now()
         now_ts = time.time()
-        now_h, now_m = _kst_time_tuple()
+        now_h, now_m = _kst_time_tuple(now_dt)
         now_total = now_h * 60 + now_m
-        today = _today_kst_str()
-        trading_day = is_krx_trading_day(datetime.now().date())
+        today = _today_kst_str(now_dt)
+        trading_day = is_krx_trading_day(now_dt.date())
         details: dict = {}
         issues: list[str] = []
         warnings: list[str] = []
@@ -315,6 +318,15 @@ class ArtifactFreshnessDetector(BaseDetector):
                 continue
 
             past_window_end = we_total is not None and now_total > we_total
+            grace_sec = int(artifact.get("window_grace_sec") or 0)
+            if grace_sec > 0 and ws and not past_window_end:
+                window_start = now_dt.replace(hour=ws[0], minute=ws[1], second=0, microsecond=0)
+                elapsed_from_start = (now_dt - window_start).total_seconds()
+                if 0 <= elapsed_from_start <= grace_sec:
+                    details[f"{aid}_status"] = "startup_grace"
+                    details[f"{aid}_window"] = f"{ws[0]:02d}:{ws[1]:02d}"
+                    details[f"{aid}_grace_sec"] = grace_sec
+                    continue
 
             exists = artifact_path.exists()
 
@@ -417,6 +429,6 @@ class ArtifactFreshnessDetector(BaseDetector):
         return ""
 
 
-def _kst_time_tuple() -> tuple[int, int]:
-    now_kst = datetime.now()
+def _kst_time_tuple(now_kst: datetime | None = None) -> tuple[int, int]:
+    now_kst = now_kst or datetime.now()
     return now_kst.hour, now_kst.minute

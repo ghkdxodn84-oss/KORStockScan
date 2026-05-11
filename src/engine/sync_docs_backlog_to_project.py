@@ -47,6 +47,7 @@ class ProjectItem:
     due_date: str = ""
     slot: str = ""
     time_window: str = ""
+    status: str = ""
 
 
 MANAGED_TRACKS = ("Plan", "ScalpingLogic", "AIPrompt", "RunbookOps")
@@ -757,6 +758,7 @@ def _fetch_project_metadata(
     token: str,
     owner: str,
     project_number: int,
+    status_field_name: str,
     due_field_name: str,
     slot_field_name: str,
     time_window_field_name: str,
@@ -785,10 +787,16 @@ def _fetch_project_metadata(
             due_date_value = ""
             slot_value = ""
             time_window_value = ""
+            status_value = ""
             for fv in (node.get("fieldValues") or {}).get("nodes") or []:
                 field_name = str(((fv.get("field") or {}).get("name")) or "").strip()
                 kind = str(fv.get("__typename") or "")
-                if field_name == due_field_name and kind == "ProjectV2ItemFieldDateValue":
+                if field_name == status_field_name:
+                    if kind == "ProjectV2ItemFieldSingleSelectValue":
+                        status_value = str(fv.get("name") or "").strip()
+                    elif kind == "ProjectV2ItemFieldTextValue" and not status_value:
+                        status_value = str(fv.get("text") or "").strip()
+                elif field_name == due_field_name and kind == "ProjectV2ItemFieldDateValue":
                     due_date_value = str(fv.get("date") or "").strip()
                 elif field_name == slot_field_name:
                     if kind == "ProjectV2ItemFieldSingleSelectValue":
@@ -811,6 +819,7 @@ def _fetch_project_metadata(
                             due_date=due_date_value,
                             slot=slot_value,
                             time_window=time_window_value,
+                            status=status_value,
                         ),
                     )
         page = (project.get("items") or {}).get("pageInfo") or {}
@@ -1100,6 +1109,7 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
         token,
         owner,
         number,
+        status_field_name,
         due_field_name,
         slot_field_name,
         time_window_field_name,
@@ -1111,8 +1121,13 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
     time_window_field = fields.get(time_window_field_name)
     status_option_id = ""
     done_status_option_id = ""
+    status_option_name_by_id: dict[str, str] = {}
     if status_field and str(status_field.get("__typename")) == "ProjectV2SingleSelectField":
         for opt in status_field.get("options") or []:
+            opt_id = str(opt.get("id") or "")
+            opt_name = str(opt.get("name") or "").strip()
+            if opt_id and opt_name:
+                status_option_name_by_id[opt_id] = opt_name
             if str(opt.get("name") or "").strip() == todo_option_name:
                 status_option_id = str(opt.get("id") or "")
             if str(opt.get("name") or "").strip() == done_option_name:
@@ -1299,6 +1314,7 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
 
     synced_status_todo = 0
     synced_status_done = 0
+    status_already_current = 0
     if status_field and status_option_id:
         for item in existing_items:
             desired_option_id = _desired_status_option_id(
@@ -1308,6 +1324,10 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
                 done_option_id=done_status_option_id,
             )
             if not desired_option_id:
+                continue
+            desired_status_name = status_option_name_by_id.get(desired_option_id, "")
+            if desired_status_name and _slot_key(item.status) == _slot_key(desired_status_name):
+                status_already_current += 1
                 continue
             if dry_run:
                 if desired_option_id == status_option_id:
@@ -1497,6 +1517,7 @@ def sync_backlog_to_project(*, dry_run: bool = False, limit: int = 150) -> dict[
         "duplicates_deleted_or_would_delete": duplicate_deleted,
         "status_synced_todo": synced_status_todo,
         "status_synced_done": synced_status_done,
+        "status_already_current": status_already_current,
         "due_filled": synced_due_filled,
         "due_reclassified": synced_due_reclassified,
         "slot_filled": synced_slot_filled,

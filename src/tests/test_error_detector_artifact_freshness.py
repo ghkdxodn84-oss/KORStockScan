@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from unittest.mock import patch
 
@@ -80,6 +81,26 @@ class TestArtifactFreshnessDetector:
             detail_key = "test_future_status"
             assert detail_key in result.details
             assert result.details[detail_key] == "not_yet_due"
+
+    def test_window_startup_grace_suppresses_missing_critical_file(self):
+        now = datetime.now()
+        artifact = {
+            "id": "test_startup_grace",
+            "path_template": "/nonexistent/path/file.json",
+            "max_staleness_sec": 600,
+            "critical": True,
+            "window_start": (now.hour, now.minute),
+            "window_end": (23, 59),
+            "window_grace_sec": 7200,
+        }
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+        ):
+            detector = ArtifactFreshnessDetector()
+            result = detector.check()
+            assert result.severity == "pass"
+            assert result.details.get("test_startup_grace_status") == "startup_grace"
 
     def test_non_trading_day_skips(self):
         artifact = {
@@ -183,3 +204,6 @@ class TestArtifactFreshnessDetector:
         assert "swing_daily_simulation_{date}.json" in registry["swing_daily_simulation_report"]["path_template"]
         assert "swing_pattern_lab_automation_{date}.json" in registry["swing_pattern_lab_automation_report"]["path_template"]
         assert "current.json" in registry["swing_model_registry_current"]["path_template"]
+        assert registry["pipeline_events"]["window_grace_sec"] == 300
+        assert registry["threshold_events"]["critical"] is False
+        assert registry["threshold_events"]["window_grace_sec"] == 300
