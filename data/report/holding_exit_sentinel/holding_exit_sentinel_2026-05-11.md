@@ -9,7 +9,7 @@
 
 ## 근거
 
-- as_of: `2026-05-11T12:50:05`
+- as_of: `2026-05-11T12:55:05`
 - exit_signal unique: `10`
 - sell_order_sent unique: `1`
 - sell_completed unique: `1`

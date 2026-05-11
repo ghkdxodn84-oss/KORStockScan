@@ -593,6 +593,47 @@ def test_openai_ws_hot_path_does_not_take_http_api_lock(monkeypatch):
     assert meta["openai_ws_roundtrip_ms"] == 120
 
 
+def test_openai_ws_entry_price_endpoint_uses_ws_transport(monkeypatch):
+    engine = _build_engine()
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_TRANSPORT_MODE="responses_ws",
+            OPENAI_RESPONSES_WS_ENABLED=True,
+        ),
+    )
+    monkeypatch.setattr(
+        engine,
+        "_call_openai_responses_ws",
+        lambda request: OpenAITransportResult(
+            payload={"action": "USE_DEFENSIVE", "confidence": 0.7, "price": 70000},
+            transport_mode="responses_ws",
+            ws_used=True,
+            ws_http_fallback=False,
+            roundtrip_ms=95,
+        ),
+    )
+
+    result = GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="test_entry_price",
+        schema_name="entry_price_v1",
+        endpoint_name="entry_price",
+        symbol="005930",
+    )
+    meta = engine._consume_last_transport_meta()
+
+    assert result["action"] == "USE_DEFENSIVE"
+    assert meta["openai_transport_mode"] == "responses_ws"
+    assert meta["openai_ws_used"] is True
+    assert meta["openai_ws_http_fallback"] is False
+
+
 def test_openai_invalid_prompt_retries_with_minimal_numeric_prompt(monkeypatch):
     engine = _build_engine()
     calls = []
