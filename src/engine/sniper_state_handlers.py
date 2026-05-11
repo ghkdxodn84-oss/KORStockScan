@@ -246,7 +246,10 @@ def _scalp_live_simulator_owner() -> str:
 
 
 def _scalp_live_simulator_fill_policy() -> str:
-    return str(_rule("SCALP_LIVE_SIMULATOR_FILL_POLICY", "quote_based") or "quote_based")
+    return str(
+        _rule("SCALP_LIVE_SIMULATOR_FILL_POLICY", "signal_inclusive_best_ask_v1")
+        or "signal_inclusive_best_ask_v1"
+    )
 
 
 def _is_scalp_simulator_target(stock: dict | None) -> bool:
@@ -475,6 +478,35 @@ def _scalp_sim_buy_quote_touch(ws_data: dict, limit_price: int) -> tuple[bool, i
     return False, 0, best_ask, best_bid
 
 
+def _scalp_sim_buy_signal_inclusive_fill(ws_data: dict, limit_price: int) -> dict:
+    limit_price = _safe_int(limit_price, 0)
+    curr_price = _safe_int((ws_data or {}).get("curr"), 0)
+    best_ask, best_bid = _get_best_levels_from_ws(ws_data or {})
+    would_limit_fill, limit_fill_price, _, _ = _scalp_sim_buy_quote_touch(ws_data or {}, limit_price)
+    if best_ask > 0:
+        fill_price = best_ask
+        fill_source = "best_ask"
+    elif curr_price > 0:
+        fill_price = curr_price
+        fill_source = "curr"
+    elif limit_price > 0:
+        fill_price = limit_price
+        fill_source = "limit_price_fallback"
+    else:
+        fill_price = 0
+        fill_source = "unpriced"
+    return {
+        "fill_price": fill_price,
+        "fill_source": fill_source,
+        "best_ask": best_ask,
+        "best_bid": best_bid,
+        "curr_price": curr_price,
+        "limit_price": limit_price,
+        "would_limit_fill": bool(would_limit_fill),
+        "limit_fill_price": limit_fill_price,
+    }
+
+
 def _scalp_sim_sell_fill_price(ws_data: dict, curr_price: int) -> tuple[int, int, int]:
     best_ask, best_bid = _get_best_levels_from_ws(ws_data or {})
     fill_price = best_bid if best_bid > 0 else _safe_int(curr_price, 0)
@@ -517,7 +549,19 @@ def _initialize_scalp_sim_holding_defaults(stock: dict, buy_price: int) -> None:
     _mutate_stock_state(stock, set_fields=set_fields)
 
 
-def _mark_scalp_simulated_holding(stock: dict, code: str, fill_price: int, qty: int, *, now_ts: float, best_ask: int, best_bid: int) -> None:
+def _mark_scalp_simulated_holding(
+    stock: dict,
+    code: str,
+    fill_price: int,
+    qty: int,
+    *,
+    now_ts: float,
+    best_ask: int,
+    best_bid: int,
+    fill_source: str | None = None,
+    would_limit_fill: bool | None = None,
+    limit_fill_price: int | None = None,
+) -> None:
     qty = max(1, _safe_int(qty, 1))
     fill_price = _safe_int(fill_price, 0)
     _initialize_scalp_sim_holding_defaults(stock, fill_price)
@@ -564,8 +608,11 @@ def _mark_scalp_simulated_holding(stock: dict, code: str, fill_price: int, qty: 
             qty=qty,
             limit_price=stock.get("scalp_sim_entry_limit_price"),
             assumed_fill_price=fill_price,
+            fill_source=fill_source or "unknown",
             best_ask=best_ask,
             best_bid=best_bid,
+            would_limit_fill=bool(would_limit_fill),
+            limit_fill_price=limit_fill_price,
             would_submit_stage="order_leg_sent",
             runtime_effect="simulated_holding_only",
         ),
@@ -580,7 +627,9 @@ def _mark_scalp_simulated_holding(stock: dict, code: str, fill_price: int, qty: 
             sim_parent_record_id=stock.get("sim_parent_record_id"),
             requested_qty=qty,
             assumed_fill_price=fill_price,
+            fill_source=fill_source or "unknown",
             entry_fill_quality="FULL_FILL",
+            would_limit_fill=bool(would_limit_fill),
             preset_tp_price=stock.get("preset_tp_price", 0),
             runtime_effect="simulated_holding_only",
         ),
@@ -596,7 +645,9 @@ def handle_scalp_simulator_pending_entry(stock: dict, code: str, ws_data: dict, 
     now_ts = now_ts or time.time()
     limit_price = _safe_int(stock.get("scalp_sim_entry_limit_price"), 0)
     qty = _safe_int(stock.get("scalp_sim_entry_qty"), _rule_int("SCALP_LIVE_SIMULATOR_QTY", 1) or 1)
-    if limit_price <= 0:
+    fill_info = _scalp_sim_buy_signal_inclusive_fill(ws_data or {}, limit_price)
+    fill_price = _safe_int(fill_info.get("fill_price"), 0)
+    if fill_price <= 0:
         if not stock.get("scalp_sim_unpriced_logged"):
             _mutate_stock_state(stock, set_fields={"scalp_sim_unpriced_logged": True})
             _log_entry_pipeline(
@@ -608,31 +659,14 @@ def handle_scalp_simulator_pending_entry(stock: dict, code: str, ws_data: dict, 
                     sim_record_id=stock.get("sim_record_id"),
                     sim_parent_record_id=stock.get("sim_parent_record_id"),
                     qty=qty,
+                    limit_price=limit_price,
+                    fill_source=fill_info.get("fill_source"),
+                    curr_price=fill_info.get("curr_price"),
+                    best_ask=fill_info.get("best_ask"),
+                    best_bid=fill_info.get("best_bid"),
                 ),
             )
             persist_scalp_simulator_state()
-        return True
-    timeout_sec = _rule_int("SCALP_LIVE_SIMULATOR_ENTRY_TIMEOUT_SEC", 90)
-    armed_at = _safe_float(stock.get("scalp_sim_entry_armed_at"), _safe_float(stock.get("order_time"), now_ts))
-    if timeout_sec > 0 and armed_at > 0 and now_ts - armed_at > timeout_sec:
-        _mutate_stock_state(stock, set_fields={"status": "EXPIRED", "scalp_sim_expired_at": now_ts})
-        _log_entry_pipeline(
-            stock,
-            code,
-            "scalp_sim_entry_expired",
-            **_scalp_sim_event_fields(
-                threshold_family="pre_submit_price_guard",
-                sim_record_id=stock.get("sim_record_id"),
-                sim_parent_record_id=stock.get("sim_parent_record_id"),
-                limit_price=limit_price,
-                qty=qty,
-                timeout_sec=timeout_sec,
-            ),
-        )
-        persist_scalp_simulator_state()
-        return True
-    touched, fill_price, best_ask, best_bid = _scalp_sim_buy_quote_touch(ws_data or {}, limit_price)
-    if not touched:
         return True
     _mark_scalp_simulated_holding(
         stock,
@@ -640,8 +674,11 @@ def handle_scalp_simulator_pending_entry(stock: dict, code: str, ws_data: dict, 
         fill_price,
         qty,
         now_ts=now_ts,
-        best_ask=best_ask,
-        best_bid=best_bid,
+        best_ask=_safe_int(fill_info.get("best_ask"), 0),
+        best_bid=_safe_int(fill_info.get("best_bid"), 0),
+        fill_source=str(fill_info.get("fill_source") or "unknown"),
+        would_limit_fill=bool(fill_info.get("would_limit_fill")),
+        limit_fill_price=_safe_int(fill_info.get("limit_fill_price"), 0),
     )
     return True
 
@@ -655,8 +692,6 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(stock: dict, code: str, ws_da
     if not bool(runtime.get("is_trigger")):
         return False
     current_ai_score = _safe_float(runtime.get("current_ai_score"), 0.0)
-    if current_ai_score < 75.0:
-        return False
     now_ts = _safe_float(runtime.get("now_ts"), time.time())
     if _has_active_scalp_simulator_position(code):
         _log_entry_pipeline(
@@ -675,19 +710,6 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(stock: dict, code: str, ws_da
         0,
     )
     qty = max(1, _rule_int("SCALP_LIVE_SIMULATOR_QTY", 1) or 1)
-    if limit_price <= 0:
-        _log_entry_pipeline(
-            stock,
-            code,
-            "scalp_sim_entry_unpriced",
-            **_scalp_sim_event_fields(
-                threshold_family="pre_submit_price_guard",
-                sim_parent_record_id=stock.get("id"),
-                qty=qty,
-                ai_score=f"{current_ai_score:.1f}",
-            ),
-        )
-        return False
     sim_record_id = _simulated_order_no("SCALPSIM", code)
     sim_ord_no = _simulated_order_no("SIMBUY", code)
     sim_target = dict(stock)
@@ -3328,6 +3350,15 @@ def _build_entry_submit_revalidation_fields(ws_data, latency_gate, *, now_ts=Non
     }
 
 
+def _is_passive_probe_stale_submit_block(submit_revalidation_fields) -> bool:
+    if not bool(_rule("SCALPING_ENTRY_PASSIVE_PROBE_STALE_SUBMIT_BLOCK_ENABLED", True)):
+        return False
+    fields = submit_revalidation_fields or {}
+    if str(fields.get("entry_order_lifecycle") or "").strip() != "passive_probe":
+        return False
+    return bool(fields.get("price_context_stale_at_submit") or fields.get("quote_stale_at_submit"))
+
+
 def _resolve_buy_order_timeout_sec(stock, strategy):
     normalized_strategy = 'SCALPING' if str(strategy or '').upper() in ('SCALPING', 'SCALP') else str(strategy or '').upper()
     if normalized_strategy != 'SCALPING':
@@ -5937,6 +5968,26 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         ),
         **swing_entry_micro_fields,
     )
+
+    if _is_passive_probe_stale_submit_block(submit_revalidation_fields):
+        log_info(
+            f"[ENTRY_SUBMIT_REVALIDATION_BLOCK] {stock.get('name')}({code}) "
+            f"lifecycle=passive_probe warning={submit_revalidation_fields.get('entry_submit_revalidation_warning')}"
+        )
+        clear_signal_reference(stock)
+        _log_entry_pipeline(
+            stock,
+            code,
+            "entry_submit_revalidation_block",
+            block_reason="stale_context_or_quote",
+            actual_order_submitted=False,
+            threshold_family="pre_submit_price_guard",
+            **submit_revalidation_fields,
+            **latency_price_snapshot,
+            **entry_orderbook_micro_fields,
+            **swing_entry_micro_fields,
+        )
+        return False
 
     if is_buy_side_paused():
         log_info(

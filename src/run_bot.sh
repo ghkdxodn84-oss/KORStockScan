@@ -10,6 +10,10 @@ while true; do
     export KORSTOCKSCAN_INVEST_RATIO_SCALPING_MIN=1.0
     export KORSTOCKSCAN_INVEST_RATIO_SCALPING_MAX=1.0
     export KORSTOCKSCAN_SCALPING_MAX_BUY_BUDGET_KRW=3000000
+    export KORSTOCKSCAN_SCALPING_AI_ROUTE=openai
+    export KORSTOCKSCAN_OPENAI_RESPONSES_WS_TIMEOUT_MS=15000
+    export KORSTOCKSCAN_OPENAI_RESPONSES_MAX_OUTPUT_TOKENS=512
+    export KORSTOCKSCAN_OPENAI_REASONING_EFFORT=auto
 
     THRESHOLD_RUNTIME_ENV="../data/threshold_cycle/runtime_env/threshold_runtime_env_$(TZ=Asia/Seoul date +%F).env"
     if [ -f "$THRESHOLD_RUNTIME_ENV" ]; then
@@ -21,7 +25,7 @@ while true; do
     fi
 
     # 봇 실행 (경로나 파일명은 환경에 맞게 수정)
-    python bot_main.py
+    ../.venv/bin/python bot_main.py
 
     echo "🛑 봇 프로세스가 종료되었습니다."
     echo "⏳ 5초 후 엔진을 재가동합니다. (완전 종료를 원하면 지금 Ctrl+C를 누르세요)"

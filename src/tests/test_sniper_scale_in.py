@@ -2235,6 +2235,25 @@ def test_entry_ai_price_canary_clamps_wait_danger_passive_probe_to_one_tick(monk
     assert applied["entry_passive_probe_adjusted_price"] == 91900
 
 
+def test_passive_probe_stale_submit_revalidation_blocks(monkeypatch):
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 100.0)
+
+    fields = state_handlers._build_entry_submit_revalidation_fields(
+        {"last_ws_update_ts": 97.0},
+        {
+            "entry_order_lifecycle": "passive_probe",
+            "entry_passive_probe_applied": True,
+            "ai_entry_price_canary_decision_ts": 90.0,
+            "ai_entry_price_canary_context_age_ms": 9000,
+        },
+        now_ts=100.0,
+    )
+
+    assert fields["entry_submit_revalidation_warning"] == "stale_context_or_quote"
+    assert fields["quote_stale_at_submit"] is True
+    assert state_handlers._is_passive_probe_stale_submit_block(fields) is True
+
+
 def test_pending_entry_cancel_logs_receipt_provenance(monkeypatch):
     logs = []
     monkeypatch.setattr(state_handlers, "_log_entry_pipeline", lambda stock, code, stage, **fields: logs.append((stage, fields)))

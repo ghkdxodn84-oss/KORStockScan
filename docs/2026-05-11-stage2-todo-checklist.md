@@ -4,6 +4,7 @@
 
 - threshold-cycle은 장전 수동 승인 없이 `auto_bounded_live`로 무인 반영한다.
 - 장후에는 daily EV 성과 리포트만 제출 기준으로 보며, Gemini/Claude pattern lab 결과는 EV report 요약으로만 포함한다.
+- 사용자 운영 지시에 따라 main live AI routing은 OpenAI로 고정하고, Gemini/DeepSeek는 fallback/비운영 분석 경로로만 본다.
 - 남은 튜닝 관련 보강은 독립 report-only 관찰축으로 늘리지 않고, `threshold_cycle` source bundle / `statistical_action_weight` / `performance_tuning` / daily EV 자동화 체인의 입력 품질 개선으로만 처리한다.
 
 ## 오늘 강제 규칙
@@ -13,6 +14,7 @@
 - 조건 미달은 rollback이 아니라 calibration trigger다. safety breach만 `safety_revert_required=true`로 분리한다.
 - 장전 수동 enable/hold checklist를 만들지 않는다. postclose 제출물은 `threshold_cycle_ev_YYYY-MM-DD.{json,md}`로 통일하고, pattern lab 상세는 별도 artifact 링크로만 둔다.
 - 신규 튜닝 판단 항목은 수동 후속계획으로 분리하지 않는다. 새 threshold family가 필요하면 pattern lab `auto_family_candidate(allowed_runtime_apply=false)` 또는 threshold-cycle `calibration_candidates`로만 편입하고, runtime 적용은 기존 `auto_bounded_live` guard를 통과한 경우에만 허용한다.
+- Provider routing은 `KORSTOCKSCAN_SCALPING_AI_ROUTE=openai`와 startup `main_scalping_openai=ON`을 기준으로 확인한다. OpenAI 키/초기화 실패로 Gemini fallback이 발생하면 runtime incident로 분리한다.
 
 ## 장전 체크리스트 (08:50~09:00)
 
@@ -26,8 +28,25 @@
 
 - 신규 수동 runtime 변경 작업 없음.
 - Runbook 운영 확인은 [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md) `장중 확인 절차`와 `build_codex_daily_workorder --slot INTRADAY`의 `IntradayAutomationHealthCheckYYYYMMDD` 블록을 기준으로 본다.
-- 확인 범위: BUY/HOLD-EXIT Sentinel, intraday calibration, pipeline/threshold event append, 스윙 dry-run provenance. Sentinel/calibration 결과로 당일 threshold, provider routing, 스윙 주문 guard를 변경하지 않는다.
+- 확인 범위: BUY/HOLD-EXIT Sentinel, intraday calibration, pipeline/threshold event append, 스윙 dry-run provenance, OpenAI live route startup 증적. Sentinel/calibration 결과로 당일 threshold, 스윙 주문 guard를 변경하지 않는다.
 - 운영 메모 (`2026-05-11 09:00 KST`): `artifact_freshness`의 장 시작 직후 `pipeline_events`/`threshold_events` stale fail은 startup grace 미적용과 sparse compact stream 과민 판정으로 분류한다. `pipeline_events`는 09:00~09:05 grace 이후 critical freshness를 유지하고, `threshold_events` stale은 warning/source coverage로만 본다. 봇 재기동, threshold mutation, provider routing 변경은 하지 않는다.
+- 운영 확인 기록 (`IntradayAutomationHealthCheck20260511`, `PVTI_lAHOAXZuE84BUTcPzgsPE-M`): `tmux bot` alive, process/resource/artifact detector pass, `pipeline_events_2026-05-11.jsonl`/`threshold_events_2026-05-11.jsonl` append 정상, BUY/HOLD-EXIT Sentinel 09:05~09:30 반복 실행 완료. BUY Funnel은 `UPSTREAM_AI_THRESHOLD` 및 `LATENCY_DROUGHT`, HOLD/EXIT Sentinel은 `SELL_EXECUTION_DROUGHT`/`HOLD_DEFER_DANGER`/`AI_HOLDING_OPS`를 report-only로 분류했다. `buy_pause_guard`는 09:30 평가 결과 `paused=false`, `should_alert=false`였으나 cron detector에는 완료 marker 계약이 없어 `unknown`으로 보인다. `error_detection_full`도 wrapper log 파일 미생성으로 warning이 남아 marker/log 계약 보강 대상으로 분리한다. 판정은 `warning`이며 runtime threshold/order/provider routing 변경 없음.
+- 운영 결함 기록 (`SeahBesteelEntryLifecycle0511`, `record_id=5811`): 세아베스틸지주(001430)는 `mechanical_momentum_latency_relief` 성과 표본에 포함하되 단순 전략 손실로만 귀속하지 않는다. 진입은 `latency_state=DANGER`, `entry_order_lifecycle=passive_probe`, `entry_submit_revalidation_warning=stale_context_or_quote`, `quote_stale_at_submit=True`였고, 주문 `0021988`은 접수 후 늦게 체결됐으나 receipt handler가 `[EXEC_IGNORED] no matching active order`로 흘려 `보유 0` 표시, broker recover, `held_sec=0` 왜곡을 유발했다. 후속은 threshold/spread/runtime restart가 아니라 `passive_probe` stale submit 차단, terminal entry order grace 보강, detector marker/log 계약 보강으로 닫는다.
+
+- [x] `[VWAPReclaimPrecheckDataRepair0511] scalp_vwap_reclaim_01 price/VWAP 전처리 데이터 보강` (`Due: 2026-05-11`, `Slot: INTRADAY`, `TimeWindow: 10:00~14:00`, `Track: RuntimeStability`)
+  - Source: [sniper_condition_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_condition_handlers.py), [test_condition_open_reclaim.py](/home/ubuntu/KORStockScan/src/tests/test_condition_open_reclaim.py)
+  - 판정: `060250 scalp_vwap_reclaim_01 reason=missing_price_or_vwap curr=0 vwap=0` 반복은 `11:07 KST` WS 로그인 준비 공백/조건검색식 재등록 직후 여러 VWAP_RECLAIM 종목에서 동시에 발생한 입력 공백 결함이다. 조건검색 push 직후 WS 현재가가 없거나 Kiwoom 분봉 값의 부호/콤마 문자열 변환 실패가 겹치면 VWAP 전처리가 0 처리될 수 있다.
+  - 실행 메모: WS `curr`/`best_bid`/`best_ask`와 Kiwoom 분봉 `현재가`/`시가`/`거래량`을 부호·콤마 포함 문자열에서도 양의 정수로 정규화한다. VWAP_RECLAIM 전처리에서 가격/VWAP가 비면 skip으로 끝내지 않고 `COMMAND_WS_REG`를 즉시 요청해 다음 조건 이벤트에서 quote가 채워지도록 했다.
+  - 유지 가드: VWAP reclaim band `current > vwap` 및 `0.1%~1.0%` 조건, threshold, 주문 수량/가격 guard, provider routing은 변경하지 않는다.
+  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_condition_open_reclaim.py`, `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/sniper_condition_handlers.py`, parser 검증으로 확인한다.
+
+- [x] `[OpenAILiveRuntimeRouting0511] main live AI routing OpenAI 고정 및 재기동 확인` (`Due: 2026-05-11`, `Slot: INTRADAY`, `TimeWindow: 10:00~15:30`, `Track: RuntimeStability`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [runtime_ai_router.py](/home/ubuntu/KORStockScan/src/engine/runtime_ai_router.py), [kiwoom_sniper_v2.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_sniper_v2.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [test_runtime_ai_router.py](/home/ubuntu/KORStockScan/src/tests/test_runtime_ai_router.py)
+  - 판정: 이전 HD한국조선해양 `SCALPING:scalping_entry` 로그는 Gemini route였고, 이는 사용자 운영 의도인 "모두 OpenAI"와 불일치했다.
+  - 실행 메모: `src/run_bot.sh`에 `KORSTOCKSCAN_SCALPING_AI_ROUTE=openai`를 고정 export하고, `resolve_scalping_ai_route()` 기본값도 OpenAI로 변경했다. 새 tmux 세션이 bare `python`을 찾지 못하는 기동 결함도 확인되어 `../.venv/bin/python bot_main.py`로 고정했다. OpenAI Responses 호환성 보강으로 `gpt-5*` 모델에는 unsupported `temperature`를 보내지 않고, JSON 호출 input에는 `Return JSON only.` marker를 보장한다. 기존 700ms timeout은 OpenAI live route에서 초기 timeout을 유발해 `KORSTOCKSCAN_OPENAI_RESPONSES_WS_TIMEOUT_MS=15000`으로 고정했다. 추가로 Gemini용 장문 시장 브리핑을 그대로 쓰던 OpenAI 스캘핑 hot path 입력을 정량 피처 중심 compact JSON payload로 줄였고, 반복 timeout 후 `max_output_tokens=512`, `reasoning.effort=auto`을 요청 payload에 고정했다.
+  - 후속 보정 (`2026-05-11 10:55 KST`): 삼성물산 `SCALPING:scalping_entry`에서 OpenAI `invalid_prompt` 400이 1회 발생했다. 원인은 키/쿼터가 아니라 prompt/input safety precheck로 분류하고, 스캘핑 OpenAI hot path compact payload에서 자연어 파생 브리핑(`tick_summary`, `volume_analysis`, `indicators`, `orderbook_imbalance`)을 제거해 순수 numeric JSON으로 축소했다. 재발 시 원본 prompt를 반복하지 않고 최소 영어 numeric JSON prompt로 1회 재시도하는 `invalid_prompt_retry` 경로를 추가했다.
+  - 유지 가드: OpenAI API key/engine 초기화 실패 시 Gemini fallback은 허용 동작이 아니라 incident로 본다. threshold 값, 주문가/수량 guard, 스윙 dry-run guard는 이 항목에서 변경하지 않는다.
+  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_ai_engine_openai_transport.py src/tests/test_runtime_ai_router.py`, `bash -n src/run_bot.sh`, 봇 재기동 후 `/proc/<pid>/environ`의 `KORSTOCKSCAN_SCALPING_AI_ROUTE=openai` 및 startup 로그 `route=openai`, `main_scalping_openai=ON`으로 확인한다.
 
 ## 장후 체크리스트 (16:00~19:00)
 
@@ -55,11 +74,20 @@
 
 - [x] `[ScalpAiBuyAllLiveSimulator0511] 스캘핑 AI BUY 전체 대상 실시간 simulator 구현` (`Due: 2026-05-11`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: ScalpingLogic`)
   - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [kiwoom_sniper_v2.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_sniper_v2.py), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [sniper_performance_tuning_report.py](/home/ubuntu/KORStockScan/src/engine/sniper_performance_tuning_report.py), [threshold_cycle_ev_report.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_ev_report.py)
-  - 실행 메모: `SCALP_LIVE_SIMULATOR_ENABLED=True` 기본 ON으로 스캘핑 AI/Gatekeeper BUY 확정 지점에서 `scalp_ai_buy_all` sim 포지션을 종목당 1개 생성한다. 브로커 매수/매도/추가매수 접수는 차단하고, quote-based full-fill v1로 BUY/scale-in/sell을 가상 체결한다.
+  - 실행 메모: `SCALP_LIVE_SIMULATOR_ENABLED=True` 기본 ON으로 스캘핑 AI/Gatekeeper BUY 확정 지점에서 `scalp_ai_buy_all` sim 포지션을 종목당 1개 생성한다. 브로커 매수/매도/추가매수 접수는 차단하고, `signal_inclusive_best_ask_v1` full-fill로 BUY 신호 전체를 즉시 가상 체결한다. quote touch/timeout은 sim 매수 허들이 아니라 `would_limit_fill`, `fill_source`, `limit_fill_price` 진단 필드로 남긴다.
   - 데이터/WS: open sim state는 `data/runtime/scalp_live_simulator_state.json`에 저장/복원한다. active sim target은 Kiwoom WS prune에서 active consumer로 보며 `scalp_sim_*`, `actual_order_submitted=false`, `calibration_authority=equal_weight`를 pipeline event에 남긴다.
   - 자동화체인 연결: threshold-cycle/daily EV/performance tuning은 sim completed rows를 `real`/`sim`/`combined`로 분리 표시하되 combined를 실매매 동급 calibration 입력으로 사용한다. 장중 runtime threshold mutation 금지는 유지한다.
   - 추가 운영 메모: heartbeat의 `보유` 카운트는 실계좌/실주문 포지션만 표시하고 simulator HOLDING은 `sim`으로 분리한다. `TEST/DUMMY/MOCK` 또는 `123456` synthetic simulator state는 재시작 복원 대상에서 제외한다.
-  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_scalp_live_simulator.py`, parser 검증으로 확인한다.
+  - 후속 보정 (`2026-05-11`): 사용자 지시에 따라 sim 목적을 "텔레그램/AI BUY 신호 전체 관측 후 EV 극대화 spot 탐색"으로 고정했다. `is_trigger=True` BUY 확정은 별도 score 75 재필터 없이 포함하고, best ask/curr/limit fallback 순서로 가상 진입한다. quote touch 실패는 제외가 아니라 `would_limit_fill=false` 표본으로 남긴다.
+  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_scalp_live_simulator.py`, `PYTHONPATH=. .venv/bin/python -m py_compile src/engine/sniper_state_handlers.py src/utils/constants.py`, parser 검증으로 확인한다.
+
+- [x] `[PassiveProbeLifecycleGuard0511] stale passive probe 제출 차단 및 receipt/detector 계약 보강` (`Due: 2026-05-11`, `Slot: INTRADAY`, `TimeWindow: 09:00~15:30`, `Track: RuntimeStability`)
+  - Source: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py), [sniper_entry_state.py](/home/ubuntu/KORStockScan/src/engine/sniper_entry_state.py), [buy_pause_guard.py](/home/ubuntu/KORStockScan/src/engine/buy_pause_guard.py), [run_error_detection.sh](/home/ubuntu/KORStockScan/deploy/run_error_detection.sh), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정: 세아베스틸지주(001430) 손실은 `mechanical_momentum_latency_relief` 표본에 포함하되 `stale_context_or_quote + late_fill + receipt_ignored` 운영 결함 태그를 붙인다. 청산 문제가 아니라 stale DANGER 진입 허용과 주문 생명주기 매칭 결함이다.
+  - 실행 메모: `passive_probe` lifecycle에서 submit revalidation이 stale이면 `entry_submit_revalidation_block`으로 브로커 제출 전 차단하고 `actual_order_submitted=false`, `threshold_family=pre_submit_price_guard`를 남긴다. late fill 매칭을 위해 terminal entry order grace를 180초로 확장했다. `buy_pause_guard evaluate` CLI는 detector가 인식 가능한 `[DONE] buy_pause_guard target_date=YYYY-MM-DD` marker를 출력하고, `run_error_detection.sh`는 시작 전 `logs/run_error_detection.log` 파일을 보장한다. crontab에는 executable bit 의존이 없도록 `*/5 * * * * bash deploy/run_error_detection.sh full ... # ERROR_DETECTION_FULL` 형태로 재설치했다. 수동 `cron_only` 재검증에서 `buy_pause_guard_status=pass`, `error_detection_full_status=pass`를 확인했다.
+  - 추가 운영 메모: `09:40 KST` `log_scanner` burst 11건은 old direct cron의 `Permission denied` 1회와 `bot_main_error.log`의 `[ERROR_DETECTION]` 메타 알림 재스캔이 섞인 report-only 중복 감지로 분류했다. `full` 재검증은 pass였고, detector 메타라인은 `log_scanner` 집계에서 제외하도록 보강했다. 후속 수동 테스트 중 기존 테스트가 운영 scan state를 삭제하는 격리 결함도 확인되어 테스트 state path를 tmp로 분리했고, detector wrapper 로그(`run_error_detection*.log`)도 scanner 입력에서 제외했다. 운영 scan state는 현재 EOF로 재베이스한 뒤 `log_only=pass`를 확인했다.
+  - 유지 가드: score threshold, spread cap, provider routing, bot restart는 변경하지 않는다. 이 변경은 stale passive probe 제출 차단과 운영 증적 계약 보강에 한정한다.
+  - 검증: `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_sniper_scale_in.py -k 'passive_probe_stale_submit_revalidation_blocks or late_fill_after_cancel_matches_terminal_entry_order or pending_entry_cancel_logs_receipt_provenance'`, `PYTHONPATH=. .venv/bin/python -m pytest -q src/tests/test_buy_pause_guard.py src/tests/test_error_detector_cron_completion.py`, `bash -n deploy/run_error_detection.sh deploy/install_error_detection_cron.sh` 통과.
 
 - [x] `[SwingModelSelectionFunnelRepair0509] 스윙 모델 추천 생성 정상화 및 선정 funnel 진단 병합 구현` (`Due: 2026-05-09`, `Slot: ADHOC`, `TimeWindow: 00:00~23:59`, `Track: ScalpingLogic`)
   - Source: [recommend_daily_v2.py](/home/ubuntu/KORStockScan/src/model/recommend_daily_v2.py), [common_v2.py](/home/ubuntu/KORStockScan/src/model/common_v2.py), [final_ensemble_scanner.py](/home/ubuntu/KORStockScan/src/scanners/final_ensemble_scanner.py), [swing_selection_funnel_report.py](/home/ubuntu/KORStockScan/src/engine/swing_selection_funnel_report.py)

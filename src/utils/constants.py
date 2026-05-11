@@ -89,9 +89,9 @@ class TradingConfig:
     SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED: bool = True  # 스윙 OFI/QI observe/proposal-only context
     SCALP_LIVE_SIMULATOR_ENABLED: bool = True  # 스캘핑 AI BUY 전체 대상 live simulator 기본 ON
     SCALP_LIVE_SIMULATOR_OWNER: str = "ScalpAiBuyAllLiveSimulator0511"
-    SCALP_LIVE_SIMULATOR_FILL_POLICY: str = "quote_based"
+    SCALP_LIVE_SIMULATOR_FILL_POLICY: str = "signal_inclusive_best_ask_v1"
     SCALP_LIVE_SIMULATOR_QTY: int = 1  # BUY 신호당 가상 진입 수량
-    SCALP_LIVE_SIMULATOR_ENTRY_TIMEOUT_SEC: int = 90  # quote touch 대기 만료
+    SCALP_LIVE_SIMULATOR_ENTRY_TIMEOUT_SEC: int = 90  # deprecated: BUY signal inclusion no longer expires on quote touch
 
     # [매매 비중 설정] 전략별 주문 가능 현금 대비 1회 매수 투입 비율
     INVEST_RATIO_KOSPI: float = 0.25  # DEPRECATED: MIN/MAX 비중으로 대체됨
@@ -454,7 +454,7 @@ class TradingConfig:
     GPT_FAST_MODEL = "gpt-5-nano"
     GPT_DEEP_MODEL = "gpt-5.4"
     GPT_REPORT_MODEL = "gpt-5.4-mini"
-    GPT_THRESHOLD_CORRECTION_MODEL = "gpt-5.5"
+    GPT_THRESHOLD_CORRECTION_MODEL: str = "gpt-5.5"
     GPT_THRESHOLD_CORRECTION_FALLBACK_MODELS: tuple = ("gpt-5.4", "gpt-5.4-mini")
     GPT_ENABLE_SCALPING_DEEP_RECHECK: bool = False
     GPT_ENGINE_MIN_INTERVAL: float = 0.5 # OpenAI 서버에 쏘는 최소 간격 (초 단위, 0.5초 = 500ms)
@@ -464,8 +464,11 @@ class TradingConfig:
     OPENAI_RESPONSES_WS_ENABLED: bool = False  # Responses WebSocket shadow-first 토글
     OPENAI_RESPONSES_WS_POOL_SIZE: int = 2  # persistent Responses WebSocket worker 수
     OPENAI_RESPONSES_WS_TIMEOUT_MS: int = 700  # hot path 판단 timeout
+    OPENAI_RESPONSES_MAX_OUTPUT_TOKENS: int = 512  # OpenAI live JSON 응답 토큰 상한
+    OPENAI_REASONING_EFFORT: str = "auto"  # hot path 추론 effort
     OPENAI_RESPONSES_WS_LATE_DISCARD_ENABLED: bool = True  # deadline 초과 응답 discard
     OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED: bool = True  # buy-side hot path timeout/parse failure 시 reject fallback
+    OPENAI_SCALPING_COMPACT_INPUT_ENABLED: bool = True  # OpenAI live route hot path 입력 compact JSON 사용
     OPENAI_PREVIOUS_RESPONSE_ID_ENABLED: bool = False  # phase1: stateless 유지
     OPENAI_DUAL_PERSONA_ENABLED: bool = False  # Plan Rebase: AI 엔진 A/B/shadow 비교는 기본 튜닝 로직 정렬 이후 재개
     OPENAI_DUAL_PERSONA_SHADOW_MODE: bool = False
@@ -1345,6 +1348,8 @@ def _build_trading_rules() -> TradingConfig:
     env_openai_ws_enabled = _env_bool("KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED")
     env_openai_ws_pool_size = _env_int("KORSTOCKSCAN_OPENAI_RESPONSES_WS_POOL_SIZE")
     env_openai_ws_timeout_ms = _env_int("KORSTOCKSCAN_OPENAI_RESPONSES_WS_TIMEOUT_MS")
+    env_openai_max_output_tokens = _env_int("KORSTOCKSCAN_OPENAI_RESPONSES_MAX_OUTPUT_TOKENS")
+    env_openai_reasoning_effort = _env_str("KORSTOCKSCAN_OPENAI_REASONING_EFFORT")
     env_openai_ws_late_discard = _env_bool("KORSTOCKSCAN_OPENAI_RESPONSES_WS_LATE_DISCARD_ENABLED")
     env_openai_entry_timeout_reject = _env_bool("KORSTOCKSCAN_OPENAI_ENTRY_TIMEOUT_REJECT_ENABLED")
     env_openai_previous_response_id = _env_bool("KORSTOCKSCAN_OPENAI_PREVIOUS_RESPONSE_ID_ENABLED")
@@ -1359,6 +1364,8 @@ def _build_trading_rules() -> TradingConfig:
         or env_openai_ws_enabled is not None
         or env_openai_ws_pool_size is not None
         or env_openai_ws_timeout_ms is not None
+        or env_openai_max_output_tokens is not None
+        or env_openai_reasoning_effort is not None
         or env_openai_ws_late_discard is not None
         or env_openai_entry_timeout_reject is not None
         or env_openai_previous_response_id is not None
@@ -1383,6 +1390,12 @@ def _build_trading_rules() -> TradingConfig:
             OPENAI_RESPONSES_WS_TIMEOUT_MS=env_openai_ws_timeout_ms
             if env_openai_ws_timeout_ms is not None
             else config.OPENAI_RESPONSES_WS_TIMEOUT_MS,
+            OPENAI_RESPONSES_MAX_OUTPUT_TOKENS=env_openai_max_output_tokens
+            if env_openai_max_output_tokens is not None
+            else config.OPENAI_RESPONSES_MAX_OUTPUT_TOKENS,
+            OPENAI_REASONING_EFFORT=env_openai_reasoning_effort
+            if env_openai_reasoning_effort is not None
+            else config.OPENAI_REASONING_EFFORT,
             OPENAI_RESPONSES_WS_LATE_DISCARD_ENABLED=env_openai_ws_late_discard
             if env_openai_ws_late_discard is not None
             else config.OPENAI_RESPONSES_WS_LATE_DISCARD_ENABLED,

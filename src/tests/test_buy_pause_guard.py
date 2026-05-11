@@ -1,3 +1,4 @@
+import sys
 from datetime import datetime
 
 from src.engine import buy_pause_guard as guard_mod
@@ -157,3 +158,21 @@ def test_confirm_buy_pause_guard_updates_state(monkeypatch, tmp_path):
     assert calls and calls[0][0] is True
     state = guard_mod.load_buy_pause_guard_state(now_dt=datetime(2026, 4, 9, 10, 5, 0))
     assert state["status"] == "confirmed"
+
+
+def test_evaluate_cli_prints_detector_done_marker(monkeypatch, capsys):
+    monkeypatch.setattr(
+        guard_mod,
+        "evaluate_buy_pause_guard",
+        lambda target_date, send_alert=True: {
+            "target_date": target_date,
+            "should_alert": False,
+            "metrics_snapshot": {},
+        },
+    )
+    monkeypatch.setattr(sys, "argv", ["buy_pause_guard", "evaluate", "--date", "2026-05-11", "--no-alert"])
+
+    assert guard_mod._main() == 0
+    captured = capsys.readouterr()
+
+    assert "[DONE] buy_pause_guard target_date=2026-05-11" in captured.out

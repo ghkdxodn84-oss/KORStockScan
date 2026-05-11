@@ -139,24 +139,40 @@ def _has_active_target(code, strategy):
     )
 
 
+def _coerce_positive_int(value, default=0):
+    try:
+        if value is None:
+            return default
+        if isinstance(value, str):
+            normalized = value.strip().replace(",", "")
+            if not normalized:
+                return default
+            return abs(int(float(normalized)))
+        return abs(int(float(value)))
+    except Exception:
+        return default
+
+
+def _request_ws_registration(code, source):
+    if EVENT_BUS is None:
+        return False
+    try:
+        EVENT_BUS.publish("COMMAND_WS_REG", {"codes": [code], "source": source})
+        return True
+    except Exception as exc:
+        log_error("condition_handlers", f"WS registration request failed for {code}: {exc}")
+        return False
+
+
 def _get_latest_price(code):
     ws_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
-    try:
-        current_price = int(float(ws_data.get('curr', 0) or 0))
-    except Exception:
-        current_price = 0
+    current_price = _coerce_positive_int(ws_data.get('curr'))
 
     if current_price > 0:
         return current_price
 
-    try:
-        best_bid = int(float(ws_data.get('best_bid', 0) or 0))
-    except Exception:
-        best_bid = 0
-    try:
-        best_ask = int(float(ws_data.get('best_ask', 0) or 0))
-    except Exception:
-        best_ask = 0
+    best_bid = _coerce_positive_int(ws_data.get('best_bid'))
+    best_ask = _coerce_positive_int(ws_data.get('best_ask'))
 
     if best_bid > 0 and best_ask > 0:
         return int((best_bid + best_ask) / 2)
@@ -169,7 +185,7 @@ def _get_latest_price(code):
         try:
             candles = kiwoom_utils.get_minute_candles_ka10080(KIWOOM_TOKEN, code, limit=5)
             for candle in candles or []:
-                candle_close = int(float(candle.get("현재가", 0) or 0))
+                candle_close = _coerce_positive_int(candle.get("현재가"))
                 if candle_close > 0:
                     return candle_close
         except Exception:
@@ -180,10 +196,7 @@ def _get_latest_price(code):
 
 def _get_latest_open_and_vwap(code):
     ws_data = WS_MANAGER.get_latest_data(code) if WS_MANAGER else {}
-    try:
-        open_price = int(float(ws_data.get('open', 0) or 0))
-    except Exception:
-        open_price = 0
+    open_price = _coerce_positive_int(ws_data.get('open'))
 
     vwap_price = 0
     if KIWOOM_TOKEN:
@@ -193,9 +206,9 @@ def _get_latest_open_and_vwap(code):
                 total_turnover = 0
                 total_volume = 0
                 for candle in candles:
-                    c_close = int(float(candle.get("현재가", 0) or 0))
-                    c_vol = abs(int(float(candle.get("거래량", 0) or 0)))
-                    c_open = int(float(candle.get("시가", 0) or 0))
+                    c_close = _coerce_positive_int(candle.get("현재가"))
+                    c_vol = _coerce_positive_int(candle.get("거래량"))
+                    c_open = _coerce_positive_int(candle.get("시가"))
                     if open_price <= 0 and c_open > 0:
                         open_price = c_open
                     if c_close > 0 and c_vol > 0:
@@ -460,14 +473,22 @@ def handle_condition_matched(payload):
     if target_position_tag == 'VWAP_RECLAIM':
         passed, precheck = _passes_vwap_reclaim_precheck(code)
         if not passed:
+            ws_registration_requested = False
+            if precheck.get('reason') == 'missing_price_or_vwap':
+                ws_registration_requested = _request_ws_registration(
+                    code,
+                    f"condition_precheck:{cnd_name}",
+                )
             log_key = f"{code}:{cnd_name}:{precheck.get('reason')}"
             if _should_log_match_event(log_key, cooldown_sec=120):
                 gap_pct = float(precheck.get('vwap_gap_pct', 0.0) or 0.0)
                 current_price = int(precheck.get('current_price', 0) or 0)
                 vwap_price = int(precheck.get('vwap_price', 0) or 0)
+                ws_note = f" ws_reg={ws_registration_requested}" if precheck.get('reason') == 'missing_price_or_vwap' else ""
                 print(
                     f"⏭️ [조건검색 전처리 스킵] {code} {cnd_name} "
                     f"reason={precheck.get('reason')} curr={current_price:,} vwap={vwap_price:,} gap={gap_pct:+.2f}%"
+                    f"{ws_note}"
                 )
             return
 

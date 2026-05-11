@@ -20,7 +20,7 @@ import hashlib
 import queue
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from itertools import cycle
 from typing import Any
@@ -170,6 +170,8 @@ class OpenAIResponseRequest:
     cache_key: str
     submitted_at_perf: float
     timeout_ms: int
+    max_output_tokens: int | None = None
+    reasoning_effort: str | None = None
     metadata: dict[str, str] = field(default_factory=dict)
 
     @property
@@ -182,7 +184,11 @@ class OpenAIResponseRequest:
     def build_provider_payload(self, *, use_schema_registry: bool) -> dict[str, Any]:
         payload: dict[str, Any] = {
             "model": self.model_name,
-            "input": self.user_input,
+            "input": (
+                f"{self.user_input}\n\nReturn JSON only."
+                if self.require_json and "json" not in str(self.user_input or "").lower()
+                else self.user_input
+            ),
             "store": False,
             "metadata": dict(self.metadata or {}),
         }
@@ -190,6 +196,10 @@ class OpenAIResponseRequest:
             payload["instructions"] = self.prompt
         if self.temperature is not None:
             payload["temperature"] = float(self.temperature)
+        if self.max_output_tokens is not None:
+            payload["max_output_tokens"] = int(self.max_output_tokens)
+        if self.reasoning_effort:
+            payload["reasoning"] = {"effort": str(self.reasoning_effort)}
         if self.require_json:
             if use_schema_registry and self.schema_name:
                 payload["text"] = {
@@ -557,7 +567,15 @@ class GPTSniperEngine:
             and getattr(TRADING_RULES, "OPENAI_RESPONSE_SCHEMA_REGISTRY_ENABLED", False)
         )
 
-    def _resolve_openai_temperature(self, *, require_json, temperature_override):
+    def _model_supports_temperature(self, model_name):
+        model = str(model_name or "").strip().lower()
+        if model.startswith("gpt-5"):
+            return False
+        return True
+
+    def _resolve_openai_temperature(self, *, require_json, temperature_override, model_name=None):
+        if not self._model_supports_temperature(model_name):
+            return None
         if temperature_override is not None:
             return float(temperature_override)
         if require_json:
@@ -565,6 +583,33 @@ class GPTSniperEngine:
                 return 0.0
             return 0.0
         return 0.7
+
+    def _resolve_openai_max_output_tokens(self, *, require_json):
+        default_value = 240 if require_json else 1200
+        try:
+            configured = int(getattr(TRADING_RULES, "OPENAI_RESPONSES_MAX_OUTPUT_TOKENS", default_value) or default_value)
+            return max(32, configured)
+        except Exception:
+            return default_value
+
+    def _resolve_openai_reasoning_effort(self, *, model_name=None):
+        value = str(getattr(TRADING_RULES, "OPENAI_REASONING_EFFORT", "auto") or "auto").strip().lower()
+        model = str(model_name or "").strip().lower()
+        if value == "auto":
+            if model.startswith("gpt-5-nano"):
+                return "minimal"
+            if model.startswith("gpt-5.4"):
+                return "none"
+            return "low"
+        if value == "minimal":
+            if model.startswith("gpt-5.4"):
+                return "low"
+            return "minimal"
+        if value == "none" and model.startswith("gpt-5-nano"):
+            return "minimal"
+        if value in {"none", "low", "medium", "high", "xhigh"}:
+            return value
+        return "low"
 
     def _build_openai_request_id(self, *, endpoint_name, symbol):
         ts_ms = int(time.time() * 1000)
@@ -584,6 +629,8 @@ class GPTSniperEngine:
         endpoint_name,
         symbol,
         cache_key,
+        max_output_tokens=None,
+        reasoning_effort=None,
     ):
         request_id = self._build_openai_request_id(endpoint_name=endpoint_name, symbol=symbol or "-")
         metadata = {
@@ -606,6 +653,8 @@ class GPTSniperEngine:
             context_name=str(context_name or "Unknown"),
             model_name=str(model_name or self.current_model_name),
             temperature=temperature,
+            max_output_tokens=max_output_tokens,
+            reasoning_effort=reasoning_effort,
             schema_name=str(schema_name or "").strip() or None,
             endpoint_name=str(endpoint_name or "generic"),
             request_id=request_id,
@@ -1144,11 +1193,49 @@ class GPTSniperEngine:
             return self._parse_json_response_text(raw_text)
         return str(raw_text or "").strip()
 
+    def _is_invalid_prompt_error(self, exc) -> bool:
+        text = str(exc or "").lower()
+        return "invalid_prompt" in text or "invalid prompt" in text
+
+    def _build_invalid_prompt_retry_request(self, request: OpenAIResponseRequest) -> OpenAIResponseRequest:
+        if request.require_json:
+            if request.schema_name == "holding_exit_v1":
+                safe_prompt = (
+                    "Classify the provided market data. Use only the numeric fields in the input. "
+                    "Return JSON only with action HOLD, TRIM, or EXIT; score as 0-100 integer; "
+                    "reason as a short neutral numeric summary."
+                )
+            else:
+                safe_prompt = (
+                    "Classify the provided market data. Use only the numeric fields in the input. "
+                    "Return JSON only with action BUY, WAIT, or DROP; score as 0-100 integer; "
+                    "reason as a short neutral numeric summary."
+                )
+        else:
+            safe_prompt = (
+                "Analyze the provided market data using only numeric fields. "
+                "Return a concise neutral report."
+            )
+        metadata = dict(request.metadata or {})
+        metadata["invalid_prompt_retry"] = "true"
+        metadata["original_endpoint_name"] = str(request.endpoint_name or "generic")
+        return replace(
+            request,
+            prompt=self._wrap_openai_prompt_contract(
+                safe_prompt,
+                require_json=request.require_json,
+                schema_name=request.schema_name,
+                endpoint_name=request.endpoint_name,
+            ),
+            metadata=metadata,
+        )
+
     def _call_openai_responses_http(self, request: OpenAIResponseRequest):
         use_schema_registry = self._should_use_openai_schema_registry(
             require_json=request.require_json,
             schema_name=request.schema_name,
         )
+        invalid_prompt_retried = bool((request.metadata or {}).get("invalid_prompt_retry") == "true")
         last_error = ""
         for attempt in range(len(self.api_keys)):
             try:
@@ -1182,6 +1269,14 @@ class GPTSniperEngine:
                 continue
             except Exception as e:
                 last_error = str(e).lower()
+                if self._is_invalid_prompt_error(e) and not invalid_prompt_retried:
+                    log_error(
+                        f"⚠️ [OpenAI invalid_prompt retry] {request.context_name} | "
+                        "retrying with minimal numeric JSON prompt"
+                    )
+                    invalid_prompt_retried = True
+                    request = self._build_invalid_prompt_retry_request(request)
+                    continue
                 if any(x in last_error for x in ["429", "quota", "503", "unavailable", "timeout", "server", "too_many_requests"]):
                     old_key = self.current_key[-5:]
                     self._rotate_client()
@@ -1223,7 +1318,10 @@ class GPTSniperEngine:
             target_temp = self._resolve_openai_temperature(
                 require_json=bool(require_json),
                 temperature_override=temperature_override,
+                model_name=target_model,
             )
+            max_output_tokens = self._resolve_openai_max_output_tokens(require_json=bool(require_json))
+            reasoning_effort = self._resolve_openai_reasoning_effort(model_name=target_model)
             request = self._build_openai_response_request(
                 prompt=prompt,
                 user_input=user_input,
@@ -1231,6 +1329,8 @@ class GPTSniperEngine:
                 context_name=context_name,
                 model_name=target_model,
                 temperature=target_temp,
+                max_output_tokens=max_output_tokens,
+                reasoning_effort=reasoning_effort,
                 schema_name=schema_name,
                 endpoint_name=endpoint_name,
                 symbol=symbol,
@@ -1286,6 +1386,8 @@ class GPTSniperEngine:
                         context_name=request.context_name,
                         model_name=request.model_name,
                         temperature=request.temperature,
+                        max_output_tokens=request.max_output_tokens,
+                        reasoning_effort=request.reasoning_effort,
                         schema_name=request.schema_name,
                         endpoint_name=request.endpoint_name,
                         request_id=request.request_id,
@@ -1470,6 +1572,50 @@ class GPTSniperEngine:
             f"- ask_depth_ratio: {feature_packet['ask_depth_ratio']}\n"
             f"- net_ask_depth: {feature_packet['net_ask_depth']}"
         )
+
+        if bool(getattr(TRADING_RULES, "OPENAI_SCALPING_COMPACT_INPUT_ENABLED", True)):
+            compact_asks = [
+                {"price": a.get("price"), "volume": a.get("volume")}
+                for a in (orderbook.get("asks") or [])[:3]
+            ]
+            compact_bids = [
+                {"price": b.get("price"), "volume": b.get("volume")}
+                for b in (orderbook.get("bids") or [])[:3]
+            ]
+            compact_ticks = [
+                {
+                    "time": t.get("time"),
+                    "dir": t.get("dir", "NEUTRAL"),
+                    "price": t.get("price"),
+                    "volume": t.get("volume"),
+                    "strength": t.get("strength", 0),
+                }
+                for t in (recent_ticks or [])[:5]
+            ]
+            compact_candles = [
+                {
+                    "time": c.get("체결시간"),
+                    "open": c.get("시가", c.get("현재가", 0)),
+                    "high": c.get("고가"),
+                    "low": c.get("저가"),
+                    "close": c.get("현재가"),
+                    "volume": c.get("거래량"),
+                }
+                for c in (recent_candles or [])[-5:]
+            ]
+            compact_payload = {
+                "current": {
+                    "price": curr_price,
+                    "fluctuation_pct": fluctuation,
+                    "websocket_strength": v_pw,
+                    "distance_from_day_high_pct": feature_packet["distance_from_day_high_pct"],
+                },
+                "features": feature_packet,
+                "orderbook_top3": {"asks": compact_asks, "bids": compact_bids},
+                "recent_ticks_latest_first": compact_ticks,
+                "recent_candles_latest_window": compact_candles,
+            }
+            return json.dumps(compact_payload, ensure_ascii=False, separators=(",", ":"), default=str)
 
         user_input = f"""
 [현재 상태]

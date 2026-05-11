@@ -298,7 +298,7 @@ def _build_scalp_simulator_summary(entry_events: list[PerfEvent], holding_events
     return {
         "enabled_default": True,
         "simulation_book": "scalp_ai_buy_all",
-        "fill_policy": "quote_based",
+        "fill_policy": "signal_inclusive_best_ask_v1",
         "calibration_authority": "equal_weight",
         "event_count": int(len(events)),
         "stage_counts": dict(stage_counts),

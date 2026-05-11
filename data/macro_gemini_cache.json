@@ -1,5 +1,5 @@
 {
-  "bundle_as_of": "2026-05-09T04:43:28Z",
+  "bundle_as_of": "2026-05-10T22:20:18Z",
   "sp500": {
     "name": "S&P 500",
     "value": 7398.93,
@@ -7,79 +7,80 @@
     "change": 61.82,
     "change_pct": 0.84,
     "as_of": "2026-05-08T20:00:00Z",
-    "source": "Associated Press"
+    "source": "AP / TheStreet"
   },
   "nasdaq": {
-    "name": "NASDAQ Composite",
+    "name": "NASDAQ",
     "value": 26247.08,
     "prev_value": 25806.2,
     "change": 440.88,
     "change_pct": 1.71,
     "as_of": "2026-05-08T20:00:00Z",
-    "source": "Associated Press"
+    "source": "AP / TheStreet"
   },
   "vix": {
     "name": "VIX",
-    "value": 17.08,
-    "prev_value": 17.39,
-    "change": -0.31,
-    "change_pct": -1.78,
+    "value": 17.19,
+    "prev_value": 17.08,
+    "change": 0.11,
+    "change_pct": 0.64,
     "as_of": "2026-05-08T20:00:00Z",
-    "source": "CBOE"
+    "source": "StreetStats / CBOE"
   },
   "us10y": {
-    "name": "US 10-Year Treasury Yield",
-    "value": 4.386,
-    "prev_value": 4.334,
-    "change": 0.052,
-    "change_pct": 1.2,
+    "name": "US 10Y Treasury Yield",
+    "value": 4.38,
+    "prev_value": 4.41,
+    "change": -0.03,
+    "change_pct": -0.68,
     "as_of": "2026-05-08T20:00:00Z",
-    "source": "The Mortgage Reports"
+    "source": "YCharts / StreetStats"
   },
   "brent": {
-    "name": "Brent Crude Oil",
+    "name": "Brent Crude",
     "value": 101.29,
-    "prev_value": 100.09,
-    "change": 1.2,
-    "change_pct": 1.2,
+    "prev_value": 100.06,
+    "change": 1.23,
+    "change_pct": 1.23,
     "as_of": "2026-05-08T20:00:00Z",
-    "source": "Associated Press"
+    "source": "Trading Economics / AP"
   },
   "headlines": [
     {
-      "title": "US employers defy economic shock from Iran war and add a surprisingly strong 115,000 jobs in April",
-      "source": "Associated Press",
-      "published_at": "2026-05-08T18:30:00Z",
-      "url": "https://apnews.com/"
-    },
-    {
-      "title": "Federal court rules against new global tariffs Trump imposed after loss at the Supreme Court",
-      "source": "WXXI News",
-      "published_at": "2026-05-08T11:27:00Z",
-      "url": "https://www.wxxinews.org/"
-    },
-    {
-      "title": "US Fires on Iran Targets as Trump Demands Deal From Tehran",
-      "source": "Bloomberg",
-      "published_at": "2026-05-08T08:00:00Z",
-      "url": "https://www.youtube.com/watch?v=Bloomberg"
-    },
-    {
       "title": "US stocks rise to records after a solid jobs report overshadows higher oil prices",
-      "source": "LA Times",
-      "published_at": "2026-05-08T20:00:00Z",
-      "url": "https://www.latimes.com/"
+      "source": "The Business Journal / AP",
+      "published_at": "2026-05-08T14:30:00Z",
+      "url": "https://thebusinessjournal.com"
     },
     {
-      "title": "Apple reaches chipmaking deal with Intel, pushing its stock to new record",
+      "title": "Kevin Warsh will be the richest Fed chair ever. The Senate is ready to confirm him anyway.",
+      "source": "Morningstar",
+      "published_at": "2026-05-08T12:00:00Z",
+      "url": "https://www.morningstar.com"
+    },
+    {
+      "title": "Oil prices jump as US-Iran tensions intensify; Brent crude stays beyond $100",
+      "source": "Times of India",
+      "published_at": "2026-05-08T02:04:00Z",
+      "url": "https://timesofindia.indiatimes.com"
+    },
+    {
+      "title": "RBC revamps S&P 500 target for the rest of 2026 to 7,900",
       "source": "TheStreet",
-      "published_at": "2026-05-08T20:28:00Z",
-      "url": "https://www.thestreet.com/"
+      "published_at": "2026-05-09T12:00:00Z",
+      "url": "https://www.thestreet.com"
+    },
+    {
+      "title": "10-Year Treasury Yield Falls to 4.364% This Week",
+      "source": "Morningstar",
+      "published_at": "2026-05-08T16:54:00Z",
+      "url": "https://www.morningstar.com"
     }
   ],
   "notes": [
-    "US equity markets reached new all-time highs on May 8, 2026, driven by stronger-than-expected April Non-Farm Payrolls (+115K) and a tech rally led by Apple and Intel.",
-    "Brent Crude Oil surged past $101 per barrel following direct military exchanges between the US and Iran in the Strait of Hormuz.",
-    "A US federal trade court struck down a second round of unilateral 10% global tariffs imposed by President Trump, marking another setback for his trade policies."
+    "Market data reflects the Friday, May 8, 2026 market close.",
+    "S&P 500 and Nasdaq set new record highs supported by strong employment data, overshadowing Middle East geopolitical tensions.",
+    "Oil prices remained elevated above $100 per barrel amid ongoing US-Iran clashes and Strait of Hormuz uncertainties.",
+    "The market is preparing for the Senate confirmation of Kevin Warsh as the next Federal Reserve Chairman, succeeding Jerome Powell when his term ends on May 15, 2026."
   ]
 }

@@ -24,6 +24,7 @@ def _reset_state(monkeypatch, tmp_path):
         CONFIG,
         SCALP_LIVE_SIMULATOR_ENABLED=True,
         SCALP_LIVE_SIMULATOR_QTY=1,
+        SCALP_LIVE_SIMULATOR_FILL_POLICY="signal_inclusive_best_ask_v1",
         SCALP_LIVE_SIMULATOR_ENTRY_TIMEOUT_SEC=90,
     )
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
@@ -82,6 +83,7 @@ def test_scalp_simulator_arms_and_fills_without_real_buy_order(monkeypatch):
     sim_target = state_handlers.ACTIVE_TARGETS[0]
     assert sim_target["status"] == "HOLDING"
     assert sim_target["simulation_book"] == "scalp_ai_buy_all"
+    assert sim_target["simulation_fill_policy"] == "signal_inclusive_best_ask_v1"
     assert sim_target["actual_order_submitted"] is False
     assert sim_target["msg_audience"] == "ADMIN_ONLY"
     assert sim_target["buy_qty"] == 1
@@ -95,6 +97,53 @@ def test_scalp_simulator_arms_and_fills_without_real_buy_order(monkeypatch):
     assert state_handlers.EVENT_BUS.published == [
         ("COMMAND_WS_REG", {"codes": ["123456"], "source": "scalp_live_simulator"})
     ]
+    fill_event = next(fields for stage, fields in logs if stage == "scalp_sim_buy_order_assumed_filled")
+    assert fill_event["fill_source"] == "best_ask"
+    assert fill_event["would_limit_fill"] is True
+
+
+def test_scalp_simulator_signal_inclusive_fill_does_not_wait_for_limit_touch(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    stock = {
+        "id": 101,
+        "name": "TEST",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "position_tag": "SCALP_BASE",
+        "target_buy_price": 10_000,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "is_trigger": True,
+        "now_ts": 1_000.0,
+        "current_ai_score": 80.0,
+    }
+
+    assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
+        stock,
+        "123456",
+        {
+            "curr": 10_020,
+            "orderbook": {
+                "asks": [{"price": 10_030}],
+                "bids": [{"price": 10_010}],
+            },
+        },
+        runtime,
+    )
+
+    sim_target = state_handlers.ACTIVE_TARGETS[0]
+    assert sim_target["status"] == "HOLDING"
+    assert sim_target["buy_price"] == 10_030
+    fill_event = next(fields for stage, fields in logs if stage == "scalp_sim_buy_order_assumed_filled")
+    assert fill_event["fill_source"] == "best_ask"
+    assert fill_event["would_limit_fill"] is False
+    assert fill_event["limit_price"] == 10_000
 
 
 def test_swing_dry_run_gatekeeper_report_is_admin_only(monkeypatch):
@@ -154,7 +203,7 @@ def test_scalp_simulator_duplicate_buy_signal_does_not_create_second_position(mo
     assert logs[0][0] == "scalp_sim_duplicate_buy_signal"
 
 
-def test_scalp_simulator_requires_buy_score_threshold():
+def test_scalp_simulator_includes_low_score_triggered_buy_signal():
     stock = {
         "id": 101,
         "name": "TEST",
@@ -169,13 +218,15 @@ def test_scalp_simulator_requires_buy_score_threshold():
         "current_ai_score": 74.9,
     }
 
-    assert not state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
+    assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
         stock,
         "123456",
         {"curr": 9_990},
         runtime,
     )
-    assert state_handlers.ACTIVE_TARGETS == []
+    assert len(state_handlers.ACTIVE_TARGETS) == 1
+    assert state_handlers.ACTIVE_TARGETS[0]["status"] == "HOLDING"
+    assert state_handlers.ACTIVE_TARGETS[0]["buy_price"] == 9_990
 
 
 def test_scalp_simulator_preset_tp_sell_does_not_call_real_sell(monkeypatch):

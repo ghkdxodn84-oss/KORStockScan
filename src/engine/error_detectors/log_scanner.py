@@ -20,6 +20,9 @@ from src.engine.error_detectors.base import (
 SCAN_STATE_PATH = PROJECT_ROOT / "tmp" / "error_detector_log_scan_state.json"
 
 _EXCEPTION_PATTERNS: list[tuple[str, re.Pattern]] = []
+_IGNORED_LINE_PATTERNS: list[re.Pattern] = [
+    re.compile(r"\[ERROR_DETECTION\]"),
+]
 
 
 def _register_pattern(name: str, pattern: str):
@@ -44,6 +47,8 @@ def _get_error_log_files() -> list[Path]:
     files: list[Path] = []
     for entry in os.scandir(str(LOGS_DIR)):
         if not entry.is_file():
+            continue
+        if entry.name.startswith("run_error_detection"):
             continue
         if "_error" in entry.name and entry.name.endswith(".log"):
             files.append(Path(entry.path))
@@ -124,6 +129,8 @@ class LogScanner(BaseDetector):
 
         error_count = 0
         for line in new_lines.splitlines():
+            if any(pattern.search(line) for pattern in _IGNORED_LINE_PATTERNS):
+                continue
             lower = line.lower()
             for etype, pattern in _EXCEPTION_PATTERNS:
                 if pattern.search(lower) or pattern.search(line):

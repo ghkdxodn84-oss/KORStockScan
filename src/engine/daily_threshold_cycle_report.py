@@ -1850,7 +1850,7 @@ def _scalp_simulator_event_summary(events: list[dict], sim_completed_rows: list[
     return {
         "enabled_default": True,
         "simulation_book": "scalp_ai_buy_all",
-        "fill_policy": "quote_based",
+        "fill_policy": "signal_inclusive_best_ask_v1",
         "calibration_authority": "equal_weight",
         "event_count": len(sim_events),
         "stage_counts": dict(stage_counts),
@@ -5050,7 +5050,7 @@ def build_cumulative_threshold_cycle_report(
     }
     event_count_by_window = {label: len(rows) for label, rows in events_by_window.items()}
     source_flags = {
-        "profit_basis": "real COMPLETED + valid profit_rate plus scalp_sim completed quote-based rows",
+        "profit_basis": "real COMPLETED + valid profit_rate plus scalp_sim completed signal-inclusive rows",
         "scalp_sim_calibration_authority": "equal_weight",
         "runtime_change": False,
         "application_mode": "report_only_cumulative_threshold_input",

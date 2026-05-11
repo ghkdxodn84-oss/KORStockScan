@@ -8,7 +8,7 @@ from typing import Any
 
 
 ENTRY_LOCK = threading.RLock()
-TERMINAL_ENTRY_GRACE_SECONDS = 5.0
+TERMINAL_ENTRY_GRACE_SECONDS = 180.0
 TERMINAL_ENTRY_ORDERS: dict[str, dict[str, Any]] = {}
 
 

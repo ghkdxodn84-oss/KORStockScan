@@ -7,17 +7,23 @@ from pathlib import Path
 
 import pytest
 
-from src.engine.error_detectors.log_scanner import LogScanner, SCAN_STATE_PATH
+from src.engine.error_detectors.log_scanner import LogScanner
 
 
 class TestLogScanner:
-    def setup_method(self):
-        if SCAN_STATE_PATH.exists():
-            SCAN_STATE_PATH.unlink()
+    def setup_method(self, method):
+        import src.engine.error_detectors.log_scanner as ls
 
-    def teardown_method(self):
-        if SCAN_STATE_PATH.exists():
-            SCAN_STATE_PATH.unlink()
+        self._tmp_state_dir = tempfile.TemporaryDirectory()
+        self._orig_scan_state_path = ls.SCAN_STATE_PATH
+        self._scan_state_path = Path(self._tmp_state_dir.name) / "scan_state.json"
+        ls.SCAN_STATE_PATH = self._scan_state_path
+
+    def teardown_method(self, method):
+        import src.engine.error_detectors.log_scanner as ls
+
+        ls.SCAN_STATE_PATH = self._orig_scan_state_path
+        self._tmp_state_dir.cleanup()
 
     def test_pass_when_no_log_files(self):
         scanner = LogScanner()
@@ -30,6 +36,16 @@ class TestLogScanner:
             log_dir = Path(tmpdir)
             log_file = log_dir / "test_error.log"
             log_file.write_text("normal line\n[DONE] ok\n", encoding="utf-8")
+            with _mock_logs_dir(log_dir):
+                scanner = LogScanner()
+                result = scanner.check()
+        assert result.severity == "pass"
+
+    def test_excludes_error_detection_wrapper_logs(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_dir = Path(tmpdir)
+            (log_dir / "run_error_detection.log").write_text("[ERROR] detector json\n", encoding="utf-8")
+            (log_dir / "run_error_detection_cron.log").write_text("Permission denied\n", encoding="utf-8")
             with _mock_logs_dir(log_dir):
                 scanner = LogScanner()
                 result = scanner.check()
@@ -64,7 +80,7 @@ class TestLogScanner:
         assert state == {}
 
         scanner._save_state({"test_file.log": {"position": 100, "scanned_at": 12345.0}})
-        assert SCAN_STATE_PATH.exists()
+        assert self._scan_state_path.exists()
 
         loaded = scanner._load_state()
         assert loaded["test_file.log"]["position"] == 100
@@ -86,6 +102,23 @@ class TestLogScanner:
             assert errors == 1
             assert new_pos > initial_size
 
+    def test_scan_file_ignores_error_detection_meta_alerts(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_file = Path(tmpdir) / "bot_main_error.log"
+            log_file.write_text(
+                "[2026-05-11 09:40:47] 🚨 ERROR in bot_main: "
+                "[ERROR_DETECTION] log_scanner: Error burst detected\n",
+                encoding="utf-8",
+            )
+
+            scanner = LogScanner()
+            counter = __import__("collections").Counter()
+            errors, new_pos, _ = scanner._scan_file(log_file, 0, counter)
+
+            assert errors == 0
+            assert new_pos == 0
+            assert counter == {}
+
     def test_scan_file_no_change(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             log_file = Path(tmpdir) / "test_error.log"
@@ -105,7 +138,7 @@ class TestLogScanner:
                 scanner = LogScanner(dry_run=True)
                 result = scanner.check()
                 assert result.severity in ("warning", "fail")
-                assert not SCAN_STATE_PATH.exists()
+                assert not self._scan_state_path.exists()
 
     def test_scan_file_rotation_reset(self):
         with tempfile.TemporaryDirectory() as tmpdir:

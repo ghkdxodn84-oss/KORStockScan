@@ -1,3 +1,4 @@
+import json
 import threading
 from dataclasses import replace
 from types import SimpleNamespace
@@ -264,6 +265,105 @@ def test_openai_deterministic_config_is_limited_to_json_path(monkeypatch):
     assert "text" not in calls[1]
 
 
+def test_openai_gpt5_models_omit_temperature(monkeypatch):
+    engine = _build_engine()
+    engine.current_model_name = "gpt-5-nano"
+    calls = []
+
+    def _fake_create(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(output_text='{"action":"WAIT","score":50,"reason":"ok"}')
+
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=_fake_create))
+
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_JSON_DETERMINISTIC_CONFIG_ENABLED=True,
+            OPENAI_TRANSPORT_MODE="http",
+        ),
+    )
+
+    GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="json",
+        endpoint_name="analyze_target",
+        symbol="000001",
+    )
+
+    assert calls[0]["model"] == "gpt-5-nano"
+    assert "temperature" not in calls[0]
+    assert "json" in calls[0]["input"].lower()
+    assert calls[0]["max_output_tokens"] == 512
+    assert calls[0]["reasoning"] == {"effort": "minimal"}
+
+
+def test_openai_reasoning_effort_auto_uses_none_for_gpt54_mini(monkeypatch):
+    engine = _build_engine()
+    engine.current_model_name = "gpt-5.4-mini"
+    calls = []
+
+    def _fake_create(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(output_text='{"action":"WAIT","score":50,"reason":"ok"}')
+
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=_fake_create))
+
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_REASONING_EFFORT="auto",
+            OPENAI_TRANSPORT_MODE="http",
+        ),
+    )
+
+    GPTSniperEngine._call_openai_safe(
+        engine,
+        "PROMPT",
+        "payload",
+        require_json=True,
+        context_name="json",
+        endpoint_name="analyze_target",
+        symbol="000001",
+    )
+
+    assert calls[0]["reasoning"] == {"effort": "none"}
+
+
+def test_openai_scalping_market_data_uses_compact_json_payload(monkeypatch):
+    engine = _build_engine()
+
+    monkeypatch.setattr(
+        openai_module,
+        "TRADING_RULES",
+        replace(
+            openai_module.TRADING_RULES,
+            OPENAI_SCALPING_COMPACT_INPUT_ENABLED=True,
+        ),
+    )
+
+    payload = engine._format_market_data(_sample_ws_data(), _sample_ticks(), _sample_candles())
+    parsed = json.loads(payload)
+
+    assert payload.startswith("{")
+    assert '"features":' in payload
+    assert '"recent_ticks_latest_first":' in payload
+    assert "derived" not in parsed
+    assert "tick_summary" not in payload
+    assert "volume_analysis" not in payload
+    assert "orderbook_imbalance" not in payload
+    assert "drawdown_from_day_high" not in payload
+    assert parsed["current"]["distance_from_day_high_pct"] == parsed["features"]["distance_from_day_high_pct"]
+    assert "최근 10틱 상세 내역" not in payload
+
+
 def test_openai_request_payload_omits_previous_response_id_by_default():
     engine = _build_engine()
 
@@ -395,6 +495,37 @@ def test_openai_call_falls_back_from_ws_to_http(monkeypatch):
     assert result["action"] == "BUY"
     assert meta["openai_ws_http_fallback"] is True
     assert meta["openai_transport_mode"] == "http"
+
+
+def test_openai_invalid_prompt_retries_with_minimal_numeric_prompt(monkeypatch):
+    engine = _build_engine()
+    calls = []
+
+    def _create(**kwargs):
+        calls.append(kwargs)
+        if len(calls) == 1:
+            raise Exception(
+                "Error code: 400 - {'error': {'code': 'invalid_prompt', 'message': 'Invalid prompt'}}"
+            )
+        return SimpleNamespace(output_text='{"action":"WAIT","score":50,"reason":"numeric retry"}')
+
+    engine.client = SimpleNamespace(responses=SimpleNamespace(create=_create))
+
+    result = engine._call_openai_safe(
+        "원본 프롬프트",
+        '{"features":{"buy_pressure_10t":55.0}}',
+        require_json=True,
+        context_name="삼성물산(SCALPING:scalping_entry)",
+        schema_name="entry_v1",
+        endpoint_name="analyze_target",
+        symbol="028260",
+    )
+
+    assert result["action"] == "WAIT"
+    assert len(calls) == 2
+    assert calls[1]["metadata"]["invalid_prompt_retry"] == "true"
+    assert "Use only the numeric fields" in calls[1]["instructions"]
+    assert "원본 프롬프트" not in calls[1]["instructions"]
 
 
 def test_openai_ws_request_id_mismatch_fails_closed_without_http_fallback(monkeypatch):

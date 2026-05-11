@@ -20,6 +20,7 @@ THRESHOLD_STAGE_FAMILY_MAP = {
     "entry_ai_price_canary_skip_order": "pre_submit_price_guard",
     "entry_ai_price_canary_skip_followup": "pre_submit_price_guard",
     "entry_submit_revalidation_warning": "pre_submit_price_guard",
+    "entry_submit_revalidation_block": "pre_submit_price_guard",
     "entry_order_cancel_requested": "pre_submit_price_guard",
     "entry_order_cancel_confirmed": "pre_submit_price_guard",
     "entry_order_cancel_failed": "pre_submit_price_guard",

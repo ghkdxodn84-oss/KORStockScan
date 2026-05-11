@@ -426,6 +426,9 @@ def _main() -> int:
     if args.command == "evaluate":
         result = evaluate_buy_pause_guard(args.target_date, send_alert=not args.no_alert)
         print(json.dumps(result, ensure_ascii=False, indent=2))
+        target_date = str(result.get("target_date") or args.target_date or datetime.now().strftime("%Y-%m-%d"))
+        finished_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"[DONE] buy_pause_guard target_date={target_date} finished_at={finished_at}")
         return 0
 
     if args.command == "status":

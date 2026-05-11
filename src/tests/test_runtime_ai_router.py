@@ -12,9 +12,9 @@ class _Engine:
         return {"engine": self.name}
 
 
-def test_scalping_route_defaults_to_gemini(monkeypatch):
+def test_scalping_route_defaults_to_openai(monkeypatch):
     monkeypatch.delenv("KORSTOCKSCAN_SCALPING_AI_ROUTE", raising=False)
-    assert resolve_scalping_ai_route() == "gemini"
+    assert resolve_scalping_ai_route() == "openai"
 
 
 def test_scalping_route_accepts_deepseek(monkeypatch):
@@ -22,14 +22,15 @@ def test_scalping_route_accepts_deepseek(monkeypatch):
     assert resolve_scalping_ai_route() == "deepseek"
 
 
-def test_router_uses_gemini_by_default_even_with_openai_engine():
+def test_router_uses_openai_by_default_when_engine_exists():
     router = RuntimeAIEngineRouter(
         gemini_engine=_Engine("gemini"),
         openai_scalping_engine=_Engine("openai"),
         runtime_role="main",
+        scalping_ai_route=resolve_scalping_ai_route(),
     )
-    assert router.analyze_target("x", {}, [], [])["engine"] == "gemini"
-    assert router._extract_scalping_features()["engine"] == "gemini"
+    assert router.analyze_target("x", {}, [], [])["engine"] == "openai"
+    assert router._extract_scalping_features()["engine"] == "openai"
 
 
 def test_router_uses_openai_only_when_explicitly_selected():

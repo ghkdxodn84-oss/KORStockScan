@@ -10,6 +10,7 @@ LOCK_FILE="${PROJECT_DIR}/tmp/run_error_detection.lock"
 LOG_FILE="${PROJECT_DIR}/logs/run_error_detection.log"
 
 mkdir -p "$PROJECT_DIR/tmp" "$PROJECT_DIR/logs"
+touch "$LOG_FILE"
 cd "$PROJECT_DIR"
 
 exec 9>"$LOCK_FILE"

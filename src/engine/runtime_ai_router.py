@@ -41,9 +41,8 @@ def resolve_scalping_ai_route() -> str:
     if explicit in {"gemini", "openai", "deepseek"}:
         return explicit
 
-    # Plan Rebase default: keep live decisions on Gemini until the core
-    # trading logic and observation axes are realigned.
-    return "gemini"
+    # 2026-05-11 operator decision: route live scalping AI through OpenAI by default.
+    return "openai"
 
 
 class RuntimeAIEngineRouter:

@@ -318,6 +318,69 @@ def test_vwap_reclaim_uses_candle_close_when_ws_curr_missing(monkeypatch):
     assert any(topic == "COMMAND_WS_REG" for topic, _ in event_bus.events)
 
 
+def test_vwap_reclaim_parses_signed_comma_candles_when_ws_curr_missing(monkeypatch):
+    db = _DummyDB()
+    event_bus = _DummyEventBus()
+    active_targets = []
+    _bind_test_deps(active_targets, db, event_bus)
+    _FakeDateTime._fixed_now = datetime(2026, 4, 4, 10, 30, 0)
+
+    class _DummyWS:
+        def get_latest_data(self, code):
+            return {"curr": "0", "open": "+1,000"}
+
+    monkeypatch.setattr(handlers, "datetime", _FakeDateTime)
+    monkeypatch.setattr(handlers, "WS_MANAGER", _DummyWS())
+    monkeypatch.setattr(
+        handlers.kiwoom_utils,
+        "get_basic_info_ka10001",
+        lambda token, code: {"Name": f"TEST-{code}"},
+    )
+    monkeypatch.setattr(
+        handlers.kiwoom_utils,
+        "get_minute_candles_ka10080",
+        lambda token, code, limit=120: [
+            {"현재가": "+1,005", "거래량": "+100", "시가": "+1,000"},
+            {"현재가": "-1,000", "거래량": "100", "시가": "1,000"},
+        ],
+    )
+
+    handlers.handle_condition_matched({"code": "035420", "condition_name": "scalp_vwap_reclaim_01"})
+
+    assert len(active_targets) == 1
+    assert active_targets[0]["position_tag"] == "VWAP_RECLAIM"
+    assert db.records and db.records[0].position_tag == "VWAP_RECLAIM"
+    assert any(topic == "COMMAND_WS_REG" for topic, _ in event_bus.events)
+
+
+def test_vwap_reclaim_missing_price_or_vwap_requests_ws_registration(monkeypatch):
+    db = _DummyDB()
+    event_bus = _DummyEventBus()
+    active_targets = []
+    _bind_test_deps(active_targets, db, event_bus)
+    _FakeDateTime._fixed_now = datetime(2026, 4, 4, 10, 30, 0)
+
+    monkeypatch.setattr(handlers, "datetime", _FakeDateTime)
+    monkeypatch.setattr(
+        handlers.kiwoom_utils,
+        "get_basic_info_ka10001",
+        lambda token, code: (_ for _ in ()).throw(AssertionError("precheck should skip before basic info")),
+    )
+    monkeypatch.setattr(handlers, "_get_latest_price", lambda code: 0)
+    monkeypatch.setattr(handlers, "_get_latest_open_and_vwap", lambda code: (0, 0))
+
+    handlers.handle_condition_matched({"code": "060250", "condition_name": "scalp_vwap_reclaim_01"})
+
+    assert active_targets == []
+    assert db.records == []
+    assert event_bus.events == [
+        (
+            "COMMAND_WS_REG",
+            {"codes": ["060250"], "source": "condition_precheck:scalp_vwap_reclaim_01"},
+        )
+    ]
+
+
 def test_resolve_condition_profile_for_dryup_squeeze():
     profile = handlers.resolve_condition_profile("scalp_dryup_squeeze_01")
 
