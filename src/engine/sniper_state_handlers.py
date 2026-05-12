@@ -147,6 +147,7 @@ SWING_INTRADAY_PROBE_BOOK = "swing_intraday_live_equiv_probe"
 SWING_INTRADAY_PROBE_STATE_PATH = DATA_DIR / "runtime" / "swing_intraday_probe_state.json"
 _SWING_PROBE_DAILY_CREATED: dict[str, int] = {}
 _SWING_PROBE_DISCARD_LOG_TS: dict[tuple[str, str, str, str], float] = {}
+_SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS: dict[str, dict] = {}
 
 
 def _mutate_stock_state(stock, set_fields: dict | None = None, pop_fields: list | tuple = ()):
@@ -628,12 +629,13 @@ def persist_swing_intraday_probe_state(targets=None, *, allow_empty_overwrite: b
             )
             return
         payload = {
-            "schema_version": 1,
+            "schema_version": 2,
             "simulation_book": SWING_INTRADAY_PROBE_BOOK,
             "owner": _swing_intraday_probe_owner(),
             "updated_at": datetime.now().isoformat(timespec="seconds"),
             "persist_reason": reason,
             "active_positions": active_positions,
+            "same_symbol_loss_reentry_cooldowns": _active_swing_same_symbol_loss_reentry_cooldowns(),
         }
         SWING_INTRADAY_PROBE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
         tmp_path = SWING_INTRADAY_PROBE_STATE_PATH.with_suffix(".tmp")
@@ -665,6 +667,32 @@ def restore_swing_intraday_probe_targets(targets=None) -> int:
     except Exception as exc:
         log_error(f"[SWING_PROBE_STATE] restore failed: {exc}")
         return 0
+    cooldown_rows = payload.get("same_symbol_loss_reentry_cooldowns") if isinstance(payload, dict) else {}
+    if isinstance(cooldown_rows, dict):
+        now_ts = time.time()
+        day_key = _swing_probe_daily_key(now_ts)
+        restored_cooldowns = 0
+        for key, row in cooldown_rows.items():
+            if not isinstance(row, dict):
+                continue
+            code = str(row.get("code") or "").strip()[:6]
+            strategy = normalize_strategy(row.get("strategy") or "")
+            if not code or not _is_swing_strategy(strategy):
+                continue
+            if str(row.get("date") or "") != day_key:
+                continue
+            resolved_key = _swing_same_symbol_loss_reentry_key(code, strategy, now_ts)
+            restored_row = dict(row)
+            restored_row["code"] = code
+            restored_row["strategy"] = strategy
+            restored_row["date"] = day_key
+            _SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS[resolved_key] = restored_row
+            restored_cooldowns += 1
+        if restored_cooldowns:
+            _log_swing_probe_state_event(
+                "swing_same_symbol_loss_reentry_cooldowns_restored",
+                restored_count=restored_cooldowns,
+            )
     rows = payload.get("active_positions") if isinstance(payload, dict) else []
     if not isinstance(rows, list):
         return 0
@@ -749,6 +777,228 @@ def _swing_probe_daily_key(now_ts: float | None = None) -> str:
         return datetime.now().date().isoformat()
 
 
+def _swing_same_symbol_loss_reentry_key(code: str, strategy: str | None, now_ts: float | None = None) -> str:
+    day_key = _swing_probe_daily_key(now_ts)
+    norm_code = str(code or "").strip()[:6]
+    strategy_norm = normalize_strategy(strategy or "")
+    return f"{day_key}:{strategy_norm}:{norm_code}"
+
+
+def _is_swing_loss_reentry_stop_rule(exit_rule: str | None) -> bool:
+    value = str(exit_rule or "").strip().lower()
+    if not value:
+        return False
+    return any(
+        marker in value
+        for marker in (
+            "stop_loss",
+            "stop-loss",
+            "hard_stop",
+            "protect_stop",
+            "protect_hard",
+            "emergency_stop",
+            "loss_cut",
+        )
+    )
+
+
+def _prune_swing_same_symbol_loss_reentry_cooldowns(now_ts: float | None = None) -> None:
+    day_key = _swing_probe_daily_key(now_ts)
+    stale_keys = [
+        key for key, row in _SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.items()
+        if not isinstance(row, dict) or str(row.get("date") or "") != day_key
+    ]
+    for key in stale_keys:
+        _SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.pop(key, None)
+
+
+def _active_swing_same_symbol_loss_reentry_cooldowns(now_ts: float | None = None) -> dict:
+    _prune_swing_same_symbol_loss_reentry_cooldowns(now_ts)
+    return {
+        key: _json_safe_value(dict(row))
+        for key, row in _SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.items()
+        if isinstance(row, dict)
+    }
+
+
+def evaluate_swing_same_symbol_loss_reentry_guard(
+    code: str,
+    strategy: str | None,
+    now_ts: float | None = None,
+    source: str | None = None,
+) -> dict:
+    now_value = _safe_float(now_ts, time.time())
+    strategy_norm = normalize_strategy(strategy or "")
+    norm_code = str(code or "").strip()[:6]
+    base = {
+        "guard_family": "swing_same_symbol_loss_reentry_guard",
+        "strategy": strategy_norm,
+        "code": norm_code,
+        "source": source or "-",
+        "enabled": _rule_bool("SWING_SAME_SYMBOL_LOSS_REENTRY_GUARD_ENABLED", True),
+        "allowed": True,
+        "reason": "allowed",
+        "cooldown_remaining_sec": 0,
+        "blocked_until_ts": 0.0,
+        "last_loss_exit_rule": "-",
+        "last_loss_profit_rate": "-",
+        "loss_count": 0,
+    }
+    if not base["enabled"]:
+        base["reason"] = "disabled"
+        return base
+    if not norm_code or not _is_swing_strategy(strategy_norm):
+        base["reason"] = "not_applicable"
+        return base
+    _prune_swing_same_symbol_loss_reentry_cooldowns(now_value)
+    key = _swing_same_symbol_loss_reentry_key(norm_code, strategy_norm, now_value)
+    row = _SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.get(key) or {}
+    blocked_until = _safe_float(row.get("blocked_until_ts"), 0.0)
+    remaining = max(0, int(math.ceil(blocked_until - now_value))) if blocked_until > now_value else 0
+    base.update(
+        {
+            "cooldown_key": key,
+            "blocked_until_ts": blocked_until,
+            "cooldown_remaining_sec": remaining,
+            "last_loss_exit_rule": row.get("last_loss_exit_rule") or "-",
+            "last_loss_profit_rate": row.get("last_loss_profit_rate", "-"),
+            "loss_count": _safe_int(row.get("loss_count"), 0),
+            "source_book": row.get("source_book") or "-",
+            "source_probe_id": row.get("source_probe_id") or "-",
+        }
+    )
+    if remaining > 0:
+        base["allowed"] = False
+        base["reason"] = "same_symbol_loss_reentry_cooldown"
+    return base
+
+
+def _swing_loss_reentry_guard_log_fields(decision: dict | None) -> dict:
+    decision = decision or {}
+    return {
+        "guard_family": decision.get("guard_family") or "swing_same_symbol_loss_reentry_guard",
+        "guard_allowed": bool(decision.get("allowed", True)),
+        "guard_reason": decision.get("reason") or "-",
+        "cooldown_key": decision.get("cooldown_key") or "-",
+        "cooldown_remaining_sec": _safe_int(decision.get("cooldown_remaining_sec"), 0),
+        "blocked_until_ts": decision.get("blocked_until_ts") or 0,
+        "last_loss_exit_rule": decision.get("last_loss_exit_rule") or "-",
+        "last_loss_profit_rate": decision.get("last_loss_profit_rate", "-"),
+        "loss_count": _safe_int(decision.get("loss_count"), 0),
+    }
+
+
+def _emit_swing_reentry_counterfactual_after_loss(
+    stock: dict,
+    code: str,
+    origin_stage: str,
+    decision: dict,
+    *,
+    runtime: dict | None = None,
+    ws_data: dict | None = None,
+    extra_fields: dict | None = None,
+) -> None:
+    if not _rule_bool("SWING_SAME_SYMBOL_LOSS_REENTRY_COUNTERFACTUAL_ENABLED", True):
+        return
+    runtime = runtime or {}
+    ws_data = ws_data or {}
+    extra_fields = extra_fields or {}
+    curr_price = _safe_int(ws_data.get("curr") or runtime.get("curr_price"), 0)
+    _log_entry_pipeline(
+        stock,
+        code,
+        "swing_reentry_counterfactual_after_loss",
+        **_swing_probe_event_fields(
+            stock,
+            runtime_effect="counterfactual_only",
+            probe_origin_stage=origin_stage,
+            discard_reason="same_symbol_loss_reentry_cooldown",
+            strategy=decision.get("strategy") or normalize_strategy((runtime or {}).get("strategy") or (stock or {}).get("strategy")),
+            curr_price=curr_price,
+            actual_order_submitted=False,
+            broker_order_forbidden=True,
+            counterfactual_in_real_like_ev=False,
+            **_swing_loss_reentry_guard_log_fields(decision),
+            **extra_fields,
+        ),
+    )
+
+
+def _record_swing_same_symbol_loss_reentry_cooldown(
+    stock: dict | None,
+    code: str,
+    strategy: str | None,
+    *,
+    exit_rule: str | None,
+    profit_rate,
+    now_ts: float | None = None,
+    actual_order_submitted: bool | None = None,
+    source_stage: str = "exit",
+) -> dict | None:
+    if not _rule_bool("SWING_SAME_SYMBOL_LOSS_REENTRY_GUARD_ENABLED", True):
+        return None
+    strategy_norm = normalize_strategy(strategy or (stock or {}).get("strategy"))
+    if not _is_swing_strategy(strategy_norm):
+        return None
+    norm_code = str(code or (stock or {}).get("code") or "").strip()[:6]
+    if not norm_code:
+        return None
+    now_value = _safe_float(now_ts, time.time())
+    profit = _safe_float(profit_rate, 0.0)
+    _prune_swing_same_symbol_loss_reentry_cooldowns(now_value)
+    key = _swing_same_symbol_loss_reentry_key(norm_code, strategy_norm, now_value)
+    existing = _SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.get(key) or {}
+    blocked_until_existing = _safe_float(existing.get("blocked_until_ts"), 0.0)
+    if profit >= 0:
+        if blocked_until_existing <= now_value:
+            _SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS.pop(key, None)
+        return None
+
+    loss_count = _safe_int(existing.get("loss_count"), 0) + 1
+    threshold = _rule_float("SWING_SAME_SYMBOL_LOSS_REENTRY_LOSS_THRESHOLD_PCT", -2.5)
+    consecutive_trigger = max(1, _rule_int("SWING_SAME_SYMBOL_LOSS_REENTRY_CONSECUTIVE_LOSSES", 2))
+    cooldown_sec = max(0, _rule_int("SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC", 3600))
+    stop_loss_trigger = _is_swing_loss_reentry_stop_rule(exit_rule) and profit <= threshold
+    consecutive_loss_trigger = loss_count >= consecutive_trigger
+    should_block = stop_loss_trigger or consecutive_loss_trigger
+    blocked_until = max(blocked_until_existing, now_value + cooldown_sec) if should_block and cooldown_sec > 0 else blocked_until_existing
+    row = {
+        "date": _swing_probe_daily_key(now_value),
+        "strategy": strategy_norm,
+        "code": norm_code,
+        "loss_count": loss_count,
+        "blocked_until_ts": blocked_until,
+        "last_loss_ts": now_value,
+        "last_loss_exit_rule": exit_rule or "-",
+        "last_loss_profit_rate": profit,
+        "source_stage": source_stage,
+        "source_book": (stock or {}).get("simulation_book") or ("real_order" if actual_order_submitted else "swing_dry_run"),
+        "source_probe_id": (stock or {}).get("probe_id") or "-",
+        "actual_order_submitted": bool(actual_order_submitted),
+        "trigger": "stop_loss" if stop_loss_trigger else ("consecutive_losses" if consecutive_loss_trigger else "loss_observed"),
+    }
+    _SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWNS[key] = row
+    if should_block:
+        _log_entry_pipeline(
+            stock or {},
+            norm_code,
+            "swing_same_symbol_loss_reentry_cooldown",
+            guard_family="swing_same_symbol_loss_reentry_guard",
+            strategy=strategy_norm,
+            cooldown_sec=cooldown_sec,
+            blocked_until_ts=blocked_until,
+            exit_rule=exit_rule or "-",
+            profit_rate=f"{profit:+.2f}",
+            loss_count=loss_count,
+            trigger=row["trigger"],
+            source_book=row["source_book"],
+            source_probe_id=row["source_probe_id"],
+            actual_order_submitted=bool(actual_order_submitted),
+            broker_order_forbidden=not bool(actual_order_submitted),
+        )
+    return row
+
+
 def _active_swing_probe_count_for_symbol(code: str, strategy: str | None = None) -> int:
     norm = str(code or "").strip()[:6]
     strategy_norm = normalize_strategy(strategy or "")
@@ -789,7 +1039,7 @@ def _has_duplicate_swing_probe(code: str, strategy: str, origin_stage: str) -> b
     )
 
 
-def _log_swing_probe_discard(stock, code, origin_stage: str, reason: str, **fields) -> None:
+def _log_swing_probe_discard(stock, code, origin_stage: str, reason: str, **fields) -> bool:
     now_ts = _safe_float(fields.pop("_now_ts", None), time.time())
     min_interval = max(0, _rule_int("SWING_INTRADAY_PROBE_DISCARD_LOG_MIN_INTERVAL_SEC", 60))
     record_id = str(
@@ -801,7 +1051,7 @@ def _log_swing_probe_discard(stock, code, origin_stage: str, reason: str, **fiel
     key = (str(code or "").strip()[:6], record_id, str(origin_stage or ""), str(reason or ""))
     last_ts = _SWING_PROBE_DISCARD_LOG_TS.get(key)
     if min_interval > 0 and last_ts is not None and (now_ts - last_ts) < min_interval:
-        return
+        return False
     _SWING_PROBE_DISCARD_LOG_TS[key] = now_ts
     _log_entry_pipeline(
         stock,
@@ -814,6 +1064,7 @@ def _log_swing_probe_discard(stock, code, origin_stage: str, reason: str, **fiel
             **fields,
         ),
     )
+    return True
 
 
 def _resolve_swing_probe_qty(stock: dict, curr_price: int, ratio: float) -> dict:
@@ -917,6 +1168,34 @@ def maybe_start_swing_intraday_probe(
             strategy=strategy,
             _now_ts=runtime.get("now_ts"),
         )
+        return False
+
+    guard_decision = evaluate_swing_same_symbol_loss_reentry_guard(
+        norm_code,
+        strategy,
+        runtime.get("now_ts"),
+        source=f"probe:{origin_stage}",
+    )
+    if not guard_decision.get("allowed", True):
+        logged = _log_swing_probe_discard(
+            stock,
+            norm_code,
+            origin_stage,
+            "same_symbol_loss_reentry_cooldown",
+            strategy=strategy,
+            **_swing_loss_reentry_guard_log_fields(guard_decision),
+            _now_ts=runtime.get("now_ts"),
+        )
+        if logged:
+            _emit_swing_reentry_counterfactual_after_loss(
+                stock,
+                norm_code,
+                origin_stage,
+                guard_decision,
+                runtime=runtime,
+                ws_data=ws_data,
+                extra_fields={"evidence_quality": evidence_quality, **extra_fields},
+            )
         return False
 
     if str(origin_stage or "").strip() == "blocked_swing_score_vpw":
@@ -6695,6 +6974,57 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         budget_cap=budget_cap if budget_cap_applied else "-", qty=real_buy_qty,
     )
 
+    if _is_swing_strategy(strategy):
+        guard_decision = evaluate_swing_same_symbol_loss_reentry_guard(
+            code,
+            strategy,
+            now_ts,
+            source="pre_submit",
+        )
+        if not guard_decision.get("allowed", True):
+            remaining = max(1, _safe_int(guard_decision.get("cooldown_remaining_sec"), 1))
+            with ENTRY_LOCK:
+                cooldowns[code] = now_ts + remaining
+                alerted_stocks.discard(code)
+            clear_signal_reference(stock)
+            log_info(
+                f"[SWING_REENTRY_GUARD_BLOCK] {stock.get('name')}({code}) "
+                f"reason={guard_decision.get('reason')} remaining={remaining}s"
+            )
+            _log_entry_pipeline(
+                stock,
+                code,
+                "swing_same_symbol_loss_reentry_blocked",
+                strategy=strategy,
+                deposit=deposit,
+                ratio=f"{ratio:.4f}",
+                target_budget=target_budget,
+                safe_budget=safe_budget,
+                safety_ratio=f"{used_safety_ratio:.4f}",
+                qty=real_buy_qty,
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                runtime_effect="pre_submit_block",
+                **_swing_loss_reentry_guard_log_fields(guard_decision),
+            )
+            _emit_swing_reentry_counterfactual_after_loss(
+                stock,
+                code,
+                "pre_submit",
+                guard_decision,
+                runtime=runtime,
+                ws_data=ws_data,
+                extra_fields={
+                    "deposit": deposit,
+                    "ratio": f"{ratio:.4f}",
+                    "target_budget": target_budget,
+                    "safe_budget": safe_budget,
+                    "safety_ratio": f"{used_safety_ratio:.4f}",
+                    "would_qty": real_buy_qty,
+                },
+            )
+            return False
+
     if strategy == 'SCALPING':
         order_type_code = "00"
         final_price = int(float(stock.get('target_buy_price', curr_price) or curr_price))
@@ -9695,10 +10025,29 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     }
                 ),
             )
+            _record_swing_same_symbol_loss_reentry_cooldown(
+                stock,
+                code,
+                strategy,
+                exit_rule=exit_rule or stock.get("last_exit_rule"),
+                profit_rate=simulated_profit_rate,
+                now_ts=now_ts,
+                actual_order_submitted=False,
+                source_stage=(
+                    "swing_probe_sell_order_assumed_filled"
+                    if _is_swing_intraday_probe_target(stock)
+                    else "swing_sim_sell_order_assumed_filled"
+                ),
+            )
             if _is_swing_intraday_probe_target(stock):
                 persist_swing_intraday_probe_state(
                     allow_empty_overwrite=True,
                     reason="probe_exit",
+                )
+            else:
+                persist_swing_intraday_probe_state(
+                    allow_empty_overwrite=True,
+                    reason="swing_loss_reentry_cooldown",
                 )
             return
 

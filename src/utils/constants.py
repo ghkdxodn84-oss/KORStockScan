@@ -109,6 +109,11 @@ class TradingConfig:
     SWING_INTRADAY_PROBE_DISCARD_LOG_MIN_INTERVAL_SEC: int = 60
     SWING_INTRADAY_PROBE_PERSIST_ENABLED: bool = True
     SWING_INTRADAY_PROBE_COUNTERFACTUAL_GATEKEEPER_ENABLED: bool = True
+    SWING_SAME_SYMBOL_LOSS_REENTRY_GUARD_ENABLED: bool = True
+    SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC: int = 3600
+    SWING_SAME_SYMBOL_LOSS_REENTRY_LOSS_THRESHOLD_PCT: float = -2.5
+    SWING_SAME_SYMBOL_LOSS_REENTRY_CONSECUTIVE_LOSSES: int = 2
+    SWING_SAME_SYMBOL_LOSS_REENTRY_COUNTERFACTUAL_ENABLED: bool = True
     SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED: bool = True  # 스윙 OFI/QI observe/proposal-only context
     SCALP_LIVE_SIMULATOR_ENABLED: bool = True  # 스캘핑 AI BUY 전체 대상 live simulator 기본 ON
     SCALP_LIVE_SIMULATOR_OWNER: str = "ScalpAiBuyAllLiveSimulator0511"
@@ -1216,6 +1221,21 @@ def _build_trading_rules() -> TradingConfig:
     env_swing_intraday_probe_discard_log_min_interval = _env_int(
         "KORSTOCKSCAN_SWING_INTRADAY_PROBE_DISCARD_LOG_MIN_INTERVAL_SEC"
     )
+    env_swing_same_symbol_loss_reentry_guard_enabled = _env_bool(
+        "KORSTOCKSCAN_SWING_SAME_SYMBOL_LOSS_REENTRY_GUARD_ENABLED"
+    )
+    env_swing_same_symbol_loss_reentry_cooldown_sec = _env_int(
+        "KORSTOCKSCAN_SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC"
+    )
+    env_swing_same_symbol_loss_reentry_loss_threshold_pct = _env_float(
+        "KORSTOCKSCAN_SWING_SAME_SYMBOL_LOSS_REENTRY_LOSS_THRESHOLD_PCT"
+    )
+    env_swing_same_symbol_loss_reentry_consecutive_losses = _env_int(
+        "KORSTOCKSCAN_SWING_SAME_SYMBOL_LOSS_REENTRY_CONSECUTIVE_LOSSES"
+    )
+    env_swing_same_symbol_loss_reentry_counterfactual_enabled = _env_bool(
+        "KORSTOCKSCAN_SWING_SAME_SYMBOL_LOSS_REENTRY_COUNTERFACTUAL_ENABLED"
+    )
     env_swing_orderbook_micro_context_enabled = _env_bool(
         "KORSTOCKSCAN_SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED"
     )
@@ -1281,6 +1301,13 @@ def _build_trading_rules() -> TradingConfig:
         or env_swing_intraday_probe_max_open is not None
         or env_swing_intraday_probe_max_daily is not None
         or env_swing_intraday_probe_max_per_symbol is not None
+        or env_swing_intraday_probe_score_vpw_max_open is not None
+        or env_swing_intraday_probe_discard_log_min_interval is not None
+        or env_swing_same_symbol_loss_reentry_guard_enabled is not None
+        or env_swing_same_symbol_loss_reentry_cooldown_sec is not None
+        or env_swing_same_symbol_loss_reentry_loss_threshold_pct is not None
+        or env_swing_same_symbol_loss_reentry_consecutive_losses is not None
+        or env_swing_same_symbol_loss_reentry_counterfactual_enabled is not None
         or env_swing_orderbook_micro_context_enabled is not None
         or env_scalp_live_simulator_enabled is not None
         or env_scalp_live_simulator_owner is not None
@@ -1388,6 +1415,21 @@ def _build_trading_rules() -> TradingConfig:
             SWING_INTRADAY_PROBE_DISCARD_LOG_MIN_INTERVAL_SEC=env_swing_intraday_probe_discard_log_min_interval
             if env_swing_intraday_probe_discard_log_min_interval is not None
             else config.SWING_INTRADAY_PROBE_DISCARD_LOG_MIN_INTERVAL_SEC,
+            SWING_SAME_SYMBOL_LOSS_REENTRY_GUARD_ENABLED=env_swing_same_symbol_loss_reentry_guard_enabled
+            if env_swing_same_symbol_loss_reentry_guard_enabled is not None
+            else config.SWING_SAME_SYMBOL_LOSS_REENTRY_GUARD_ENABLED,
+            SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC=env_swing_same_symbol_loss_reentry_cooldown_sec
+            if env_swing_same_symbol_loss_reentry_cooldown_sec is not None
+            else config.SWING_SAME_SYMBOL_LOSS_REENTRY_COOLDOWN_SEC,
+            SWING_SAME_SYMBOL_LOSS_REENTRY_LOSS_THRESHOLD_PCT=env_swing_same_symbol_loss_reentry_loss_threshold_pct
+            if env_swing_same_symbol_loss_reentry_loss_threshold_pct is not None
+            else config.SWING_SAME_SYMBOL_LOSS_REENTRY_LOSS_THRESHOLD_PCT,
+            SWING_SAME_SYMBOL_LOSS_REENTRY_CONSECUTIVE_LOSSES=env_swing_same_symbol_loss_reentry_consecutive_losses
+            if env_swing_same_symbol_loss_reentry_consecutive_losses is not None
+            else config.SWING_SAME_SYMBOL_LOSS_REENTRY_CONSECUTIVE_LOSSES,
+            SWING_SAME_SYMBOL_LOSS_REENTRY_COUNTERFACTUAL_ENABLED=env_swing_same_symbol_loss_reentry_counterfactual_enabled
+            if env_swing_same_symbol_loss_reentry_counterfactual_enabled is not None
+            else config.SWING_SAME_SYMBOL_LOSS_REENTRY_COUNTERFACTUAL_ENABLED,
             SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED=env_swing_orderbook_micro_context_enabled
             if env_swing_orderbook_micro_context_enabled is not None
             else config.SWING_ORDERBOOK_MICRO_CONTEXT_ENABLED,

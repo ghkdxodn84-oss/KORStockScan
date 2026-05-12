@@ -17,6 +17,7 @@ from src.engine.error_detectors import (
 )
 import src.engine.error_detectors.cron_completion  # noqa: F401
 import src.engine.error_detectors.log_scanner  # noqa: F401
+import src.engine.error_detectors.kiwoom_auth_8005_restart  # noqa: F401
 import src.engine.error_detectors.process_health  # noqa: F401
 import src.engine.error_detectors.artifact_freshness  # noqa: F401
 import src.engine.error_detectors.resource_usage  # noqa: F401
@@ -31,6 +32,7 @@ MODE_DETECTOR_MAP = {
     "health_only": {"process_health"},
     "cron_only": {"cron_completion"},
     "log_only": {"log_scanner"},
+    "auth_only": {"kiwoom_auth_8005_restart"},
     "artifact_only": {"artifact_freshness"},
     "resource_only": {"resource_usage"},
 }
@@ -112,7 +114,15 @@ def main():
     parser = argparse.ArgumentParser(description="System Error Detection Engine")
     parser.add_argument(
         "--mode",
-        choices=["full", "health_only", "cron_only", "log_only", "artifact_only", "resource_only"],
+        choices=[
+            "full",
+            "health_only",
+            "cron_only",
+            "log_only",
+            "auth_only",
+            "artifact_only",
+            "resource_only",
+        ],
         default="full",
         help="Detection scope (default: full)",
     )

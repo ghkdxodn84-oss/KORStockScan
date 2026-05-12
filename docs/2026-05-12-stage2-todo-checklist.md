@@ -13,6 +13,7 @@
 - OpenAI WS 확인은 transport/provenance 검증이며 threshold 값, 주문가/수량 guard, 스윙 dry-run guard를 변경하지 않는다.
 - `actual_order_submitted=false`인 sim/probe 표본은 실주문 전환 근거가 아니라 EV/source-quality 입력이다. 실주문 전환은 별도 approval artifact와 checklist가 필요하다.
 - `panic_sell_defense`는 runtime mutation, bot restart, score/stop threshold 변경 권한이 없는 report-only 입력이다.
+- 스윙 동일종목 손실 후 재진입 guard는 threshold 튜닝이 아니라 mandatory pre-submit safety이며, 막힌 후보는 `swing_reentry_counterfactual_after_loss`로만 남긴다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
 ## 장전 체크리스트 (08:50~09:00)
@@ -68,6 +69,9 @@
 - 근거: `bot_main.py` PID `15393`이 실행 중이고 `pipeline_events_2026-05-12.jsonl`은 09:08 KST 기준 5,121건으로 append 중이다. `buy_funnel_sentinel_2026-05-12`와 `holding_exit_sentinel_2026-05-12`는 모두 09:05 cron `[DONE]` marker와 `classification.primary=NORMAL`을 생성했다. `run_error_detection.log`도 09:05 full detector `[DONE]` marker를 남겼고 process/resource/stale-lock은 pass다. `threshold_events_2026-05-12.jsonl`은 7건으로 sparse stream이 생성됐으며, selected threshold family 직접 표본은 아직 없지만 runbook 기준 fatal stale이 아니라 source coverage 대기다.
 - not_yet_due: `12:05` intraday threshold calibration과 장후/postclose 산출물은 아직 due 전이다.
 - 다음 액션: Sentinel/Detector는 계속 report-only로 본다. selected runtime family, OpenAI `entry_price`, scalp sim BUY 확정 표본은 장후 EV/report에서 재확인하고 장중 runtime threshold mutation은 하지 않는다.
+- 운영 메모 (`2026-05-12 12:13 KST`): `11:07:41` Kiwoom WS 재접속 후 REST 시세 API가 `8005 Token이 유효하지 않습니다`를 반복해 `scalp_vwap_reclaim_01` 전처리에서 `curr=0`, `vwap=0`, `missing_price_or_vwap`가 광범위하게 발생했다. runbook 기준 `8005` 반복은 graceful restart 우선으로 보고 `bot_main.py` PID `15393`에 TERM을 보내 `run_bot.sh` wrapper 재기동을 수행했다. 새 PID는 `40466`이며 `12:13:42` WS 로그인/조건검색식 등록, `12:13:45` 다수 종목 첫 실시간 수신, `ka10080` 분봉 직접 검증(`085660`, `397030`, `039200` 각 5개 반환)을 확인했다. 이 조치는 token/runtime data path 복구이며 threshold, 주문가/수량 guard, provider route, score/stop threshold는 변경하지 않았다.
+- 구현 메모 (`2026-05-12 12:24 KST`): 동일 유형 재발 방지를 위해 System Error Detector에 `kiwoom_auth_8005_restart`를 추가했다. 대상은 `bot_history.log`, `kiwoom_utils_info.log`, `kiwoom_sniper_v2_error.log`, `sniper_state_handlers_error.log`, `kiwoom_orders*.log`의 fresh append 로그로 제한하며, 첫 실행은 기존 로그를 baseline 처리하고 이후 fresh `8005` 인증 실패만 `/home/ubuntu/KORStockScan/restart.flag` 생성 대상으로 본다. dry-run은 `would_restart=true`만 보고하고, live는 120초 cooldown을 둔 `restart.flag` 생성만 수행한다. 하루 3회 이상은 `fail`로 올려 operator 확인 대상이다. 전략 threshold, 주문가/수량 guard, provider route는 변경하지 않는다.
+- 검증 메모 (`2026-05-12 12:26 KST`): `auth_only --dry-run`과 `full --dry-run`에서 `12:25:03` `kiwoom_utils_info.log`의 fresh `kt00008` 8005를 `would_restart=true`로 감지했다. live `auth_only` 실행으로 `restart.flag`를 생성했고, `bot_main.py`는 `12:26:07` flag를 소비해 graceful 종료 후 PID `40466 -> 42892`로 재기동했다. `12:26:27` WS 연결/로그인/조건검색식 수신을 확인했고, 직접 REST 검증은 `ka10080(085660)` 5개 row 반환으로 통과했다.
 
 - [x] `[SwingMarketRegimeLocalBreadthGate0512] 스윙 market-regime 게이트 국내 breadth 반영 누락 점검` (`Due: 2026-05-12`, `Slot: INTRADAY`, `TimeWindow: 09:05~15:20`, `Track: SwingLogic`)
   - Source: [report_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/report_2026-05-12.json), [market_regime_snapshot.json](/home/ubuntu/KORStockScan/data/cache/market_regime_snapshot.json), [service.py](/home/ubuntu/KORStockScan/src/market_regime/service.py), [sniper_market_regime.py](/home/ubuntu/KORStockScan/src/engine/sniper_market_regime.py)
@@ -175,6 +179,12 @@
   - 판정 기준: 당일 변경/관찰 결과를 기준으로 `remove`, `observe-only`, `baseline-promote`, `active-canary` 상태 변동 여부를 닫는다.
   - 금지: shadow 금지, canary-only, baseline 승격 원칙을 코드/문서 상태와 분리하지 않는다.
   - 다음 액션: 변경이 있으면 기준문서와 checklist를 함께 갱신하고 cohort 잠금 필드를 남긴다.
+
+- [x] `[SwingSameSymbolLossReentryGuard0512] 스윙 동일종목 손실 후 재진입 guard 구현 및 문서 반영` (`Due: 2026-05-12`, `Slot: POSTCLOSE`, `TimeWindow: 18:55~19:10`, `Track: SwingLogic`)
+  - 판정: pass
+  - 근거: 스윙/probe 손실 청산 후 동일 종목/전략 신규 BUY·probe를 60분 차단하는 `swing_same_symbol_loss_reentry_guard`를 추가했다. stop-loss 계열 `<= -2.5%` 또는 당일 연속 손실 2회가 trigger이며, blocked 후보는 `swing_reentry_counterfactual_after_loss`로 분리해 `actual_order_submitted=false`, `broker_order_forbidden=true`, `runtime_effect=counterfactual_only`를 강제한다.
+  - 다음 액션: 장후 swing lifecycle/EV에서 real-like EV와 cooldown counterfactual이 섞이지 않는지 확인하고, real canary approval 전에도 pre-submit guard를 mandatory로 유지한다.
+  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py` 및 checklist/parser 검증 수행.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 

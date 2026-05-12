@@ -253,7 +253,7 @@ PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode full --dry-run
 | cron | 5분 단위 운영 report 생성 | `deploy/run_error_detection.sh full` | `data/report/error_detection/error_detection_YYYY-MM-DD.json`, `logs/run_error_detection.log` (`touch` 보장) |
 | bot daemon | 장중 빠른 health alert | `bot_main.py` 내부 `error_detection_loop` | 동일 report 갱신, fail 전환/summary 변경 시 `SYSTEM_HEALTH_ALERT` |
 | 수동 dry-run | 배포 전/수정 후 안전 점검 | `PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode full --dry-run` | report 파일 미작성, filesystem mutation 차단 |
-| 수동 단일 범위 | 특정 detector 재현 | `--mode health_only|cron_only|log_only|artifact_only|resource_only` | 해당 detector만 실행 |
+| 수동 단일 범위 | 특정 detector 재현 | `--mode health_only|cron_only|log_only|auth_only|artifact_only|resource_only` | 해당 detector만 실행 |
 
 설치/갱신 명령:
 
@@ -276,13 +276,14 @@ ls -l data/report/error_detection/error_detection_$(TZ=Asia/Seoul date +%F).json
 | `process_health` | main loop, daemon thread heartbeat stale 또는 PID 불일치 | heartbeat owner와 실제 tmux/process 상태 확인. 장애면 운영 복구 playbook으로 분리 | 자동 restart, threshold 변경 |
 | `cron_completion` | 필수 cron log의 당일 DONE 누락 또는 FAIL 최신 marker | 해당 cron log와 산출물 재확인 후 같은 date 재실행 여부 판단 | 실패를 threshold 성과로 해석 |
 | `log_scanner` | error log burst 또는 신규 error pattern. `TEST`, `123456`, `_DummySession`, `bus fail`처럼 pytest fixture signature가 붙은 라인은 운영 incident에서 제외한다 | stack trace/source artifact 확인 후 incident 또는 code workorder로 분리. fixture noise가 runtime log에 섞이면 test log sink 분리 또는 scanner ignore rule 보강으로 닫는다 | 에러만 보고 live guard 완화 |
+| `kiwoom_auth_8005_restart` | fresh runtime log에서 `8005 Token이 유효하지 않습니다` 계열 인증 실패 감지. 기존 offset 이전 로그, pytest fixture signature, `run_error_detection*` meta log는 제외한다 | `restart.flag` 기반 graceful restart 후 새 PID, WS 수신, REST 시세/잔고 응답 회복을 확인한다. 하루 3회 이상이면 operator가 token 발급/캐시/WS reconnect 경로를 별도 incident로 본다 | hot-refresh, 주문 retry, threshold/spread/order guard 변경 |
 | `artifact_freshness` | 시간창 기준 필수 report/artifact stale/누락 또는 JSON status 값 비정상. 장중 `pipeline_events`는 09:00~09:05 startup grace를 두고, `threshold_events` compact stream은 sparse stream이라 stale을 warning으로 본다 | window, startup grace, trading_day skip, upstream cron 실패, status JSON의 `failed_steps` 확인 | 누락 artifact를 수동 값으로 대체 |
 | `resource_usage` | CPU/memory/swap/load/disk threshold 위반, sampler stale | resource pressure 원인 확인. disk-low면 log rotate 결과와 cooldown state 확인 | 전략 runtime parameter 변경 |
 | `stale_lock` | 오래된 lock 발견 또는 cleanup 실패 | active lock인지 확인. 반복되면 wrapper lock lifecycle 보강 | 실행 중인 process lock 강제 삭제 |
 
 ### 코드수정 필요 에러 처리 절차
 
-`summary_severity=fail` 또는 반복 `warning`이 코드 결함, instrumentation gap, wrapper 계약 불일치로 보이면 사람이 Codex에 수정 작업을 지시한다. detector 결과만으로 live threshold, spread cap, 주문 guard, provider routing, bot restart를 임의 변경하지 않는다.
+`summary_severity=fail` 또는 반복 `warning`이 코드 결함, instrumentation gap, wrapper 계약 불일치로 보이면 사람이 Codex에 수정 작업을 지시한다. detector 결과만으로 live threshold, spread cap, 주문 guard, provider routing, bot restart를 임의 변경하지 않는다. 단, `kiwoom_auth_8005_restart`는 인증/runtime data path 복구 예외로 fresh 8005 감지 시 `restart.flag` 생성만 허용한다.
 
 1. 최신 detector report를 연다.
 
@@ -323,10 +324,11 @@ ls -l data/report/error_detection/error_detection_$(TZ=Asia/Seoul date +%F).json
 
 ### 허용된 filesystem maintenance
 
-6개 detector 중 4개는 순수 report-only다. 아래 2개만 운영 파일 정리 mutation을 허용한다.
+7개 detector 중 4개는 순수 report-only다. 아래 3개만 운영 filesystem/runtime maintenance mutation을 허용한다.
 
 - `stale_lock`: `ERROR_DETECTOR_STALE_LOCK_CLEANUP_ENABLED=True`이고 dry-run이 아닐 때, `tmp/*.lock` 중 `ERROR_DETECTOR_STALE_LOCK_MAX_AGE_SEC`를 넘고 `fcntl` non-blocking lock 획득에 성공한 파일만 삭제한다.
 - `resource_usage`: disk free가 `ERROR_DETECTOR_DISK_FREE_MIN_MB` 미만이고 `ERROR_DETECTOR_DISK_LOG_ROTATE_ENABLED=True`이며 dry-run이 아닐 때 `deploy/run_logs_rotation_cleanup_cron.sh 7`을 호출한다. 성공한 호출만 `tmp/error_detector_last_log_rotate_ts.txt`에 기록하며, 30분 cooldown 중에는 `log_rotate_trigger=cooldown_active`로 보고한다.
+- `kiwoom_auth_8005_restart`: fresh runtime `8005` 인증 실패를 감지하고 dry-run이 아닐 때 `restart.flag`만 생성한다. 동일 auth incident 120초 cooldown 중에는 중복 flag 생성을 억제하고, 하루 누적 3회 이상이면 `fail`로 올려 operator 확인을 요구한다.
 
 maintenance mutation도 전략 runtime 변경이 아니다. 실패하거나 반복되면 `warning/fail`로 보고 원인 복구를 진행하며, 매매 threshold를 수동 조정하지 않는다.
 
