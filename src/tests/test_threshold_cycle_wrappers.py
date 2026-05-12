@@ -7,12 +7,79 @@ def test_postclose_wrapper_runs_pattern_labs_before_automation_and_ev_report():
     gemini_idx = script.index("analysis/gemini_scalping_pattern_lab/run.sh")
     claude_idx = script.index("analysis/claude_scalping_pattern_lab/run_all.sh")
     automation_idx = script.index("src.engine.scalping_pattern_lab_automation")
-    ev_idx = script.index("src.engine.threshold_cycle_ev_report")
+    ev_idx = script.index('run_threshold_cycle_ev_and_wait "pre_workorder"')
 
     assert "ANALYSIS_START_DATE=\"$PATTERN_LAB_START_DATE\" ANALYSIS_END_DATE=\"$TARGET_DATE\"" in script
     assert gemini_idx < automation_idx
     assert claude_idx < automation_idx
     assert automation_idx < ev_idx
+
+
+def test_postclose_wrapper_runs_swing_daily_simulation_before_lifecycle_audit():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+
+    simulation_idx = script.index('deploy/run_swing_daily_simulation_report.sh" "$TARGET_DATE"')
+    simulation_wait_idx = script.index('"$PROJECT_DIR/data/report/swing_daily_simulation/swing_daily_simulation_${TARGET_DATE}.json"')
+    audit_idx = script.index("src.engine.swing_lifecycle_audit")
+
+    assert simulation_idx < audit_idx
+    assert simulation_idx < simulation_wait_idx < audit_idx
+
+
+def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+
+    pre_ev_idx = script.index('run_threshold_cycle_ev_and_wait "pre_workorder"')
+    workorder_idx = script.index("src.engine.build_code_improvement_workorder")
+    post_ev_idx = script.index('run_threshold_cycle_ev_and_wait "post_workorder_refresh"')
+    runtime_summary_idx = script.index("src.engine.runtime_approval_summary")
+
+    assert pre_ev_idx < workorder_idx < post_ev_idx < runtime_summary_idx
+
+
+def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_steps():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+
+    assert 'ARTIFACT_WAIT_SEC="${THRESHOLD_CYCLE_ARTIFACT_WAIT_SEC:-600}"' in script
+    assert "wait_for_json_artifact()" in script
+    assert "wait_for_report_artifact()" in script
+    assert "next_stage2_checklist_path()" in script
+    assert '"$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.json"' in script
+    assert 'wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist"' in script
+    assert "src.engine.verify_threshold_cycle_postclose_chain" in script
+    assert '"$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json"' in script
+
+
+def test_postclose_wrapper_marks_availability_guard_pause_as_fail():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+
+    assert "[PAUSED] threshold-cycle postclose" in script
+    assert "[FAIL] threshold-cycle postclose" in script
+    assert "paused_by_availability_guard" in script
+    assert 'if [ "${completed:-false}" != "true" ]; then' in script
+    assert "compact collection incomplete" in script
+
+
+def test_postclose_wrapper_reuses_existing_snapshot_when_checkpoint_exists():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+
+    assert 'CHECKPOINT_PATH="$PROJECT_DIR/data/threshold_cycle/checkpoints/${TARGET_DATE}.json"' in script
+    assert 'find "$SNAPSHOT_DIR" -maxdepth 1 -type f -name "pipeline_events_${TARGET_DATE}_*.jsonl"' in script
+    assert '[ -f "$CHECKPOINT_PATH" ] && [ -n "$EXISTING_SNAPSHOT_PATH" ]' in script
+    assert 'echo "[threshold-cycle] reusing immutable snapshot source=$EXISTING_SNAPSHOT_PATH checkpoint=$CHECKPOINT_PATH"' in script
+    assert '[ "${REUSE_EXISTING_SNAPSHOT:-false}" != "true" ]' in script
+
+
+def test_postclose_wrapper_cleans_up_snapshot_duplicates_with_retention():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+
+    assert 'SNAPSHOT_RETENTION_DAYS="${THRESHOLD_CYCLE_SNAPSHOT_RETENTION_DAYS:-7}"' in script
+    assert "cleanup_threshold_cycle_snapshots()" in script
+    assert 'cleanup_threshold_cycle_snapshots "$SNAPSHOT_DIR" "$SNAPSHOT_RETENTION_DAYS"' in script
+    assert 'pipeline_events_(\\d{4}-\\d{2}-\\d{2})_(\\d{8}_\\d{6})\\.jsonl$' in script
+    assert 'retention_days={retention_days}' in script
+    assert 'removed_bytes={removed_bytes}' in script
 
 
 def test_tuning_monitoring_wrapper_skips_pattern_labs_by_default():

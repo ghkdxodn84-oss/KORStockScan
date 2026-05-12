@@ -622,7 +622,7 @@ def run_update_kospi_chain() -> dict:
 
     logger.info("🚀 추천 모델(recommend_daily_v2.py)을 이어서 실행합니다...")
     try:
-        subprocess.run([sys.executable, "src/model/recommend_daily_v2.py"], check=True)
+        subprocess.run([sys.executable, str(PROJECT_ROOT / "src/model/recommend_daily_v2.py")], check=True, cwd=PROJECT_ROOT)
         steps.append(_step('recommend_daily_v2', 'completed'))
     except subprocess.CalledProcessError as e:
         logger.error(f"❌ 추천 모델 실행 중 에러 발생: {e}")

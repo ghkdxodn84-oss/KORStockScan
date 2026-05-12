@@ -287,8 +287,101 @@ def test_build_threshold_cycle_ev_report_warns_when_pattern_lab_artifact_missing
     assert report["pattern_lab_automation"]["available"] is False
     assert "pattern_lab_automation_missing" in report["warnings"]
     assert "code_improvement_workorder_missing" in report["warnings"]
-    markdown = (ev_dir / "threshold_cycle_ev_2026-05-08.md").read_text(encoding="utf-8")
-    assert "AI threshold miss EV 회수 조건 점검" not in markdown
+
+
+def test_threshold_cycle_ev_report_prefers_candidate_sample_counts_from_calibration(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    monitor_dir = report_dir / "monitor_snapshots"
+    calibration_dir = report_dir / "threshold_cycle_calibration"
+    apply_dir = tmp_path / "apply_plans"
+    ev_dir = report_dir / "threshold_cycle_ev"
+    workorder_report_dir = report_dir / "code_improvement_workorder"
+    workorder_doc_dir = tmp_path / "docs" / "code-improvement-workorders"
+    for path in (monitor_dir, calibration_dir, apply_dir, ev_dir, workorder_report_dir, workorder_doc_dir):
+        path.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
+    monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", calibration_dir)
+    monkeypatch.setattr(mod, "EV_REPORT_DIR", ev_dir)
+    monkeypatch.setattr(mod, "apply_manifest_path", lambda target_date: apply_dir / f"threshold_apply_{target_date}.json")
+    monkeypatch.setattr(
+        mod,
+        "automation_report_paths",
+        lambda target_date: (
+            tmp_path / "missing" / f"scalping_pattern_lab_automation_{target_date}.json",
+            tmp_path / "missing" / f"scalping_pattern_lab_automation_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(
+        mod,
+        "code_improvement_workorder_paths",
+        lambda target_date: (
+            workorder_report_dir / f"code_improvement_workorder_{target_date}.json",
+            workorder_doc_dir / f"code_improvement_workorder_{target_date}.md",
+        ),
+    )
+
+    (monitor_dir / "trade_review_2026-05-12.json").write_text(
+        json.dumps({"metrics": {"completed_trades": 0, "open_trades": 0, "win_trades": 0, "loss_trades": 0}}),
+        encoding="utf-8",
+    )
+    (monitor_dir / "performance_tuning_2026-05-12.json").write_text(
+        json.dumps({"metrics": {"budget_pass_events": 0, "order_bundle_submitted_events": 0}}),
+        encoding="utf-8",
+    )
+    (calibration_dir / "threshold_cycle_calibration_2026-05-12_postclose.json").write_text(
+        json.dumps(
+            {
+                "run_phase": "postclose",
+                "runtime_change": False,
+                "calibration_candidates": [
+                    {
+                        "family": "holding_exit_decision_matrix_advisory",
+                        "calibration_state": "hold_no_edge",
+                        "sample_count": 14,
+                        "source_sample_count": 14,
+                        "sample_floor": 1,
+                        "sample_floor_status": "minimum_edge_missing",
+                        "source_metrics": {
+                            "counterfactual_gap_count": 14,
+                            "eligible_but_not_chosen_sample_snapshots": 0,
+                        },
+                    }
+                ],
+                "post_apply_attribution": {
+                    "calibration_decisions": [
+                        {
+                            "family": "holding_exit_decision_matrix_advisory",
+                            "calibration_state": "hold_no_edge",
+                            "sample_count": 0,
+                            "sample_floor": 1,
+                        }
+                    ]
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (apply_dir / "threshold_apply_2026-05-12.json").write_text(
+        json.dumps({"status": "auto_bounded_live_ready", "runtime_change": False}),
+        encoding="utf-8",
+    )
+
+    report = mod.build_threshold_cycle_ev_report("2026-05-12")
+
+    decision = next(
+        item
+        for item in report["calibration_outcome"]["decisions"]
+        if item["family"] == "holding_exit_decision_matrix_advisory"
+    )
+    assert decision["sample_count"] == 14
+    assert decision["source_sample_count"] == 14
+    assert decision["sample_floor_status"] == "minimum_edge_missing"
+    assert decision["source_metrics"]["counterfactual_gap_count"] == 14
+    markdown = (ev_dir / "threshold_cycle_ev_2026-05-12.md").read_text(encoding="utf-8")
+    assert "holding_exit_decision_matrix_advisory" in markdown
+    assert "sample=`14/1`" in markdown
 
 
 def test_build_threshold_cycle_ev_report_renders_swing_pattern_lab_section(tmp_path, monkeypatch):
@@ -348,6 +441,13 @@ def test_build_threshold_cycle_ev_report_renders_swing_pattern_lab_section(tmp_p
                     "data_quality_warning_count": 0,
                     "carryover_warning_count": 1,
                     "population_split_available": True,
+                    "source_quality_blocked_families": [
+                        {
+                            "family": "swing_scale_in_ofi_qi_confirmation",
+                            "stage": "scale_in",
+                            "source_quality_blockers": ["scale_in_ofi_qi_invalid_micro_context"],
+                        }
+                    ],
                 },
                 "consensus_findings": [
                     {"finding_id": "f1", "title": "selection gap", "route": "design_family_candidate"},
@@ -356,7 +456,10 @@ def test_build_threshold_cycle_ev_report_renders_swing_pattern_lab_section(tmp_p
                 "code_improvement_orders": [
                     {"order_id": "order_f1", "title": "selection gap", "decision": "design_family_candidate"},
                 ],
-                "data_quality": {"warnings": []},
+                "data_quality": {
+                    "warnings": [],
+                    "ofi_qi_quality": {"stale_missing_unique_record_count": 1},
+                },
             },
             ensure_ascii=False,
         ),
@@ -371,9 +474,13 @@ def test_build_threshold_cycle_ev_report_renders_swing_pattern_lab_section(tmp_p
     assert report["swing_pattern_lab_automation"]["available"] is True
     assert report["swing_pattern_lab_automation"]["findings_count"] == 2
     assert report["swing_pattern_lab_automation"]["carryover_warning_count"] == 1
+    assert report["swing_pattern_lab_automation"]["source_quality_blocked_families"][0]["family"] == (
+        "swing_scale_in_ofi_qi_confirmation"
+    )
 
     markdown = (ev_dir / "threshold_cycle_ev_2026-05-08.md").read_text(encoding="utf-8")
     assert "Swing Pattern Lab Automation" in markdown
     assert "deepseek_lab_available" in markdown
+    assert "source_quality_blocked_families" in markdown
     assert "carryover_warnings" in markdown
     assert "population_split_available" in markdown

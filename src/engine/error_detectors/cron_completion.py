@@ -135,7 +135,7 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
         "id": "update_kospi",
         "log": "logs/update_kospi.log",
         "window_start": (21, 0),
-        "window_end": (21, 15),
+        "window_end": (21, 50),
         "mode": "once",
         "critical": False,
     },

@@ -191,6 +191,12 @@ def _sample_ofi_qi_fact() -> pd.DataFrame:
                 "swing_micro_advice": "SUPPORT_ENTRY",
                 "swing_micro_runtime_effect": False,
                 "smoothing_action": "",
+                "micro_missing_flag": False,
+                "micro_stale_flag": False,
+                "observer_unhealthy_flag": False,
+                "micro_not_ready_flag": False,
+                "state_insufficient_flag": False,
+                "stale_missing_reasons": "",
                 "stale_missing_flag": False,
             },
             {
@@ -213,6 +219,12 @@ def _sample_ofi_qi_fact() -> pd.DataFrame:
                 "swing_micro_advice": "MISSING",
                 "swing_micro_runtime_effect": False,
                 "smoothing_action": "NO_CHANGE",
+                "micro_missing_flag": True,
+                "micro_stale_flag": False,
+                "observer_unhealthy_flag": True,
+                "micro_not_ready_flag": True,
+                "state_insufficient_flag": True,
+                "stale_missing_reasons": "micro_missing,observer_unhealthy,micro_not_ready,state_insufficient",
                 "stale_missing_flag": True,
             },
         ]
@@ -262,6 +274,34 @@ class TestPrepareDataset:
         assert report["fact_counts"]["swing_ofi_qi_fact_rows"] == 2
         assert report["completed_trades"] == 2
         assert report["valid_profit_trades"] == 2
+        assert report["ofi_qi_quality"]["reason_counts"]["micro_missing"] == 1
+        assert report["ofi_qi_quality"]["reason_counts"]["observer_unhealthy"] == 1
+        assert report["ofi_qi_quality"]["reason_counts"]["micro_not_ready"] == 1
+        assert report["ofi_qi_quality"]["reason_counts"]["state_insufficient"] == 1
+        assert report["ofi_qi_quality"]["reason_combination_counts"] == {
+            "micro_missing+observer_unhealthy+micro_not_ready+state_insufficient": 1
+        }
+        assert report["ofi_qi_quality"]["stale_missing_unique_record_count"] == 1
+        assert report["ofi_qi_quality"]["reason_combination_unique_record_counts"] == {
+            "micro_missing+observer_unhealthy+micro_not_ready+state_insufficient": 1
+        }
+        assert report["ofi_qi_quality"]["stale_missing_group_counts"] == {"exit": 1}
+        assert report["ofi_qi_quality"]["stale_missing_group_unique_record_counts"] == {"exit": 1}
+        assert report["ofi_qi_quality"]["observer_unhealthy_overlap"] == {
+            "observer_unhealthy_total": 1,
+            "observer_unhealthy_with_other_reason": 1,
+            "observer_unhealthy_only": 0,
+        }
+        assert report["ofi_qi_quality"]["examples"][0]["record_id"] == "2"
+        assert not any("funnel fact has only" in warning for warning in report["warnings"])
+
+    def test_build_data_quality_report_warns_when_funnel_rows_below_window_floor(self):
+        trade = _sample_trade_fact()
+        funnel = _sample_funnel_fact().iloc[:1].copy()
+        seq = _sample_sequence_fact()
+        ofi = _sample_ofi_qi_fact()
+        report = build_data_quality_report(trade, funnel, seq, ofi, ["2026-05-08", "2026-05-09"])
+        assert "funnel fact has only 1 rows (min 2)" in report["warnings"]
 
     def test_generate_data_quality_markdown(self):
         report = {
@@ -269,10 +309,23 @@ class TestPrepareDataset:
             "fact_counts": {"swing_trade_fact_rows": 2, "swing_lifecycle_funnel_fact_rows": 1, "swing_sequence_fact_rows": 1, "swing_ofi_qi_fact_rows": 2},
             "completed_trades": 2,
             "valid_profit_trades": 2,
+            "ofi_qi_quality": {
+                "stale_missing_count": 1,
+                "stale_missing_unique_record_count": 1,
+                "stale_missing_ratio": 0.5,
+                "reason_counts": {"micro_missing": 1},
+                "reason_combination_counts": {"micro_missing": 1},
+                "reason_combination_unique_record_counts": {"micro_missing": 1},
+                "stale_missing_group_counts": {"entry": 1},
+                "stale_missing_group_unique_record_counts": {"entry": 1},
+                "observer_unhealthy_overlap": {"observer_unhealthy_total": 0},
+            },
             "warnings": ["test warning"],
         }
         md = generate_data_quality_markdown(report)
         assert "test warning" in md
+        assert "reason_counts" in md
+        assert "reason_combination_counts" in md
         assert "2026-05-08" in md
 
 
@@ -317,6 +370,16 @@ class TestAnalyzeSwingPatterns:
         assert len(findings) >= 1
         for f in findings:
             assert f["runtime_effect"] is False
+        stale_finding = next(f for f in findings if f["finding_id"].endswith("_ofi_qi_stale_missing"))
+        assert stale_finding["evidence"]["stale_missing_reason_counts"]["micro_missing"] == 1
+        assert stale_finding["evidence"]["stale_missing_reason_combination_counts"] == {
+            "micro_missing+observer_unhealthy+micro_not_ready+state_insufficient": 1
+        }
+        assert stale_finding["evidence"]["stale_missing_unique_record_count"] == 1
+        assert stale_finding["evidence"]["stale_missing_reason_combination_unique_record_counts"] == {
+            "micro_missing+observer_unhealthy+micro_not_ready+state_insufficient": 1
+        }
+        assert stale_finding["evidence"]["observer_unhealthy_overlap"]["observer_unhealthy_with_other_reason"] == 1
 
     def test_build_code_improvement_orders_are_safe(self):
         findings = [
@@ -371,6 +434,17 @@ class TestBuildDeepSeekPayload:
         summary = build_payload_summary(trade, funnel, seq, ofi, analysis)
         assert summary["payload_type"] == "deepseek_swing_pattern_lab_summary"
         assert summary["counts"]["trade_rows"] == 2
+        assert summary["case_counts"] == {"selected_trades": 2, "findings_brief": 0, "ofi_qi_samples": 2}
+        assert summary["total_cases"] == 4
+        assert summary["ofi_qi_summary"]["stale_missing_reason_counts"]["micro_missing"] == 1
+        assert summary["ofi_qi_summary"]["stale_missing_reason_combination_counts"] == {
+            "micro_missing+observer_unhealthy+micro_not_ready+state_insufficient": 1
+        }
+        assert summary["ofi_qi_summary"]["stale_missing_unique_record_count"] == 1
+        assert summary["ofi_qi_summary"]["stale_missing_reason_combination_unique_record_counts"] == {
+            "micro_missing+observer_unhealthy+micro_not_ready+state_insufficient": 1
+        }
+        assert summary["ofi_qi_summary"]["observer_unhealthy_overlap"]["observer_unhealthy_only"] == 0
 
     def test_build_payload_cases(self):
         trade = _sample_trade_fact()
@@ -381,6 +455,7 @@ class TestBuildDeepSeekPayload:
         assert cases["payload_type"] == "deepseek_swing_pattern_lab_cases"
         assert len(cases["selected_trades"]) == 2
         assert len(cases["ofi_qi_samples"]) == 2
+        assert cases["ofi_qi_samples"][1]["reason_flags"]["micro_not_ready"] is True
 
     def test_generate_final_review_markdown(self):
         analysis = {

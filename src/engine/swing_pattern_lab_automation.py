@@ -194,6 +194,39 @@ def _extract_carryover_warnings(analysis_result: dict[str, Any]) -> list[str]:
     return warnings
 
 
+def _source_quality_blocked_families(ofi_qi_quality: dict[str, Any]) -> list[dict[str, Any]]:
+    if not isinstance(ofi_qi_quality, dict):
+        return []
+    group_unique_counts = (
+        ofi_qi_quality.get("stale_missing_group_unique_record_counts")
+        if isinstance(ofi_qi_quality.get("stale_missing_group_unique_record_counts"), dict)
+        else {}
+    )
+    group_to_family = {
+        "entry": "swing_entry_ofi_qi_execution_quality",
+        "scale_in": "swing_scale_in_ofi_qi_confirmation",
+    }
+    blocked: list[dict[str, Any]] = []
+    for group, family in group_to_family.items():
+        invalid_unique_count = _safe_int(group_unique_counts.get(group), 0)
+        if invalid_unique_count <= 0:
+            continue
+        blocked.append(
+            {
+                "family": family,
+                "stage": group,
+                "source_quality_blockers": [f"{group}_ofi_qi_invalid_micro_context"],
+                "invalid_micro_context_unique_record_count": invalid_unique_count,
+                "invalid_reason_combination_unique_record_counts": (
+                    ofi_qi_quality.get("reason_combination_unique_record_counts") or {}
+                ),
+                "automation_input": True,
+                "runtime_effect": False,
+            }
+        )
+    return blocked
+
+
 def build_swing_pattern_lab_automation_report(target_date: str) -> dict[str, Any]:
     target_date = str(target_date).strip()
     paths = _lab_output_paths()
@@ -204,6 +237,8 @@ def build_swing_pattern_lab_automation_report(target_date: str) -> dict[str, Any
     payload_summary = _load_json(paths["payload_summary"])
 
     dq_warnings = data_quality.get("warnings", []) if isinstance(data_quality.get("warnings"), list) else []
+    ofi_qi_quality = data_quality.get("ofi_qi_quality") if isinstance(data_quality.get("ofi_qi_quality"), dict) else {}
+    source_quality_blocked_families = _source_quality_blocked_families(ofi_qi_quality)
     carryover_warnings = _extract_carryover_warnings(analysis_result)
 
     if freshness["fresh"]:
@@ -250,6 +285,8 @@ def build_swing_pattern_lab_automation_report(target_date: str) -> dict[str, Any
             "data_quality_warning_count": len(dq_warnings),
             "carryover_warning_count": len(carryover_warnings),
             "population_split_available": freshness["fresh"],
+            "source_quality_blocked_family_count": len(source_quality_blocked_families),
+            "source_quality_blocked_families": source_quality_blocked_families,
         },
         "consensus_findings": [
             {
@@ -309,6 +346,8 @@ def build_swing_pattern_lab_automation_report(target_date: str) -> dict[str, Any
         ],
         "data_quality": {
             "warnings": dq_warnings,
+            "ofi_qi_quality": ofi_qi_quality,
+            "source_quality_blocked_families": source_quality_blocked_families,
             "carryover_warnings": carryover_warnings,
             "carryover_warnings_raw": data_quality_carryover_raw,
             "denominator_warnings": carryover_warnings,
@@ -354,6 +393,23 @@ def _render_markdown(report: dict[str, Any]) -> str:
             )
     if not report.get("code_improvement_orders"):
         lines.append("- none")
+    ofi_qi_quality = report.get("data_quality", {}).get("ofi_qi_quality") if isinstance(report.get("data_quality"), dict) else {}
+    if ofi_qi_quality:
+        lines.extend(
+            [
+                "",
+                "## OFI/QI Quality",
+                f"- stale_missing_ratio: `{ofi_qi_quality.get('stale_missing_ratio', 0.0)}`",
+                f"- stale_missing_unique_record_count: `{ofi_qi_quality.get('stale_missing_unique_record_count', 0)}`",
+                f"- reason_counts: `{ofi_qi_quality.get('reason_counts', {})}`",
+                f"- reason_combination_counts: `{ofi_qi_quality.get('reason_combination_counts', {})}`",
+                f"- reason_combination_unique_record_counts: `{ofi_qi_quality.get('reason_combination_unique_record_counts', {})}`",
+                f"- stale_missing_group_counts: `{ofi_qi_quality.get('stale_missing_group_counts', {})}`",
+                f"- stale_missing_group_unique_record_counts: `{ofi_qi_quality.get('stale_missing_group_unique_record_counts', {})}`",
+                f"- observer_unhealthy_overlap: `{ofi_qi_quality.get('observer_unhealthy_overlap', {})}`",
+                f"- source_quality_blocked_families: `{summary.get('source_quality_blocked_families', [])}`",
+            ]
+        )
     if report.get("data_quality", {}).get("carryover_warnings"):
         lines.extend(["", "## Carryover Warnings"])
         for w in report["data_quality"]["carryover_warnings"]:

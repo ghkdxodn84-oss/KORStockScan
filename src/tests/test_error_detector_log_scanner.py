@@ -148,6 +148,27 @@ class TestLogScanner:
             severity, _ = scanner._classify(errors, counter)
             assert severity == "warning"
 
+    def test_scan_file_ignores_info_db_success_lines_in_error_log(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_file = Path(tmpdir) / "update_kospi_error.log"
+            log_file.write_text(
+                "\n".join([
+                    "2026-05-12 21:27:31,342 - INFO - DB 일괄 삽입 성공! (총 42359행 적재 완료)",
+                    "2026-05-12 21:27:32,461 - INFO - 당일 대시보드 파일 DB 업로드 시작...",
+                    "2026-05-12 21:27:53,598 - INFO - 대시보드 파일 DB 업로드 완료",
+                    "2026-05-12 21:28:06,978 - ERROR - 추천 모델 실행 중 에러 발생: "
+                    "Command returned non-zero exit status 1.",
+                ]),
+                encoding="utf-8",
+            )
+
+            scanner = LogScanner()
+            counter = __import__("collections").Counter()
+            errors, _, _ = scanner._scan_file(log_file, 0, counter)
+
+            assert errors == 1
+            assert counter == {"UNKNOWN": 1}
+
     def test_scan_file_no_change(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             log_file = Path(tmpdir) / "test_error.log"

@@ -422,6 +422,72 @@ def analyze_ofi_qi_quality(ofi_qi_fact: pd.DataFrame) -> list[dict[str, Any]]:
     total_rows = len(ofi_qi_fact)
     stale_missing = int(ofi_qi_fact["stale_missing_flag"].sum())
     stale_ratio = round(stale_missing / max(total_rows, 1), 4)
+    reason_counts = {
+        column.replace("_flag", ""): int(ofi_qi_fact[column].sum())
+        for column in (
+            "micro_missing_flag",
+            "micro_stale_flag",
+            "observer_unhealthy_flag",
+            "micro_not_ready_flag",
+            "state_insufficient_flag",
+        )
+        if column in ofi_qi_fact
+    }
+    reason_ratios = {
+        reason: round(count / max(total_rows, 1), 4)
+        for reason, count in reason_counts.items()
+    }
+    stale_rows = ofi_qi_fact[ofi_qi_fact["stale_missing_flag"] == True].copy()
+    reason_combination_counts = (
+        stale_rows["stale_missing_reasons"].fillna("unknown").replace("", "unknown").str.replace(",", "+").value_counts().to_dict()
+        if "stale_missing_reasons" in stale_rows and not stale_rows.empty
+        else {}
+    )
+    reason_combination_unique_record_counts: dict[str, int] = {}
+    if not stale_rows.empty and "stale_missing_reasons" in stale_rows and "record_id" in stale_rows:
+        tmp = stale_rows.copy()
+        tmp["_reason_combination"] = tmp["stale_missing_reasons"].fillna("unknown").replace("", "unknown").str.replace(",", "+")
+        reason_combination_unique_record_counts = {
+            str(key): int(value)
+            for key, value in tmp.groupby("_reason_combination")["record_id"].nunique().to_dict().items()
+        }
+    stale_missing_group_counts = (
+        stale_rows["group"].fillna("unknown").replace("", "unknown").value_counts().to_dict()
+        if "group" in stale_rows and not stale_rows.empty
+        else {}
+    )
+    stale_missing_group_unique_record_counts = (
+        {
+            str(key): int(value)
+            for key, value in stale_rows.groupby("group")["record_id"].nunique().to_dict().items()
+        }
+        if "group" in stale_rows and "record_id" in stale_rows and not stale_rows.empty
+        else {}
+    )
+    observer_unhealthy_overlap = {
+        "observer_unhealthy_total": int(stale_rows["observer_unhealthy_flag"].sum())
+        if "observer_unhealthy_flag" in stale_rows and not stale_rows.empty else 0,
+        "observer_unhealthy_with_other_reason": 0,
+        "observer_unhealthy_only": 0,
+    }
+    if not stale_rows.empty and "observer_unhealthy_flag" in stale_rows:
+        other_columns = [
+            column for column in (
+                "micro_missing_flag",
+                "micro_stale_flag",
+                "micro_not_ready_flag",
+                "state_insufficient_flag",
+            )
+            if column in stale_rows
+        ]
+        observer_rows = stale_rows[stale_rows["observer_unhealthy_flag"] == True]
+        observer_unhealthy_overlap["observer_unhealthy_with_other_reason"] = int(
+            observer_rows[other_columns].any(axis=1).sum()
+        ) if other_columns else 0
+        observer_unhealthy_overlap["observer_unhealthy_only"] = (
+            observer_unhealthy_overlap["observer_unhealthy_total"]
+            - observer_unhealthy_overlap["observer_unhealthy_with_other_reason"]
+        )
 
     advice_counts = ofi_qi_fact["swing_micro_advice"].value_counts().to_dict() if "swing_micro_advice" in ofi_qi_fact else {}
     state_counts = ofi_qi_fact["orderbook_micro_state"].value_counts().to_dict() if "orderbook_micro_state" in ofi_qi_fact else {}
@@ -443,6 +509,14 @@ def analyze_ofi_qi_quality(ofi_qi_fact: pd.DataFrame) -> list[dict[str, Any]]:
                 "total_samples": total_rows,
                 "stale_missing_count": stale_missing,
                 "stale_missing_ratio": stale_ratio,
+                "stale_missing_reason_counts": reason_counts,
+                "stale_missing_reason_ratios": reason_ratios,
+                "stale_missing_reason_combination_counts": reason_combination_counts,
+                "stale_missing_reason_combination_unique_record_counts": reason_combination_unique_record_counts,
+                "stale_missing_group_counts": stale_missing_group_counts,
+                "stale_missing_group_unique_record_counts": stale_missing_group_unique_record_counts,
+                "stale_missing_unique_record_count": int(stale_rows["record_id"].nunique()) if "record_id" in stale_rows else 0,
+                "observer_unhealthy_overlap": observer_unhealthy_overlap,
                 "advice_distribution": advice_counts,
                 "state_distribution": state_counts,
                 "group_distribution": group_counts,

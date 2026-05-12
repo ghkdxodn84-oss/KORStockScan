@@ -76,9 +76,16 @@ class ResourceUsageDetector(BaseDetector):
                     issues.append(f"Memory available {mem_avail_mb}MB < {mem_avail_min}MB")
                 else:
                     warnings.append(f"Memory available {mem_avail_mb}MB approaching {mem_avail_min}MB")
+            healthy_mem_floor_mb = mem_avail_min * 4
             if swap_used_pct >= swap_used_max * 0.9:
                 if swap_used_pct >= swap_used_max:
-                    issues.append(f"Swap used {swap_used_pct}% >= {swap_used_max}%")
+                    if mem_avail_mb >= healthy_mem_floor_mb:
+                        warnings.append(
+                            f"Swap used {swap_used_pct}% >= {swap_used_max}% but memory available {mem_avail_mb}MB remains healthy"
+                        )
+                        details["swap_pressure_state"] = "swap_high_memory_healthy"
+                    else:
+                        issues.append(f"Swap used {swap_used_pct}% >= {swap_used_max}%")
                 else:
                     warnings.append(f"Swap used {swap_used_pct}% approaching {swap_used_max}%")
             if load15 >= loadavg_15m_max * 0.9:

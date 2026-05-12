@@ -77,6 +77,23 @@ class TestCronCompletionDetector:
         assert "[FAIL]" in filtered
         assert filtered.count("[DONE]") == 1
 
+    def test_update_kospi_start_only_before_extended_window_end_is_not_fail(self, monkeypatch, tmp_path):
+        import src.engine.error_detectors.cron_completion as cc
+
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir(parents=True)
+        (logs_dir / "update_kospi.log").write_text(
+            "[START] update_kospi target_date=2026-05-12 started_at=2026-05-12T21:00:03+0900\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr(cc, "_today_kst", lambda: "2026-05-12")
+
+        with _mock_time(21, 16):
+            result = CronCompletionDetector().check()
+
+        assert "update_kospi: no completion marker after window end" not in result.summary
+
 
 @contextmanager
 def _mock_time(hour: int, minute: int):

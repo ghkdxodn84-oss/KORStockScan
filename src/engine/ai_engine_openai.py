@@ -38,7 +38,7 @@ from src.engine.scalping_feature_packet import (
     build_scalping_feature_audit_fields,
     extract_scalping_feature_packet,
 )
-from src.utils.logger import log_error
+from src.utils.logger import log_error, log_info
 from src.utils.constants import TRADING_RULES
 from src.engine.macro_briefing_complete import build_scanner_data_input
 from src.engine.ai_engine import (
@@ -200,6 +200,15 @@ class OpenAIWSLateResponseError(TimeoutError):
 
 class OpenAIWSRequestIdMismatchError(RuntimeError):
     pass
+
+
+def _is_recoverable_openai_ws_close(exc: Exception) -> bool:
+    """HTTP fallback 성공 시 error로 올리지 않아도 되는 정상 WS 종료를 식별한다."""
+    error_type = type(exc).__name__
+    message = str(exc).lower()
+    if error_type == "ConnectionClosedOK":
+        return True
+    return "received 1000 (ok)" in message and "sent 1000 (ok)" in message
 
 
 @dataclass
@@ -1458,7 +1467,11 @@ class GPTSniperEngine:
                         "openai_ws_roundtrip_ms": int(result.roundtrip_ms),
                     }
                 )
-                log_error(f"⚠️ [OpenAI WS fallback] {context_name}: {e}")
+                fallback_msg = f"⚠️ [OpenAI WS fallback] {context_name}: {e}"
+                if _is_recoverable_openai_ws_close(e):
+                    log_info(fallback_msg)
+                else:
+                    log_error(fallback_msg)
         else:
             with self.api_call_lock:
                 result = self._call_openai_responses_http(request)

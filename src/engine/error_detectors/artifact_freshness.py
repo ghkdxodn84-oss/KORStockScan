@@ -118,6 +118,7 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
             "id": "threshold_cycle_postclose",
             "log": "logs/threshold_cycle_postclose_cron.log",
         },
+        "allow_missing_after_window_while_cron_in_progress": True,
     },
     {
         "id": "code_improvement_workorder",
@@ -285,7 +286,7 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "critical": False,
         "trading_day_only": False,
         "window_start": (21, 0),
-        "window_end": (21, 30),
+        "window_end": (21, 50),
         "json_status_field": "status",
         "json_ok_values": ["completed", "skipped_non_trading_day"],
     },
@@ -356,6 +357,15 @@ class ArtifactFreshnessDetector(BaseDetector):
                     warnings.append(f"{aid}: upstream cron in progress; artifact not generated yet")
                     details[f"{aid}_status"] = "warning"
                     details[f"{aid}_upstream_status"] = "in_progress"
+                    continue
+                if (
+                    in_progress_cron
+                    and past_window_end
+                    and bool(artifact.get("allow_missing_after_window_while_cron_in_progress"))
+                ):
+                    warnings.append(f"{aid}: upstream cron still in progress after window end")
+                    details[f"{aid}_status"] = "warning"
+                    details[f"{aid}_upstream_status"] = "in_progress_after_window"
                     continue
                 if past_window_end:
                     if critical:

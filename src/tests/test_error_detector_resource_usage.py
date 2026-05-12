@@ -67,7 +67,8 @@ class TestResourceUsageDetector:
         with tempfile.TemporaryDirectory() as tmpdir:
             sample_file = Path(tmpdir) / "samples.jsonl"
             sample_file.write_text(json.dumps(sample), encoding="utf-8")
-            with patch("src.engine.error_detectors.resource_usage.SAMPLER_JSONL", sample_file):
+            with patch("src.engine.error_detectors.resource_usage.SAMPLER_JSONL", sample_file), \
+                patch.object(ResourceUsageDetector, "_check_disk_free", return_value=8192.0):
                 detector = ResourceUsageDetector()
                 result = detector.check()
             assert result.severity == "pass"
@@ -84,7 +85,8 @@ class TestResourceUsageDetector:
         with tempfile.TemporaryDirectory() as tmpdir:
             sample_file = Path(tmpdir) / "samples.jsonl"
             sample_file.write_text(json.dumps(sample), encoding="utf-8")
-            with patch("src.engine.error_detectors.resource_usage.SAMPLER_JSONL", sample_file):
+            with patch("src.engine.error_detectors.resource_usage.SAMPLER_JSONL", sample_file), \
+                patch.object(ResourceUsageDetector, "_check_disk_free", return_value=8192.0):
                 detector = ResourceUsageDetector()
                 result = detector.check()
             assert result.severity == "fail"
@@ -101,7 +103,45 @@ class TestResourceUsageDetector:
         with tempfile.TemporaryDirectory() as tmpdir:
             sample_file = Path(tmpdir) / "samples.jsonl"
             sample_file.write_text(json.dumps(sample), encoding="utf-8")
-            with patch("src.engine.error_detectors.resource_usage.SAMPLER_JSONL", sample_file):
+            with patch("src.engine.error_detectors.resource_usage.SAMPLER_JSONL", sample_file), \
+                patch.object(ResourceUsageDetector, "_check_disk_free", return_value=8192.0):
+                detector = ResourceUsageDetector()
+                result = detector.check()
+            assert result.severity == "fail"
+
+    def test_high_swap_with_healthy_memory_warns_not_fails(self):
+        import time
+        sample = {
+            "ts": "2026-05-09T18:00:00+09:00",
+            "epoch": int(time.time()),
+            "cpu": {"cpu_busy_pct": 20.0},
+            "memory": {"mem_available_mb": 8192.0, "swap_total_mb": 4096.0, "swap_free_mb": 8.0},
+            "loadavg": {"15m": 1.5},
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_file = Path(tmpdir) / "samples.jsonl"
+            sample_file.write_text(json.dumps(sample), encoding="utf-8")
+            with patch("src.engine.error_detectors.resource_usage.SAMPLER_JSONL", sample_file), \
+                patch.object(ResourceUsageDetector, "_check_disk_free", return_value=8192.0):
+                detector = ResourceUsageDetector()
+                result = detector.check()
+            assert result.severity == "warning"
+            assert result.details["swap_pressure_state"] == "swap_high_memory_healthy"
+
+    def test_high_swap_with_unhealthy_memory_fails(self):
+        import time
+        sample = {
+            "ts": "2026-05-09T18:00:00+09:00",
+            "epoch": int(time.time()),
+            "cpu": {"cpu_busy_pct": 20.0},
+            "memory": {"mem_available_mb": 1500.0, "swap_total_mb": 4096.0, "swap_free_mb": 8.0},
+            "loadavg": {"15m": 1.5},
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_file = Path(tmpdir) / "samples.jsonl"
+            sample_file.write_text(json.dumps(sample), encoding="utf-8")
+            with patch("src.engine.error_detectors.resource_usage.SAMPLER_JSONL", sample_file), \
+                patch.object(ResourceUsageDetector, "_check_disk_free", return_value=8192.0):
                 detector = ResourceUsageDetector()
                 result = detector.check()
             assert result.severity == "fail"

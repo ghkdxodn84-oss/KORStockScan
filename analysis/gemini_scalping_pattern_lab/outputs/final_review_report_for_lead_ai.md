@@ -1,7 +1,7 @@
 # Gemini Scalping Pattern Lab Final Review
 
-- generated_at: `2026-05-11 16:16:30`
-- analysis_period: `2026-04-21 ~ 2026-05-11`
+- generated_at: `2026-05-12 19:46:48`
+- analysis_period: `2026-04-21 ~ 2026-05-12`
 
 ## 1. 판정
 
@@ -14,10 +14,10 @@
 
 ### 1-2. Plan Rebase 관찰축 요약
 
-- `WAIT65~79 total_candidates=128`, `recovery_check=0`, `promoted=0`, `submitted=0`
-- `blocked_ai_score_share=60.9%`, `budget_pass_to_submitted_rate=0.4%`, `gatekeeper_eval_ms_p95=10495ms`
+- `WAIT65~79 total_candidates=14`, `recovery_check=0`, `promoted=0`, `submitted=0`
+- `blocked_ai_score_share=71.4%`, `budget_pass_to_submitted_rate=0.0%`, `gatekeeper_eval_ms_p95=4936ms`
 
-- `No acute observability alert`: 중립 — 주요 관찰축에서 즉시 경고할 단일 병목이 두드러지지 않는다.
+- `AI threshold dominance`: 경고 — `blocked_ai_score_share=71.4%`로 WAIT/BLOCK 비중이 높아 BUY drought 해석을 지지한다.
 
 ### 1-3. 손실 패턴 Top 5
 
@@ -63,16 +63,16 @@
 ### 1-5. 기회비용 회수 후보 Top 5
 
 **#1** — `AI threshold miss`
-- 차단 건수 합계: 2788187건 | 차단 비율: 100.0% | 관찰 일수: 19일
+- 차단 건수 합계: 3123485건 | 차단 비율: 100.0% | 관찰 일수: 20일
 
 **#2** — `overbought gate miss`
-- 차단 건수 합계: 900577건 | 차단 비율: 100.0% | 관찰 일수: 19일
+- 차단 건수 합계: 980938건 | 차단 비율: 100.0% | 관찰 일수: 20일
 
 **#3** — `latency guard miss`
-- 차단 건수 합계: 59632건 | 차단 비율: 99.5% | 관찰 일수: 19일
+- 차단 건수 합계: 59633건 | 차단 비율: 99.5% | 관찰 일수: 20일
 
 **#4** — `liquidity gate miss`
-- 차단 건수 합계: 47301건 | 차단 비율: 99.4% | 관찰 일수: 19일
+- 차단 건수 합계: 55661건 | 차단 비율: 99.5% | 관찰 일수: 20일
 
 ---
 
@@ -100,9 +100,9 @@
 - `split-entry / scalp_soft_stop_pct 손실패턴 분해`
   검증지표: 빈도=26, 중앙손익=-1.745%, 기여손익=-47.910%
 - `AI threshold miss EV 회수 조건 점검`
-  검증지표: 차단건수=2788187, 차단비율=100.0%
+  검증지표: 차단건수=3123485, 차단비율=100.0%
 - `overbought gate miss EV 회수 조건 점검`
-  검증지표: 차단건수=900577, 차단비율=100.0%
+  검증지표: 차단건수=980938, 차단비율=100.0%
 
 ### 3-2. Plan Rebase 연계 관찰
 

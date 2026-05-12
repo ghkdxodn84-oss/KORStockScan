@@ -1,7 +1,7 @@
 # 작업지시서: Shadow/Canary 런타임 경로와 Live Cohort 분류 기준
 
 작성일: `2026-04-25 KST`  
-마지막 갱신: `2026-05-10 KST`
+마지막 갱신: `2026-05-12 KST`
 대상: KORStockScan 메인 코드베이스 운영/튜닝 문서 소유자  
 ApplyTarget: `main` 문서/후속 코드정리 기준  
 
@@ -25,11 +25,11 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 5. `Execution receipt binding`은 BUY/SELL 체결 truth 품질 이슈다. EV 판정 전제 품질축으로 보되, alpha canary로 분류하지 않는다.
 6. `2026-05-01` 근로자의 날과 `2026-05-05` 어린이날은 KRX 휴장으로, 휴장일 Due 작업은 다음 운영일 체크리스트로 이관한다.
 7. threshold 운영은 `실시간 자동변경`이 아니라 `장중 적재 -> 장후 산정 -> 다음 장전 적용`으로 고정한다. compact threshold stream이 기본 경로이며, `entry_mechanical_momentum`, `bad_entry_block`, `REVERSAL_ADD blocked funnel`, `soft_stop_micro_grace`가 현재 sample-ready family다.
-8. `bad_entry_block`의 naive 차단은 금지하지만, `2026-04-30` 장후 outcome으로 좁힌 `bad_entry_refined_canary`는 다음 보유/청산 active canary다. 5/4 장전에는 신규 설계가 아니라 로드/override/cohort 확인만 남긴다.
+8. `bad_entry_block`의 naive 차단은 금지한다. 다만 `2026-05-12` postclose 기준 `bad_entry_refined_canary`는 active live owner가 아니라 `post_sell` join readiness를 기다리는 `observe-only / report-only hold`다. entry 쪽 active canary는 `score65_74_recovery_probe`와 `dynamic_entry_ai_price_canary_p2`처럼 별도 cohort로 분리해 본다.
 9. `statistical_action_weight`는 가격대/거래량/시간대별 행동 선택 통계용 `decision-support` 축이다. live 판단에는 직접 쓰지 않고 장후 threshold weight 입력과 동적 수량화 설계 근거로만 둔다.
 10. 스윙은 `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True`가 기본이며, `swing_sim_*`/combined는 EV 후보와 승인 요청 생성에는 동급 입력으로 쓴다. 다만 broker execution 품질은 real-only라 `swing_one_share_real_canary`를 별도 approval-required real-canary 후보로 둔다.
 
-## 0.1 Runtime ON/OFF 스냅샷 (`2026-05-01` 기준)
+## 0.1 Runtime ON/OFF 스냅샷 (`2026-05-12` 기준)
 
 이 표는 `src/utils/constants.py` 기본값과 현재 운영문서 기준의 runtime 상태를 한곳에 잠그기 위한 스냅샷이다. env override가 있으면 장전 로드 확인에서 반드시 이 표와 비교한다.
 
@@ -39,9 +39,9 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 | --- | --- | --- | --- |
 | `mechanical_momentum_latency_relief` | ON, entry operating override | `SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_CANARY_ENABLED=True` | same-day entry replacement 운영 override다. 단, score 50 fallback/neutral은 `AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED=True`가 우선해 `blocked_ai_score`로 보류한다. 제출 전은 진입병목 회복, 제출 후는 `full/partial` 체결 품질과 BUY 신호 적정성으로 분리 판정한다 |
 | `ai_score_50_buy_hold_override` | ON, entry operating override | `AI_SCORE_50_BUY_HOLD_OVERRIDE_ENABLED=True` | AI parse/error/neutral score 50을 신규 BUY 제출로 내려보내지 않는다. 5/6에는 avoided loser와 missed winner를 분리해 하향 재진입 복합 threshold로 대체 가능성을 본다 |
+| `score65_74_recovery_probe` | ON, entry active-canary | `AI_SCORE65_74_RECOVERY_PROBE_ENABLED=True` | AI score `65~74`, latency `DANGER` 제외, 수급/가속/micro-VWAP gate를 통과한 cohort만 bounded canary로 본다. `missed_probe_counterfactual`은 `actual_order_submitted=false`라 EV 입력일 뿐 broker execution 승인 근거는 아니다 |
 | `soft_stop_micro_grace` | ON, exit active-canary | `SCALP_SOFT_STOP_MICRO_GRACE_ENABLED=True`, `20초`, emergency `-2.0%` | hard stop 전환, 미체결, same-symbol 손실이 늘면 OFF. 반등 포착 개선이 유지되면 baseline-promote 후보 |
 | `REVERSAL_ADD` | ON, exit active-canary | `REVERSAL_ADD_ENABLED=True` | executed가 계속 0이면 parking 금지. `pnl/hold/supply/qty/position_cap/cooldown/pending/protection` blocker를 좁혀 실행요건을 찾는다 |
-| `bad_entry_refined_canary` | ON, exit active-canary | `SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=True` | naive block 금지. `GOOD_EXIT/MISSED_UPSIDE` 제거가 늘거나 canary cohort 손익이 비적용 후보보다 악화되면 OFF |
 | `initial_entry_qty_cap_1share` | ON, size guard restored | `SCALPING_INITIAL_ENTRY_QTY_CAP_ENABLED=True`, `SCALPING_INITIAL_ENTRY_MAX_QTY=1` | 2026-05-09 후속 사용자 지시로 신규 BUY/wait6579 probe/REVERSAL_ADD/PYRAMID 1주 수량 cap은 기본 ON으로 복귀했다. 해제는 `position_sizing_cap_release` approval request와 사용자 승인 없이는 금지한다 |
 | `pre_submit_price_guard` | ON, entry guard | `SCALPING_PRE_SUBMIT_PRICE_GUARD_ENABLED=True` | 비정상 저가 지정가 차단. false block이 확인될 때만 threshold 조정 |
 | `dynamic_entry_price_resolver_p1` | ON, entry baseline-promote 후보 | `SCALPING_ENTRY_PRICE_RESOLVER_ENABLED=True`, `SCALPING_ENTRY_PRICE_RESOLVER_MAX_BELOW_BID_BPS=80` | `target_buy_price`는 reference로만 쓰고 실주문가는 strategy-aware resolver가 결정한다. 일반 스캘핑 `90초`, `BREAKOUT 120초`, `PULLBACK 600초`, `RESERVE 1200초` timeout 분리와 함께 본다 |
@@ -57,6 +57,7 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 | --- | --- | --- | --- |
 | `stat_action_decision_snapshot` | observe-only ON | `STAT_ACTION_DECISION_SNAPSHOT_ENABLED=True`, `30초` rate-limit | 직접 live 전환 금지. 장후 weight/report 입력으로만 사용 |
 | `statistical_action_weight` | report-only ON | 장후 행동가중치 리포트 생성 | live 적용은 별도 단일축 canary와 rollback guard가 있을 때만 가능 |
+| `bad_entry_refined_canary` | observe-only ON, live OFF | `SCALP_BAD_ENTRY_REFINED_CANARY_ENABLED=False` | `record_id -> post_sell_evaluations` join readiness가 닫히기 전까지 `bad_entry_refined_candidate`는 provisional signal로만 본다 |
 | `holding_exit_decision_matrix` | report-only ON | AI 보유/청산 판단 보조 매트릭스 | `ADM-1 report-only -> ADM-2 shadow prompt -> ADM-3 advisory nudge -> ADM-4 weighted live -> ADM-5 policy gate` 순서로만 전환 |
 | `swing_live_order_dry_run` | dry-run ON | `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True`; 스윙 live lifecycle은 실행하되 브로커 주문만 차단 | runtime threshold/logic은 승인 artifact가 있을 때 dry-run 내부에서만 반영. 실주문 허용과 별개 |
 | `swing_runtime_approval` | approval request ON | hard floor + EV trade-off score로 `approval_required` 요청 생성 | 수동 approval artifact가 있어야 다음 장전 dry-run env 반영. 실주문 허용 없음 |
@@ -300,7 +301,7 @@ cohort 분류 공통 규칙은 아래로 고정한다.
 | `soft_stop_expert_defense` | `observe-only` | 2026-04-30 same-day v2 수집에서 stop arbitration/thesis veto/orderbook absorption/shadow 전략을 한 owner로 묶은 보유/청산 방어망 | 다음 재승인 전 기본 OFF. `soft_stop_absorption_*`, `soft_stop_expert_shadow`, `adverse_fill_observed`는 다음 방어망 설계 근거로만 유지하고 live 유예/청산 변경에는 쓰지 않는다 | `2026-04-30 checklist` |
 | `reversal_add` | `active-canary-decision` | 유효 진입 초반 눌림을 1주 소형 추가매수로 회수하는 보유/청산 canary | `reversal_add_candidate`, `reversal_add_blocked_reason`, `reversal_add_gate_blocked`, `scale_in_executed add_type=AVG_DOWN`, `reversal_add_used`, 후속 `soft_stop/trailing/COMPLETED`로 손익/soft stop tail 개선 여부가 닫히면 유지/종료/승격 결정 | `Plan Rebase`, `2026-04-30 checklist` |
 | `bad_entry_block` | `observe-only` | never-green/AI fade 불량 진입 후보를 실전 차단 전 관찰 | 2026-04-30 기준 표본 수는 충분하지만 `GOOD_EXIT` 제거 위험이 남아 단순 live block은 금지. observe 로그는 refined canary의 후보/비후보 비교군으로 유지 | `Plan Rebase`, `2026-04-30 checklist` |
-| `bad_entry_refined_canary` | `active-canary-decision` | never-green/AI fade 중 `GOOD_EXIT` 제거 위험을 줄인 조기정리 canary | `held_sec>=180`, `profit_rate<=-1.16`, `peak_profit<=+0.05`, `AI<=45`와 recovery/thesis/adverse 확인을 통과한 cohort만 `scalp_bad_entry_refined_canary`로 조기정리. `bad_entry_refined_candidate/exit`, 후속 `COMPLETED + valid profit_rate`, `GOOD_EXIT/MISSED_UPSIDE`, `REVERSAL_ADD` 혼입으로 keep/OFF 판정 | `2026-05-04 checklist` |
+| `bad_entry_refined_canary` | `observe-only` | never-green/AI fade 후보의 lifecycle join readiness 관찰 | `bad_entry_refined_candidate`는 runtime provisional signal로만 남기고, `record_id -> post_sell_evaluations` join 완료 전에는 live go/no-go에 쓰지 않는다. joined sample floor, preventable count, false-positive risk가 닫힌 뒤에만 bounded canary 재승격을 검토한다 | `2026-05-12 checklist` |
 | `hard_stop_whipsaw_aux` | `observe-only` | severe-loss guard 보조 관찰 | 하드스탑을 보조 관찰로만 둔다는 원칙이 유지되는 동안 유지. `MISSED_UPSIDE/GOOD_EXIT/NEUTRAL`과 반등 지표가 독립 판단가치를 잃거나 hard stop 완화 의제가 공식 폐기되면 제거 | `Plan Rebase`, `2026-04-27 checklist` |
 | `same_symbol_reentry` | `observe-only` | 동일종목 재진입 손실/guard 필요성 관찰 | `same_symbol_reentry_loss_count`가 독립 guard 후보성을 잃거나, soft stop/position context 축에 완전히 흡수되어 별도 재진입 cohort가 필요 없을 때 제거 | `holding_exit_observation`, `2026-04-27 checklist` |
 | `trailing_continuation` | `observe-only` | upside capture 개선 후보 관찰 | `MISSED_UPSIDE rate >= 60%`, `GOOD_EXIT rate <= 30%`로 2순위 live 후보 요건을 충족해 canary로 승격되거나, 반대로 upside 개선 후보성이 약해져 후순위 폐기가 확정되면 제거/재분류 | `holding_exit_observation`, `2026-04-27 checklist` |
@@ -385,7 +386,7 @@ inventory 운영 규칙은 아래로 고정한다.
 | `initial_entry_qty_cap_1share` | `active-canary` | `limited-live` | current initial entry size guard. 2주/3주 확대는 별도 승인 전 observe-only |
 | `reversal_add` | `active-canary` | `limited-live` | valid-entry early pullback recovery. 2026-05-09 후속 사용자 지시로 1주 cap은 ON이며, 해제는 `position_sizing_cap_release` 사용자 승인 전까지 금지한다. current owner is blocker narrowing (`pnl -> hold -> gate`) |
 | `bad_entry_block` | `observe-only` | `none` | never-green/AI fade 후보 분류. 표본 부족이 아니라 precision/GOOD_EXIT 예외 설계가 병목이었고, refined canary의 비교군으로 유지 |
-| `bad_entry_refined_canary` | `active-canary` | `limited-live` | v2 OFF 이후 다음 보유/청산 신규 owner. `scalp_bad_entry_refined_canary`는 soft stop 전 never-green tail을 줄이는 단일축 canary |
+| `bad_entry_refined_canary` | `observe-only` | `guarded-off` | `2026-05-12` postclose 기준 `candidate_records=1`, `post_sell_joined_records=0`, `preventable_bad_entry_candidate_records=0`이라 lifecycle join readiness가 닫히지 않았다. naive block 비교군과 joined evidence를 분리하는 report-only hold로 유지한다 |
 | `statistical_action_weight` | `observe-only` | `none` | completed trade와 `exit_signal`/`sell_completed`/`scale_in_executed` compact stage를 묶는 장후 행동가중치 리포트. live runtime mutation 없음 |
 | `stat_action_decision_snapshot` | `observe-only` | `none` | HOLDING 판단 순간의 후보/선택/차단 행동 수집 이벤트. `statistical_action_weight`의 selection-bias 보정 입력이며 기본 30초 rate-limit로 IO를 제한 |
 | `ai_cache_hit_miss` | `observe-only` | `none` | structured join gap으로 보조지표 유지 |

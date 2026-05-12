@@ -1062,13 +1062,24 @@ def test_statistical_action_weight_reports_eligible_but_not_chosen(tmp_path, mon
     assert eligible["sample_snapshots"] == 1
     assert eligible["sample_candidates"] == 2
     assert eligible["post_sell_joined_candidates"] == 2
-    exit_row = next(row for row in eligible["action_summary"] if row["candidate_action"] == "exit_now")
+    chosen_row = next(row for row in eligible["chosen_action_summary"] if row["chosen_action"] == "hold_defer")
+    assert chosen_row["sample"] == 1
+    exit_row = next(row for row in eligible["action_summary"] if row["candidate_action"] == "exit_only")
     assert exit_row["avg_post_decision_mfe_10m_proxy"] == 1.4
 
     artifact = report_mod.build_statistical_action_weight_artifact(report)
     markdown = report_mod.render_statistical_action_weight_markdown(artifact)
     assert "Eligible But Not Chosen" in markdown
+    assert "Chosen Action Proxy" in markdown
     assert "post_decision_*_proxy" in markdown
+
+    matrix = report_mod.build_holding_exit_decision_matrix(report)
+    proxy_summary = matrix["counterfactual_proxy_summary"]
+    assert proxy_summary["sample_snapshots"] == 1
+    assert proxy_summary["per_action_samples"]["hold_defer"] == 1
+    assert proxy_summary["per_action_samples"]["exit_only"] == 1
+    assert proxy_summary["per_action_samples"]["pyramid_wait"] == 1
+    assert proxy_summary["missing_actions"] == ["avg_down_wait"]
 
 
 def test_ofi_ai_smoothing_families_generate_manifest_only_candidates():
@@ -1486,12 +1497,24 @@ def test_holding_exit_decision_matrix_artifact_contains_prompt_hints(tmp_path, m
     assert payload["runtime_change"] is False
     assert payload["hard_veto"]
     assert payload["entries"]
+    assert payload["summary"]["entry_count"] == len(payload["entries"])
+    assert payload["summary"]["non_no_clear_edge_count"] == 0
+    assert payload["summary"]["no_clear_edge_count"] == len(payload["entries"])
+    assert payload["summary"]["per_action_edge_buckets"] == {
+        "prefer_exit": 0,
+        "prefer_avg_down_wait": 0,
+        "prefer_pyramid_wait": 0,
+    }
     assert "prompt_hint" in payload["entries"][0]
     assert "counterfactual_coverage" in payload["entries"][0]
     assert payload["counterfactual_coverage_summary"]["entry_count"] == len(payload["entries"])
     assert "exit_only" in payload["counterfactual_coverage_summary"]["per_action_samples"]
+    assert payload["counterfactual_proxy_summary"]["required_actions"][0] == "hold_defer"
     assert "Holding/Exit Decision Matrix" in markdown
     assert "Counterfactual Coverage" in markdown
+    assert "non_no_clear_edge_count" in markdown
+    assert "per_action_edge_buckets" in markdown
+    assert "proxy_per_action_samples" in markdown
     assert "Prompt Hints" in markdown
 
 

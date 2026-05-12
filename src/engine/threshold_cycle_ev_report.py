@@ -140,6 +140,11 @@ def _swing_runtime_approval_summary(apply_manifest: dict[str, Any]) -> dict[str,
         "dry_run_forced": bool(swing.get("dry_run_forced")),
         "real_canary_policy": real_canary_policy,
         "scale_in_real_canary_policy": scale_in_real_canary_policy,
+        "source_quality_blocked_families": (
+            swing.get("source_quality_blocked_families")
+            if isinstance(swing.get("source_quality_blocked_families"), list)
+            else []
+        ),
         "real_execution_quality": {
             "scale_in_canary_selected": len(scale_in_selected),
             "execution_quality_source": "real_only",
@@ -169,6 +174,16 @@ def _cohort_decisions(calibration_report: dict[str, Any]) -> list[dict[str, Any]
     candidate_by_family = {
         str(item.get("family") or ""): item for item in candidates if isinstance(item, dict) and item.get("family")
     } if isinstance(candidates, list) else {}
+
+    def _prefer_source_count(item_value: Any, source_value: Any) -> Any:
+        item_count = _safe_int(item_value, None)
+        source_count = _safe_int(source_value, None)
+        if item_count is None:
+            return source_value
+        if item_count == 0 and (source_count or 0) > 0:
+            return source_value
+        return item_value
+
     decisions = attribution.get("calibration_decisions")
     if isinstance(decisions, list):
         merged: list[dict[str, Any]] = []
@@ -180,8 +195,20 @@ def _cohort_decisions(calibration_report: dict[str, Any]) -> list[dict[str, Any]
             merged.append(
                 {
                     **item,
-                    "sample_count": item.get("sample_count", source.get("sample_count")),
-                    "sample_floor": item.get("sample_floor", source.get("sample_floor")),
+                    "sample_count": _prefer_source_count(item.get("sample_count"), source.get("sample_count")),
+                    "source_sample_count": _prefer_source_count(
+                        item.get("source_sample_count"),
+                        source.get("source_sample_count"),
+                    ),
+                    "sample_floor": _prefer_source_count(item.get("sample_floor"), source.get("sample_floor")),
+                    "sample_floor_status": item.get("sample_floor_status") or source.get("sample_floor_status"),
+                    "source_metrics": (
+                        item.get("source_metrics")
+                        if isinstance(item.get("source_metrics"), dict)
+                        else source.get("source_metrics")
+                        if isinstance(source.get("source_metrics"), dict)
+                        else {}
+                    ),
                 }
             )
         return merged
@@ -289,7 +316,8 @@ def _swing_pattern_lab_automation_summary(target_date: str) -> tuple[dict[str, A
         )
     summary = payload.get("ev_report_summary") if isinstance(payload.get("ev_report_summary"), dict) else {}
     warnings: list[str] = []
-    dq_warnings = (payload.get("data_quality") or {}).get("warnings", [])
+    data_quality = payload.get("data_quality") if isinstance(payload.get("data_quality"), dict) else {}
+    dq_warnings = data_quality.get("warnings", [])
     if dq_warnings:
         warnings.extend(f"swing_lab_dq:{w}" for w in (dq_warnings if isinstance(dq_warnings, list) else []))
     if summary.get("stale_reason"):
@@ -305,6 +333,14 @@ def _swing_pattern_lab_automation_summary(target_date: str) -> tuple[dict[str, A
             "findings_count": _safe_int(summary.get("findings_count"), 0),
             "code_improvement_order_count": _safe_int(summary.get("code_improvement_order_count"), 0),
             "data_quality_warning_count": _safe_int(summary.get("data_quality_warning_count"), 0),
+            "ofi_qi_quality": data_quality.get("ofi_qi_quality") if isinstance(data_quality.get("ofi_qi_quality"), dict) else {},
+            "source_quality_blocked_families": (
+                summary.get("source_quality_blocked_families")
+                if isinstance(summary.get("source_quality_blocked_families"), list)
+                else data_quality.get("source_quality_blocked_families")
+                if isinstance(data_quality.get("source_quality_blocked_families"), list)
+                else []
+            ),
             "carryover_warning_count": carryover_count,
             "population_split_available": bool(summary.get("population_split_available")),
             "top_findings": [
@@ -547,6 +583,12 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- deepseek_lab_available: `{swing_lab.get('deepseek_lab_available')}`",
         f"- findings/orders: `{swing_lab.get('findings_count')}` / `{swing_lab.get('code_improvement_order_count')}`",
         f"- data_quality_warnings: `{swing_lab.get('data_quality_warning_count')}`",
+        f"- ofi_qi_stale_missing_unique_records: `{((swing_lab.get('ofi_qi_quality') or {}).get('stale_missing_unique_record_count')) or 0}`",
+        f"- ofi_qi_stale_missing_reasons: `{((swing_lab.get('ofi_qi_quality') or {}).get('reason_counts')) or {}}`",
+        f"- ofi_qi_stale_missing_reason_combinations: `{((swing_lab.get('ofi_qi_quality') or {}).get('reason_combination_counts')) or {}}`",
+        f"- ofi_qi_stale_missing_reason_combination_unique_records: `{((swing_lab.get('ofi_qi_quality') or {}).get('reason_combination_unique_record_counts')) or {}}`",
+        f"- ofi_qi_observer_unhealthy_overlap: `{((swing_lab.get('ofi_qi_quality') or {}).get('observer_unhealthy_overlap')) or {}}`",
+        f"- source_quality_blocked_families: `{swing_lab.get('source_quality_blocked_families') or []}`",
         f"- carryover_warnings: `{swing_lab.get('carryover_warning_count')}`",
         f"- population_split_available: `{swing_lab.get('population_split_available')}`",
         "",

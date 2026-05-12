@@ -307,6 +307,38 @@ def _threshold_ev_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, A
         state = str(item.get("calibration_state") or "").strip()
         if family != "holding_exit_decision_matrix_advisory" or state != "hold_no_edge":
             continue
+        source_metrics = item.get("source_metrics") if isinstance(item.get("source_metrics"), dict) else {}
+        counterfactual_gap_count = _safe_int(source_metrics.get("counterfactual_gap_count"), 0)
+        proxy_sample_snapshots = _safe_int(source_metrics.get("eligible_but_not_chosen_sample_snapshots"), 0)
+        proxy_joined_candidates = _safe_int(
+            source_metrics.get("eligible_but_not_chosen_post_sell_joined_candidates"),
+            0,
+        )
+        proxy_missing_actions = (
+            list(source_metrics.get("counterfactual_proxy_missing_actions") or [])
+            if isinstance(source_metrics.get("counterfactual_proxy_missing_actions"), list)
+            else []
+        )
+        instrumentation_gap = not source_metrics or (
+            counterfactual_gap_count > 0 or proxy_sample_snapshots <= 0 or proxy_joined_candidates <= 0
+        )
+        if not instrumentation_gap:
+            continue
+        evidence = [
+            "calibration_state=hold_no_edge",
+            f"sample_count={item.get('sample_count')}",
+            f"sample_floor={item.get('sample_floor')}",
+        ]
+        if source_metrics:
+            evidence.extend(
+                [
+                    f"counterfactual_gap_count={counterfactual_gap_count}",
+                    f"eligible_snapshot_count={proxy_sample_snapshots}",
+                    f"eligible_joined_candidates={proxy_joined_candidates}",
+                ]
+            )
+            if proxy_missing_actions:
+                evidence.append(f"proxy_missing_actions={','.join(str(value) for value in proxy_missing_actions)}")
         orders.append(
             {
                 "order_id": "order_holding_exit_decision_matrix_edge_counterfactual",
@@ -322,11 +354,7 @@ def _threshold_ev_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, A
                 "priority": 4,
                 "runtime_effect": False,
                 "expected_ev_effect": "Break hold_no_edge by separating exit_only/hold_defer/avg_down/pyramid counterfactual outcomes.",
-                "evidence": [
-                    "calibration_state=hold_no_edge",
-                    f"sample_count={item.get('sample_count')}",
-                    f"sample_floor={item.get('sample_floor')}",
-                ],
+                "evidence": evidence,
                 "next_postclose_metric": "holding_exit_decision_matrix_advisory should report per-action edge buckets, non_no_clear_edge_count, and counterfactual coverage.",
                 "files_likely_touched": [
                     "src/engine/daily_threshold_cycle_report.py",

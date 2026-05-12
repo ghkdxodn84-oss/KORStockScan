@@ -301,6 +301,9 @@ SWING_THRESHOLD_FAMILIES = [
             "entry_micro_state_counts",
             "entry_micro_advice_counts",
             "stale_missing_ratio",
+            "stale_missing_reason_counts",
+            "stale_missing_reason_combination_counts",
+            "stale_missing_reason_combination_unique_record_counts",
             "submitted_or_simulated_entry_quality",
         ],
     },
@@ -1521,18 +1524,33 @@ def _family_metric_snapshot(audit_report: dict[str, Any], family: str) -> dict[s
         }
     if family == "swing_entry_ofi_qi_execution_quality":
         entry_states = ofi_qi.get("entry_micro_state_counts") or {}
+        source_quality = _ofi_qi_source_quality_for_group(ofi_qi, "entry")
         return {
             "sample_count": int(sum(entry_states.values())),
+            "valid_micro_context_count": source_quality.get("valid_micro_context_count"),
+            "source_quality": source_quality,
+            "source_quality_blockers": source_quality.get("source_quality_blockers"),
             "entry_micro_state_counts": entry_states,
             "entry_micro_advice_counts": ofi_qi.get("entry_micro_advice_counts"),
             "stale_missing_ratio": ofi_qi.get("stale_missing_ratio"),
+            "stale_missing_unique_record_count": ofi_qi.get("stale_missing_unique_record_count"),
+            "stale_missing_reason_counts": ofi_qi.get("stale_missing_reason_counts"),
+            "stale_missing_reason_combination_counts": ofi_qi.get("stale_missing_reason_combination_counts"),
+            "stale_missing_reason_combination_unique_record_counts": ofi_qi.get("stale_missing_reason_combination_unique_record_counts"),
+            "stale_missing_group_counts": ofi_qi.get("stale_missing_group_counts"),
+            "stale_missing_group_unique_record_counts": ofi_qi.get("stale_missing_group_unique_record_counts"),
+            "observer_unhealthy_overlap": ofi_qi.get("observer_unhealthy_overlap"),
             "submitted_unique_records": events.get("submitted_unique_records"),
             "simulated_order_unique_records": events.get("simulated_order_unique_records"),
         }
     if family == "swing_scale_in_ofi_qi_confirmation":
         scale_states = ofi_qi.get("scale_in_micro_state_counts") or {}
+        source_quality = _ofi_qi_source_quality_for_group(ofi_qi, "scale_in")
         return {
             "sample_count": int(sum(scale_states.values())),
+            "valid_micro_context_count": source_quality.get("valid_micro_context_count"),
+            "source_quality": source_quality,
+            "source_quality_blockers": source_quality.get("source_quality_blockers"),
             "scale_in_micro_state_counts": scale_states,
             "scale_in_micro_advice_counts": ofi_qi.get("scale_in_micro_advice_counts"),
             "add_types": events.get("add_types"),
@@ -1554,6 +1572,33 @@ def _family_metric_snapshot(audit_report: dict[str, Any], family: str) -> dict[s
             "exit_smoothing_action_counts": exit_actions,
         }
     return {"sample_count": 0}
+
+
+def _ofi_qi_source_quality_for_group(ofi_qi: dict[str, Any], group: str) -> dict[str, Any]:
+    group = str(group or "").strip()
+    state_counts_key = f"{group}_micro_state_counts"
+    sample_count = int(sum((ofi_qi.get(state_counts_key) or {}).values()))
+    stale_group_counts = ofi_qi.get("stale_missing_group_counts") or {}
+    stale_group_unique = ofi_qi.get("stale_missing_group_unique_record_counts") or {}
+    invalid_event_count = _safe_int(stale_group_counts.get(group), 0)
+    invalid_unique_count = _safe_int(stale_group_unique.get(group), 0)
+    valid_count = max(0, sample_count - invalid_event_count)
+    reason_combination_counts = ofi_qi.get("stale_missing_reason_combination_counts") or {}
+    reason_combination_unique = ofi_qi.get("stale_missing_reason_combination_unique_record_counts") or {}
+    blockers: list[str] = []
+    if invalid_unique_count > 0:
+        blockers.append(f"{group}_ofi_qi_invalid_micro_context")
+    return {
+        "group": group,
+        "sample_count": sample_count,
+        "valid_micro_context_count": valid_count,
+        "invalid_micro_context_count": invalid_event_count,
+        "invalid_micro_context_unique_record_count": invalid_unique_count,
+        "invalid_reason_combination_counts": reason_combination_counts,
+        "invalid_reason_combination_unique_record_counts": reason_combination_unique,
+        "observer_unhealthy_overlap": ofi_qi.get("observer_unhealthy_overlap") or {},
+        "source_quality_blockers": blockers,
+    }
 
 
 def _clamp_float(value: float, lower: float = 0.0, upper: float = 1.0) -> float:
@@ -1718,10 +1763,13 @@ def _scale_in_real_canary_arm_blockers(
     )
     blockers: list[str] = []
     sample_count = int(action_groups.get(arm, 0) or 0)
+    source_quality = _ofi_qi_source_quality_for_group(ofi_qi, "scale_in")
+    valid_micro_context_count = _safe_int(source_quality.get("valid_micro_context_count"), 0)
     if sample_count < sample_floor:
         blockers.append(f"{arm.lower()}_sample_floor_not_met")
-    if int(sum((ofi_qi.get("scale_in_micro_state_counts") or {}).values())) < 5:
+    if valid_micro_context_count < 5:
         blockers.append("scale_in_ofi_qi_sample_floor_not_met")
+    blockers.extend(str(reason) for reason in (source_quality.get("source_quality_blockers") or []))
     if _safe_int(axis_summary.get("instrumentation_gap_count"), 0) > 0:
         blockers.append("critical_instrumentation_gap")
     if bool(db_load.get("db_load_gap")):
@@ -1760,6 +1808,9 @@ def _build_swing_scale_in_real_canary_request(audit_report: dict[str, Any]) -> t
     arm_floors = {"PYRAMID": 5, "AVG_DOWN": 8}
     arm_decisions: list[dict[str, Any]] = []
     allowed_actions: list[str] = []
+    events = audit_report.get("lifecycle_events") if isinstance(audit_report.get("lifecycle_events"), dict) else {}
+    ofi_qi = events.get("ofi_qi_summary") if isinstance(events.get("ofi_qi_summary"), dict) else {}
+    source_quality = _ofi_qi_source_quality_for_group(ofi_qi, "scale_in")
     for arm, floor in arm_floors.items():
         blockers = _scale_in_real_canary_arm_blockers(audit_report, arm, sample_floor=floor)
         arm_decisions.append(
@@ -1768,6 +1819,7 @@ def _build_swing_scale_in_real_canary_request(audit_report: dict[str, Any]) -> t
                 "sample_floor": floor,
                 "approved_for_request": not blockers,
                 "block_reasons": blockers,
+                "source_quality": source_quality,
             }
         )
         if not blockers:
@@ -1888,9 +1940,17 @@ def _swing_hard_floor_blocks(audit_report: dict[str, Any], family: str, sample_c
         else {}
     )
     ev_summary = _completed_ev_summary(audit_report)
+    events = audit_report.get("lifecycle_events") if isinstance(audit_report.get("lifecycle_events"), dict) else {}
+    ofi_qi = events.get("ofi_qi_summary") if isinstance(events.get("ofi_qi_summary"), dict) else {}
     p10 = _safe_float(ev_summary.get("p10_profit_rate"), default=None)
     if sample_count < sample_floor:
         blocks.append("family_sample_floor_not_met")
+    if family == "swing_entry_ofi_qi_execution_quality":
+        quality = _ofi_qi_source_quality_for_group(ofi_qi, "entry")
+        blocks.extend(str(reason) for reason in (quality.get("source_quality_blockers") or []))
+    if family == "swing_scale_in_ofi_qi_confirmation":
+        quality = _ofi_qi_source_quality_for_group(ofi_qi, "scale_in")
+        blocks.extend(str(reason) for reason in (quality.get("source_quality_blockers") or []))
     if _safe_int(axis_summary.get("instrumentation_gap_count"), 0) > 0:
         blocks.append("critical_instrumentation_gap")
     if bool(db_load.get("db_load_gap")):
@@ -2005,6 +2065,40 @@ def build_swing_runtime_approval_report(
     real_canary_policy = swing_one_share_real_canary_phase0_policy()
     scale_in_real_canary_policy = swing_scale_in_real_canary_phase0_policy()
     scale_in_request, scale_in_arm_decisions = _build_swing_scale_in_real_canary_request(audit_report)
+    source_quality_blocked_families = [
+        {
+            "family": item.get("family"),
+            "stage": item.get("stage"),
+            "block_reasons": [
+                str(reason)
+                for reason in (item.get("hard_floor_block_reasons") or [])
+                if "ofi_qi_invalid_micro_context" in str(reason)
+            ],
+            "source_quality": ((item.get("source_metrics") or {}).get("source_quality") or {}),
+        }
+        for item in candidates
+        if any("ofi_qi_invalid_micro_context" in str(reason) for reason in (item.get("hard_floor_block_reasons") or []))
+    ]
+    if any(
+        "ofi_qi_invalid_micro_context" in str(reason)
+        for arm in scale_in_arm_decisions
+        for reason in (arm.get("block_reasons") or [])
+    ):
+        source_quality_blocked_families.append(
+            {
+                "family": scale_in_real_canary_policy["policy_id"],
+                "stage": "scale_in",
+                "block_reasons": sorted(
+                    {
+                        str(reason)
+                        for arm in scale_in_arm_decisions
+                        for reason in (arm.get("block_reasons") or [])
+                        if "ofi_qi_invalid_micro_context" in str(reason)
+                    }
+                ),
+                "source_quality": (scale_in_arm_decisions[0].get("source_quality") if scale_in_arm_decisions else {}),
+            }
+        )
     requests = [
         {
             "approval_id": item.get("approval_id"),
@@ -2093,6 +2187,7 @@ def build_swing_runtime_approval_report(
             **scale_in_real_canary_policy,
             "arm_decisions": scale_in_arm_decisions,
         },
+        "source_quality_blocked_families": source_quality_blocked_families,
         "rolling_source_bundle": {
             "source_authority": {
                 "real": "required_for_broker_execution_quality_and_order_receipt",
@@ -2502,6 +2597,8 @@ def build_swing_improvement_automation_report(
     scale_in_observation = events.get("scale_in_observation") or {}
     ai_contract_metrics = events.get("ai_contract_metrics") or {}
     sim_opportunity = audit_report.get("simulation_opportunity") or {}
+    scale_in_ofi_qi_quality = _ofi_qi_source_quality_for_group(ofi_qi, "scale_in")
+    entry_ofi_qi_quality = _ofi_qi_source_quality_for_group(ofi_qi, "entry")
 
     findings: list[dict[str, Any]] = []
     orders: list[dict[str, Any]] = []
@@ -2794,6 +2891,13 @@ def build_swing_improvement_automation_report(
                 evidence=[
                     f"stale_missing_count={ofi_qi.get('stale_missing_count')}",
                     f"stale_missing_ratio={ofi_qi.get('stale_missing_ratio')}",
+                    f"stale_missing_unique_record_count={ofi_qi.get('stale_missing_unique_record_count')}",
+                    f"stale_missing_reason_counts={ofi_qi.get('stale_missing_reason_counts')}",
+                    f"stale_missing_reason_combination_counts={ofi_qi.get('stale_missing_reason_combination_counts')}",
+                    f"stale_missing_reason_combination_unique_record_counts={ofi_qi.get('stale_missing_reason_combination_unique_record_counts')}",
+                    f"observer_unhealthy_overlap={ofi_qi.get('observer_unhealthy_overlap')}",
+                    f"scale_in_source_quality={scale_in_ofi_qi_quality}",
+                    f"entry_source_quality={entry_ofi_qi_quality}",
                 ],
                 improvement_type="instrumentation",
             )
@@ -2825,7 +2929,12 @@ def build_swing_improvement_automation_report(
                 expected_ev_effect="post-add outcome and micro_risk attribution are visible for future guarded threshold design.",
                 files_likely_touched=["src/engine/sniper_state_handlers.py", "src/engine/swing_lifecycle_audit.py"],
                 acceptance_tests=["pytest sniper scale-in tests", "pytest swing lifecycle audit tests"],
-                evidence=[f"scale_in_RISK_BEARISH={scale_risk_count}"],
+                evidence=[
+                    f"scale_in_RISK_BEARISH={scale_risk_count}",
+                    f"valid_micro_context_count={scale_in_ofi_qi_quality.get('valid_micro_context_count')}",
+                    f"invalid_micro_context_unique_record_count={scale_in_ofi_qi_quality.get('invalid_micro_context_unique_record_count')}",
+                    f"source_quality_blockers={scale_in_ofi_qi_quality.get('source_quality_blockers')}",
+                ],
                 improvement_type="lifecycle_logic_observation",
             )
         )
@@ -2948,6 +3057,7 @@ def build_swing_improvement_automation_report(
         threshold_ai_review=threshold_ai_review,
         automation_report=None,
     )
+    source_quality_blocked_families = runtime_approval_preview.get("source_quality_blocked_families") or []
     return {
         "schema_version": AUTOMATION_SCHEMA_VERSION,
         "report_type": "swing_improvement_automation",
@@ -2984,6 +3094,9 @@ def build_swing_improvement_automation_report(
             "simulation_opportunity_sample_state": sim_opportunity.get("sample_state"),
             "simulation_opportunity_closed_count": sim_opportunity.get("closed_count"),
             "simulation_opportunity_winner_count": sim_opportunity.get("winner_count"),
+            "source_quality_blocked_family_count": len(source_quality_blocked_families),
+            "source_quality_blocked_families": source_quality_blocked_families,
+            "scale_in_ofi_qi_source_quality": scale_in_ofi_qi_quality,
         },
         "consensus_findings": [item for item in findings if item.get("confidence") != "solo"],
         "solo_findings": [item for item in findings if item.get("confidence") == "solo"],
@@ -3041,7 +3154,14 @@ def render_swing_lifecycle_audit_markdown(report: dict[str, Any]) -> str:
             "## OFI/QI Micro Context",
             "",
             f"- sample_count: `{ofi_qi.get('sample_count', 0)}`",
+            f"- stale_missing_unique_record_count: `{ofi_qi.get('stale_missing_unique_record_count', 0)}`",
             f"- stale_missing_ratio: `{ofi_qi.get('stale_missing_ratio', 0.0)}`",
+            f"- stale_missing_reason_counts: `{ofi_qi.get('stale_missing_reason_counts', {})}`",
+            f"- stale_missing_reason_combination_counts: `{ofi_qi.get('stale_missing_reason_combination_counts', {})}`",
+            f"- stale_missing_reason_combination_unique_record_counts: `{ofi_qi.get('stale_missing_reason_combination_unique_record_counts', {})}`",
+            f"- stale_missing_group_counts: `{ofi_qi.get('stale_missing_group_counts', {})}`",
+            f"- stale_missing_group_unique_record_counts: `{ofi_qi.get('stale_missing_group_unique_record_counts', {})}`",
+            f"- observer_unhealthy_overlap: `{ofi_qi.get('observer_unhealthy_overlap', {})}`",
             f"- entry_micro_state_counts: `{ofi_qi.get('entry_micro_state_counts', {})}`",
             f"- scale_in_micro_state_counts: `{ofi_qi.get('scale_in_micro_state_counts', {})}`",
             f"- exit_micro_state_counts: `{ofi_qi.get('exit_micro_state_counts', {})}`",
@@ -3266,6 +3386,39 @@ def render_swing_runtime_approval_markdown(report: dict[str, Any]) -> str:
             )
             + " |"
         )
+    lines.extend(
+        [
+            "",
+            "## Source Quality Blockers",
+            "",
+            "| family | stage | reasons | valid/invalid |",
+            "| --- | --- | --- | ---: |",
+        ]
+    )
+    source_quality_blockers = (
+        report.get("source_quality_blocked_families")
+        if isinstance(report.get("source_quality_blocked_families"), list)
+        else []
+    )
+    if source_quality_blockers:
+        for item in source_quality_blockers:
+            if not isinstance(item, dict):
+                continue
+            quality = item.get("source_quality") if isinstance(item.get("source_quality"), dict) else {}
+            lines.append(
+                "| "
+                + " | ".join(
+                    [
+                        f"`{item.get('family')}`",
+                        f"`{item.get('stage')}`",
+                        f"`{', '.join(str(reason) for reason in (item.get('block_reasons') or []))}`",
+                        f"{quality.get('valid_micro_context_count', 0)}/{quality.get('invalid_micro_context_unique_record_count', 0)}",
+                    ]
+                )
+                + " |"
+            )
+    else:
+        lines.append("| `-` | `-` | `none` | 0/0 |")
     lines.append("")
     return "\n".join(lines)
 

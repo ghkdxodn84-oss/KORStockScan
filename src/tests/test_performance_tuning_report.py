@@ -431,6 +431,9 @@ def test_performance_tuning_report_builds_metrics(monkeypatch):
     assert latency_ev["threshold_family"] == "pre_submit_price_guard"
     assert latency_ev["evaluated_candidates"] == 1
     assert latency_ev["latency_block_events"] == 1
+    assert latency_ev["latency_guard_miss_unique_stocks"] == 1
+    assert latency_ev["coverage_status"] == "reason_breakdown_ready"
+    assert latency_ev["top_latency_reason"] == "latency_state_danger"
     assert report["metrics"]["entry_blocked_liquidity_events"] == 1
     assert report["metrics"]["entry_blocked_overbought_events"] == 1
     terminal_blockers = {item["label"]: item for item in report["breakdowns"]["entry_terminal_blocker_breakdown"]}

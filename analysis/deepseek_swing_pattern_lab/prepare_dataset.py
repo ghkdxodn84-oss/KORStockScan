@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -30,6 +30,17 @@ from analysis.deepseek_swing_pattern_lab.config import (
 )
 
 SWING_STRATEGIES = {"KOSPI_ML", "KOSDAQ_ML", "MAIN"}
+OFI_QI_QUALITY_FLAG_COLUMNS = (
+    "micro_missing_flag",
+    "micro_stale_flag",
+    "observer_unhealthy_flag",
+    "micro_not_ready_flag",
+    "state_insufficient_flag",
+)
+
+
+def _reason_key_from_flag_column(column: str) -> str:
+    return column.replace("_flag", "")
 SWING_EVENT_STAGES = {
     "blocked_swing_gap",
     "gatekeeper_fast_reuse",
@@ -582,6 +593,12 @@ def build_swing_ofi_qi_fact(target_dates: list[str]) -> pd.DataFrame:
                     "swing_micro_advice": str(fields.get("swing_micro_advice") or ""),
                     "swing_micro_runtime_effect": _safe_bool(fields.get("swing_micro_runtime_effect")),
                     "smoothing_action": str(fields.get("smoothing_action") or ""),
+                    "micro_missing_flag": False,
+                    "micro_stale_flag": False,
+                    "observer_unhealthy_flag": False,
+                    "micro_not_ready_flag": False,
+                    "state_insufficient_flag": False,
+                    "stale_missing_reasons": "",
                     "stale_missing_flag": False,
                 }
             )
@@ -590,12 +607,17 @@ def build_swing_ofi_qi_fact(target_dates: list[str]) -> pd.DataFrame:
             state = str(fields.get("orderbook_micro_state") or "").lower()
             ready = _safe_bool(fields.get("orderbook_micro_ready"))
             healthy = _safe_bool(fields.get("orderbook_micro_observer_healthy"))
-            rows[-1]["stale_missing_flag"] = (
-                stale in {"1", "true", "yes", "y"}
-                or advice in {"MISSING", ""}
-                or state in {"", "missing", "insufficient"}
-                or not ready
-                or not healthy
+            flags = {
+                "micro_missing_flag": advice in {"MISSING", ""} or state in {"", "missing"},
+                "micro_stale_flag": stale in {"1", "true", "yes", "y"},
+                "observer_unhealthy_flag": not healthy,
+                "micro_not_ready_flag": not ready,
+                "state_insufficient_flag": state == "insufficient",
+            }
+            rows[-1].update(flags)
+            rows[-1]["stale_missing_flag"] = any(flags.values())
+            rows[-1]["stale_missing_reasons"] = ",".join(
+                key.replace("_flag", "") for key, active in flags.items() if active
             )
 
     df = pd.DataFrame(rows)
@@ -611,6 +633,8 @@ def build_data_quality_report(
     ofi_qi_fact: pd.DataFrame,
     target_dates: list[str],
 ) -> dict[str, Any]:
+    analysis_days = max(len(target_dates), 1)
+    min_funnel_rows = min(MIN_VALID_SAMPLES, analysis_days)
     trade_rows = len(trade_fact)
     funnel_rows = len(funnel_fact)
     seq_rows = len(sequence_fact)
@@ -619,16 +643,110 @@ def build_data_quality_report(
     valid_profit = int((trade_fact["valid_profit_rate"].notna()).sum()) if not trade_fact.empty else 0
 
     warnings: list[str] = []
-    if funnel_rows < MIN_VALID_SAMPLES:
-        warnings.append(f"funnel fact has only {funnel_rows} rows (min {MIN_VALID_SAMPLES})")
+    if funnel_rows < min_funnel_rows:
+        warnings.append(f"funnel fact has only {funnel_rows} rows (min {min_funnel_rows})")
     if trade_rows == 0 and seq_rows == 0:
         warnings.append("no trade or sequence data found for the analysis period")
     if ofi_qi_rows == 0:
         warnings.append("no OFI/QI micro context data found")
+
     stale_missing = int(ofi_qi_fact["stale_missing_flag"].sum()) if not ofi_qi_fact.empty else 0
+    reason_counts: dict[str, int] = {}
+    reason_ratios: dict[str, float] = {}
+    reason_combination_counts: dict[str, int] = {}
+    reason_combination_unique_record_counts: dict[str, int] = {}
+    stale_missing_group_counts: dict[str, int] = {}
+    stale_missing_group_unique_record_counts: dict[str, int] = {}
+    stale_missing_stage_counts: dict[str, int] = {}
+    stale_missing_unique_record_count = 0
+    observer_unhealthy_overlap: dict[str, int] = {
+        "observer_unhealthy_total": 0,
+        "observer_unhealthy_with_other_reason": 0,
+        "observer_unhealthy_only": 0,
+    }
+    examples: list[dict[str, Any]] = []
+    if not ofi_qi_fact.empty:
+        for column in OFI_QI_QUALITY_FLAG_COLUMNS:
+            count = int(ofi_qi_fact[column].sum()) if column in ofi_qi_fact else 0
+            key = _reason_key_from_flag_column(column)
+            reason_counts[key] = count
+            reason_ratios[key] = round(count / max(ofi_qi_rows, 1), 4)
+        if "stale_missing_flag" in ofi_qi_fact:
+            stale_rows = ofi_qi_fact[ofi_qi_fact["stale_missing_flag"] == True].copy()
+        else:
+            stale_rows = pd.DataFrame()
+        if not stale_rows.empty:
+            combination_counter: Counter[str] = Counter()
+            combination_records: dict[str, set[str]] = defaultdict(set)
+            group_counter: Counter[str] = Counter()
+            group_records: dict[str, set[str]] = defaultdict(set)
+            stage_counter: Counter[str] = Counter()
+            all_records: set[str] = set()
+            observer_total = 0
+            observer_with_other = 0
+            observer_only = 0
+            for _, row in stale_rows.iterrows():
+                active_reasons = [
+                    _reason_key_from_flag_column(column)
+                    for column in OFI_QI_QUALITY_FLAG_COLUMNS
+                    if column in stale_rows and bool(row.get(column, False))
+                ]
+                combination = "+".join(active_reasons) if active_reasons else "unknown"
+                record_id = str(row.get("record_id") or "")
+                combination_counter[combination] += 1
+                if record_id:
+                    combination_records[combination].add(record_id)
+                group_counter[str(row.get("group") or "unknown")] += 1
+                if record_id:
+                    group_records[str(row.get("group") or "unknown")].add(record_id)
+                    all_records.add(record_id)
+                stage_counter[str(row.get("stage") or "unknown")] += 1
+                if "observer_unhealthy" in active_reasons:
+                    observer_total += 1
+                    if len(active_reasons) > 1:
+                        observer_with_other += 1
+                    else:
+                        observer_only += 1
+                if len(examples) < 10:
+                    examples.append(
+                        {
+                            "date": str(row.get("date") or ""),
+                            "record_id": str(row.get("record_id") or ""),
+                            "stock_code": str(row.get("stock_code") or ""),
+                            "stock_name": str(row.get("stock_name") or ""),
+                            "stage": str(row.get("stage") or ""),
+                            "group": str(row.get("group") or ""),
+                            "reasons": active_reasons,
+                            "orderbook_micro_state": str(row.get("orderbook_micro_state") or ""),
+                            "swing_micro_advice": str(row.get("swing_micro_advice") or ""),
+                            "orderbook_micro_ready": bool(row.get("orderbook_micro_ready", False)),
+                            "orderbook_micro_observer_healthy": bool(row.get("orderbook_micro_observer_healthy", False)),
+                        }
+                    )
+            reason_combination_counts = dict(combination_counter)
+            reason_combination_unique_record_counts = {
+                key: len(values) for key, values in combination_records.items()
+            }
+            stale_missing_group_counts = dict(group_counter)
+            stale_missing_group_unique_record_counts = {
+                key: len(values) for key, values in group_records.items()
+            }
+            stale_missing_stage_counts = dict(stage_counter)
+            stale_missing_unique_record_count = len(all_records)
+            observer_unhealthy_overlap = {
+                "observer_unhealthy_total": observer_total,
+                "observer_unhealthy_with_other_reason": observer_with_other,
+                "observer_unhealthy_only": observer_only,
+            }
     if stale_missing > 0:
         stale_ratio = round(stale_missing / max(ofi_qi_rows, 1), 4)
-        warnings.append(f"OFI/QI stale/missing ratio: {stale_ratio} ({stale_missing}/{ofi_qi_rows})")
+        active_reasons = ", ".join(
+            f"{reason}={count}" for reason, count in reason_counts.items() if count
+        )
+        warning = f"OFI/QI stale/missing ratio: {stale_ratio} ({stale_missing}/{ofi_qi_rows})"
+        if active_reasons:
+            warning = f"{warning}; reasons: {active_reasons}"
+        warnings.append(warning)
 
     return {
         "schema_version": SCHEMA_VERSION,
@@ -641,6 +759,21 @@ def build_data_quality_report(
         },
         "completed_trades": completed,
         "valid_profit_trades": valid_profit,
+        "ofi_qi_quality": {
+            "sample_count": ofi_qi_rows,
+            "stale_missing_count": stale_missing,
+            "stale_missing_unique_record_count": stale_missing_unique_record_count,
+            "stale_missing_ratio": round(stale_missing / max(ofi_qi_rows, 1), 4) if ofi_qi_rows else 0.0,
+            "reason_counts": reason_counts,
+            "reason_ratios": reason_ratios,
+            "reason_combination_counts": reason_combination_counts,
+            "reason_combination_unique_record_counts": reason_combination_unique_record_counts,
+            "stale_missing_group_counts": stale_missing_group_counts,
+            "stale_missing_group_unique_record_counts": stale_missing_group_unique_record_counts,
+            "stale_missing_stage_counts": stale_missing_stage_counts,
+            "observer_unhealthy_overlap": observer_unhealthy_overlap,
+            "examples": examples,
+        },
         "warnings": warnings,
     }
 
@@ -661,6 +794,24 @@ def generate_data_quality_markdown(report: dict[str, Any]) -> str:
         f"- valid_profit_trades: `{report['valid_profit_trades']}`",
         "",
     ]
+    ofi_qi_quality = report.get("ofi_qi_quality") if isinstance(report.get("ofi_qi_quality"), dict) else {}
+    if ofi_qi_quality:
+        lines.extend(
+            [
+                "## OFI/QI Quality",
+                "",
+                f"- stale_missing_count: `{ofi_qi_quality.get('stale_missing_count', 0)}`",
+                f"- stale_missing_unique_record_count: `{ofi_qi_quality.get('stale_missing_unique_record_count', 0)}`",
+                f"- stale_missing_ratio: `{ofi_qi_quality.get('stale_missing_ratio', 0.0)}`",
+                f"- reason_counts: `{ofi_qi_quality.get('reason_counts', {})}`",
+                f"- reason_combination_counts: `{ofi_qi_quality.get('reason_combination_counts', {})}`",
+                f"- reason_combination_unique_record_counts: `{ofi_qi_quality.get('reason_combination_unique_record_counts', {})}`",
+                f"- stale_missing_group_counts: `{ofi_qi_quality.get('stale_missing_group_counts', {})}`",
+                f"- stale_missing_group_unique_record_counts: `{ofi_qi_quality.get('stale_missing_group_unique_record_counts', {})}`",
+                f"- observer_unhealthy_overlap: `{ofi_qi_quality.get('observer_unhealthy_overlap', {})}`",
+                "",
+            ]
+        )
     if report.get("warnings"):
         lines.extend(["## Warnings", ""])
         for w in report["warnings"]:

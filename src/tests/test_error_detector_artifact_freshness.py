@@ -131,6 +131,33 @@ class TestArtifactFreshnessDetector:
             assert result.details.get("threshold_postclose_report_status") == "warning"
             assert result.details.get("threshold_postclose_report_upstream_status") == "in_progress"
 
+    def test_missing_critical_artifact_warns_after_window_when_upstream_cron_still_in_progress(self, tmp_path):
+        today = datetime.now().strftime("%Y-%m-%d")
+        cron_log = tmp_path / "postclose.log"
+        cron_log.write_text(f"[START] threshold-cycle postclose target_date={today}\n", encoding="utf-8")
+        artifact = {
+            "id": "threshold_postclose_report",
+            "path_template": str(tmp_path / "missing_threshold_ev.json"),
+            "max_staleness_sec": 600,
+            "critical": True,
+            "window_start": (0, 0),
+            "window_end": (0, 1),
+            "allow_missing_after_window_while_cron_in_progress": True,
+            "suppress_missing_while_cron_in_progress": {
+                "id": "threshold_cycle_postclose",
+                "log": str(cron_log),
+            },
+        }
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+        ):
+            detector = ArtifactFreshnessDetector()
+            result = detector.check()
+            assert result.severity == "warning"
+            assert result.details.get("threshold_postclose_report_status") == "warning"
+            assert result.details.get("threshold_postclose_report_upstream_status") == "in_progress_after_window"
+
     def test_non_trading_day_skips(self):
         artifact = {
             "id": "test_skip",

@@ -1626,6 +1626,11 @@ def _build_latency_guard_miss_ev_recovery_section(metrics: dict, breakdowns: dic
     submitted_events = int(metrics.get("order_bundle_submitted_events", 0) or 0)
     quote_fresh_blocks = int(metrics.get("quote_fresh_latency_blocks", 0) or 0)
     quote_fresh_passes = int(metrics.get("quote_fresh_latency_passes", 0) or 0)
+    unique_stocks = int(metrics.get("latency_guard_miss_unique_stocks", 0) or 0)
+    reason_breakdown = list(breakdowns.get("latency_reason_breakdown") or [])[:10]
+    top_reason = reason_breakdown[0] if reason_breakdown else {}
+    top_reason_count = _safe_int(top_reason.get("count"), 0) or 0
+    coverage_status = "sample_pending_next_postclose" if latency_block_events <= 0 else "reason_breakdown_ready"
 
     return {
         "runtime_effect": False,
@@ -1642,7 +1647,22 @@ def _build_latency_guard_miss_ev_recovery_section(metrics: dict, breakdowns: dic
         "order_bundle_submitted_events": submitted_events,
         "budget_pass_to_submitted_rate": float(metrics.get("budget_pass_to_submitted_rate", 0.0) or 0.0),
         "gatekeeper_eval_ms_p95": float(metrics.get("gatekeeper_eval_ms_p95", 0.0) or 0.0),
-        "latency_reason_breakdown": list(breakdowns.get("latency_reason_breakdown") or [])[:10],
+        "latency_guard_miss_unique_stocks": unique_stocks,
+        "latency_reason_breakdown": reason_breakdown,
+        "top_latency_reason": top_reason.get("label"),
+        "top_latency_reason_share_pct": _ratio(top_reason_count, latency_block_events),
+        "coverage_status": coverage_status,
+        "coverage_warning": (
+            "latency_block 표본이 없어 다음 postclose source freshness 확인 필요"
+            if latency_block_events <= 0
+            else ""
+        ),
+        "provenance_contract": [
+            "latency_block_events",
+            "latency_guard_miss_unique_stocks",
+            "quote_fresh_latency_pass_rate",
+            "latency_reason_breakdown",
+        ],
         "automation_reentry": "threshold_cycle.source_metrics.latency_guard_miss_ev_recovery",
         "next_postclose_metric": "source freshness/warning reduction and latency block attribution coverage",
     }

@@ -1,18 +1,18 @@
 {
-  "timestamp": "2026-05-12T12:26:27.703568",
-  "vix_close": 18.3799991607666,
-  "vix_ma3": 17.549999872843426,
+  "timestamp": "2026-05-12T17:33:55.849961",
+  "vix_close": 18.829999923706055,
+  "vix_ma3": 18.133333206176758,
   "vix_peak_passed": false,
   "vix_two_day_down": false,
   "vix_extreme": false,
-  "wti_close": 99.02999877929688,
-  "wti_rsi": 51.94453358653833,
-  "wti_macd": 1.302114730123435,
-  "wti_macd_signal": 1.8700647236713461,
+  "wti_close": 100.83999633789062,
+  "wti_rsi": 54.11714146195696,
+  "wti_macd": 1.354940078977009,
+  "wti_macd_signal": 1.773850408051635,
   "wti_dead_cross": false,
-  "wti_from_recent_high_pct": -7.344684389828659,
+  "wti_from_recent_high_pct": -5.651198606607554,
   "oil_reversal": true,
-  "fng_value": 66.9714285714286,
+  "fng_value": 65.9142857142857,
   "fng_prev": 66.9714285714286,
   "fng_description": "greed",
   "fng_extreme_fear": false,
@@ -27,7 +27,7 @@
   ],
   "debug": {
     "oil_rsi_turned": false,
-    "fng_curr": 66.9714285714286,
+    "fng_curr": 65.9142857142857,
     "fng_prev": 66.9714285714286,
     "score_threshold": 70,
     "component_scores": {
@@ -53,5 +53,5 @@
     "local_breadth_signal": "bullish"
   },
   "cached_session_date": "2026-05-12",
-  "cached_at": "2026-05-12T12:26:27.721133+09:00"
+  "cached_at": "2026-05-12T17:33:55.858037+09:00"
 }

@@ -1,7 +1,7 @@
 # 스캘핑 패턴 분석 최종 리뷰 보고서 (for Lead AI)
 
-생성일: 2026-05-11 16:20:46
-분석 기간: 2026-04-21 ~ 2026-05-11
+생성일: 2026-05-12 19:52:13
+분석 기간: 2026-04-21 ~ 2026-05-12
 
 ---
 
@@ -11,16 +11,16 @@
 
 | 코호트 | 거래수 | 승률 | 손익 중앙값 | 기여손익 합 | 표본충분 |
 |---|---:|---:|---:|---:|---|
-| full_fill | 140 | 42.1% | -1.055% | -66.090% | ✓ |
+| full_fill | 142 | 43.0% | -0.890% | -49.490% | ✓ |
 | partial_fill | 2 | 50.0% | +0.295% | +0.590% | ⚠️부족 |
 | split-entry | 3 | 0.0% | -1.740% | -5.060% | ⚠️부족 |
 
 ### 1-4. 튜닝 관찰축 요약
 
-- `WAIT65~79 total_candidates=128`, `recovery_check=0`, `promoted=0`, `submitted=0`
-- `blocked_ai_score_share=60.9%`, `gatekeeper_eval_ms_p95=10495ms`, `budget_pass_to_submitted_rate=0.4%`
+- `WAIT65~79 total_candidates=14`, `recovery_check=0`, `promoted=0`, `submitted=0`
+- `blocked_ai_score_share=71.4%`, `gatekeeper_eval_ms_p95=4936ms`, `budget_pass_to_submitted_rate=0.0%`
 
-- `No acute observability alert`: 중립 — 주요 관찰축에서 즉시 경고할 단일 병목이 두드러지지 않는다.
+- `AI threshold dominance`: 경고 — `blocked_ai_score_share=71.4%`로 WAIT/BLOCK 비중이 높아 BUY drought 해석을 지지한다.
 
 ### 1-2. 손실 패턴 Top 5
 
@@ -66,16 +66,16 @@
 ### 1-4. 기회비용 회수 후보 Top 5
 
 **#1** — `AI threshold miss`
-- 차단 건수 합계: 3369732건 | 차단 비율: 100.0% | 관찰 일수: 20일
+- 차단 건수 합계: 3785392건 | 차단 비율: 100.0% | 관찰 일수: 21일
 
 **#2** — `overbought gate miss`
-- 차단 건수 합계: 830040건 | 차단 비율: 100.0% | 관찰 일수: 20일
+- 차단 건수 합계: 910401건 | 차단 비율: 100.0% | 관찰 일수: 21일
 
 **#3** — `latency guard miss`
-- 차단 건수 합계: 50878건 | 차단 비율: 99.5% | 관찰 일수: 20일
+- 차단 건수 합계: 50879건 | 차단 비율: 99.5% | 관찰 일수: 21일
 
 **#4** — `liquidity gate miss`
-- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 20일
+- 차단 건수 합계: 0건 | 차단 비율: 0.0% | 관찰 일수: 21일
 
 ---
 

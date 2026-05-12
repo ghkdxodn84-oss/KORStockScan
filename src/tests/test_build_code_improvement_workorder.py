@@ -372,6 +372,12 @@ def test_build_code_improvement_workorder_adds_threshold_ev_hold_no_edge_followu
                             "calibration_state": "hold_no_edge",
                             "sample_count": 42,
                             "sample_floor": 20,
+                            "source_metrics": {
+                                "counterfactual_gap_count": 42,
+                                "eligible_but_not_chosen_sample_snapshots": 0,
+                                "eligible_but_not_chosen_post_sell_joined_candidates": 0,
+                                "counterfactual_proxy_missing_actions": ["hold_defer", "avg_down_wait"],
+                            },
                         }
                     ]
                 }
@@ -393,9 +399,65 @@ def test_build_code_improvement_workorder_adds_threshold_ev_hold_no_edge_followu
     assert order["order_id"] == "order_holding_exit_decision_matrix_edge_counterfactual"
     assert order["decision"] == "implement_now"
     assert order["mapped_family"] == "holding_exit_decision_matrix_advisory"
+    assert "counterfactual_gap_count=42" in order["evidence"]
     markdown = (doc_dir / "code_improvement_workorder_2026-05-11.md").read_text(encoding="utf-8")
     assert "hold_no_edge" in markdown
     assert "counterfactual" in markdown
+
+
+def test_build_code_improvement_workorder_skips_adm_followup_when_instrumentation_gap_closed(tmp_path, monkeypatch):
+    scalping_dir = tmp_path / "scalping"
+    ev_dir = tmp_path / "ev"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    scalping_dir.mkdir()
+    ev_dir.mkdir()
+    (scalping_dir / "scalping_pattern_lab_automation_2026-05-11.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-11",
+                "consensus_findings": [],
+                "solo_findings": [],
+                "auto_family_candidates": [],
+                "code_improvement_orders": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ev_dir / "threshold_cycle_ev_2026-05-11.json").write_text(
+        json.dumps(
+            {
+                "calibration_outcome": {
+                    "decisions": [
+                        {
+                            "family": "holding_exit_decision_matrix_advisory",
+                            "calibration_state": "hold_no_edge",
+                            "sample_count": 14,
+                            "sample_floor": 1,
+                            "source_metrics": {
+                                "counterfactual_gap_count": 0,
+                                "eligible_but_not_chosen_sample_snapshots": 12,
+                                "eligible_but_not_chosen_post_sell_joined_candidates": 8,
+                                "counterfactual_proxy_missing_actions": [],
+                            },
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", scalping_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-11", max_orders=5)
+
+    assert report["summary"]["threshold_ev_source_order_count"] == 0
+    assert all(item["order_id"] != "order_holding_exit_decision_matrix_edge_counterfactual" for item in report["orders"])
 
 
 def test_build_code_improvement_workorder_reports_previous_generation_diff(tmp_path, monkeypatch):

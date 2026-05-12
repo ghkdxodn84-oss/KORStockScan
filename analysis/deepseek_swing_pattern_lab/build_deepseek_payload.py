@@ -71,6 +71,16 @@ def build_payload_summary(
     ofi_qi_fact: pd.DataFrame,
     analysis_result: dict[str, Any],
 ) -> dict[str, Any]:
+    completed_case_count = 0
+    if not trade_fact.empty and "completed" in trade_fact:
+        completed_case_count = min(int((trade_fact["completed"] == True).sum()), 20)
+    finding_case_count = min(len(analysis_result.get("stage_findings", []) or []), 10)
+    ofi_qi_case_count = min(len(ofi_qi_fact), 30) if not ofi_qi_fact.empty else 0
+    case_counts = {
+        "selected_trades": completed_case_count,
+        "findings_brief": finding_case_count,
+        "ofi_qi_samples": ofi_qi_case_count,
+    }
     summary = {
         "schema_version": SCHEMA_VERSION,
         "payload_type": "deepseek_swing_pattern_lab_summary",
@@ -90,6 +100,8 @@ def build_payload_summary(
         "ofi_qi_summary": _build_ofi_qi_summary(ofi_qi_fact),
         "findings_count": len(analysis_result.get("stage_findings", [])),
         "order_count": len(analysis_result.get("code_improvement_orders", [])),
+        "case_counts": case_counts,
+        "total_cases": sum(case_counts.values()),
     }
     return summary
 
@@ -131,11 +143,84 @@ def _build_ofi_qi_summary(ofi_qi_fact: pd.DataFrame) -> dict[str, Any]:
         return {"error": "No OFI/QI data"}
     total = len(ofi_qi_fact)
     stale = int(ofi_qi_fact["stale_missing_flag"].sum())
+    reason_counts = {
+        column.replace("_flag", ""): int(ofi_qi_fact[column].sum())
+        for column in (
+            "micro_missing_flag",
+            "micro_stale_flag",
+            "observer_unhealthy_flag",
+            "micro_not_ready_flag",
+            "state_insufficient_flag",
+        )
+        if column in ofi_qi_fact
+    }
+    stale_rows = ofi_qi_fact[ofi_qi_fact["stale_missing_flag"] == True].copy()
+    reason_combination_counts = (
+        stale_rows["stale_missing_reasons"].fillna("unknown").replace("", "unknown").str.replace(",", "+").value_counts().to_dict()
+        if "stale_missing_reasons" in stale_rows and not stale_rows.empty
+        else {}
+    )
+    reason_combination_unique_record_counts: dict[str, int] = {}
+    if not stale_rows.empty and "stale_missing_reasons" in stale_rows and "record_id" in stale_rows:
+        tmp = stale_rows.copy()
+        tmp["_reason_combination"] = tmp["stale_missing_reasons"].fillna("unknown").replace("", "unknown").str.replace(",", "+")
+        reason_combination_unique_record_counts = {
+            str(key): int(value)
+            for key, value in tmp.groupby("_reason_combination")["record_id"].nunique().to_dict().items()
+        }
+    group_counts = (
+        stale_rows["group"].fillna("unknown").replace("", "unknown").value_counts().to_dict()
+        if "group" in stale_rows and not stale_rows.empty
+        else {}
+    )
+    group_unique_record_counts = (
+        {
+            str(key): int(value)
+            for key, value in stale_rows.groupby("group")["record_id"].nunique().to_dict().items()
+        }
+        if "group" in stale_rows and "record_id" in stale_rows and not stale_rows.empty
+        else {}
+    )
+    observer_overlap = {
+        "observer_unhealthy_total": int(stale_rows["observer_unhealthy_flag"].sum())
+        if "observer_unhealthy_flag" in stale_rows and not stale_rows.empty else 0,
+        "observer_unhealthy_with_other_reason": 0,
+        "observer_unhealthy_only": 0,
+    }
+    if not stale_rows.empty and "observer_unhealthy_flag" in stale_rows:
+        other_columns = [
+            column for column in (
+                "micro_missing_flag",
+                "micro_stale_flag",
+                "micro_not_ready_flag",
+                "state_insufficient_flag",
+            )
+            if column in stale_rows
+        ]
+        observer_rows = stale_rows[stale_rows["observer_unhealthy_flag"] == True]
+        observer_overlap["observer_unhealthy_with_other_reason"] = int(
+            observer_rows[other_columns].any(axis=1).sum()
+        ) if other_columns else 0
+        observer_overlap["observer_unhealthy_only"] = (
+            observer_overlap["observer_unhealthy_total"]
+            - observer_overlap["observer_unhealthy_with_other_reason"]
+        )
     advice = ofi_qi_fact["swing_micro_advice"].value_counts().to_dict() if "swing_micro_advice" in ofi_qi_fact else {}
     return {
         "total_samples": total,
         "stale_missing_count": stale,
         "stale_missing_ratio": round(stale / max(total, 1), 4),
+        "stale_missing_reason_counts": reason_counts,
+        "stale_missing_reason_ratios": {
+            reason: round(count / max(total, 1), 4)
+            for reason, count in reason_counts.items()
+        },
+        "stale_missing_unique_record_count": int(stale_rows["record_id"].nunique()) if "record_id" in stale_rows else 0,
+        "stale_missing_reason_combination_counts": reason_combination_counts,
+        "stale_missing_reason_combination_unique_record_counts": reason_combination_unique_record_counts,
+        "stale_missing_group_counts": group_counts,
+        "stale_missing_group_unique_record_counts": group_unique_record_counts,
+        "observer_unhealthy_overlap": observer_overlap,
         "advice_distribution": advice,
     }
 
@@ -199,6 +284,14 @@ def build_payload_cases(
                     "micro_state": str(row.get("orderbook_micro_state", "")),
                     "micro_advice": str(row.get("swing_micro_advice", "")),
                     "stale_missing": bool(row.get("stale_missing_flag", False)),
+                    "stale_missing_reasons": str(row.get("stale_missing_reasons", "")),
+                    "reason_flags": {
+                        "micro_missing": bool(row.get("micro_missing_flag", False)),
+                        "micro_stale": bool(row.get("micro_stale_flag", False)),
+                        "observer_unhealthy": bool(row.get("observer_unhealthy_flag", False)),
+                        "micro_not_ready": bool(row.get("micro_not_ready_flag", False)),
+                        "state_insufficient": bool(row.get("state_insufficient_flag", False)),
+                    },
                     "ready": bool(row.get("orderbook_micro_ready", False)),
                     "healthy": bool(row.get("orderbook_micro_observer_healthy", False)),
                 }

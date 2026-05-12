@@ -44,7 +44,14 @@
 ## OFI/QI Micro Context
 
 - sample_count: `74`
+- stale_missing_unique_record_count: `2`
 - stale_missing_ratio: `0.9189`
+- stale_missing_reason_counts: `{'micro_missing': 68, 'micro_not_ready': 6, 'state_insufficient': 6}`
+- stale_missing_reason_combination_counts: `{'micro_missing': 62, 'micro_missing+micro_not_ready+state_insufficient': 6}`
+- stale_missing_reason_combination_unique_record_counts: `{'micro_missing+micro_not_ready+state_insufficient': 2}`
+- stale_missing_group_counts: `{'exit': 62, 'scale_in': 6}`
+- stale_missing_group_unique_record_counts: `{'scale_in': 2}`
+- observer_unhealthy_overlap: `{'observer_unhealthy_total': 0, 'observer_unhealthy_with_other_reason': 0, 'observer_unhealthy_only': 0}`
 - entry_micro_state_counts: `{}`
 - scale_in_micro_state_counts: `{'insufficient': 6, 'neutral': 6}`
 - exit_smoothing_action_counts: `{'NO_CHANGE': 61, 'CONFIRM_EXIT': 1}`

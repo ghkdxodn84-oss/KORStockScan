@@ -820,6 +820,12 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     )
     saw_policy_counts = stat_action.get("policy_counts") if isinstance(stat_action.get("policy_counts"), dict) else {}
     stat_action_sample = stat_action.get("sample") if isinstance(stat_action.get("sample"), dict) else {}
+    eligible_not_chosen = (
+        stat_action.get("eligible_but_not_chosen")
+        if isinstance(stat_action.get("eligible_but_not_chosen"), dict)
+        else {}
+    )
+    counterfactual_proxy = _summarize_counterfactual_proxy_actions(eligible_not_chosen)
     blocker_outcomes = (
         missed_metrics.get("blocker_outcome_metrics")
         if isinstance(missed_metrics.get("blocker_outcome_metrics"), dict)
@@ -1080,6 +1086,17 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
                 if isinstance(matrix_counterfactual.get("per_action_samples"), dict)
                 else {}
             ),
+            "eligible_but_not_chosen_status": counterfactual_proxy.get("status"),
+            "eligible_but_not_chosen_sample_snapshots": counterfactual_proxy.get("sample_snapshots"),
+            "eligible_but_not_chosen_sample_candidates": counterfactual_proxy.get("sample_candidates"),
+            "eligible_but_not_chosen_post_sell_joined_candidates": counterfactual_proxy.get(
+                "post_sell_joined_candidates"
+            ),
+            "counterfactual_proxy_ready": bool(counterfactual_proxy.get("ready")),
+            "counterfactual_proxy_actions_present": counterfactual_proxy.get("actions_present") or [],
+            "counterfactual_proxy_missing_actions": counterfactual_proxy.get("missing_actions") or [],
+            "counterfactual_proxy_per_action_samples": counterfactual_proxy.get("per_action_samples") or {},
+            "counterfactual_proxy_per_action_joined": counterfactual_proxy.get("per_action_joined") or {},
             "excluded_reports": {},
         },
         "scale_in_price_guard": {
@@ -1712,9 +1729,11 @@ def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str |
     snapshots = _events_for_stage(events, "stat_action_decision_snapshot")
     post_sell_by_record = _load_post_sell_evaluation_by_record_id(target_date)
     rows: list[dict] = []
+    chosen_rows: list[dict] = []
     action_values: dict[str, dict[str, list[float]]] = {}
     action_reasons: dict[str, Counter] = {}
-    joined_count = 0
+    chosen_action_values: dict[str, dict[str, list[float]]] = {}
+    joined_snapshot_count = 0
     for event in snapshots:
         fields = _event_fields(event)
         chosen = str(fields.get("chosen_action") or "-").strip()
@@ -1729,7 +1748,7 @@ def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str |
         record_id = event.get("record_id")
         post_sell = post_sell_by_record.get(str(record_id)) if record_id not in (None, "", "-") else None
         if post_sell:
-            joined_count += 1
+            joined_snapshot_count += 1
         profit_rate = _safe_float(fields.get("profit_rate"), None)
         peak_profit = _safe_float(fields.get("peak_profit"), None)
         drawdown = _safe_float(fields.get("drawdown_from_peak"), None)
@@ -1740,6 +1759,42 @@ def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str |
             else None
         )
         snapshot_mae_proxy = round(min(0.0, -abs(drawdown)), 4) if drawdown is not None else None
+        chosen_row = {
+            "record_id": record_id,
+            "stock_code": event.get("stock_code"),
+            "stock_name": event.get("stock_name"),
+            "emitted_at": event.get("emitted_at"),
+            "chosen_action": chosen,
+            "snapshot_profit_rate": profit_rate,
+            "snapshot_peak_profit": peak_profit,
+            "snapshot_drawdown_from_peak": drawdown,
+            "snapshot_mfe_proxy": snapshot_mfe_proxy,
+            "snapshot_mae_proxy": snapshot_mae_proxy,
+            "current_ai_score": current_ai_score,
+            "post_sell_joined": bool(post_sell),
+            "post_sell_outcome": post_sell.get("outcome") if isinstance(post_sell, dict) else None,
+            "post_sell_exit_rule": post_sell.get("exit_rule") if isinstance(post_sell, dict) else None,
+            "post_sell_profit_rate": _safe_float(post_sell.get("profit_rate"), None) if isinstance(post_sell, dict) else None,
+            "post_decision_mfe_10m_proxy": _post_sell_metric(post_sell, "10m", "mfe_pct"),
+            "post_decision_mae_10m_proxy": _post_sell_metric(post_sell, "10m", "mae_pct"),
+        }
+        chosen_rows.append(chosen_row)
+        chosen_action = _normalize_counterfactual_proxy_action(chosen)
+        if chosen_action not in {"-", ""}:
+            chosen_bucket = chosen_action_values.setdefault(
+                chosen_action,
+                {
+                    "snapshot_profit_rate": [],
+                    "snapshot_drawdown_from_peak": [],
+                    "current_ai_score": [],
+                    "post_decision_mfe_10m_proxy": [],
+                    "post_decision_mae_10m_proxy": [],
+                },
+            )
+            for key in chosen_bucket:
+                value = _safe_float(chosen_row.get(key), None)
+                if value is not None:
+                    chosen_bucket[key].append(value)
         for action in candidates:
             reason = rejected_reasons.get(action, "eligible_not_chosen")
             row = {
@@ -1764,8 +1819,9 @@ def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str |
                 "post_decision_mae_10m_proxy": _post_sell_metric(post_sell, "10m", "mae_pct"),
             }
             rows.append(row)
+            normalized_action = _normalize_counterfactual_proxy_action(action)
             bucket = action_values.setdefault(
-                action,
+                normalized_action,
                 {
                     "snapshot_profit_rate": [],
                     "snapshot_drawdown_from_peak": [],
@@ -1778,15 +1834,24 @@ def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str |
                 value = _safe_float(row.get(key), None)
                 if value is not None:
                     bucket[key].append(value)
-            action_reasons.setdefault(action, Counter())[str(reason or "-")] += 1
+            action_reasons.setdefault(normalized_action, Counter())[str(reason or "-")] += 1
 
     action_summary = []
     for action, values in sorted(action_values.items()):
-        joined = sum(1 for row in rows if row.get("candidate_action") == action and row.get("post_sell_joined"))
+        joined = sum(
+            1
+            for row in rows
+            if _normalize_counterfactual_proxy_action(row.get("candidate_action")) == action
+            and row.get("post_sell_joined")
+        )
         action_summary.append(
             {
                 "candidate_action": action,
-                "sample": sum(1 for row in rows if row.get("candidate_action") == action),
+                "sample": sum(
+                    1
+                    for row in rows
+                    if _normalize_counterfactual_proxy_action(row.get("candidate_action")) == action
+                ),
                 "post_sell_joined": joined,
                 "avg_snapshot_profit_rate": round(_avg(values["snapshot_profit_rate"]) or 0.0, 4)
                 if values["snapshot_profit_rate"]
@@ -1806,6 +1871,40 @@ def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str |
                 "top_not_chosen_reasons": dict(action_reasons.get(action, Counter()).most_common(5)),
             }
         )
+    chosen_action_summary = []
+    for action, values in sorted(chosen_action_values.items()):
+        joined = sum(
+            1
+            for row in chosen_rows
+            if _normalize_counterfactual_proxy_action(row.get("chosen_action")) == action
+            and row.get("post_sell_joined")
+        )
+        chosen_action_summary.append(
+            {
+                "chosen_action": action,
+                "sample": sum(
+                    1
+                    for row in chosen_rows
+                    if _normalize_counterfactual_proxy_action(row.get("chosen_action")) == action
+                ),
+                "post_sell_joined": joined,
+                "avg_snapshot_profit_rate": round(_avg(values["snapshot_profit_rate"]) or 0.0, 4)
+                if values["snapshot_profit_rate"]
+                else None,
+                "avg_snapshot_drawdown_from_peak": round(_avg(values["snapshot_drawdown_from_peak"]) or 0.0, 4)
+                if values["snapshot_drawdown_from_peak"]
+                else None,
+                "avg_current_ai_score": round(_avg(values["current_ai_score"]) or 0.0, 4)
+                if values["current_ai_score"]
+                else None,
+                "avg_post_decision_mfe_10m_proxy": round(_avg(values["post_decision_mfe_10m_proxy"]) or 0.0, 4)
+                if values["post_decision_mfe_10m_proxy"]
+                else None,
+                "avg_post_decision_mae_10m_proxy": round(_avg(values["post_decision_mae_10m_proxy"]) or 0.0, 4)
+                if values["post_decision_mae_10m_proxy"]
+                else None,
+            }
+        )
     return {
         "schema_version": 1,
         "status": "report_only",
@@ -1814,7 +1913,7 @@ def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str |
         "sample_snapshots": len(snapshots),
         "sample_candidates": len(rows),
         "post_sell_joined_candidates": sum(1 for row in rows if row.get("post_sell_joined")),
-        "post_sell_joined_snapshots": joined_count,
+        "post_sell_joined_snapshots": joined_snapshot_count,
         "fields": [
             "candidate_action",
             "chosen_action",
@@ -1825,6 +1924,7 @@ def _build_eligible_but_not_chosen_report(events: list[dict], target_date: str |
             "post_decision_mae_10m_proxy",
         ],
         "action_summary": action_summary,
+        "chosen_action_summary": chosen_action_summary,
         "examples": rows[:20],
         "quality_notes": [
             "post_decision_*_proxy는 post_sell_evaluation 10분 지표를 record_id로 붙인 report-only proxy다.",
@@ -3937,6 +4037,11 @@ def _build_post_apply_attribution(calibration_candidates: list[dict]) -> dict:
                 "family": candidate.get("family"),
                 "threshold_version": candidate.get("threshold_version"),
                 "calibration_state": candidate.get("calibration_state"),
+                "sample_count": candidate.get("sample_count"),
+                "source_sample_count": candidate.get("source_sample_count"),
+                "sample_floor": candidate.get("sample_floor"),
+                "sample_floor_status": candidate.get("sample_floor_status"),
+                "source_metrics": candidate.get("source_metrics") or {},
                 "safety_revert_required": candidate.get("safety_revert_required"),
             }
             for candidate in calibration_candidates
@@ -4716,6 +4821,40 @@ def _best_action_row(bucket: dict) -> dict:
 
 
 MATRIX_COUNTERFACTUAL_ACTIONS = ("exit_only", "avg_down_wait", "pyramid_wait")
+MATRIX_COUNTERFACTUAL_PROXY_ACTIONS = ("hold_defer", *MATRIX_COUNTERFACTUAL_ACTIONS)
+
+
+def _normalize_counterfactual_proxy_action(value: Any) -> str:
+    token = str(value or "").strip().lower()
+    if not token:
+        return "-"
+    normalized = token.replace("-", "_").replace(" ", "_")
+    aliases = {
+        "hold": "hold_defer",
+        "hold_action": "hold_defer",
+        "hold_defer": "hold_defer",
+        "hold_wait": "hold_defer",
+        "continue_hold": "hold_defer",
+        "wait": "hold_defer",
+        "wait_hold": "hold_defer",
+        "defer_exit": "hold_defer",
+        "exit": "exit_only",
+        "exit_action": "exit_only",
+        "exit_now": "exit_only",
+        "exit_only": "exit_only",
+        "sell": "exit_only",
+        "sell_close": "exit_only",
+        "trim": "exit_only",
+        "drop": "exit_only",
+        "avg_down": "avg_down_wait",
+        "avg_down_wait": "avg_down_wait",
+        "reversal_add": "avg_down_wait",
+        "reversal_add_wait": "avg_down_wait",
+        "pyramid": "pyramid_wait",
+        "pyramid_wait": "pyramid_wait",
+        "scale_in": "pyramid_wait",
+    }
+    return aliases.get(normalized, normalized)
 
 
 def _matrix_action_counterfactual_coverage(row: dict) -> dict:
@@ -4774,6 +4913,78 @@ def _summarize_matrix_counterfactual_coverage(entries: list[dict]) -> dict:
         "ready_rate": round(ready_count / entry_count, 4) if entry_count else None,
         "per_action_samples": per_action_samples,
         "required_actions": list(MATRIX_COUNTERFACTUAL_ACTIONS),
+    }
+
+
+def _summarize_counterfactual_proxy_actions(eligible_report: dict | None) -> dict:
+    report = eligible_report if isinstance(eligible_report, dict) else {}
+    per_action_samples = {action: 0 for action in MATRIX_COUNTERFACTUAL_PROXY_ACTIONS}
+    per_action_joined = {action: 0 for action in MATRIX_COUNTERFACTUAL_PROXY_ACTIONS}
+    chosen_summary = report.get("chosen_action_summary") if isinstance(report.get("chosen_action_summary"), list) else []
+    candidate_summary = report.get("action_summary") if isinstance(report.get("action_summary"), list) else []
+
+    for row in chosen_summary:
+        if not isinstance(row, dict):
+            continue
+        action = _normalize_counterfactual_proxy_action(row.get("chosen_action"))
+        if action not in per_action_samples:
+            continue
+        per_action_samples[action] += _safe_int(row.get("sample"), 0) or 0
+        per_action_joined[action] += _safe_int(row.get("post_sell_joined"), 0) or 0
+
+    for row in candidate_summary:
+        if not isinstance(row, dict):
+            continue
+        action = _normalize_counterfactual_proxy_action(row.get("candidate_action"))
+        if action not in per_action_samples:
+            continue
+        per_action_samples[action] += _safe_int(row.get("sample"), 0) or 0
+        per_action_joined[action] += _safe_int(row.get("post_sell_joined"), 0) or 0
+
+    actions_present = [action for action, count in per_action_samples.items() if count > 0]
+    missing_actions = [action for action, count in per_action_samples.items() if count <= 0]
+    return {
+        "status": report.get("status") or "report_only",
+        "sample_snapshots": _safe_int(report.get("sample_snapshots"), 0) or 0,
+        "sample_candidates": _safe_int(report.get("sample_candidates"), 0) or 0,
+        "post_sell_joined_candidates": _safe_int(report.get("post_sell_joined_candidates"), 0) or 0,
+        "post_sell_joined_snapshots": _safe_int(report.get("post_sell_joined_snapshots"), 0) or 0,
+        "per_action_samples": per_action_samples,
+        "per_action_joined": per_action_joined,
+        "actions_present": actions_present,
+        "missing_actions": missing_actions,
+        "required_actions": list(MATRIX_COUNTERFACTUAL_PROXY_ACTIONS),
+        "ready": not missing_actions,
+    }
+
+
+def _summarize_matrix_bias_distribution(entries: list[dict]) -> dict:
+    per_action_edge_buckets = {
+        "prefer_exit": 0,
+        "prefer_avg_down_wait": 0,
+        "prefer_pyramid_wait": 0,
+    }
+    no_clear_edge_count = 0
+    candidate_weight_source_non_clear_edge_count = 0
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        bias = str(entry.get("recommended_bias") or "no_clear_edge")
+        policy_hint = str(entry.get("policy_hint") or "")
+        if bias == "no_clear_edge":
+            no_clear_edge_count += 1
+            continue
+        if bias in per_action_edge_buckets:
+            per_action_edge_buckets[bias] += 1
+        if policy_hint == "candidate_weight_source":
+            candidate_weight_source_non_clear_edge_count += 1
+    non_no_clear_edge_count = sum(per_action_edge_buckets.values())
+    return {
+        "entry_count": len(entries),
+        "non_no_clear_edge_count": non_no_clear_edge_count,
+        "no_clear_edge_count": no_clear_edge_count,
+        "candidate_weight_source_non_clear_edge_count": candidate_weight_source_non_clear_edge_count,
+        "per_action_edge_buckets": per_action_edge_buckets,
     }
 
 
@@ -4918,6 +5129,34 @@ def render_statistical_action_weight_markdown(artifact: dict) -> str:
             )
             + " |"
         )
+    chosen_summary = eligible_report.get("chosen_action_summary") if isinstance(eligible_report.get("chosen_action_summary"), list) else []
+    lines.extend(
+        [
+            "",
+            "### Chosen Action Proxy",
+            "",
+            "| chosen_action | sample | joined | avg_snapshot_profit | avg_snapshot_dd | avg_post_mfe_10m_proxy | avg_post_mae_10m_proxy |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for row in chosen_summary:
+        if not isinstance(row, dict):
+            continue
+        lines.append(
+            "| "
+            + " | ".join(
+                [
+                    _markdown_value(row.get("chosen_action")),
+                    _markdown_value(row.get("sample")),
+                    _markdown_value(row.get("post_sell_joined")),
+                    _markdown_value(row.get("avg_snapshot_profit_rate")),
+                    _markdown_value(row.get("avg_snapshot_drawdown_from_peak")),
+                    _markdown_value(row.get("avg_post_decision_mfe_10m_proxy")),
+                    _markdown_value(row.get("avg_post_decision_mae_10m_proxy")),
+                ]
+            )
+            + " |"
+        )
     lines.extend(
         [
             "",
@@ -4986,6 +5225,11 @@ def build_holding_exit_decision_matrix(report: dict) -> dict:
     target_date = str(report.get("date") or date.today().isoformat())
     family = (report.get("threshold_snapshot") or {}).get("statistical_action_weight") or {}
     recommended = family.get("recommended") if isinstance(family.get("recommended"), dict) else {}
+    eligible_report = (
+        recommended.get("eligible_but_not_chosen")
+        if isinstance(recommended.get("eligible_but_not_chosen"), dict)
+        else {}
+    )
     entries: list[dict] = []
     for axis, key in (
         ("price_bucket", "by_price_bucket"),
@@ -5014,6 +5258,8 @@ def build_holding_exit_decision_matrix(report: dict) -> dict:
                 }
             )
     coverage_summary = _summarize_matrix_counterfactual_coverage(entries)
+    bias_summary = _summarize_matrix_bias_distribution(entries)
+    proxy_summary = _summarize_counterfactual_proxy_actions(eligible_report)
     return {
         "matrix_version": f"holding_exit_decision_matrix_v1_{target_date}",
         "source_report": str(report_path_for_date(target_date)),
@@ -5029,7 +5275,9 @@ def build_holding_exit_decision_matrix(report: dict) -> dict:
             "post_add_eval_exclusion",
         ],
         "entries": entries,
+        "summary": bias_summary,
         "counterfactual_coverage_summary": coverage_summary,
+        "counterfactual_proxy_summary": proxy_summary,
         "notes": [
             "장중 self-updating 금지: 장후 산정 matrix를 다음 장전 로드하고 장중에는 immutable context로만 사용한다.",
             "AI 점수를 직접 덮어쓰지 않는다. recommended_bias가 no_clear_edge가 아닌 bucket만 advisory canary 후보로 검증한다.",
@@ -5038,6 +5286,7 @@ def build_holding_exit_decision_matrix(report: dict) -> dict:
 
 
 def render_holding_exit_decision_matrix_markdown(matrix: dict) -> str:
+    summary = matrix.get("summary") if isinstance(matrix.get("summary"), dict) else {}
     lines = [
         f"# Holding/Exit Decision Matrix - {matrix.get('source_date')}",
         "",
@@ -5057,15 +5306,29 @@ def render_holding_exit_decision_matrix_markdown(matrix: dict) -> str:
         if isinstance(matrix.get("counterfactual_coverage_summary"), dict)
         else {}
     )
+    proxy_summary = (
+        matrix.get("counterfactual_proxy_summary")
+        if isinstance(matrix.get("counterfactual_proxy_summary"), dict)
+        else {}
+    )
     lines.extend(
         [
             "",
             "## Counterfactual Coverage",
             "",
+            f"- non_no_clear_edge_count: `{_markdown_value(summary.get('non_no_clear_edge_count'))}`",
+            f"- no_clear_edge_count: `{_markdown_value(summary.get('no_clear_edge_count'))}`",
+            f"- candidate_weight_source_non_clear_edge_count: `{_markdown_value(summary.get('candidate_weight_source_non_clear_edge_count'))}`",
             f"- ready_count: `{_markdown_value(coverage_summary.get('ready_count'))}` / "
             f"`{_markdown_value(coverage_summary.get('entry_count'))}`",
             f"- ready_rate: `{_markdown_value(coverage_summary.get('ready_rate'))}`",
+            f"- per_action_edge_buckets: `{summary.get('per_action_edge_buckets') or {}}`",
             f"- per_action_samples: `{coverage_summary.get('per_action_samples') or {}}`",
+            f"- proxy_sample_snapshots: `{_markdown_value(proxy_summary.get('sample_snapshots'))}`",
+            f"- proxy_joined_candidates: `{_markdown_value(proxy_summary.get('post_sell_joined_candidates'))}`",
+            f"- proxy_actions_present: `{proxy_summary.get('actions_present') or []}`",
+            f"- proxy_missing_actions: `{proxy_summary.get('missing_actions') or []}`",
+            f"- proxy_per_action_samples: `{proxy_summary.get('per_action_samples') or {}}`",
             "",
         ]
     )

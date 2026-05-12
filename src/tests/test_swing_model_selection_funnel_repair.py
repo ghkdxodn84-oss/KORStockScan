@@ -215,6 +215,24 @@ def test_swing_funnel_report_separates_raw_and_unique_event_counts():
     assert summary["ofi_qi_summary"]["scale_in_micro_advice_counts"]["RISK_BEARISH"] == 1
     assert summary["ofi_qi_summary"]["exit_smoothing_action_counts"]["NO_CHANGE"] == 1
     assert summary["ofi_qi_summary"]["stale_missing_count"] == 1
+    assert summary["ofi_qi_summary"]["stale_missing_reason_counts"]["micro_missing"] == 1
+    assert summary["ofi_qi_summary"]["stale_missing_reason_counts"]["micro_not_ready"] == 1
+    assert summary["ofi_qi_summary"]["stale_missing_reason_counts"]["observer_unhealthy"] == 1
+    assert summary["ofi_qi_summary"]["stale_missing_reason_combination_counts"] == {
+        "micro_missing+observer_unhealthy+micro_not_ready+state_insufficient": 1
+    }
+    assert summary["ofi_qi_summary"]["stale_missing_unique_record_count"] == 1
+    assert summary["ofi_qi_summary"]["stale_missing_reason_combination_unique_record_counts"] == {
+        "micro_missing+observer_unhealthy+micro_not_ready+state_insufficient": 1
+    }
+    assert summary["ofi_qi_summary"]["stale_missing_group_counts"] == {"exit": 1}
+    assert summary["ofi_qi_summary"]["stale_missing_group_unique_record_counts"] == {"exit": 1}
+    assert summary["ofi_qi_summary"]["observer_unhealthy_overlap"] == {
+        "observer_unhealthy_total": 1,
+        "observer_unhealthy_with_other_reason": 1,
+        "observer_unhealthy_only": 0,
+    }
+    assert summary["ofi_qi_summary"]["stale_missing_examples"][0]["record_id"] == "4"
 
 
 def test_swing_lifecycle_audit_separates_intraday_probe_evidence_quality():
@@ -1802,6 +1820,64 @@ def test_swing_runtime_approval_emits_scale_in_real_canary_request_when_arm_read
     assert request["recommended_values"]["enabled"] is True
     assert request["dry_run_required"] is False
     assert report["scale_in_real_canary_policy"]["policy_id"] == "swing_scale_in_real_canary_phase0"
+
+
+def test_swing_runtime_approval_blocks_scale_in_real_canary_on_invalid_ofi_qi_source_quality():
+    audit = _approval_ready_audit(
+        lifecycle_events={
+            "raw_counts": {},
+            "unique_record_counts": {},
+            "group_unique_counts": {"entry": 5, "exit": 3, "holding": 0, "scale_in": 8},
+            "submitted_unique_records": 0,
+            "simulated_order_unique_records": 5,
+            "ofi_qi_summary": {
+                "scale_in_micro_state_counts": {"bullish": 5, "not_ready": 3},
+                "scale_in_micro_advice_counts": {"SUPPORT_ENTRY": 5},
+                "stale_missing_group_counts": {"scale_in": 3},
+                "stale_missing_group_unique_record_counts": {"scale_in": 1},
+                "stale_missing_reason_combination_unique_record_counts": {
+                    "micro_missing+micro_not_ready+state_insufficient": 1
+                },
+            },
+            "scale_in_observation": {
+                "action_groups": {"PYRAMID": 5, "AVG_DOWN": 8},
+                "post_add_outcomes": {"closed_win": 8},
+                "arm_outcomes": {
+                    "PYRAMID": {
+                        "sample_count": 5,
+                        "final_exit_return_summary": {"count": 5, "avg": 1.2},
+                        "post_add_delta_vs_exit_only_summary": {"count": 5, "avg": 0.3},
+                        "post_add_mae_summary": {"count": 5, "p50": -1.0},
+                        "post_add_mae_p90": -1.5,
+                        "loser_extension_rate": 0.1,
+                    },
+                    "AVG_DOWN": {
+                        "sample_count": 8,
+                        "final_exit_return_summary": {"count": 8, "avg": 0.8},
+                        "post_add_delta_vs_exit_only_summary": {"count": 8, "avg": 0.2},
+                        "post_add_mae_summary": {"count": 8, "p50": -1.2},
+                        "post_add_mae_p90": -2.5,
+                        "loser_extension_rate": 0.2,
+                    },
+                },
+            },
+            "record_timeline_sample": [],
+        },
+    )
+
+    report = build_swing_runtime_approval_report(audit)
+    scale_in_requests = [
+        item for item in report["approval_requests"] if item.get("policy_id") == "swing_scale_in_real_canary_phase0"
+    ]
+    blocked_families = {item["family"]: item for item in report["source_quality_blocked_families"]}
+
+    assert scale_in_requests == []
+    assert "swing_scale_in_real_canary_phase0" in blocked_families
+    assert "scale_in_ofi_qi_invalid_micro_context" in blocked_families["swing_scale_in_real_canary_phase0"][
+        "block_reasons"
+    ]
+    pyramid = next(item for item in report["scale_in_real_canary_policy"]["arm_decisions"] if item["arm"] == "PYRAMID")
+    assert pyramid["source_quality"]["valid_micro_context_count"] == 5
 
 
 def test_swing_improvement_automation_emits_workorder_ready_orders():

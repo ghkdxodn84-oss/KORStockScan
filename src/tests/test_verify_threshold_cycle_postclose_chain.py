@@ -1,0 +1,136 @@
+import json
+from pathlib import Path
+
+from src.engine import verify_threshold_cycle_postclose_chain as mod
+
+
+def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(tmp_path, monkeypatch):
+    project_root = tmp_path
+    report_dir = project_root / "data" / "report"
+    (project_root / "logs").mkdir(parents=True)
+    (report_dir / "threshold_cycle_ev").mkdir(parents=True)
+    (report_dir / "code_improvement_workorder").mkdir(parents=True)
+    (report_dir / "runtime_approval_summary").mkdir(parents=True)
+    (report_dir / "swing_daily_simulation").mkdir(parents=True)
+    (report_dir / "swing_lifecycle_audit").mkdir(parents=True)
+    (project_root / "docs").mkdir(parents=True)
+
+    log_path = project_root / "logs" / "threshold_cycle_postclose_cron.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "[START] threshold-cycle postclose target_date=2026-05-12 started_at=2026-05-12T21:00:00+0900",
+                "[threshold-cycle] artifact ready label=swing_daily_simulation.json path=/tmp/a waited=0s json_valid=true",
+                "[threshold-cycle] artifact ready label=threshold_cycle_ev_pre_workorder.json path=/tmp/b waited=0s json_valid=true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    (report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-12.json").write_text(
+        json.dumps(
+            {
+                "sources": {
+                    "code_improvement_workorder": str(
+                        report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-12.json"
+                    )
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (report_dir / "code_improvement_workorder" / "code_improvement_workorder_2026-05-12.json").write_text(
+        json.dumps(
+            {
+                "generation_id": "2026-05-12-newhash",
+                "source_hash": "newhash",
+                "summary": {
+                    "new_selected_order_count": 1,
+                    "removed_selected_order_count": 0,
+                    "decision_changed_order_count": 0,
+                },
+                "lineage": {
+                    "previous_exists": True,
+                    "previous_generation_id": "2026-05-12-oldhash",
+                    "previous_source_hash": "oldhash",
+                    "new_order_ids": ["order_new"],
+                    "removed_order_ids": [],
+                    "decision_changed_order_ids": [],
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (report_dir / "runtime_approval_summary" / "runtime_approval_summary_2026-05-12.json").write_text(
+        json.dumps(
+            {
+                "sources": {
+                    "threshold_cycle_ev": str(report_dir / "threshold_cycle_ev" / "threshold_cycle_ev_2026-05-12.json")
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    (report_dir / "swing_daily_simulation" / "swing_daily_simulation_2026-05-12.json").write_text("{}", encoding="utf-8")
+    (report_dir / "swing_lifecycle_audit" / "swing_lifecycle_audit_2026-05-12.json").write_text("{}", encoding="utf-8")
+    (project_root / "docs" / "2026-05-13-stage2-todo-checklist.md").write_text("# next\n", encoding="utf-8")
+
+    monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification")
+    monkeypatch.setattr(mod, "LOG_PATH", log_path)
+    monkeypatch.setattr(mod, "_next_krx_trading_day", lambda target_date: "2026-05-13")
+
+    report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
+
+    assert report["status"] == "pass"
+    assert report["predecessor_integrity"]["wait_count"] == 0
+    assert report["workorder_snapshot"]["status"] == "source_changed_with_lineage"
+    assert report["workorder_snapshot"]["new_order_ids"] == ["order_new"]
+    assert report["downstream_links"]["runtime_approval_summary_sources_ev"].endswith(
+        "threshold_cycle_ev_2026-05-12.json"
+    )
+
+
+def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(tmp_path, monkeypatch):
+    project_root = tmp_path
+    report_dir = project_root / "data" / "report"
+    (project_root / "logs").mkdir(parents=True)
+    (report_dir / "threshold_cycle_ev").mkdir(parents=True)
+    (report_dir / "code_improvement_workorder").mkdir(parents=True)
+    (report_dir / "runtime_approval_summary").mkdir(parents=True)
+    (report_dir / "swing_daily_simulation").mkdir(parents=True)
+    (report_dir / "swing_lifecycle_audit").mkdir(parents=True)
+    (project_root / "docs").mkdir(parents=True)
+
+    log_path = project_root / "logs" / "threshold_cycle_postclose_cron.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "[START] threshold-cycle postclose target_date=2026-05-12 started_at=2026-05-12T21:00:00+0900",
+                "[threshold-cycle] artifact ready label=swing_daily_simulation.json path=/tmp/a waited=5s json_valid=true",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for rel in (
+        "threshold_cycle_ev/threshold_cycle_ev_2026-05-12.json",
+        "code_improvement_workorder/code_improvement_workorder_2026-05-12.json",
+        "runtime_approval_summary/runtime_approval_summary_2026-05-12.json",
+        "swing_daily_simulation/swing_daily_simulation_2026-05-12.json",
+        "swing_lifecycle_audit/swing_lifecycle_audit_2026-05-12.json",
+    ):
+        path = report_dir / rel
+        path.write_text("{}", encoding="utf-8")
+    (project_root / "docs" / "2026-05-13-stage2-todo-checklist.md").write_text("# next\n", encoding="utf-8")
+
+    monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification")
+    monkeypatch.setattr(mod, "LOG_PATH", log_path)
+    monkeypatch.setattr(mod, "_next_krx_trading_day", lambda target_date: "2026-05-13")
+
+    report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
+
+    assert report["status"] == "warning"
+    assert report["predecessor_integrity"]["wait_count"] == 1
