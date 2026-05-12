@@ -51,6 +51,16 @@ def test_build_wait6579_ev_cohort_report(monkeypatch, tmp_path):
             },
             {
                 "pipeline": "ENTRY_PIPELINE",
+                "stage": "score65_74_recovery_probe",
+                "stock_name": "풀체결후보",
+                "stock_code": "111111",
+                "record_id": 101,
+                "fields": {"ai_score": "68"},
+                "emitted_at": "2026-04-21T10:00:01.500000",
+                "emitted_date": target_date,
+            },
+            {
+                "pipeline": "ENTRY_PIPELINE",
                 "stage": "entry_armed",
                 "stock_name": "풀체결후보",
                 "stock_code": "111111",
@@ -183,7 +193,16 @@ def test_build_wait6579_ev_cohort_report(monkeypatch, tmp_path):
         "has_budget_pass",
         "has_latency_block",
         "has_recovery_check",
+        "has_score65_74_probe",
+        "counterfactual_book",
+        "actual_order_submitted",
+        "broker_order_forbidden",
     }.issubset(row_keys)
+    score_probe_row = next(row for row in report["rows"] if row["stock_code"] == "111111")
+    assert score_probe_row["has_score65_74_probe"] is True
+    assert score_probe_row["counterfactual_book"] == "scalp_score65_74_probe_counterfactual"
+    assert score_probe_row["actual_order_submitted"] is False
+    assert score_probe_row["broker_order_forbidden"] is True
 
     split_map = {row["fill_type"]: row["samples"] for row in report["fill_split"]}
     assert split_map.get("FULL", 0) == 1
@@ -200,6 +219,9 @@ def test_build_wait6579_ev_cohort_report(monkeypatch, tmp_path):
     assert blocker_map["no_recovery_check"] == 1
     assert blocker_map["latency_block"] == 1
     assert report["approval_gate"]["min_sample_gate_passed"] is False
+    assert report["counterfactual_summary"]["total_candidates"] == 2
+    assert report["counterfactual_summary"]["score65_74_probe_candidates"] == 1
+    assert report["counterfactual_summary"]["real_execution_quality_source"] == "none"
 
 
 def test_build_wait6579_ev_cohort_report_empty(monkeypatch, tmp_path):
@@ -214,6 +236,7 @@ def test_build_wait6579_ev_cohort_report_empty(monkeypatch, tmp_path):
     assert report["preflight"]["behavior_change"] == "none"
     assert report["preflight"]["observability_passed"] is True
     assert report["approval_gate"]["threshold_relaxation_approved"] is False
+    assert report["counterfactual_summary"]["book"] == "scalp_score65_74_probe_counterfactual"
 
 
 def test_build_wait6579_preflight_report_uses_events_only(monkeypatch, tmp_path):

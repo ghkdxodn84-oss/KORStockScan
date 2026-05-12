@@ -73,6 +73,40 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
         ),
         encoding="utf-8",
     )
+    (monitor_dir / "wait6579_ev_cohort_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "metrics": {
+                    "total_candidates": 3,
+                    "score65_74_probe_candidates": 2,
+                    "avg_expected_ev_pct": 1.25,
+                    "expected_ev_krw_sum": 12000,
+                },
+                "counterfactual_summary": {
+                    "book": "scalp_score65_74_probe_counterfactual",
+                    "role": "missed_buy_probe_counterfactual",
+                    "actual_order_submitted": False,
+                    "broker_order_forbidden": True,
+                    "runtime_effect": "counterfactual_report_only",
+                    "calibration_authority": "missed_probe_ev_only_not_broker_execution",
+                    "total_candidates": 3,
+                    "score65_74_probe_candidates": 2,
+                    "avg_expected_ev_pct": 1.25,
+                    "score65_74_avg_expected_ev_pct": 2.5,
+                    "expected_ev_krw_sum": 12000,
+                    "real_execution_quality_source": "none",
+                },
+                "approval_gate": {
+                    "min_sample_gate_passed": False,
+                    "threshold_relaxation_approved": False,
+                    "full_samples": 2,
+                    "partial_samples": 0,
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
     (calibration_dir / "threshold_cycle_calibration_2026-05-08_postclose.json").write_text(
         json.dumps(
             {
@@ -179,6 +213,9 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
     assert report["daily_ev_summary"]["completed_trades"] == 2
     assert report["daily_ev_summary"]["realized_pnl_krw"] == -282
     assert report["entry_funnel"]["budget_pass_to_submitted_rate_pct"] == 5.0
+    assert report["missed_probe_counterfactual"]["book"] == "scalp_score65_74_probe_counterfactual"
+    assert report["missed_probe_counterfactual"]["score65_74_probe_candidates"] == 2
+    assert report["missed_probe_counterfactual"]["real_execution_quality_source"] == "none"
     assert report["pattern_lab_automation"]["consensus_count"] == 1
     assert report["swing_runtime_approval"]["requested"] == 1
     assert (
@@ -197,6 +234,7 @@ def test_build_threshold_cycle_ev_report_uses_existing_reports(tmp_path, monkeyp
     assert (ev_dir / "threshold_cycle_ev_2026-05-08.json").exists()
     assert (ev_dir / "threshold_cycle_ev_2026-05-08.md").exists()
     markdown = (ev_dir / "threshold_cycle_ev_2026-05-08.md").read_text(encoding="utf-8")
+    assert "Missed Probe Counterfactual" in markdown
     assert "Swing Runtime Approval" in markdown
     assert "swing_one_share_real_canary_phase0" in markdown
     assert "AVG_DOWN, PYRAMID, SCALE_IN" in markdown

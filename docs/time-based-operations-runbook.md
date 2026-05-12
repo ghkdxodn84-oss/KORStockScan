@@ -379,6 +379,14 @@ tmux ls
 6. `RUNTIME_OPS`, snapshot failure, model call timeout, 주문 receipt/provenance 손상이 있으면 전략 threshold 문제가 아니라 운영 장애로 분류한다.
 7. safety breach가 아니라 목표 미달이면 rollback이 아니라 postclose calibration 입력으로 넘긴다.
 
+### IntradayAutomationHealthCheck20260512 운영 확인 기록
+
+- checked_at: `2026-05-12 09:08 KST`
+- 판정: `pass`
+- 근거: `bot_main.py` PID `15393`이 실행 중이고 `pipeline_events_2026-05-12.jsonl`은 09:08 KST 기준 5,121건으로 append 중이다. `buy_funnel_sentinel_2026-05-12`와 `holding_exit_sentinel_2026-05-12`는 모두 09:05 cron `[DONE]` marker와 `classification.primary=NORMAL`을 생성했다. `run_error_detection.log`도 09:05 full detector `[DONE]` marker를 남겼고 process/resource/stale-lock은 pass다. `threshold_events_2026-05-12.jsonl`은 7건으로 sparse stream이 생성됐으며, selected threshold family 직접 표본은 아직 없지만 runbook 기준 fatal stale이 아니라 source coverage 대기다.
+- not_yet_due: `12:05` intraday threshold calibration과 장후/postclose 산출물은 아직 due 전이다.
+- 다음 액션: Sentinel/Detector는 계속 report-only로 본다. selected runtime family, OpenAI `entry_price`, scalp sim BUY 확정 표본은 장후 EV/report에서 재확인하고 장중 runtime threshold mutation은 하지 않는다.
+
 표준 확인 명령:
 
 ```bash

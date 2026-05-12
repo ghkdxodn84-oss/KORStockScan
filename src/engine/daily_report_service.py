@@ -16,7 +16,7 @@ from src.utils.constants import DATA_DIR, POSTGRES_URL, TRADING_RULES
 
 REPORT_DIR = DATA_DIR / "report"
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
-REPORT_SCHEMA_VERSION = 2
+REPORT_SCHEMA_VERSION = 3
 DEFAULT_REALIZED_PNL_COST_RATE = 0.0023
 
 _MODEL_XGB_FEATURES = [
@@ -497,8 +497,13 @@ def _apply_cached_market_regime_label(snapshot: dict[str, Any], target_date: str
     summary = _load_cached_market_regime_summary(target_date)
     if not summary:
         return
-    snapshot["status_text"] = summary["status_text"]
-    snapshot["status_tone"] = summary["status_tone"]
+    risk_label = {
+        "RISK_ON": "리스크온",
+        "NEUTRAL": "리스크중립",
+        "RISK_OFF": "리스크오프",
+    }.get(str(summary["risk_state"]).upper(), "리스크 데이터 부족")
+    snapshot["risk_status_text"] = risk_label
+    snapshot["risk_status_tone"] = summary["status_tone"]
     snapshot["regime_code"] = summary["regime_code"]
     snapshot["risk_state"] = summary["risk_state"]
     snapshot["allow_swing_entry"] = bool(summary.get("allow_swing_entry", False))
@@ -716,6 +721,13 @@ def build_daily_report(target_date: str | None = None) -> dict:
             "status_text": status_text,
             "color": tone_map.get(market.get("status_tone", "muted"), "text-secondary"),
             "tone": market.get("status_tone", "muted"),
+            "risk_status_text": market.get("risk_status_text"),
+            "risk_status_tone": market.get("risk_status_tone"),
+            "risk_state": market.get("risk_state"),
+            "regime_code": market.get("regime_code"),
+            "allow_swing_entry": market.get("allow_swing_entry"),
+            "swing_score": market.get("swing_score"),
+            "regime_source": market.get("regime_source"),
         },
         "insights": {
             "dashboard": market.get("dashboard", ""),
@@ -769,4 +781,6 @@ def format_daily_report_summary(report: dict) -> str:
         f"- 실현손익 추정: {perf_summary.get('realized_pnl_krw', 0):,}원",
         f"- 경고: {len(warnings)}건",
     ]
+    if stats.get("risk_status_text"):
+        lines.insert(5, f"- 매크로 리스크: {stats.get('risk_status_text')} ({stats.get('risk_state', 'UNKNOWN')})")
     return "\n".join(lines)

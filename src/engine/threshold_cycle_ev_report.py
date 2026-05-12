@@ -58,6 +58,39 @@ def _calibration_path(target_date: str) -> Path:
     return CALIBRATION_REPORT_DIR / f"threshold_cycle_calibration_{target_date}_intraday.json"
 
 
+def _wait6579_counterfactual_summary(target_date: str) -> tuple[dict[str, Any], str | None]:
+    path = MONITOR_SNAPSHOT_DIR / f"wait6579_ev_cohort_{target_date}.json"
+    payload = _load_json(path)
+    summary = payload.get("counterfactual_summary") if isinstance(payload.get("counterfactual_summary"), dict) else {}
+    metrics = payload.get("metrics") if isinstance(payload.get("metrics"), dict) else {}
+    approval = payload.get("approval_gate") if isinstance(payload.get("approval_gate"), dict) else {}
+    if not payload:
+        return {}, None
+    if not summary:
+        summary = {
+            "book": "scalp_score65_74_probe_counterfactual",
+            "role": "missed_buy_probe_counterfactual",
+            "actual_order_submitted": False,
+            "broker_order_forbidden": True,
+            "runtime_effect": "counterfactual_report_only",
+            "calibration_authority": "missed_probe_ev_only_not_broker_execution",
+            "total_candidates": _safe_int(metrics.get("total_candidates"), 0),
+            "score65_74_probe_candidates": _safe_int(metrics.get("score65_74_probe_candidates"), 0),
+            "avg_expected_ev_pct": round(_safe_float(metrics.get("avg_expected_ev_pct"), 0.0), 4),
+            "expected_ev_krw_sum": _safe_int(metrics.get("expected_ev_krw_sum"), 0),
+            "source_authority": "observe_only_threshold_relaxation_input",
+            "real_execution_quality_source": "none",
+        }
+    summary = dict(summary)
+    summary["approval_gate"] = {
+        "min_sample_gate_passed": bool(approval.get("min_sample_gate_passed")),
+        "threshold_relaxation_approved": bool(approval.get("threshold_relaxation_approved")),
+        "full_samples": _safe_int(approval.get("full_samples"), 0),
+        "partial_samples": _safe_int(approval.get("partial_samples"), 0),
+    }
+    return summary, str(path)
+
+
 def _selected_families(apply_manifest: dict[str, Any]) -> list[str]:
     selected = apply_manifest.get("auto_apply_selected")
     if isinstance(selected, list) and selected:
@@ -352,6 +385,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     trade_metrics = trade_review.get("metrics") if isinstance(trade_review.get("metrics"), dict) else {}
     perf_metrics = performance.get("metrics") if isinstance(performance.get("metrics"), dict) else {}
     scalp_simulator = calibration.get("scalp_simulator") if isinstance(calibration.get("scalp_simulator"), dict) else {}
+    wait6579_counterfactual, wait6579_counterfactual_path = _wait6579_counterfactual_summary(target_date)
     completed_by_source = (
         calibration.get("completed_by_source")
         if isinstance(calibration.get("completed_by_source"), dict)
@@ -409,6 +443,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "holding_ai_cache_hit_ratio": round(_safe_float(perf_metrics.get("holding_ai_cache_hit_ratio"), 0.0), 4),
         },
         "scalp_simulator": scalp_simulator,
+        "missed_probe_counterfactual": wait6579_counterfactual,
         "calibration_outcome": {
             "calibration_report": str(calibration_path) if calibration_path.exists() else None,
             "run_phase": calibration.get("run_phase"),
@@ -428,6 +463,7 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "pattern_lab_automation": pattern_lab_path,
             "swing_pattern_lab_automation": swing_lab_path,
             "code_improvement_workorder": code_workorder_path,
+            "missed_probe_counterfactual": wait6579_counterfactual_path,
         },
         "warnings": [
             message
@@ -455,6 +491,7 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
     funnel = report.get("entry_funnel") if isinstance(report.get("entry_funnel"), dict) else {}
     holding = report.get("holding_exit") if isinstance(report.get("holding_exit"), dict) else {}
     scalp_sim = report.get("scalp_simulator") if isinstance(report.get("scalp_simulator"), dict) else {}
+    missed_probe = report.get("missed_probe_counterfactual") if isinstance(report.get("missed_probe_counterfactual"), dict) else {}
     runtime = report.get("runtime_apply") if isinstance(report.get("runtime_apply"), dict) else {}
     pattern_lab = report.get("pattern_lab_automation") if isinstance(report.get("pattern_lab_automation"), dict) else {}
     swing_lab = report.get("swing_pattern_lab_automation") if isinstance(report.get("swing_pattern_lab_automation"), dict) else {}
@@ -492,6 +529,13 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- armed/filled/sold: `{scalp_sim.get('entry_armed')}` / `{scalp_sim.get('buy_filled')}` / `{scalp_sim.get('sell_completed')}`",
         f"- expired/unpriced/duplicate: `{scalp_sim.get('entry_expired')}` / `{scalp_sim.get('entry_unpriced')}` / `{scalp_sim.get('duplicate_buy_signal')}`",
         f"- completed_profit_summary: `{scalp_sim.get('completed_profit_summary') or {}}`",
+        "",
+        "## Missed Probe Counterfactual",
+        f"- book: `{missed_probe.get('book') or '-'}` / role: `{missed_probe.get('role') or '-'}`",
+        f"- total/score65_74: `{missed_probe.get('total_candidates')}` / `{missed_probe.get('score65_74_probe_candidates')}`",
+        f"- avg_expected_ev: `{missed_probe.get('avg_expected_ev_pct')}`% / score65_74_avg_expected_ev: `{missed_probe.get('score65_74_avg_expected_ev_pct')}`%",
+        f"- actual_order_submitted: `{missed_probe.get('actual_order_submitted')}` / broker_order_forbidden: `{missed_probe.get('broker_order_forbidden')}`",
+        f"- authority: `{missed_probe.get('calibration_authority') or '-'}`",
         "",
         "## Pattern Lab Automation",
         f"- artifact: `{pattern_lab.get('artifact') or '-'}`",

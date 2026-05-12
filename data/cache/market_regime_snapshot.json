@@ -1,43 +1,57 @@
 {
-  "timestamp": "2026-05-11T16:25:06.457749",
-  "vix_close": 17.190000534057617,
-  "vix_ma3": 17.21999994913737,
+  "timestamp": "2026-05-12T08:57:54.572018",
+  "vix_close": 18.3799991607666,
+  "vix_ma3": 17.549999872843426,
   "vix_peak_passed": false,
   "vix_two_day_down": false,
   "vix_extreme": false,
-  "wti_close": 99.1500015258789,
-  "wti_rsi": 52.059104487837544,
-  "wti_macd": 1.311687598796638,
-  "wti_macd_signal": 1.8719792974059868,
+  "wti_close": 98.0999984741211,
+  "wti_rsi": 51.0377121134722,
+  "wti_macd": 1.2279266715908932,
+  "wti_macd_signal": 1.8552271119648378,
   "wti_dead_cross": false,
-  "wti_from_recent_high_pct": -7.232406368060474,
+  "wti_from_recent_high_pct": -8.214819428259378,
   "oil_reversal": true,
-  "fng_value": 66.9142857142857,
-  "fng_prev": 66.9142857142857,
+  "fng_value": 66.9714285714286,
+  "fng_prev": 66.9714285714286,
   "fng_description": "greed",
   "fng_extreme_fear": false,
   "fng_recovery": false,
-  "allow_swing_entry": false,
-  "swing_score": 35,
+  "allow_swing_entry": true,
+  "swing_score": 70,
   "volatility_mode": "NORMAL",
-  "risk_state": "RISK_OFF",
+  "risk_state": "RISK_ON",
   "reasons": [
-    "원유 반전 시그널"
+    "원유 반전 시그널",
+    "국내 breadth 상승장(20일선 위 62.8%)"
   ],
   "debug": {
     "oil_rsi_turned": false,
-    "fng_curr": 66.9142857142857,
-    "fng_prev": 66.9142857142857,
+    "fng_curr": 66.9714285714286,
+    "fng_prev": 66.9714285714286,
     "score_threshold": 70,
     "component_scores": {
       "vix": 0,
       "oil": 35,
-      "fng": 0
+      "fng": 0,
+      "local_breadth": 35
     },
     "vix_signal": "none",
     "oil_signal": "reversal",
-    "fng_signal": "none"
+    "fng_signal": "none",
+    "local_market_context": {
+      "ma20_ratio": 62.8,
+      "daily_status_text": "상승장",
+      "quote_date": "2026-05-11",
+      "report_source": "/home/ubuntu/KORStockScan/data/report/report_2026-05-12.json",
+      "bull_regime": 1,
+      "safe_pool_count": 61,
+      "candidate_count": 296,
+      "selection_mode": "SELECTED",
+      "diagnostics_date": "2026-05-11 00:00:00"
+    },
+    "local_breadth_signal": "bullish"
   },
-  "cached_session_date": "2026-05-11",
-  "cached_at": "2026-05-11T16:25:06.464893+09:00"
+  "cached_session_date": "2026-05-12",
+  "cached_at": "2026-05-12T08:57:54.579530+09:00"
 }

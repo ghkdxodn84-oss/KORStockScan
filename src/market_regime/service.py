@@ -108,6 +108,100 @@ class MarketRegimeService:
         except Exception as e:
             snapshot.reasons.append(f"cache 저장 실패: {e}")
 
+    def _load_local_market_context(self, session_date: str) -> dict:
+        context: dict = {}
+
+        report_dir = DATA_DIR / "report"
+        candidates = [report_dir / f"report_{session_date}.json"]
+        try:
+            candidates.extend(sorted(report_dir.glob("report_*.json"), reverse=True))
+        except Exception:
+            pass
+
+        for path in candidates:
+            try:
+                if not path.exists():
+                    continue
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                stats = payload.get("stats", {}) if isinstance(payload, dict) else {}
+                if not isinstance(stats, dict):
+                    continue
+                if stats.get("ma20_ratio") is None:
+                    continue
+                context["ma20_ratio"] = float(stats.get("ma20_ratio") or 0.0)
+                context["daily_status_text"] = str(stats.get("status_text", "") or "")
+                context["quote_date"] = str(stats.get("quote_date", "") or "")
+                context["report_source"] = str(path)
+                break
+            except Exception as e:
+                context["report_error"] = str(e)
+                continue
+
+        diag_path = DATA_DIR / "daily_recommendations_v2_diagnostics.json"
+        try:
+            payload = json.loads(diag_path.read_text(encoding="utf-8"))
+            latest = payload.get("latest_stats", {}) if isinstance(payload, dict) else {}
+            if isinstance(latest, dict):
+                context["bull_regime"] = int(latest.get("bull_regime", 0) or 0)
+                context["safe_pool_count"] = int(latest.get("safe_pool_count", 0) or 0)
+                context["candidate_count"] = int(latest.get("candidate_count", 0) or 0)
+                context["selection_mode"] = str(latest.get("selection_mode", "") or "")
+                context["diagnostics_date"] = str(latest.get("date", "") or "")
+        except Exception as e:
+            context["diagnostics_error"] = str(e)
+
+        return context
+
+    def _apply_local_market_context(self, snapshot: MarketRegimeSnapshot, context: dict) -> MarketRegimeSnapshot:
+        component_scores = dict(snapshot.debug.get("component_scores", {}) or {})
+        component_scores.setdefault("vix", 0)
+        component_scores.setdefault("oil", 0)
+        component_scores.setdefault("fng", 0)
+        component_scores.setdefault("local_breadth", 0)
+
+        local_score = 0
+        ma20_ratio = context.get("ma20_ratio")
+        bull_regime = int(context.get("bull_regime", 0) or 0)
+        safe_pool_count = int(context.get("safe_pool_count", 0) or 0)
+        vix_unresolved_extreme = bool(snapshot.vix_extreme and not snapshot.vix_two_day_down)
+
+        if not vix_unresolved_extreme:
+            if ma20_ratio is not None:
+                try:
+                    breadth = float(ma20_ratio)
+                    if breadth >= 70.0:
+                        local_score = 45
+                    elif breadth >= 60.0:
+                        local_score = 35
+                    elif breadth >= 55.0 and bull_regime == 1:
+                        local_score = 25
+                except (TypeError, ValueError):
+                    local_score = 0
+            elif bull_regime == 1 and safe_pool_count >= 30:
+                local_score = 30
+
+        if local_score > 0:
+            component_scores["local_breadth"] = local_score
+            snapshot.swing_score += local_score
+            reason = "국내 breadth 상승장"
+            if ma20_ratio is not None:
+                reason = f"{reason}(20일선 위 {float(ma20_ratio):.1f}%)"
+            if reason not in snapshot.reasons:
+                snapshot.reasons.append(reason)
+
+        snapshot.allow_swing_entry = snapshot.swing_score >= int(snapshot.debug.get("score_threshold", 70) or 70)
+        if snapshot.allow_swing_entry:
+            snapshot.risk_state = "RISK_ON"
+        elif snapshot.swing_score >= 45:
+            snapshot.risk_state = "NEUTRAL"
+        else:
+            snapshot.risk_state = "RISK_OFF"
+
+        snapshot.debug["component_scores"] = component_scores
+        snapshot.debug["local_market_context"] = context
+        snapshot.debug["local_breadth_signal"] = "bullish" if local_score > 0 else "none"
+        return snapshot
+
     def _clone_snapshot_with_reason(self, snapshot: MarketRegimeSnapshot, reason: str) -> MarketRegimeSnapshot:
         cloned = self._snapshot_from_payload(self._snapshot_to_payload(snapshot, snapshot.debug.get("cached_session_date", ""))) or snapshot
         cloned.reasons = list(cloned.reasons)
@@ -192,6 +286,8 @@ class MarketRegimeService:
                     raise ValueError(f"market data incomplete: {', '.join(missing_sources)}")
 
                 new_snapshot = evaluate_market_regime(vix_df, oil_df, fng_data=fng_data)
+                local_context = self._load_local_market_context(session_date)
+                new_snapshot = self._apply_local_market_context(new_snapshot, local_context)
                 self._snapshot = new_snapshot
                 self._last_refresh_at = now
 

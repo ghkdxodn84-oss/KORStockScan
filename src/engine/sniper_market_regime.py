@@ -36,7 +36,7 @@ def _format_market_regime_block_reason(snap) -> str:
         f"risk={snap.risk_state}, "
         f"score={snap.swing_score}/{threshold}, "
         f"deficit={deficit}, "
-        f"components=vix:{component_scores.get('vix', 0)},oil:{component_scores.get('oil', 0)},fng:{component_scores.get('fng', 0)}, "
+        f"components=vix:{component_scores.get('vix', 0)},oil:{component_scores.get('oil', 0)},fng:{component_scores.get('fng', 0)},local_breadth:{component_scores.get('local_breadth', 0)}, "
         f"VIX={snap.vix_close:.2f}, "
         f"WTI_RSI={snap.wti_rsi:.2f}, "
         f"oil_reversal={snap.oil_reversal}, "

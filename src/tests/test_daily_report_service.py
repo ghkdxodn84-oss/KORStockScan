@@ -143,8 +143,10 @@ def test_apply_cached_market_regime_label_uses_session_cache(tmp_path, monkeypat
     snapshot = {"status_text": "중립장", "status_tone": "warn"}
     report_mod._apply_cached_market_regime_label(snapshot, "2026-04-07")
 
-    assert snapshot["status_text"] == "하락장"
-    assert snapshot["status_tone"] == "bad"
+    assert snapshot["status_text"] == "중립장"
+    assert snapshot["status_tone"] == "warn"
+    assert snapshot["risk_status_text"] == "리스크오프"
+    assert snapshot["risk_status_tone"] == "bad"
     assert snapshot["regime_code"] == "BEAR"
     assert snapshot["risk_state"] == "RISK_OFF"
     assert snapshot["regime_source"] == "market_regime_cache"

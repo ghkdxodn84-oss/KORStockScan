@@ -12,8 +12,18 @@ from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.logger import log_error
 
 
-WAIT6579_EV_COHORT_SCHEMA_VERSION = 1
+WAIT6579_EV_COHORT_SCHEMA_VERSION = 2
 _WAIT6579_STAGE = "wait65_79_ev_candidate"
+_SCORE65_74_PROBE_STAGE = "score65_74_recovery_probe"
+_COUNTERFACTUAL_BOOK = "scalp_score65_74_probe_counterfactual"
+_COUNTERFACTUAL_POLICY = {
+    "book": _COUNTERFACTUAL_BOOK,
+    "role": "missed_buy_probe_counterfactual",
+    "actual_order_submitted": False,
+    "broker_order_forbidden": True,
+    "runtime_effect": "counterfactual_report_only",
+    "calibration_authority": "missed_probe_ev_only_not_broker_execution",
+}
 _ENTRY_ARMED_STAGES = {"entry_armed", "entry_armed_resume"}
 _ATTEMPT_AUXILIARY_STAGES = {
     "dual_persona_shadow",
@@ -29,6 +39,7 @@ _PREFLIGHT_STAGES = {
     _WAIT6579_STAGE,
     "watching_buy_recovery_canary",
     "wait6579_probe_canary_applied",
+    _SCORE65_74_PROBE_STAGE,
     "entry_armed",
     "entry_armed_resume",
     "budget_pass",
@@ -248,6 +259,7 @@ def _build_wait6579_candidates(target_date: str) -> list[dict]:
                 for event in attempt_events
             )
             has_probe_applied = any(event.stage == "wait6579_probe_canary_applied" for event in attempt_events)
+            has_score65_74_probe = any(event.stage == _SCORE65_74_PROBE_STAGE for event in attempt_events)
             has_budget_pass = any(event.stage == "budget_pass" for event in attempt_events)
             has_latency_pass = any(event.stage == "latency_pass" for event in attempt_events)
             has_latency_block = any(event.stage == "latency_block" for event in attempt_events)
@@ -305,6 +317,7 @@ def _build_wait6579_candidates(target_date: str) -> list[dict]:
                     "has_recovery_check": has_recovery_check,
                     "recovery_promoted": recovery_promoted,
                     "has_probe_applied": has_probe_applied,
+                    "has_score65_74_probe": has_score65_74_probe,
                     "has_budget_pass": has_budget_pass,
                     "has_latency_pass": has_latency_pass,
                     "has_latency_block": has_latency_block,
@@ -529,6 +542,29 @@ def _fill_split_rows(rows: list[dict]) -> list[dict]:
     return out
 
 
+def _counterfactual_summary(rows: list[dict]) -> dict:
+    score65_rows = [row for row in rows if bool(row.get("has_score65_74_probe"))]
+    full_rows = [row for row in rows if str(row.get("expected_fill_class") or "") == "FULL"]
+    partial_rows = [row for row in rows if str(row.get("expected_fill_class") or "") == "PARTIAL"]
+    return {
+        **_COUNTERFACTUAL_POLICY,
+        "total_candidates": len(rows),
+        "score65_74_probe_candidates": len(score65_rows),
+        "full_samples": len(full_rows),
+        "partial_samples": len(partial_rows),
+        "avg_expected_ev_pct": _avg([_safe_float(row.get("expected_ev_pct"), 0.0) for row in rows]),
+        "score65_74_avg_expected_ev_pct": _avg(
+            [_safe_float(row.get("expected_ev_pct"), 0.0) for row in score65_rows]
+        ),
+        "score65_74_avg_close_10m_pct": _avg(
+            [_safe_float(row.get("close_10m_pct"), 0.0) for row in score65_rows]
+        ),
+        "expected_ev_krw_sum": int(sum(_safe_int(row.get("expected_ev_krw"), 0) for row in rows)),
+        "source_authority": "observe_only_threshold_relaxation_input",
+        "real_execution_quality_source": "none",
+    }
+
+
 def _terminal_breakdown(rows: list[dict]) -> list[dict]:
     buckets: dict[str, list[dict]] = defaultdict(list)
     for row in rows:
@@ -744,12 +780,15 @@ def build_wait6579_ev_cohort_report(
                 "total_candidates": 0,
                 "entered_attempts": 0,
                 "missed_attempts": 0,
+                "counterfactual_candidates": 0,
+                "score65_74_probe_candidates": 0,
                 "expected_fill_rate_pct": 0.0,
                 "avg_expected_ev_pct": 0.0,
                 "expected_ev_krw_sum": 0,
             },
             "fill_split": [],
             "terminal_breakdown": [],
+            "counterfactual_summary": _counterfactual_summary([]),
             "preflight": _preflight_summary([]),
             "approval_gate": {
                 "min_full_samples_required": min_full_samples,
@@ -818,6 +857,7 @@ def build_wait6579_ev_cohort_report(
                 "has_recovery_check": bool(candidate.get("has_recovery_check")),
                 "recovery_promoted": bool(candidate.get("recovery_promoted")),
                 "has_probe_applied": bool(candidate.get("has_probe_applied")),
+                "has_score65_74_probe": bool(candidate.get("has_score65_74_probe")),
                 "has_budget_pass": bool(candidate.get("has_budget_pass")),
                 "has_latency_pass": bool(candidate.get("has_latency_pass")),
                 "has_latency_block": bool(candidate.get("has_latency_block")),
@@ -832,6 +872,12 @@ def build_wait6579_ev_cohort_report(
                 "mfe_10m_pct": round(_safe_float(metrics_10m.get("mfe_pct"), 0.0), 4),
                 "mae_10m_pct": round(_safe_float(metrics_10m.get("mae_pct"), 0.0), 4),
                 "bars_10m": _safe_int(metrics_10m.get("bars"), 0),
+                "counterfactual_book": _COUNTERFACTUAL_BOOK,
+                "counterfactual_role": _COUNTERFACTUAL_POLICY["role"],
+                "actual_order_submitted": False,
+                "broker_order_forbidden": True,
+                "runtime_effect": _COUNTERFACTUAL_POLICY["runtime_effect"],
+                "calibration_authority": _COUNTERFACTUAL_POLICY["calibration_authority"],
                 **paper_fill,
             }
         )
@@ -849,6 +895,7 @@ def build_wait6579_ev_cohort_report(
     total = len(rows)
     entered_attempts = sum(1 for row in rows if str(row.get("attempt_status") or "") == "ENTERED")
     missed_attempts = sum(1 for row in rows if str(row.get("attempt_status") or "") == "MISSED")
+    score65_74_probe_candidates = sum(1 for row in rows if bool(row.get("has_score65_74_probe")))
     fill_split = _fill_split_rows(rows)
     terminal_breakdown = _terminal_breakdown(rows)
 
@@ -866,6 +913,8 @@ def build_wait6579_ev_cohort_report(
             "total_candidates": total,
             "entered_attempts": int(entered_attempts),
             "missed_attempts": int(missed_attempts),
+            "counterfactual_candidates": int(total),
+            "score65_74_probe_candidates": int(score65_74_probe_candidates),
             "entered_rate": _ratio(entered_attempts, total),
             "expected_fill_rate_pct": _avg(
                 [_safe_float(row.get("expected_fill_rate_pct"), 0.0) for row in rows]
@@ -877,6 +926,7 @@ def build_wait6579_ev_cohort_report(
         },
         "fill_split": fill_split,
         "terminal_breakdown": terminal_breakdown,
+        "counterfactual_summary": _counterfactual_summary(rows),
         "preflight": _preflight_summary(rows),
         "approval_gate": {
             "min_full_samples_required": min_full_samples,
@@ -894,5 +944,6 @@ def build_wait6579_ev_cohort_report(
             "schema_version": WAIT6579_EV_COHORT_SCHEMA_VERSION,
             "generated_at": datetime.now().isoformat(),
             "pipeline_jsonl": str(_pipeline_events_path(safe_date)),
+            "counterfactual_policy": _COUNTERFACTUAL_POLICY,
         },
     }

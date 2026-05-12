@@ -59,23 +59,46 @@
 
 ## 장중 체크리스트 (09:05~15:20)
 
-- [ ] `[RuntimeEnvIntradayObserve0512] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-05-12`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
+### IntradayAutomationHealthCheck20260512 운영 확인 기록
+
+- checked_at: `2026-05-12 09:08 KST`
+- 판정: `pass`
+- 근거: `bot_main.py` PID `15393`이 실행 중이고 `pipeline_events_2026-05-12.jsonl`은 09:08 KST 기준 5,121건으로 append 중이다. `buy_funnel_sentinel_2026-05-12`와 `holding_exit_sentinel_2026-05-12`는 모두 09:05 cron `[DONE]` marker와 `classification.primary=NORMAL`을 생성했다. `run_error_detection.log`도 09:05 full detector `[DONE]` marker를 남겼고 process/resource/stale-lock은 pass다. `threshold_events_2026-05-12.jsonl`은 7건으로 sparse stream이 생성됐으며, selected threshold family 직접 표본은 아직 없지만 runbook 기준 fatal stale이 아니라 source coverage 대기다.
+- not_yet_due: `12:05` intraday threshold calibration과 장후/postclose 산출물은 아직 due 전이다.
+- 다음 액션: Sentinel/Detector는 계속 report-only로 본다. selected runtime family, OpenAI `entry_price`, scalp sim BUY 확정 표본은 장후 EV/report에서 재확인하고 장중 runtime threshold mutation은 하지 않는다.
+
+- [x] `[SwingMarketRegimeLocalBreadthGate0512] 스윙 market-regime 게이트 국내 breadth 반영 누락 점검` (`Due: 2026-05-12`, `Slot: INTRADAY`, `TimeWindow: 09:05~15:20`, `Track: SwingLogic`)
+  - Source: [report_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/report_2026-05-12.json), [market_regime_snapshot.json](/home/ubuntu/KORStockScan/data/cache/market_regime_snapshot.json), [service.py](/home/ubuntu/KORStockScan/src/market_regime/service.py), [sniper_market_regime.py](/home/ubuntu/KORStockScan/src/engine/sniper_market_regime.py)
+  - 판정: `fix_applied_restarted`.
+  - 근거: 일일 리포트 breadth는 `20일선 위 비율 62.8%`, `status_text=상승장`인데 기존 스윙 market-regime cache는 VIX/WTI/Fear&Greed만 점수화해 `oil=35`, `swing_score=35`, `risk_state=RISK_OFF`, `allow_swing_entry=false`로 닫혔다. 이는 표시 오류와 별개로 스윙 dry-run/probe 게이트에 영향을 주는 국내 breadth 반영 누락이다.
+  - 조치: `MarketRegimeService`가 daily report/diagnostics의 국내 breadth context를 로드해 `local_breadth` component score로 합산하도록 수정했다. 현재 조건에서는 원유 반전 `35` + 국내 breadth `35`로 `swing_score=70`, `allow_swing_entry=true`가 된다. 단, VIX extreme이 아직 해소되지 않은 경우에는 local breadth override를 막는다.
+  - 검증: `pytest` 10건 통과, `py_compile` 통과, `sync_docs_backlog_to_project --print-backlog-only --limit 500` parser 검증 통과. market regime cache는 `risk_state=RISK_ON`, `allow_swing_entry=true`, `swing_score=70`, `component_scores.local_breadth=35`로 재생성했다. 봇은 PID `4493 -> 15393`으로 재기동했고 `bot_history.log`에 `시장상태=상승장, 리스크=리스크온`, `시장환경 초기화 risk=RISK_ON, allow_swing=True`가 기록됐다.
+  - 다음 액션: 장중 스윙 probe/dry-run 로그에서 `market_regime_pass`와 `actual_order_submitted=false` provenance를 분리 확인한다. 스윙 실주문 전환은 별도 approval artifact 없이는 열지 않는다.
+
+- [x] `[RuntimeEnvIntradayObserve0512] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-05-12`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-11.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-11.json)
   - 판정 기준: selected_families=soft_stop_whipsaw_confirmation, score65_74_recovery_probe가 runtime event provenance에 찍히는지 확인한다.
   - 금지: 장중 관찰 결과로 runtime threshold mutation을 수행하지 않는다.
-  - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
+  - 완료 판정: `warning_sample_pending`.
+  - 완료 근거: `threshold_runtime_env_2026-05-12.env`와 현재 봇 PID `15393` 환경에서 `KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED=true`, `KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true`, `KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE=2026-05-12` 로드를 확인했다. `data/pipeline_events/pipeline_events_2026-05-12.jsonl`은 09:08 KST 기준 5,121건으로 append 중이고, `data/threshold_cycle/threshold_events_2026-05-12.jsonl`은 7건의 sparse event를 생성했다. 다만 selected family `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe` 직접 provenance는 아직 0건이다. rollback/safety breach 문자열도 0건이다.
+  - 완료 다음 액션: 표본 미발생은 runtime 실패가 아니라 `pending_applied_cohort`로 유지한다. 장후 `ThresholdDailyEVReport0512`에서 selected family 적용/미적용 cohort와 rollback guard를 다시 확인한다.
 
-- [ ] `[OpenAIWSIntradaySample0512] OpenAI WS/entry_price 장중 표본 및 fallback/fail-closed 재확인` (`Due: 2026-05-12`, `Slot: INTRADAY`, `TimeWindow: 09:20~09:35`, `Track: RuntimeStability`)
+- [x] `[OpenAIWSIntradaySample0512] OpenAI WS/entry_price 장중 표본 및 fallback/fail-closed 재확인` (`Due: 2026-05-12`, `Slot: INTRADAY`, `TimeWindow: 09:20~09:35`, `Track: RuntimeStability`)
   - Source: [openai_ws_stability_2026-05-11.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-11.md)
   - 판정 기준: `analyze_target` WS latency/fallback과 `entry_price` transport metadata 누락 여부를 별도 표본으로 확인한다.
   - 금지: entry_price 표본 0건 또는 instrumentation gap을 OpenAI WS runtime 효과 0으로 해석하지 않는다.
-  - 다음 액션: 표본 부족이면 postclose provenance 보강 workorder로 분리한다.
+  - 완료 판정: `pass_with_entry_price_sample_pending`.
+  - 완료 근거: 09:08 KST 기준 `pipeline_events_2026-05-12.jsonl`에서 OpenAI 관련 `ai_confirmed` 7건을 확인했다. 7건 모두 `openai_endpoint_name=analyze_target`, `openai_transport_mode=responses_ws`, `openai_ws_used=True`, `openai_ws_http_fallback=False`, `ai_parse_fail=False`였다. roundtrip은 대략 `1014~3117ms`, queue wait는 `0~65ms` 범위다. `entry_price`/`entry_ai_price` 표본은 아직 0건이다.
+  - 완료 다음 액션: `entry_price` 표본 0건은 OpenAI WS 실패가 아니라 해당 hook 미발생/표본 부족으로 분리한다. postclose 또는 다음 장중 표본에서 `openai_endpoint_name=entry_price`, `openai_transport_mode=responses_ws`, fallback/fail-closed provenance를 다시 확인한다.
 
-- [ ] `[SimProbeIntradayCoverage0512] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-05-12`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
+- [x] `[SimProbeIntradayCoverage0512] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-05-12`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
   - Source: [threshold_cycle_ev_2026-05-11.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-11.json)
   - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다.
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
-  - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
+  - 완료 판정: `pass_with_scalp_sim_no_sample_yet`.
+  - 완료 근거: `pipeline_events_2026-05-12.jsonl`에서 simulation provenance가 `SwingIntradayLiveEquivalentProbe0511` 115건, `SwingLiveOrderDryRunSimulation0511` 3건으로 확인됐고, `actual_order_submitted=False`는 108건 확인됐다. `data/runtime/swing_intraday_probe_state.json`은 `simulation_book=swing_intraday_live_equiv_probe`, `owner=SwingIntradayLiveEquivalentProbe0511`, `updated_at=2026-05-12T09:05:48`, active 10개이며 모든 active probe가 `simulated_order=True`, `actual_order_submitted=False`, `broker_order_forbidden=True`다. origin은 `blocked_swing_score_vpw` 4개, `blocked_gatekeeper_reject` 4개, `blocked_swing_gap` 2개다. `scalp_live_simulator_state.json`은 active 0개로, 스캘핑 BUY 확정 sim 표본은 아직 없다.
+  - 추가 점검(10:13 KST): `pipeline_events_2026-05-12.jsonl` 기준 스캘핑 sim event는 0건이고, 스윙 probe는 entry 14건, scale-in 가정체결 13건, sell 가정체결 11건이다. sell 가정체결 11건은 모두 `actual_order_submitted=False`, `broker_order_forbidden=True`이며 승률 36.4%, 평균 수익률 -0.283%, 수수료/세금 전 가상 gross PnL +1,405원이다. `swing_intraday_probe_state.json`은 `updated_at=2026-05-12T10:13:41`, active 10개이며 source date는 2026-05-11 3개, 2026-05-12 7개다.
+  - 완료 다음 액션: sim/probe는 계속 real/sim split으로만 본다. 스윙 probe cap 도달/discard는 source-quality 정보로 장후 리포트에 넘기고, scalp sim 0건은 BUY 확정 hook 미발생으로 분리한다.
 
 ## 장후 체크리스트 (16:30~18:55)
 
@@ -126,6 +149,7 @@
   - Source: [scalping-runtime-blocker-resolution-plan-2026-05-12.md](/home/ubuntu/KORStockScan/docs/scalping-runtime-blocker-resolution-plan-2026-05-12.md), [threshold_cycle_ev_2026-05-11.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-11.json)
   - 판정 기준: sim/real/combined split에서 sim 표본이 EV/source-quality 판단을 빠르게 하는 항목과 broker execution 때문에 real-only 증거가 필요한 항목을 분리한다.
   - 금지: `actual_order_submitted=false` 표본을 실주문 전환 또는 체결품질 승인 근거로 단독 사용하지 않는다.
+  - 장중 선반영: `score65_74_recovery_probe`는 `scalp_ai_buy_all` 확정 BUY sim과 섞지 않고 `scalp_score65_74_probe_counterfactual` missed/probe counterfactual로 분리한다. `wait6579_ev_cohort`는 이 축을 `actual_order_submitted=false`, `broker_order_forbidden=true`, `runtime_effect=counterfactual_report_only`, `calibration_authority=missed_probe_ev_only_not_broker_execution`로 집계하고, `threshold_cycle_ev_report`는 `missed_probe_counterfactual` 섹션으로 별도 노출한다. 장중 재집계는 허용하되 runtime threshold/order mutation이나 봇 restart 없이 report regeneration만 수행한다.
   - 다음 액션: family별로 `sim_accelerates_decision=true/false`, `real_only_guard=true/false`, `approval_required=true/false`를 다음 automation 입력 후보로 남긴다.
 
 - [ ] `[ShadowCanaryCohortReview0512] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-12`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)

@@ -1,86 +1,85 @@
 {
-  "bundle_as_of": "2026-05-10T22:20:18Z",
+  "bundle_as_of": "2026-05-11T22:20:18Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7398.93,
-    "prev_value": 7337.11,
-    "change": 61.82,
-    "change_pct": 0.84,
-    "as_of": "2026-05-08T20:00:00Z",
-    "source": "AP / TheStreet"
+    "value": 7412.84,
+    "prev_value": 7398.93,
+    "change": 13.91,
+    "change_pct": 0.19,
+    "as_of": "2026-05-11T20:00:00Z",
+    "source": "Morningstar / Associated Press"
   },
   "nasdaq": {
-    "name": "NASDAQ",
-    "value": 26247.08,
-    "prev_value": 25806.2,
-    "change": 440.88,
-    "change_pct": 1.71,
-    "as_of": "2026-05-08T20:00:00Z",
-    "source": "AP / TheStreet"
+    "name": "NASDAQ Composite",
+    "value": 26274.13,
+    "prev_value": 26247.08,
+    "change": 27.05,
+    "change_pct": 0.1,
+    "as_of": "2026-05-11T20:00:00Z",
+    "source": "Morningstar / Associated Press"
   },
   "vix": {
     "name": "VIX",
-    "value": 17.19,
-    "prev_value": 17.08,
-    "change": 0.11,
-    "change_pct": 0.64,
-    "as_of": "2026-05-08T20:00:00Z",
-    "source": "StreetStats / CBOE"
+    "value": 18.34,
+    "prev_value": 17.19,
+    "change": 1.15,
+    "change_pct": 6.69,
+    "as_of": "2026-05-11T20:00:00Z",
+    "source": "Investing.com"
   },
   "us10y": {
-    "name": "US 10Y Treasury Yield",
-    "value": 4.38,
-    "prev_value": 4.41,
-    "change": -0.03,
-    "change_pct": -0.68,
-    "as_of": "2026-05-08T20:00:00Z",
-    "source": "YCharts / StreetStats"
+    "name": "US 10-Year Treasury Yield",
+    "value": 4.41,
+    "prev_value": 4.38,
+    "change": 0.03,
+    "change_pct": 0.68,
+    "as_of": "2026-05-11T20:00:00Z",
+    "source": "Seeking Alpha / Post-Gazette"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 101.29,
-    "prev_value": 100.06,
-    "change": 1.23,
-    "change_pct": 1.23,
-    "as_of": "2026-05-08T20:00:00Z",
-    "source": "Trading Economics / AP"
+    "value": 104.21,
+    "prev_value": 101.29,
+    "change": 2.92,
+    "change_pct": 2.88,
+    "as_of": "2026-05-11T20:00:00Z",
+    "source": "Associated Press"
   },
   "headlines": [
     {
-      "title": "US stocks rise to records after a solid jobs report overshadows higher oil prices",
-      "source": "The Business Journal / AP",
-      "published_at": "2026-05-08T14:30:00Z",
-      "url": "https://thebusinessjournal.com"
+      "title": "Oil prices rise as the Iran war drags on, but U.S. stocks inch to more records",
+      "source": "Los Angeles Times / Associated Press",
+      "published_at": "2026-05-11T20:56:00Z",
+      "url": "https://www.latimes.com/business/story/2026-05-11/oil-prices-rise-as-the-iran-war-drags-on-but-stocks-inch-to-more-records"
     },
     {
-      "title": "Kevin Warsh will be the richest Fed chair ever. The Senate is ready to confirm him anyway.",
-      "source": "Morningstar",
-      "published_at": "2026-05-08T12:00:00Z",
-      "url": "https://www.morningstar.com"
+      "title": "Wall Street ends slightly higher as U.S.-Iran resolution talks fizzle",
+      "source": "Seeking Alpha",
+      "published_at": "2026-05-11T20:09:00Z",
+      "url": "https://seekingalpha.com/news/wall-street-ends-slightly-higher-as-us-iran-resolution-talks-fizzle"
     },
     {
-      "title": "Oil prices jump as US-Iran tensions intensify; Brent crude stays beyond $100",
-      "source": "Times of India",
-      "published_at": "2026-05-08T02:04:00Z",
-      "url": "https://timesofindia.indiatimes.com"
+      "title": "A 'race against time.' Hormuz closure could push Brent to $150 a barrel by summer, warns Morgan Stanley.",
+      "source": "MarketWatch / Morningstar",
+      "published_at": "2026-05-11T09:34:00Z",
+      "url": "https://www.morningstar.com/news/marketwatch/20260511419/a-race-against-time-hormuz-closure-could-push-brent-to-150-a-barrel-by-summer-warns-morgan-stanley"
     },
     {
-      "title": "RBC revamps S&P 500 target for the rest of 2026 to 7,900",
-      "source": "TheStreet",
-      "published_at": "2026-05-09T12:00:00Z",
-      "url": "https://www.thestreet.com"
+      "title": "Trump Rejects Iran Proposal 'Totally Unacceptable' as Brent Surges; Warsh Confirmation Vote Today",
+      "source": "Capital Street FX",
+      "published_at": "2026-05-11T12:00:00Z",
+      "url": "https://capitalstreetfx.com/en/trump-rejects-iran-proposal-totally-unacceptable/"
     },
     {
-      "title": "10-Year Treasury Yield Falls to 4.364% This Week",
-      "source": "Morningstar",
-      "published_at": "2026-05-08T16:54:00Z",
-      "url": "https://www.morningstar.com"
+      "title": "Stock Market Today, May 11: Markets Inch Upwards Even As Oil Prices Rise",
+      "source": "The Motley Fool",
+      "published_at": "2026-05-11T16:00:00Z",
+      "url": "https://www.fool.com/investing/2026/05/11/stock-market-today-markets-inch-upwards-even-as-oi/"
     }
   ],
   "notes": [
-    "Market data reflects the Friday, May 8, 2026 market close.",
-    "S&P 500 and Nasdaq set new record highs supported by strong employment data, overshadowing Middle East geopolitical tensions.",
-    "Oil prices remained elevated above $100 per barrel amid ongoing US-Iran clashes and Strait of Hormuz uncertainties.",
-    "The market is preparing for the Senate confirmation of Kevin Warsh as the next Federal Reserve Chairman, succeeding Jerome Powell when his term ends on May 15, 2026."
+    "All market data reflects the closing values for Monday, May 11, 2026.",
+    "Global crude oil prices experienced a strong surge after diplomatic talks to end the US-Iran conflict faltered over the weekend.",
+    "US Treasury yields rose slightly while major equity benchmarks including the S&P 500 and NASDAQ Composite continued their rally to fresh record highs."
   ]
 }

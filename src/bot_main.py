@@ -223,9 +223,12 @@ def generate_daily_report_job(target_date: str | None = None):
         report = build_daily_report(target_date)
         path = save_daily_report(report)
         warnings = report.get("meta", {}).get("warnings", []) or []
+        stats = report.get("stats", {}) or {}
+        risk_text = stats.get("risk_status_text")
+        risk_part = f", 리스크={risk_text}" if risk_text else ""
         print(
             f"📘 [시스템] 일일 리포트 생성 완료: {path} "
-            f"(시장상태={report.get('stats', {}).get('status_text', '-')}, 경고={len(warnings)}건)"
+            f"(시장상태={stats.get('status_text', '-')}{risk_part}, 경고={len(warnings)}건)"
         )
         return report
     except Exception as e:
