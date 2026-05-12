@@ -178,6 +178,37 @@ def _ratio(numerator: int, denominator: int) -> float:
     return round((numerator / denominator) * 100.0, 1) if denominator else 0.0
 
 
+def _count_unique(events: list[PipelineEvent], stage: str) -> int:
+    return len({_attempt_key(event) for event in events if event.stage == stage})
+
+
+def _is_false_like(value: str) -> bool:
+    return _safe_str(value).lower() in {"0", "false", "no", "n"}
+
+
+def _is_true_like(value: str) -> bool:
+    return _safe_str(value).lower() in {"1", "true", "yes", "y"}
+
+
+def _is_non_real_observation(event: PipelineEvent) -> bool:
+    fields = event.fields
+    if _is_false_like(fields.get("actual_order_submitted", "")):
+        return True
+    if _is_true_like(fields.get("broker_order_forbidden", "")):
+        return True
+    if _is_true_like(fields.get("simulated_order", "")):
+        return True
+    if fields.get("simulation_book") or fields.get("simulation_owner"):
+        return True
+    if _is_true_like(fields.get("swing_intraday_probe", "")):
+        return True
+    if fields.get("probe_id") or fields.get("probe_origin_stage"):
+        return True
+    if "sim_" in event.stage or "_probe_" in event.stage or event.stage.startswith("swing_probe_"):
+        return True
+    return False
+
+
 def _count_cache_miss(events: list[PipelineEvent]) -> int:
     return sum(1 for event in events if event.stage == "ai_holding_review" and event.fields.get("ai_cache") == "miss")
 
@@ -257,6 +288,8 @@ def _stage_reason_top(events: list[PipelineEvent]) -> list[dict[str, Any]]:
 
 def _summarize_events(events: list[PipelineEvent], *, start_at: datetime, end_at: datetime) -> dict[str, Any]:
     scoped = [event for event in events if start_at <= event.emitted_at <= end_at]
+    real_scoped = [event for event in scoped if not _is_non_real_observation(event)]
+    non_real_scoped = [event for event in scoped if _is_non_real_observation(event)]
     stage_events = Counter(event.stage for event in scoped)
     stage_unique = {
         stage: len({_attempt_key(event) for event in scoped if event.stage == stage})
@@ -265,6 +298,22 @@ def _summarize_events(events: list[PipelineEvent], *, start_at: datetime, end_at
     exit_signal = int(stage_unique.get("exit_signal", 0) or 0)
     sell_sent = int(stage_unique.get("sell_order_sent", 0) or 0)
     sell_completed = int(stage_unique.get("sell_completed", 0) or 0)
+    real_exit_signal = _count_unique(real_scoped, "exit_signal")
+    real_sell_sent = _count_unique(real_scoped, "sell_order_sent")
+    real_sell_completed = _count_unique(real_scoped, "sell_completed")
+    non_real_exit_signal = _count_unique(non_real_scoped, "exit_signal")
+    non_real_sell_sent = _count_unique(non_real_scoped, "sell_order_sent")
+    non_real_sell_completed = _count_unique(non_real_scoped, "sell_completed")
+    stage_unique.update(
+        {
+            "real_exit_signal": real_exit_signal,
+            "real_sell_order_sent": real_sell_sent,
+            "real_sell_completed": real_sell_completed,
+            "non_real_exit_signal": non_real_exit_signal,
+            "non_real_sell_order_sent": non_real_sell_sent,
+            "non_real_sell_completed": non_real_sell_completed,
+        }
+    )
     flow_defer = int(stage_events.get("holding_flow_override_defer_exit", 0) or 0)
     flow_review = int(stage_events.get("holding_flow_override_review", 0) or 0)
     ai_review = int(stage_events.get("ai_holding_review", 0) or 0)
@@ -285,6 +334,8 @@ def _summarize_events(events: list[PipelineEvent], *, start_at: datetime, end_at
         "ratios": {
             "sell_sent_to_exit_signal_unique_pct": _ratio(sell_sent, exit_signal),
             "sell_completed_to_exit_signal_unique_pct": _ratio(sell_completed, exit_signal),
+            "real_sell_sent_to_exit_signal_unique_pct": _ratio(real_sell_sent, real_exit_signal),
+            "non_real_sell_sent_to_exit_signal_unique_pct": _ratio(non_real_sell_sent, non_real_exit_signal),
             "flow_defer_to_review_event_pct": _ratio(flow_defer, flow_review),
             "ai_cache_miss_pct": _ratio(cache_miss, ai_review),
         },
@@ -293,6 +344,12 @@ def _summarize_events(events: list[PipelineEvent], *, start_at: datetime, end_at
             "exit_signal": exit_signal,
             "sell_order_sent": sell_sent,
             "sell_completed": sell_completed,
+            "real_exit_signal": real_exit_signal,
+            "real_sell_order_sent": real_sell_sent,
+            "real_sell_completed": real_sell_completed,
+            "non_real_exit_signal": non_real_exit_signal,
+            "non_real_sell_order_sent": non_real_sell_sent,
+            "non_real_sell_completed": non_real_sell_completed,
             "active_holding": len(active_keys),
         },
     }
@@ -332,6 +389,10 @@ def _classify(summary: dict[str, Any], baseline: dict[str, Any] | None, observat
 
     exit_signal = int(unique.get("exit_signal", 0) or 0)
     sell_sent = int(unique.get("sell_order_sent", 0) or 0)
+    real_exit_signal = int(unique.get("real_exit_signal", 0) or 0)
+    real_sell_sent = int(unique.get("real_sell_order_sent", 0) or 0)
+    non_real_exit_signal = int(unique.get("non_real_exit_signal", 0) or 0)
+    non_real_sell_sent = int(unique.get("non_real_sell_order_sent", 0) or 0)
     flow_defer = int(stage_events.get("holding_flow_override_defer_exit", 0) or 0)
     force_exit = int(stage_events.get("holding_flow_override_force_exit", 0) or 0)
     exit_confirmed = int(stage_events.get("holding_flow_override_exit_confirmed", 0) or 0)
@@ -354,9 +415,11 @@ def _classify(summary: dict[str, Any], baseline: dict[str, Any] | None, observat
         matches.append("RUNTIME_OPS")
         reasons.append("holding pipeline event stream is stale while active holdings remain")
 
-    if exit_signal >= 1 and sell_sent < exit_signal:
+    if real_exit_signal >= 1 and real_sell_sent < real_exit_signal:
         matches.append("SELL_EXECUTION_DROUGHT")
-        reasons.append("exit_signal is not fully followed by sell_order_sent")
+        reasons.append("real exit_signal is not fully followed by real sell_order_sent")
+    elif non_real_exit_signal >= 1 and non_real_sell_sent < non_real_exit_signal:
+        reasons.append("non-real exit_signal has no broker sell_order_sent; report-only provenance split")
 
     if flow_defer >= 3 or force_exit >= 1 or exit_confirmed >= 2:
         matches.append("HOLD_DEFER_DANGER")
@@ -404,6 +467,12 @@ def _classify(summary: dict[str, Any], baseline: dict[str, Any] | None, observat
         "baseline_sell_sent_to_exit_signal_unique_pct": (
             (baseline or {}).get("ratios", {}).get("sell_sent_to_exit_signal_unique_pct")
         ),
+        "sell_execution_scope": {
+            "real_exit_signal": real_exit_signal,
+            "real_sell_order_sent": real_sell_sent,
+            "non_real_exit_signal": non_real_exit_signal,
+            "non_real_sell_order_sent": non_real_sell_sent,
+        },
         "live_runtime_effect": False,
         "forbidden_automations": FORBIDDEN_AUTOMATIONS,
     }
@@ -424,6 +493,66 @@ def _recommend_actions(classification: dict[str, Any]) -> list[str]:
     if primary == "RUNTIME_OPS":
         return ["Check holding pipeline event freshness; restart only after explicit approval."]
     return ["Continue monitoring; no dynamic action required."]
+
+
+def _followup_route(classification: dict[str, Any]) -> dict[str, Any]:
+    primary = classification.get("primary")
+    scope = classification.get("sell_execution_scope") or {}
+    if primary == "RUNTIME_OPS":
+        return {
+            "route": "holding_runtime_ops_playbook",
+            "owner": "operator_review",
+            "operator_action_required": True,
+            "runtime_effect": "report_only_no_mutation",
+            "next_artifact": "incident_playbook_review",
+        }
+    if primary == "SELL_EXECUTION_DROUGHT":
+        return {
+            "route": "sell_receipt_order_path_check",
+            "owner": "postclose_holding_exit_attribution",
+            "operator_action_required": bool(scope.get("real_exit_signal", 0)),
+            "runtime_effect": "report_only_no_mutation",
+            "next_artifact": "trade_lifecycle_attribution",
+        }
+    if primary == "HOLD_DEFER_DANGER":
+        return {
+            "route": "holding_flow_defer_cost_review",
+            "owner": "postclose_threshold_cycle",
+            "operator_action_required": False,
+            "runtime_effect": "report_only_no_mutation",
+            "next_artifact": "holding_exit_observation",
+        }
+    if primary == "AI_HOLDING_OPS":
+        return {
+            "route": "ai_holding_provenance_review",
+            "owner": "runtime_stability_review",
+            "operator_action_required": False,
+            "runtime_effect": "report_only_no_mutation",
+            "next_artifact": "holding_exit_sentinel",
+        }
+    if primary == "SOFT_STOP_WHIPSAW":
+        return {
+            "route": "soft_stop_whipsaw_calibration_review",
+            "owner": "postclose_threshold_cycle",
+            "operator_action_required": False,
+            "runtime_effect": "report_only_no_mutation",
+            "next_artifact": "threshold_cycle_calibration_source_bundle",
+        }
+    if primary == "TRAILING_EARLY_EXIT":
+        return {
+            "route": "trailing_continuation_report_only_review",
+            "owner": "postclose_threshold_cycle",
+            "operator_action_required": False,
+            "runtime_effect": "report_only_no_mutation",
+            "next_artifact": "threshold_cycle_calibration_source_bundle",
+        }
+    return {
+        "route": "normal_no_action",
+        "owner": "none",
+        "operator_action_required": False,
+        "runtime_effect": "report_only_no_mutation",
+        "next_artifact": "none",
+    }
 
 
 def build_holding_exit_sentinel_report(
@@ -458,9 +587,10 @@ def build_holding_exit_sentinel_report(
     observation = load_observation_report(target_date)
     obs_metrics = _observation_metrics(observation)
     classification = _classify(session_summary, baseline_summary, obs_metrics, as_of=as_of)
+    followup = _followup_route(classification)
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "report_type": "holding_exit_sentinel",
         "target_date": target_date,
         "as_of": as_of.isoformat(timespec="seconds"),
@@ -475,6 +605,7 @@ def build_holding_exit_sentinel_report(
         "current": {"session": session_summary, "windows": windows},
         "observation": {"path": str(_observation_path(target_date)), "metrics": obs_metrics},
         "classification": classification,
+        "followup": followup,
         "recommended_actions": _recommend_actions(classification),
     }
 
@@ -500,6 +631,10 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- secondary: `{', '.join(classification['secondary']) if classification['secondary'] else '-'}`",
         f"- report_only: `{str(report['policy']['report_only']).lower()}`",
         f"- live_runtime_effect: `{str(report['policy']['live_runtime_effect']).lower()}`",
+        f"- operator_action_required: `{str(report['followup']['operator_action_required']).lower()}`",
+        f"- followup_route: `{report['followup']['route']}`",
+        f"- followup_owner: `{report['followup']['owner']}`",
+        f"- runtime_effect: `{report['followup']['runtime_effect']}`",
         "",
         "## 근거",
         "",
@@ -507,7 +642,13 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- exit_signal unique: `{unique.get('exit_signal', 0)}`",
         f"- sell_order_sent unique: `{unique.get('sell_order_sent', 0)}`",
         f"- sell_completed unique: `{unique.get('sell_completed', 0)}`",
+        f"- real exit/sell_sent/sell_completed: `{unique.get('real_exit_signal', 0)}` / "
+        f"`{unique.get('real_sell_order_sent', 0)}` / `{unique.get('real_sell_completed', 0)}`",
+        f"- non-real exit/sell_sent/sell_completed: `{unique.get('non_real_exit_signal', 0)}` / "
+        f"`{unique.get('non_real_sell_order_sent', 0)}` / `{unique.get('non_real_sell_completed', 0)}`",
         f"- sell_sent/exit_signal: `{ratios.get('sell_sent_to_exit_signal_unique_pct', 0.0)}%`",
+        f"- real sell_sent/exit_signal: `{ratios.get('real_sell_sent_to_exit_signal_unique_pct', 0.0)}%`",
+        f"- non-real sell_sent/exit_signal: `{ratios.get('non_real_sell_sent_to_exit_signal_unique_pct', 0.0)}%`",
         f"- flow defer events: `{session['stage_events'].get('holding_flow_override_defer_exit', 0)}`",
         f"- AI holding cache MISS: `{ratios.get('ai_cache_miss_pct', 0.0)}%`",
         f"- soft_stop rebound above sell 10m: `{obs.get('soft_stop_rebound_above_sell_10m_rate', 0.0)}%`",

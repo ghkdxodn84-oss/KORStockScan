@@ -197,8 +197,9 @@
 | `08:00~09:00` | operator/guard | PREOPEN 안정 구간 | 없음 | checklist 상단 `오늘 목적/강제 규칙`과 전일 EV report를 읽고 불일치가 있으면 `warning`으로 기록 | full monitor snapshot build는 wrapper가 차단한다. 새 workorder 없는 live toggle 금지 |
 | `08:59` | cron | `deploy/run_ipo_listing_day_autorun.sh` | `data/ipo_listing_day/status/ipo_listing_day_YYYY-MM-DD.status.json`, `logs/ipo_listing_day/ipo_listing_day_YYYY-MM-DD.log` | 당일 YAML 존재, dry-select target, STOP 파일, lock, runner exit code 확인 | YAML 없을 때 실행 금지. threshold-cycle/daily EV 자동 입력 금지 |
 | `09:00~09:05` | runtime | 장 시작 후 실전 이벤트 수집 시작 | `data/pipeline_events/pipeline_events_YYYY-MM-DD.jsonl`, `data/threshold_cycle/threshold_events_YYYY-MM-DD.jsonl` | 봇 연결, 계좌/잔고/주문 가능 상태 확인 | threshold 변경, provider 라우팅 변경 금지 |
-| `09:05~15:20` | cron | `deploy/run_buy_funnel_sentinel_intraday.sh` 5분 주기 | `data/report/buy_funnel_sentinel/buy_funnel_sentinel_YYYY-MM-DD.md`, `logs/run_buy_funnel_sentinel_cron.log` | `UPSTREAM_AI_THRESHOLD`, `LATENCY_DROUGHT`, `PRICE_GUARD_DROUGHT`, `RUNTIME_OPS` 추세 확인 | Sentinel 결과로 score/spread/fallback/restart 자동 변경 금지 |
-| `09:05~15:30` | cron | `deploy/run_holding_exit_sentinel_intraday.sh` 5분 주기 | `data/report/holding_exit_sentinel/holding_exit_sentinel_YYYY-MM-DD.md`, `logs/run_holding_exit_sentinel_cron.log` | `HOLD_DEFER_DANGER`, `SOFT_STOP_WHIPSAW`, `AI_HOLDING_OPS` 추세 확인 | Sentinel 결과로 자동 매도, threshold mutation, bot restart 금지 |
+| `09:05~15:20` | cron | `deploy/run_buy_funnel_sentinel_intraday.sh` 5분 주기 | `data/report/buy_funnel_sentinel/buy_funnel_sentinel_YYYY-MM-DD.{json,md}`, `logs/run_buy_funnel_sentinel_cron.log` | `UPSTREAM_AI_THRESHOLD`, `LATENCY_DROUGHT`, `PRICE_GUARD_DROUGHT`, `RUNTIME_OPS` 추세와 `followup.route`, `operator_action_required`, `runtime_effect=report_only_no_mutation` 확인 | Sentinel 결과로 score/spread/fallback/restart 자동 변경 금지 |
+| `09:05~15:30` | cron | `deploy/run_holding_exit_sentinel_intraday.sh` 5분 주기 | `data/report/holding_exit_sentinel/holding_exit_sentinel_YYYY-MM-DD.{json,md}`, `logs/run_holding_exit_sentinel_cron.log` | `HOLD_DEFER_DANGER`, `SOFT_STOP_WHIPSAW`, `AI_HOLDING_OPS`, `SELL_EXECUTION_DROUGHT` 추세와 real/non-real exit split, `followup.route`, `operator_action_required`, `runtime_effect=report_only_no_mutation` 확인 | Sentinel 결과로 자동 매도, threshold mutation, bot restart 금지 |
+| `09:05~15:30` | cron | `deploy/run_panic_sell_defense_intraday.sh` 5분 주기 | `data/report/panic_sell_defense/panic_sell_defense_YYYY-MM-DD.{json,md}`, `logs/run_panic_sell_defense_cron.log` | `panic_state`, stop-loss cluster, active sim/probe 회복률, post-sell rebound, `canary_candidates`, `runtime_effect=report_only_no_mutation` 확인 | panic 결과로 score/stop threshold 변경, 자동매도, bot restart, 스윙 실주문 전환 금지 |
 | `09:30~11:00` | cron | `src.engine.buy_pause_guard evaluate` 5분 주기 | `logs/buy_pause_guard.log` | pause guard 반복 발동 여부와 `[DONE] buy_pause_guard target_date=YYYY-MM-DD` marker 확인 | pause guard를 진입 threshold 튜닝 근거로 단독 사용 금지 |
 | `09:35~12:00` | cron | monitor snapshot incremental/full | `data/report/monitor_snapshots/*_YYYY-MM-DD.json`, `logs/run_monitor_snapshot_cron.log`, `data/runtime/monitor_snapshot_completion_*.json` | snapshot failure, async timeout, manifest status, completion artifact 확인. 완료 Telegram 발송은 기본 제거하고 로그/산출물 기준으로 판정한다 | 장전 full build 차단을 우회하지 않는다 |
 | `12:05` | cron | `deploy/run_threshold_cycle_calibration.sh` with `THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER=openai` | `data/report/threshold_cycle_calibration/threshold_cycle_calibration_YYYY-MM-DD_intraday.json`, `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_intraday.{json,md}`, `logs/threshold_cycle_calibration_intraday_cron.log` | `[START]/[DONE]/[FAIL] threshold-cycle calibration target_date=YYYY-MM-DD phase=intraday` marker와 `calibration_state`, `safety_revert_required`, `ai_status`, `guard_reject_reason` 확인 | 장중 calibration 결과를 당일 runtime에 적용 금지 |
@@ -376,8 +377,9 @@ tmux ls
 3. `pipeline_events_YYYY-MM-DD.jsonl` append가 멈추지 않았는지 확인한다. `threshold_events_YYYY-MM-DD.jsonl`는 threshold-family 대상 stage만 남는 sparse compact stream이므로, stale은 fatal runtime 중단이 아니라 source coverage warning으로 분류한다.
 4. 스윙 dry-run은 실전 판단 흐름 관찰용이다. `swing_sim_*`, `swing_probe_*`, `blocked_swing_score_vpw`, `swing_entry_micro_context_observed`, `swing_scale_in_micro_context_observed`, `swing_sim_scale_in_order_assumed_filled`, `swing_probe_scale_in_order_assumed_filled`, `holding_flow_ofi_smoothing_applied`가 보이면 주문 제출 여부와 별도로 provenance만 본다. `swing_probe_*`는 `data/runtime/swing_intraday_probe_state.json`에서 재시작 복원되며, open cap/일일 cap 초과 시 `swing_probe_discarded`로 닫힌다.
 5. 스캘핑 live simulator는 실전 주문이 아니라 BUY 신호 전체 관측용 `signal_inclusive_best_ask_v1` 가상 체결이다. quote touch/timeout은 진입 허들이 아니라 `would_limit_fill`, `fill_source`, `limit_fill_price` 진단 필드로만 본다. 장중에는 `scalp_sim_*` stage와 Kiwoom WS 유지 여부만 확인하고, sim 손익만으로 당일 threshold를 바꾸지 않는다.
-6. `RUNTIME_OPS`, snapshot failure, model call timeout, 주문 receipt/provenance 손상이 있으면 전략 threshold 문제가 아니라 운영 장애로 분류한다.
-7. safety breach가 아니라 목표 미달이면 rollback이 아니라 postclose calibration 입력으로 넘긴다.
+6. 패닉셀 급변 구간은 `panic_sell_defense_report`로 `panic_state`, stop-loss cluster, active sim/probe 회복률, post-sell rebound를 분리 확인한다. 이 리포트는 `report_only_no_mutation`이며 score/stop threshold 변경, 자동매도, 봇 재기동, 스윙 실주문 전환 권한이 없다.
+7. `RUNTIME_OPS`, snapshot failure, model call timeout, 주문 receipt/provenance 손상이 있으면 전략 threshold 문제가 아니라 운영 장애로 분류한다.
+8. safety breach가 아니라 목표 미달이면 rollback이 아니라 postclose calibration 입력으로 넘긴다.
 
 ### IntradayAutomationHealthCheck20260512 운영 확인 기록
 
@@ -392,11 +394,14 @@ tmux ls
 ```bash
 tail -n 80 logs/run_buy_funnel_sentinel_cron.log
 tail -n 80 logs/run_holding_exit_sentinel_cron.log
+tail -n 80 logs/run_panic_sell_defense_cron.log
 tail -n 80 logs/threshold_cycle_calibration_intraday_cron.log
 grep -n "threshold-cycle calibration target_date=$(TZ=Asia/Seoul date +%F)" logs/threshold_cycle_calibration_intraday_cron.log || true
 ls -l data/pipeline_events/pipeline_events_$(TZ=Asia/Seoul date +%F).jsonl
 ls -l data/threshold_cycle/threshold_events_$(TZ=Asia/Seoul date +%F).jsonl
 ls -l data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_$(TZ=Asia/Seoul date +%F)_intraday.md
+PYTHONPATH=. .venv/bin/python -m src.engine.panic_sell_defense_report --date $(TZ=Asia/Seoul date +%F) --print-json
+ls -l data/report/panic_sell_defense/panic_sell_defense_$(TZ=Asia/Seoul date +%F).json
 ```
 
 ## 장후 확인 절차

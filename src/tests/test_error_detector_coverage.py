@@ -23,6 +23,8 @@ def test_required_detector_coverage_registry_is_complete():
 def test_new_operational_feature_must_declare_detector_coverage():
     assert "error_detection_full" in REQUIRED_CRON_JOB_IDS
     assert "system_metric_sampler" in REQUIRED_CRON_JOB_IDS
+    assert "panic_sell_defense" in REQUIRED_CRON_JOB_IDS
+    assert "panic_sell_defense_report" in REQUIRED_ARTIFACT_IDS
     assert "swing_lifecycle_audit_report" in REQUIRED_ARTIFACT_IDS
     assert "swing_improvement_automation_report" in REQUIRED_ARTIFACT_IDS
     assert "swing_live_dry_run_status" in REQUIRED_ARTIFACT_IDS

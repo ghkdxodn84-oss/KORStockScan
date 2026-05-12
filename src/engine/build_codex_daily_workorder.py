@@ -662,14 +662,16 @@ def build_runbook_operational_checks(*, target_date: str | None, slots: list[str
                 artifact_checks=(
                     "logs/run_buy_funnel_sentinel_cron.log",
                     "logs/run_holding_exit_sentinel_cron.log",
+                    "logs/run_panic_sell_defense_cron.log",
                     "logs/threshold_cycle_calibration_intraday_cron.log",
                     f"data/pipeline_events/pipeline_events_{date_text}.jsonl",
                     f"data/threshold_cycle/threshold_events_{date_text}.jsonl",
+                    f"data/report/panic_sell_defense/panic_sell_defense_{date_text}.md",
                     f"data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_{date_text}_intraday.md",
                     f"data/report/error_detection/error_detection_{date_text}.json",
                 ),
                 decision_rule=(
-                    "pass|warning|fail|not_yet_due 중 하나로 판정. Sentinel RUNTIME_OPS, "
+                    "pass|warning|fail|not_yet_due 중 하나로 판정. Sentinel RUNTIME_OPS, panic_state, "
                     "pipeline/threshold event append, intraday calibration 생성 여부, AI correction ai_status, "
                     "스윙 dry-run provenance, runtime_change=false 유지 확인. "
                     "SystemErrorDetector report의 summary_severity 및 fail detector 확인. "

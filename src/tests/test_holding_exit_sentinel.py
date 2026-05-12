@@ -62,6 +62,9 @@ def test_sell_execution_drought_when_exit_signal_not_sent(monkeypatch, tmp_path)
     assert report["classification"]["primary"] == "SELL_EXECUTION_DROUGHT"
     assert report["current"]["session"]["stage_unique"]["exit_signal"] == 2
     assert report["current"]["session"]["stage_unique"]["sell_order_sent"] == 1
+    assert report["classification"]["sell_execution_scope"]["real_exit_signal"] == 2
+    assert report["followup"]["route"] == "sell_receipt_order_path_check"
+    assert report["followup"]["operator_action_required"] is True
 
 
 def test_hold_defer_danger_is_classified(monkeypatch, tmp_path):
@@ -164,3 +167,52 @@ def test_policy_excludes_telegram_alert(monkeypatch, tmp_path):
     )
 
     assert report["policy"]["allowed_automations"] == ["json_report", "markdown_report", "action_recommendation"]
+
+
+def test_non_real_exit_signal_is_split_from_sell_execution_drought(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event(
+                "2026-05-06",
+                "10:00:00",
+                "exit_signal",
+                record_id=1,
+                fields={
+                    "simulation_book": "swing_intraday_live_equiv_probe",
+                    "actual_order_submitted": "False",
+                    "broker_order_forbidden": "True",
+                },
+            ),
+            _event(
+                "2026-05-06",
+                "10:01:00",
+                "exit_signal",
+                record_id=2,
+                fields={
+                    "simulation_book": "scalp_ai_buy_all",
+                    "actual_order_submitted": "False",
+                    "broker_order_forbidden": "True",
+                },
+            ),
+        ],
+    )
+
+    report = sentinel.build_holding_exit_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:05:00"),
+    )
+
+    assert report["schema_version"] == 2
+    assert report["classification"]["primary"] == "NORMAL"
+    assert "SELL_EXECUTION_DROUGHT" not in report["classification"]["matches"]
+    assert report["classification"]["sell_execution_scope"] == {
+        "real_exit_signal": 0,
+        "real_sell_order_sent": 0,
+        "non_real_exit_signal": 2,
+        "non_real_sell_order_sent": 0,
+    }
+    assert report["current"]["session"]["stage_unique"]["non_real_exit_signal"] == 2
+    assert report["current"]["session"]["ratios"]["non_real_sell_sent_to_exit_signal_unique_pct"] == 0.0

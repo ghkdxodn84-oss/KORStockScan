@@ -694,6 +694,7 @@ def _calibration_report_source_paths(target_date: str) -> dict[str, Path]:
         "post_sell_feedback": REPORT_DIR / "monitor_snapshots" / f"post_sell_feedback_{target_date}.json",
         "trade_review": REPORT_DIR / "monitor_snapshots" / f"trade_review_{target_date}.json",
         "holding_exit_sentinel": REPORT_DIR / "holding_exit_sentinel" / f"holding_exit_sentinel_{target_date}.json",
+        "panic_sell_defense": REPORT_DIR / "panic_sell_defense" / f"panic_sell_defense_{target_date}.json",
         "holding_exit_decision_matrix": (
             REPORT_DIR / "holding_exit_decision_matrix" / f"holding_exit_decision_matrix_{target_date}.json"
         ),
@@ -714,6 +715,7 @@ def _holding_exit_report_source_paths(target_date: str) -> dict[str, Path]:
             "post_sell_feedback",
             "trade_review",
             "holding_exit_sentinel",
+            "panic_sell_defense",
             "holding_exit_decision_matrix",
             "statistical_action_weight",
         }
@@ -744,6 +746,7 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     post_sell_feedback = _read_json_dict(source_paths["post_sell_feedback"])
     trade_review = _read_json_dict(source_paths["trade_review"])
     holding_exit_sentinel = _read_json_dict(source_paths["holding_exit_sentinel"])
+    panic_sell_defense = _read_json_dict(source_paths["panic_sell_defense"])
     decision_matrix = _read_json_dict(source_paths["holding_exit_decision_matrix"])
     stat_action = _read_json_dict(source_paths["statistical_action_weight"])
 
@@ -784,6 +787,26 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     stage_events = session.get("stage_events") if isinstance(session.get("stage_events"), dict) else {}
     classification = holding_exit_sentinel.get("classification") if isinstance(holding_exit_sentinel, dict) else {}
     classification = classification if isinstance(classification, dict) else {}
+    panic_metrics = panic_sell_defense.get("panic_metrics") if isinstance(panic_sell_defense, dict) else {}
+    panic_metrics = panic_metrics if isinstance(panic_metrics, dict) else {}
+    recovery_metrics = panic_sell_defense.get("recovery_metrics") if isinstance(panic_sell_defense, dict) else {}
+    recovery_metrics = recovery_metrics if isinstance(recovery_metrics, dict) else {}
+    active_recovery = (
+        recovery_metrics.get("active_sim_probe") if isinstance(recovery_metrics.get("active_sim_probe"), dict) else {}
+    )
+    post_sell_recovery = (
+        recovery_metrics.get("post_sell_feedback") if isinstance(recovery_metrics.get("post_sell_feedback"), dict) else {}
+    )
+    panic_candidates = (
+        panic_sell_defense.get("canary_candidates")
+        if isinstance(panic_sell_defense.get("canary_candidates"), list)
+        else []
+    )
+    panic_candidate_status = {
+        str(item.get("family")): item.get("status")
+        for item in panic_candidates
+        if isinstance(item, dict) and item.get("family")
+    }
     matrix_entries = decision_matrix.get("entries") if isinstance(decision_matrix.get("entries"), list) else []
     non_clear_matrix_entries = [
         entry
@@ -991,6 +1014,46 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             "trade_review_completed_valid": _safe_int((trade_review.get("metrics") or {}).get("completed_valid"), 0)
             if isinstance(trade_review.get("metrics"), dict)
             else 0,
+        },
+        "panic_sell_defense": {
+            "panic_state": panic_sell_defense.get("panic_state") if isinstance(panic_sell_defense, dict) else None,
+            "runtime_effect": (
+                (panic_sell_defense.get("policy") or {}).get("runtime_effect")
+                if isinstance(panic_sell_defense.get("policy"), dict)
+                else None
+            ),
+            "real_exit_count": _safe_int(panic_metrics.get("real_exit_count"), 0) or 0,
+            "non_real_exit_count": _safe_int(panic_metrics.get("non_real_exit_count"), 0) or 0,
+            "stop_loss_exit_count": _safe_int(panic_metrics.get("stop_loss_exit_count"), 0) or 0,
+            "max_rolling_30m_stop_loss_exit_count": _safe_int(
+                panic_metrics.get("max_rolling_30m_stop_loss_exit_count"), 0
+            )
+            or 0,
+            "stop_loss_exit_ratio_pct": _safe_float(panic_metrics.get("stop_loss_exit_ratio_pct"), None),
+            "avg_exit_profit_rate_pct": _safe_float(panic_metrics.get("avg_exit_profit_rate_pct"), None),
+            "confirmation_eligible_exit_count": _safe_int(
+                panic_metrics.get("confirmation_eligible_exit_count"), 0
+            )
+            or 0,
+            "never_delay_exit_count": _safe_int(panic_metrics.get("never_delay_exit_count"), 0) or 0,
+            "active_sim_probe_positions": _safe_int(active_recovery.get("active_positions"), 0) or 0,
+            "active_sim_probe_avg_unrealized_profit_rate_pct": _safe_float(
+                active_recovery.get("avg_unrealized_profit_rate_pct"), None
+            ),
+            "active_sim_probe_win_rate_pct": _safe_float(active_recovery.get("win_rate_pct"), None),
+            "active_sim_probe_provenance_passed": bool(
+                ((active_recovery.get("provenance_check") or {}).get("passed"))
+                if isinstance(active_recovery.get("provenance_check"), dict)
+                else False
+            ),
+            "post_sell_rebound_above_sell_10_20m_pct": _safe_float(
+                post_sell_recovery.get("rebound_above_sell_10_20m_pct"), None
+            ),
+            "post_sell_rebound_above_buy_10_20m_pct": _safe_float(
+                post_sell_recovery.get("rebound_above_buy_10_20m_pct"), None
+            ),
+            "candidate_status": panic_candidate_status,
+            "allowed_runtime_apply": False,
         },
         "decision_support": {
             "matrix_version": decision_matrix.get("matrix_version"),

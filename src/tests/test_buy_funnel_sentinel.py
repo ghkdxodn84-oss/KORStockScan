@@ -164,3 +164,32 @@ def test_policy_excludes_telegram_alert(monkeypatch, tmp_path):
     )
 
     assert report["policy"]["allowed_automations"] == ["json_report", "markdown_report", "action_recommendation"]
+
+
+def test_followup_route_is_report_only_for_upstream_threshold(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    rows = []
+    for idx in range(10):
+        rows.append(_event("2026-05-06", f"10:{idx:02d}:00", "ai_confirmed", record_id=idx))
+    for idx in range(10, 20):
+        rows.append(
+            _event(
+                "2026-05-06",
+                f"10:{idx - 10:02d}:10",
+                "blocked_ai_score",
+                record_id=idx,
+                fields={"score": "68"},
+            )
+        )
+    _write_events(tmp_path, "2026-05-06", rows)
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:10:00"),
+    )
+
+    assert report["schema_version"] == 2
+    assert report["classification"]["primary"] == "UPSTREAM_AI_THRESHOLD"
+    assert report["followup"]["route"] == "score65_74_counterfactual_review"
+    assert report["followup"]["operator_action_required"] is False
+    assert report["followup"]["runtime_effect"] == "report_only_no_mutation"

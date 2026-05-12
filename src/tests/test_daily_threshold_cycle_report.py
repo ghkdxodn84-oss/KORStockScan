@@ -322,6 +322,60 @@ def test_threshold_cycle_calibration_uses_holding_exit_report_sources():
     assert candidates["holding_flow_ofi_smoothing"]["source_metrics"]["sentinel_primary"] == "HOLD_DEFER_DANGER"
 
 
+def test_calibration_source_bundle_includes_panic_sell_defense(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "REPORT_DIR", tmp_path / "report")
+    panic_path = tmp_path / "report" / "panic_sell_defense" / "panic_sell_defense_2026-05-12.json"
+    panic_path.parent.mkdir(parents=True, exist_ok=True)
+    panic_path.write_text(
+        json.dumps(
+            {
+                "report_type": "panic_sell_defense",
+                "panic_state": "RECOVERY_WATCH",
+                "policy": {"runtime_effect": "report_only_no_mutation"},
+                "panic_metrics": {
+                    "real_exit_count": 28,
+                    "non_real_exit_count": 28,
+                    "stop_loss_exit_count": 22,
+                    "max_rolling_30m_stop_loss_exit_count": 17,
+                    "stop_loss_exit_ratio_pct": 78.6,
+                    "avg_exit_profit_rate_pct": -1.3621,
+                    "confirmation_eligible_exit_count": 6,
+                    "never_delay_exit_count": 0,
+                },
+                "recovery_metrics": {
+                    "active_sim_probe": {
+                        "active_positions": 8,
+                        "avg_unrealized_profit_rate_pct": 0.7995,
+                        "win_rate_pct": 62.5,
+                        "provenance_check": {"passed": True},
+                    },
+                    "post_sell_feedback": {
+                        "rebound_above_sell_10_20m_pct": 0.0,
+                        "rebound_above_buy_10_20m_pct": 0.0,
+                    },
+                },
+                "canary_candidates": [
+                    {"family": "panic_entry_freeze_guard", "status": "report_only_candidate"},
+                    {"family": "panic_rebound_probe", "status": "hold_until_recovery_confirmed"},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = report_mod._summarize_calibration_report_sources("2026-05-12")
+    metrics = bundle["source_metrics"]["panic_sell_defense"]
+
+    assert bundle["sources"]["panic_sell_defense"]["exists"] is True
+    assert metrics["panic_state"] == "RECOVERY_WATCH"
+    assert metrics["runtime_effect"] == "report_only_no_mutation"
+    assert metrics["max_rolling_30m_stop_loss_exit_count"] == 17
+    assert metrics["active_sim_probe_provenance_passed"] is True
+    assert metrics["candidate_status"]["panic_entry_freeze_guard"] == "report_only_candidate"
+    assert metrics["allowed_runtime_apply"] is False
+
+
 def test_soft_stop_calibration_holds_on_single_post_sell_source_sample():
     report_sources = {
         "schema_version": 1,

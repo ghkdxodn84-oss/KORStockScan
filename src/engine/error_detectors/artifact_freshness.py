@@ -97,6 +97,15 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "window_end": (15, 30),
     },
     {
+        "id": "panic_sell_defense_report",
+        "path_template": "data/report/panic_sell_defense/panic_sell_defense_{date}.md",
+        "max_staleness_sec": 600,
+        "critical": False,
+        "trading_day_only": True,
+        "window_start": (9, 5),
+        "window_end": (15, 30),
+    },
+    {
         "id": "threshold_postclose_report",
         "path_template": "data/report/threshold_cycle_ev/threshold_cycle_ev_{date}.json",
         "max_staleness_sec": 1800,

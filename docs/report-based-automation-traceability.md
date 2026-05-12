@@ -32,6 +32,7 @@
 | `data/report/holding_exit_decision_matrix/holding_exit_decision_matrix_YYYY-MM-DD.{json,md}` | `daily_threshold_cycle_report` | ADM advisory canary/live-readiness, threshold-cycle source bundle | `R1_daily_report` | `AIDecisionMatrix0506`, `EfficientTradeoffCalibration0508` | matrix_version, hard_veto, prompt_hint, non-no_clear_edge bucket count |
 | `data/report/buy_funnel_sentinel/buy_funnel_sentinel_YYYY-MM-DD.{json,md}` | `buy_funnel_sentinel` | operator intraday review, threshold/anomaly routing | `R1_daily_report` | `BuyFunnelSentinel0506-Intraday`, `SentinelThresholdFeedback0507-Intraday`, `SentinelTelegramRemoval0508` | classification, baseline comparison, forbidden auto mutation, no Telegram alert |
 | `data/report/holding_exit_sentinel/holding_exit_sentinel_YYYY-MM-DD.{json,md}` | `holding_exit_sentinel` | operator intraday review, holding/exit anomaly routing | `R1_daily_report` | `HoldingExitSentinel0506-Intraday`, `SentinelThresholdFeedback0507-Intraday`, `SentinelTelegramRemoval0508` | classification, holding/exit conversion, forbidden auto mutation, no Telegram alert |
+| `data/report/panic_sell_defense/panic_sell_defense_YYYY-MM-DD.{json,md}` | `panic_sell_defense_report` | operator intraday/postclose review, threshold-cycle source bundle candidate | `R1_daily_report` | `PanicSellDefenseReportOnly0512` | `panic_state`, stop-loss cluster, real/non-real split, active sim/probe provenance, post-sell rebound, forbidden runtime mutation |
 | `tmp/monitor_snapshot_completion_YYYY-MM-DD_PROFILE.json` | `run_monitor_snapshot_safe.sh` | cron/admin completion check, web async refresh status | `R0_collect` | `MonitorSnapshotAsyncCompletion0507` | async worker pid, result file, status, skip/failure reason, log path |
 | `data/report/tuning_monitoring/status/tuning_monitoring_postclose_YYYY-MM-DD.json` | `run_tuning_monitoring_postclose.sh` | postclose monitoring chain health check | `R0_collect` | `TuningMonitoringPostcloseFallback0507` | lock/retry status, per-step exit code, failed step, command provenance |
 | `data/ipo_listing_day/status/ipo_listing_day_YYYY-MM-DD.status.json` | `run_ipo_listing_day_autorun.sh` | operator IPO run audit. YAML 존재 시만 별도 real-order runner 실행 | IPO_YAML_GATED_REAL_ORDER | `IpoListingDayYamlGatedAutorun0510` | missing YAML skip, STOP skip, dry-select result, lock/status/log path. threshold-cycle/daily EV consumer 금지 |
@@ -57,6 +58,15 @@
 | `NORMAL` | no-action | 없음 | 없음 |
 
 Sentinel routing은 [2026-05-07 checklist](./2026-05-07-stage2-todo-checklist.md) `SentinelThresholdFeedback0507-Intraday`에서 표준화했다. `2026-05-08`부터 Sentinel Telegram 알림과 날짜별 notify state는 삭제됐고, report JSON/Markdown 생성과 classification 갱신만 매 실행 유지한다.
+
+### 3.1 Panic Sell Defense Routing Standard
+
+| panic_state | 기본 라우팅 | threshold-cycle 연결 조건 | 금지된 자동변경 |
+| --- | --- | --- | --- |
+| `NORMAL` | no-action | 없음 | 없음 |
+| `PANIC_SELL` | 신규 live 진입 완화 금지 후보, stop-loss cluster attribution | 장후 post-sell outcome과 active sim/probe가 닫힌 뒤 `panic_entry_freeze_guard`/`panic_stop_confirmation` 후보로만 검토 | score threshold 완화, stop-loss 완화, 자동매도, bot restart |
+| `RECOVERY_WATCH` | 회복 evidence 관찰, missed upside/방어효과 분리 | active sim/probe 평균 미실현 수익률 또는 post-sell rebound가 유지되고 provenance pass일 때 report-only 후보 유지 | live threshold mutation, 스윙 실주문 전환 |
+| `RECOVERY_CONFIRMED` | `panic_rebound_probe` 후보 검토 | sim/probe only, `actual_order_submitted=false`, `broker_order_forbidden=true`, 장후 attribution과 다음 장전 bounded guard 필요 | broker order 제출, approval artifact 없는 swing real canary |
 
 ## 4. auto bounded calibration gate
 

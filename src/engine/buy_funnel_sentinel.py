@@ -430,6 +430,49 @@ def _recommend_actions(classification: dict[str, Any]) -> list[str]:
     return ["Continue monitoring; no dynamic action required."]
 
 
+def _followup_route(classification: dict[str, Any]) -> dict[str, Any]:
+    primary = classification.get("primary")
+    if primary == "RUNTIME_OPS":
+        return {
+            "route": "runtime_ops_playbook",
+            "owner": "operator_review",
+            "operator_action_required": True,
+            "runtime_effect": "report_only_no_mutation",
+            "next_artifact": "incident_playbook_review",
+        }
+    if primary == "PRICE_GUARD_DROUGHT":
+        return {
+            "route": "pre_submit_price_guard_review",
+            "owner": "postclose_threshold_cycle",
+            "operator_action_required": False,
+            "runtime_effect": "report_only_no_mutation",
+            "next_artifact": "threshold_cycle_calibration_source_bundle",
+        }
+    if primary == "UPSTREAM_AI_THRESHOLD":
+        return {
+            "route": "score65_74_counterfactual_review",
+            "owner": "postclose_threshold_cycle",
+            "operator_action_required": False,
+            "runtime_effect": "report_only_no_mutation",
+            "next_artifact": "wait6579_ev_cohort_and_missed_probe_counterfactual",
+        }
+    if primary == "LATENCY_DROUGHT":
+        return {
+            "route": "latency_quote_quality_review",
+            "owner": "postclose_threshold_cycle",
+            "operator_action_required": False,
+            "runtime_effect": "report_only_no_mutation",
+            "next_artifact": "threshold_cycle_calibration_source_bundle",
+        }
+    return {
+        "route": "normal_no_action",
+        "owner": "none",
+        "operator_action_required": False,
+        "runtime_effect": "report_only_no_mutation",
+        "next_artifact": "none",
+    }
+
+
 def build_buy_funnel_sentinel_report(
     target_date: str,
     *,
@@ -464,10 +507,11 @@ def build_buy_funnel_sentinel_report(
         )
 
     classification = _classify(session_summary, baseline_summary, as_of=as_of)
+    followup = _followup_route(classification)
     recommended_actions = _recommend_actions(classification)
 
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "report_type": "buy_funnel_sentinel",
         "target_date": target_date,
         "as_of": as_of.isoformat(timespec="seconds"),
@@ -495,6 +539,7 @@ def build_buy_funnel_sentinel_report(
             "windows": windows,
         },
         "classification": classification,
+        "followup": followup,
         "recommended_actions": recommended_actions,
     }
 
@@ -521,6 +566,10 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- secondary: `{', '.join(classification['secondary']) if classification['secondary'] else '-'}`",
         f"- report_only: `{str(report['policy']['report_only']).lower()}`",
         f"- live_runtime_effect: `{str(report['policy']['live_runtime_effect']).lower()}`",
+        f"- operator_action_required: `{str(report['followup']['operator_action_required']).lower()}`",
+        f"- followup_route: `{report['followup']['route']}`",
+        f"- followup_owner: `{report['followup']['owner']}`",
+        f"- runtime_effect: `{report['followup']['runtime_effect']}`",
         "",
         "## 근거",
         "",

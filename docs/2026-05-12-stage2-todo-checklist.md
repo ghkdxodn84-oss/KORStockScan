@@ -5,12 +5,14 @@
 - 2026-05-11 postclose 자동화가 만든 threshold apply 후보와 OpenAI WS 유지 상태를 장전 산출물 기준으로 확인한다.
 - 스윙 실주문, 스윙 숫자 floor, 스윙 scale-in real canary는 approval request가 없으므로 사용자 artifact 없이 열지 않는다.
 - 2026-05-11 code-improvement workorder는 자동 repo 수정이 아니라 사용자가 Codex에 구현을 지시한 경우에만 실행한다.
+- 장중 패닉셀 구간은 closed PnL 단독으로 보지 않고 `panic_sell_defense` report-only 산출물에서 방어/회복 attribution을 분리한다.
 
 ## 오늘 강제 규칙
 
 - 장중 runtime threshold mutation은 금지한다. 적용은 PREOPEN `threshold_cycle_preopen_apply`가 생성한 runtime env만 source로 본다.
 - OpenAI WS 확인은 transport/provenance 검증이며 threshold 값, 주문가/수량 guard, 스윙 dry-run guard를 변경하지 않는다.
 - `actual_order_submitted=false`인 sim/probe 표본은 실주문 전환 근거가 아니라 EV/source-quality 입력이다. 실주문 전환은 별도 approval artifact와 checklist가 필요하다.
+- `panic_sell_defense`는 runtime mutation, bot restart, score/stop threshold 변경 권한이 없는 report-only 입력이다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
 ## 장전 체크리스트 (08:50~09:00)
@@ -99,6 +101,22 @@
   - 완료 근거: `pipeline_events_2026-05-12.jsonl`에서 simulation provenance가 `SwingIntradayLiveEquivalentProbe0511` 115건, `SwingLiveOrderDryRunSimulation0511` 3건으로 확인됐고, `actual_order_submitted=False`는 108건 확인됐다. `data/runtime/swing_intraday_probe_state.json`은 `simulation_book=swing_intraday_live_equiv_probe`, `owner=SwingIntradayLiveEquivalentProbe0511`, `updated_at=2026-05-12T09:05:48`, active 10개이며 모든 active probe가 `simulated_order=True`, `actual_order_submitted=False`, `broker_order_forbidden=True`다. origin은 `blocked_swing_score_vpw` 4개, `blocked_gatekeeper_reject` 4개, `blocked_swing_gap` 2개다. `scalp_live_simulator_state.json`은 active 0개로, 스캘핑 BUY 확정 sim 표본은 아직 없다.
   - 추가 점검(10:13 KST): `pipeline_events_2026-05-12.jsonl` 기준 스캘핑 sim event는 0건이고, 스윙 probe는 entry 14건, scale-in 가정체결 13건, sell 가정체결 11건이다. sell 가정체결 11건은 모두 `actual_order_submitted=False`, `broker_order_forbidden=True`이며 승률 36.4%, 평균 수익률 -0.283%, 수수료/세금 전 가상 gross PnL +1,405원이다. `swing_intraday_probe_state.json`은 `updated_at=2026-05-12T10:13:41`, active 10개이며 source date는 2026-05-11 3개, 2026-05-12 7개다.
   - 완료 다음 액션: sim/probe는 계속 real/sim split으로만 본다. 스윙 probe cap 도달/discard는 source-quality 정보로 장후 리포트에 넘기고, scalp sim 0건은 BUY 확정 hook 미발생으로 분리한다.
+
+- [x] `[SentinelFollowupRouteReportOnly0512] Sentinel operator action/followup route 및 real/sim exit split 적용` (`Due: 2026-05-12`, `Slot: INTRADAY`, `TimeWindow: 11:10~11:35`, `Track: RuntimeStability`)
+  - Source: [buy_funnel_sentinel.py](/home/ubuntu/KORStockScan/src/engine/buy_funnel_sentinel.py), [holding_exit_sentinel.py](/home/ubuntu/KORStockScan/src/engine/holding_exit_sentinel.py), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정: `report_only_enhancement_applied`.
+  - 근거: BUY/HOLD-EXIT Sentinel JSON schema를 `2`로 올리고 `followup.route`, `followup.owner`, `operator_action_required`, `runtime_effect=report_only_no_mutation`, `next_artifact`를 추가했다. HOLD/EXIT는 `actual_order_submitted=false`, `broker_order_forbidden=true`, `simulation_book`, `simulation_owner`, probe 필드가 있는 event를 non-real observation으로 분리해 `real_exit_signal`, `real_sell_order_sent`, `non_real_exit_signal`, `non_real_sell_order_sent`를 별도 집계한다. `SELL_EXECUTION_DROUGHT` primary는 real exit path에만 적용하고, non-real drought는 provenance split reason으로만 남긴다.
+  - 금지: 이 변경은 report/attribution 품질 개선이며 runtime threshold, 주문가/수량, 청산 판단, bot restart를 변경하지 않는다.
+  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_holding_exit_sentinel.py` 13건 통과, `py_compile` 통과. 2026-05-12 산출물 재생성 결과 BUY는 `UPSTREAM_AI_THRESHOLD -> score65_74_counterfactual_review`, `operator_action_required=false`; HOLD/EXIT는 `SELL_EXECUTION_DROUGHT -> sell_receipt_order_path_check`, `operator_action_required=true`, `real_exit_signal=16`, `real_sell_order_sent=0`, `non_real_exit_signal=0`으로 분리됐다.
+  - 다음 액션: 장후 `trade_lifecycle_attribution`에서 HOLD/EXIT real sell receipt/order path를 확인한다. BUY `UPSTREAM_AI_THRESHOLD`는 `wait6579_ev_cohort`와 `missed_probe_counterfactual`로 넘기고 score threshold 완화나 fallback 재개는 하지 않는다.
+
+- [x] `[PanicSellDefenseReportOnly0512] 패닉셀 방어 report-only 리포트 축 구현 및 당일 산출물 생성` (`Due: 2026-05-12`, `Slot: INTRADAY`, `TimeWindow: 11:35~12:00`, `Track: RuntimeStability`)
+  - Source: [panic_sell_defense_report.py](/home/ubuntu/KORStockScan/src/engine/panic_sell_defense_report.py), [run_panic_sell_defense_intraday.sh](/home/ubuntu/KORStockScan/deploy/run_panic_sell_defense_intraday.sh), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [panic_sell_defense_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/panic_sell_defense/panic_sell_defense_2026-05-12.json), [panic_sell_defense_2026-05-12.md](/home/ubuntu/KORStockScan/data/report/panic_sell_defense/panic_sell_defense_2026-05-12.md), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정: `report_only_axis_applied_and_automation_chain_wired`.
+  - 근거: 신규 `panic_sell_defense` 산출물은 `pipeline_events`, BUY/HOLD Sentinel, market regime snapshot, swing/scalp sim state, post-sell feedback를 읽어 `NORMAL/PANIC_SELL/RECOVERY_WATCH/RECOVERY_CONFIRMED`를 분류한다. 2026-05-12 12:01 KST 산출물은 `panic_state=RECOVERY_WATCH`, `max_rolling_30m_stop_loss_exit_count=17`, `stop_loss_exit_ratio_pct=78.6`, active sim/probe `avg_unrealized_profit_rate_pct=0.7995`, `win_rate_pct=62.5`, provenance pass로 닫혔다. 이후 5분 반복 wrapper/cron installer, error detector cron/freshness registry, `threshold_cycle` calibration source bundle, workorder artifact check까지 연결했다.
+  - 금지: runtime threshold mutation, score threshold 완화, stop-loss 완화, 자동매도, bot restart, 스윙 실주문 enable은 모두 금지 automation으로 남겼다. hard/protect/emergency stop은 confirmation 후보에서 제외하고, soft/trailing/flow 후보만 다음 장전 bounded canary 검토 후보로 라우팅한다.
+  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_panic_sell_defense_report.py src/tests/test_daily_threshold_cycle_report.py src/tests/test_error_detector_coverage.py` 통과. `bash -n deploy/run_panic_sell_defense_intraday.sh deploy/install_panic_sell_defense_cron.sh` 통과. 당일 JSON/Markdown 산출물 생성 완료.
+  - 다음 액션: 장후 `trade_lifecycle_attribution`과 `threshold_cycle_ev`에서 `panic_attribution_pack`, `panic_entry_freeze_guard`, `panic_stop_confirmation`, `panic_rebound_probe` 후보를 closed PnL/forward return/active probe로 분리 재판정한다. 장중에는 report-only 유지한다.
 
 ## 장후 체크리스트 (16:30~18:55)
 
