@@ -216,3 +216,52 @@ def test_non_real_exit_signal_is_split_from_sell_execution_drought(monkeypatch, 
     }
     assert report["current"]["session"]["stage_unique"]["non_real_exit_signal"] == 2
     assert report["current"]["session"]["ratios"]["non_real_sell_sent_to_exit_signal_unique_pct"] == 0.0
+
+
+def test_probe_sibling_marks_sparse_exit_signal_as_non_real(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event("2026-05-06", "10:00:00", "exit_signal", record_id=1),
+            _event(
+                "2026-05-06",
+                "10:00:01",
+                "swing_probe_exit_signal",
+                record_id=1,
+                fields={
+                    "simulation_book": "swing_intraday_live_equiv_probe",
+                    "actual_order_submitted": "False",
+                    "broker_order_forbidden": "True",
+                },
+            ),
+            _event(
+                "2026-05-06",
+                "10:00:02",
+                "swing_probe_sell_order_assumed_filled",
+                record_id=1,
+                fields={
+                    "simulation_book": "swing_intraday_live_equiv_probe",
+                    "actual_order_submitted": "False",
+                    "broker_order_forbidden": "True",
+                },
+            ),
+        ],
+    )
+
+    report = sentinel.build_holding_exit_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:05:00"),
+    )
+
+    assert report["classification"]["primary"] == "NORMAL"
+    assert "SELL_EXECUTION_DROUGHT" not in report["classification"]["matches"]
+    assert report["classification"]["sell_execution_scope"] == {
+        "real_exit_signal": 0,
+        "real_sell_order_sent": 0,
+        "non_real_exit_signal": 1,
+        "non_real_sell_order_sent": 0,
+    }
+    assert report["current"]["session"]["stage_unique"]["exit_signal"] == 1
+    assert report["current"]["session"]["stage_unique"]["non_real_exit_signal"] == 1

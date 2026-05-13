@@ -21,6 +21,15 @@
 - warning: 최초 장전 확인 시 `openai_ws_stability_2026-05-12.md` artifact가 없어 `OpenAIWSIntradaySample0513` 장중 표본 재확인을 남겼다. `2026-05-13 08:47 KST`에 동일 모듈로 5/12 artifact를 재생성했고 `decision=keep_ws`, unique WS calls=`582`, fallback=`0`, entry_price WS sample=`0`을 확인했다.
 - 다음 액션: 장중 runtime threshold mutation 없이 selected family provenance, OpenAI transport 표본, sim/probe source-quality만 확인한다.
 
+### IntradayAutomationHealthCheck20260513 운영 확인 기록
+
+- checked_at: `2026-05-13 09:37 KST`
+- 판정: `warning`
+- 근거: `buy_funnel_sentinel`, `holding_exit_sentinel`, `panic_sell_defense`, `buy_pause_guard`, `monitor_snapshot`, `error_detection_full`은 모두 당일 `[DONE]` marker 또는 fresh artifact를 남겼고, `run_error_detection.sh full` 재실행 결과 `summary_severity=pass`다. 단, 장중 리포트 상태는 `buy_funnel_sentinel.primary=UPSTREAM_AI_THRESHOLD`, `holding_exit_sentinel.primary=SELL_EXECUTION_DROUGHT`, `panic_sell_defense.panic_state=PANIC_SELL`로 관찰 경고가 있다.
+- 금지 확인: 장중 runtime threshold mutation, provider route 변경, score/stop threshold 변경, 자동매도, bot restart는 수행하지 않았다.
+- 다음 액션: 12:05 intraday calibration은 due 전이므로 장중에는 report-only 상태를 유지하고, panic/holding/buy funnel 원인은 장후 attribution과 postclose threshold-cycle source bundle에서 닫는다.
+- 정정 (`2026-05-13 09:47 KST`): `holding_exit_sentinel.primary=SELL_EXECUTION_DROUGHT`는 probe-only `exit_signal`의 sparse provenance 오분류였다. 같은 `record_id`의 `swing_probe_*` sibling이 있으면 선행 `exit_signal`도 non-real로 귀속하도록 보정했고, 재생성 결과 `holding_exit_sentinel.primary=NORMAL`, `real_exit_signal=0`, `non_real_exit_signal=9`로 닫혔다. 남는 장중 관찰 경고는 `buy_funnel_sentinel.primary=UPSTREAM_AI_THRESHOLD`와 `panic_sell_defense.panic_state=PANIC_SELL`이다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-05-12` postclose -> `2026-05-13`)
 
@@ -60,23 +69,33 @@
 
 ## 장중 체크리스트 (09:05~15:20)
 
-- [ ] `[RuntimeEnvIntradayObserve0513] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-05-13`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
+- [x] `[RuntimeEnvIntradayObserve0513] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-05-13`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-12.json)
   - 판정 기준: selected_families=soft_stop_whipsaw_confirmation, score65_74_recovery_probe가 runtime event provenance에 찍히는지 확인한다.
   - 금지: 장중 관찰 결과로 runtime threshold mutation을 수행하지 않는다.
   - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
+  - 판정 (`2026-05-13 09:37 KST`): `warning_provenance_partial`.
+  - 근거: `data/threshold_cycle/threshold_events_2026-05-13.jsonl`에 `score65_74_recovery_probe` 적용 이벤트 1건이 남았고 `threshold_applied_value=enabled=True|score=65-74|budget=50000|qty=1`, `qty_cap=1`, `budget_cap_krw=50000` provenance가 확인된다. 같은 시각 `soft_stop_whipsaw_confirmation` 적용/rollback 표본은 아직 없어 해당 family는 표본 부족으로 남긴다. panic report는 `PANIC_SELL`이지만 runtime mutation은 없었다.
+  - 다음 액션: 장후 `ThresholdDailyEVReport0513`에서 selected family별 표본/rollback guard를 real/sim 분리로 재확인한다.
 
-- [ ] `[OpenAIWSIntradaySample0513] OpenAI WS/entry_price 장중 표본 및 fallback/fail-closed 재확인` (`Due: 2026-05-13`, `Slot: INTRADAY`, `TimeWindow: 09:20~09:35`, `Track: RuntimeStability`)
+- [x] `[OpenAIWSIntradaySample0513] OpenAI WS/entry_price 장중 표본 및 fallback/fail-closed 재확인` (`Due: 2026-05-13`, `Slot: INTRADAY`, `TimeWindow: 09:20~09:35`, `Track: RuntimeStability`)
   - Source: [openai_ws_stability_2026-05-12.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-12.md)
   - 판정 기준: `analyze_target` WS latency/fallback과 `entry_price` transport metadata 누락 여부를 별도 표본으로 확인한다.
   - 금지: entry_price 표본 0건 또는 instrumentation gap을 OpenAI WS runtime 효과 0으로 해석하지 않는다.
   - 다음 액션: 표본 부족이면 postclose provenance 보강 workorder로 분리한다.
+  - 판정 (`2026-05-13 09:37 KST`): `warning_entry_price_sample_missing_but_analyze_target_ws_pass`.
+  - 근거: `pipeline_events_2026-05-13.jsonl` 기준 OpenAI `analyze_target` 표본 101건은 `openai_transport_mode=responses_ws`, `openai_ws_used=True`, `openai_ws_http_fallback=False`로 확인됐다. 최근 표본의 `openai_ws_roundtrip_ms`는 대략 `873~3586ms` 범위다. `entry_ai_price`/`entry_price` transport 표본은 아직 0건이라 fail-closed/fallback 품질을 장중 표본으로 확정할 수 없다.
+  - 다음 액션: postclose `openai_ws_stability_report`에서 entry_price 표본 발생 여부를 다시 확인하고, 계속 0건이면 provenance 보강 workorder가 아니라 표본 부족으로 닫는다.
 
-- [ ] `[SimProbeIntradayCoverage0513] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-05-13`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
+- [x] `[SimProbeIntradayCoverage0513] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-05-13`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
   - Source: [threshold_cycle_ev_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-12.json)
   - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다.
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
+  - 판정 (`2026-05-13 09:37 KST`): `pass_with_panic_warning`.
+  - 근거: `panic_sell_defense_2026-05-13.json`의 active sim/probe provenance check는 passed이며 active `swing_probe=10`, `scalp_sim=0`, checked positions `10`, violations `0`이다. pipeline event 집계에서도 `swing_probe_*`, `swing_sim_scale_in_order_assumed_filled`, `swing_reentry_counterfactual_after_loss` 표본은 `actual_order_submitted=False`, `broker_order_forbidden=True`로 분리되어 있다. 다만 같은 report의 `panic_state=PANIC_SELL`, active sim/probe 평균 미실현손익 `-0.0137%`, win rate `40.0%`이므로 EV 판단은 장후 attribution까지 보류한다.
+  - 다음 액션: sim/probe EV는 broker execution 품질로 승격하지 않고, 장후 `ThresholdDailyEVReport0513`와 `PanicEntryFreezeGuardWorkorder0513`에서 panic 구간 표본으로 분리한다.
+  - 보정 (`2026-05-13 09:47 KST`): `holding_exit_sentinel`이 같은 `record_id`의 `swing_probe_*` sibling provenance를 선행 `exit_signal`에 전파하도록 수정했다. 재생성한 `holding_exit_sentinel_2026-05-13.json`은 `primary=NORMAL`, `real_exit_signal=0`, `non_real_exit_signal=9`, `operator_action_required=false`다.
 
 ## 장후 체크리스트 (16:30~18:55)
 

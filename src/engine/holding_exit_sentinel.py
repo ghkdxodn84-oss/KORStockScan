@@ -209,6 +209,15 @@ def _is_non_real_observation(event: PipelineEvent) -> bool:
     return False
 
 
+def _non_real_attempt_keys(events: list[PipelineEvent]) -> set[str]:
+    """Propagate probe/sim provenance to sparse sibling events with the same record id."""
+    return {
+        _attempt_key(event)
+        for event in events
+        if _attempt_key(event) and _is_non_real_observation(event)
+    }
+
+
 def _count_cache_miss(events: list[PipelineEvent]) -> int:
     return sum(1 for event in events if event.stage == "ai_holding_review" and event.fields.get("ai_cache") == "miss")
 
@@ -288,8 +297,17 @@ def _stage_reason_top(events: list[PipelineEvent]) -> list[dict[str, Any]]:
 
 def _summarize_events(events: list[PipelineEvent], *, start_at: datetime, end_at: datetime) -> dict[str, Any]:
     scoped = [event for event in events if start_at <= event.emitted_at <= end_at]
-    real_scoped = [event for event in scoped if not _is_non_real_observation(event)]
-    non_real_scoped = [event for event in scoped if _is_non_real_observation(event)]
+    non_real_keys = _non_real_attempt_keys(scoped)
+    real_scoped = [
+        event
+        for event in scoped
+        if _attempt_key(event) not in non_real_keys and not _is_non_real_observation(event)
+    ]
+    non_real_scoped = [
+        event
+        for event in scoped
+        if _attempt_key(event) in non_real_keys or _is_non_real_observation(event)
+    ]
     stage_events = Counter(event.stage for event in scoped)
     stage_unique = {
         stage: len({_attempt_key(event) for event in scoped if event.stage == stage})
