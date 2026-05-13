@@ -28,6 +28,37 @@ class _DummyAIEngine:
         }
 
 
+def test_watching_state_debug_log_is_disabled_by_default(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", SimpleNamespace(WATCHING_STATE_DEBUG_LOG_ENABLED=False))
+    messages = []
+    monkeypatch.setattr(state_handlers, "log_info", lambda msg, send_telegram=False: messages.append(msg))
+
+    state_handlers._log_watching_state_debug(
+        {"name": "테스트", "strategy": "SCALPING", "position_tag": "SCANNER"},
+        "123456",
+        radar=object(),
+        ai_engine=object(),
+    )
+
+    assert messages == []
+
+
+def test_watching_state_debug_log_can_be_enabled(monkeypatch):
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", SimpleNamespace(WATCHING_STATE_DEBUG_LOG_ENABLED=True))
+    messages = []
+    monkeypatch.setattr(state_handlers, "log_info", lambda msg, send_telegram=False: messages.append(msg))
+
+    state_handlers._log_watching_state_debug(
+        {"name": "테스트", "strategy": "SCALPING", "position_tag": "SCANNER"},
+        "123456",
+        radar=object(),
+        ai_engine=object(),
+    )
+
+    assert len(messages) == 1
+    assert "[DEBUG] handle_watching_state 시작: 테스트 (123456)" in messages[0]
+
+
 def test_gatekeeper_fast_reuse_bypass_logs_sentinel_when_fast_timestamp_missing(monkeypatch):
     state_handlers.COOLDOWNS = {}
     state_handlers.ALERTED_STOCKS = set()

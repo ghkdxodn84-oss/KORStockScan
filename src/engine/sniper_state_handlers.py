@@ -2390,6 +2390,16 @@ def _log_holding_pipeline(stock, code, stage, **fields):
     )
 
 
+def _log_watching_state_debug(stock, code, *, radar=None, ai_engine=None):
+    if not _rule_bool("WATCHING_STATE_DEBUG_LOG_ENABLED", False):
+        return
+    log_info(
+        f"[DEBUG] handle_watching_state 시작: {stock.get('name')} ({code}), 전략={stock.get('strategy')}, "
+        f"위치태그={stock.get('position_tag')}, radar={'있음' if radar else '없음'}, "
+        f"ai_engine={'있음' if ai_engine else '없음'}"
+    )
+
+
 def _format_action_list(values):
     cleaned = [str(value).strip() for value in (values or []) if str(value).strip()]
     return "|".join(cleaned) if cleaned else "-"
@@ -8203,11 +8213,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
         now_dt = datetime.now()
     now_t = now_dt.time()
 
-    log_info(
-        f"[DEBUG] handle_watching_state 시작: {stock.get('name')} ({code}), 전략={stock.get('strategy')}, "
-        f"위치태그={stock.get('position_tag')}, radar={'있음' if radar else '없음'}, "
-        f"ai_engine={'있음' if ai_engine else '없음'}"
-    )
+    _log_watching_state_debug(stock, code, radar=radar, ai_engine=ai_engine)
 
     if is_buy_side_paused():
         last_log = float(stock.get('last_pause_block_log_ts', 0) or 0)

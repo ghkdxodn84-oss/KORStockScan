@@ -565,6 +565,24 @@ class TradingConfig:
     BOT_HISTORY_BACKUP_COUNT: int = 7  # 콘솔 히스토리 일별 보관 개수
     PIPELINE_EVENT_JSONL_ENABLED: bool = True
     PIPELINE_EVENT_SCHEMA_VERSION: int = 1
+    PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED: bool = False
+    PIPELINE_EVENT_TEXT_INFO_STAGE_ALLOWLIST: tuple = (
+        "order_bundle_submitted",
+        "entry_order_cancel_requested",
+        "entry_order_cancel_confirmed",
+        "entry_order_cancel_failed",
+        "partial_fill_ratio_below_min_exit_ordered",
+        "partial_fill_ratio_below_min_exit_failed",
+        "buy_signal_telegram_enqueue_failed",
+        "sell_order_sent",
+        "sell_order_failed",
+        "sell_order_rejected",
+        "swing_real_order_submitted",
+        "swing_real_order_failed",
+        "swing_scale_in_real_canary_order_submitted",
+        "swing_scale_in_real_canary_order_failed",
+    )
+    WATCHING_STATE_DEBUG_LOG_ENABLED: bool = False
 
     # ==========================================
     # 시스템 에러 탐지 설정
@@ -1243,6 +1261,15 @@ def _build_trading_rules() -> TradingConfig:
     env_scalp_live_simulator_owner = _env_str("KORSTOCKSCAN_SCALP_LIVE_SIMULATOR_OWNER")
     env_scalp_live_simulator_fill_policy = _env_str("KORSTOCKSCAN_SCALP_LIVE_SIMULATOR_FILL_POLICY")
     env_scalp_live_simulator_qty = _env_int("KORSTOCKSCAN_SCALP_LIVE_SIMULATOR_QTY")
+    env_pipeline_event_text_info_log_enabled = _env_bool(
+        "KORSTOCKSCAN_PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED"
+    )
+    env_pipeline_event_text_info_stage_allowlist = _env_csv_tuple(
+        "KORSTOCKSCAN_PIPELINE_EVENT_TEXT_INFO_STAGE_ALLOWLIST"
+    )
+    env_watching_state_debug_log_enabled = _env_bool(
+        "KORSTOCKSCAN_WATCHING_STATE_DEBUG_LOG_ENABLED"
+    )
     env_scalp_live_simulator_timeout = _env_int("KORSTOCKSCAN_SCALP_LIVE_SIMULATOR_ENTRY_TIMEOUT_SEC")
     env_stat_action_snapshot_enabled = _env_bool("KORSTOCKSCAN_STAT_ACTION_DECISION_SNAPSHOT_ENABLED")
     env_stat_action_snapshot_min_interval = _env_int("KORSTOCKSCAN_STAT_ACTION_DECISION_SNAPSHOT_MIN_INTERVAL_SEC")
@@ -1639,6 +1666,24 @@ def _build_trading_rules() -> TradingConfig:
             HOLDING_FLOW_REVIEW_MAX_WS_AGE_SEC=env_holding_flow_max_ws_age
             if env_holding_flow_max_ws_age is not None
             else config.HOLDING_FLOW_REVIEW_MAX_WS_AGE_SEC,
+        )
+
+    if (
+        env_pipeline_event_text_info_log_enabled is not None
+        or env_pipeline_event_text_info_stage_allowlist is not None
+        or env_watching_state_debug_log_enabled is not None
+    ):
+        config = replace(
+            config,
+            PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED=env_pipeline_event_text_info_log_enabled
+            if env_pipeline_event_text_info_log_enabled is not None
+            else config.PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED,
+            PIPELINE_EVENT_TEXT_INFO_STAGE_ALLOWLIST=env_pipeline_event_text_info_stage_allowlist
+            if env_pipeline_event_text_info_stage_allowlist is not None
+            else config.PIPELINE_EVENT_TEXT_INFO_STAGE_ALLOWLIST,
+            WATCHING_STATE_DEBUG_LOG_ENABLED=env_watching_state_debug_log_enabled
+            if env_watching_state_debug_log_enabled is not None
+            else config.WATCHING_STATE_DEBUG_LOG_ENABLED,
         )
 
     env_ed_enabled = _env_bool("KORSTOCKSCAN_ERROR_DETECTOR_ENABLED")

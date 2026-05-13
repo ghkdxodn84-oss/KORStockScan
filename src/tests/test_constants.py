@@ -140,3 +140,33 @@ def test_trading_rules_stale_lock_env_override(monkeypatch):
     assert reloaded.TRADING_RULES.ERROR_DETECTOR_STALE_LOCK_CLEANUP_ENABLED is False
     assert reloaded.TRADING_RULES.ERROR_DETECTOR_STALE_LOCK_MAX_AGE_SEC == 1800
     assert reloaded.TRADING_RULES.ERROR_DETECTOR_DISK_LOG_ROTATE_ENABLED is False
+
+
+def test_trading_rules_log_text_noise_defaults_are_off(monkeypatch):
+    monkeypatch.delenv("KORSTOCKSCAN_PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_PIPELINE_EVENT_TEXT_INFO_STAGE_ALLOWLIST", raising=False)
+    monkeypatch.delenv("KORSTOCKSCAN_WATCHING_STATE_DEBUG_LOG_ENABLED", raising=False)
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED is False
+    assert "order_bundle_submitted" in reloaded.TRADING_RULES.PIPELINE_EVENT_TEXT_INFO_STAGE_ALLOWLIST
+    assert reloaded.TRADING_RULES.WATCHING_STATE_DEBUG_LOG_ENABLED is False
+
+
+def test_trading_rules_log_text_noise_env_override(monkeypatch):
+    monkeypatch.setenv("KORSTOCKSCAN_PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED", "true")
+    monkeypatch.setenv(
+        "KORSTOCKSCAN_PIPELINE_EVENT_TEXT_INFO_STAGE_ALLOWLIST",
+        "order_bundle_submitted,sell_order_failed",
+    )
+    monkeypatch.setenv("KORSTOCKSCAN_WATCHING_STATE_DEBUG_LOG_ENABLED", "true")
+
+    reloaded = importlib.reload(constants)
+
+    assert reloaded.TRADING_RULES.PIPELINE_EVENT_TEXT_INFO_LOG_ENABLED is True
+    assert reloaded.TRADING_RULES.PIPELINE_EVENT_TEXT_INFO_STAGE_ALLOWLIST == (
+        "order_bundle_submitted",
+        "sell_order_failed",
+    )
+    assert reloaded.TRADING_RULES.WATCHING_STATE_DEBUG_LOG_ENABLED is True
