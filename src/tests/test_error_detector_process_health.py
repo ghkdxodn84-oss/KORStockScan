@@ -8,6 +8,7 @@ from datetime import datetime
 
 import pytest
 
+from src.engine.error_detectors import process_health as process_health_module
 from src.engine.error_detectors.process_health import (
     ProcessHealthDetector,
     reset_heartbeat,
@@ -97,3 +98,43 @@ class TestProcessHealthDetector:
         detector = ProcessHealthDetector()
         result = detector.check()
         assert result.severity == "warning"
+
+    def test_detector_pass_when_no_heartbeat_outside_expected_runtime(self, monkeypatch):
+        if HEARTBEAT_PATH.exists():
+            HEARTBEAT_PATH.unlink()
+        monkeypatch.setattr(process_health_module, "_is_bot_expected_running", lambda: False)
+
+        result = ProcessHealthDetector().check()
+
+        assert result.severity == "pass"
+        assert result.details["main_loop_status"] == "expected_stopped"
+
+    def test_detector_pass_when_pid_dead_outside_expected_runtime(self, monkeypatch):
+        monkeypatch.setattr(process_health_module, "_is_bot_expected_running", lambda: False)
+        data = {
+            "main_loop": {
+                "last_beat": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "pid": 99999999,
+            }
+        }
+        HEARTBEAT_PATH.write_text(json.dumps(data), encoding="utf-8")
+
+        result = ProcessHealthDetector().check()
+
+        assert result.severity == "pass"
+        assert result.details["main_loop_status"] == "pid_dead"
+
+    def test_detector_fail_when_pid_dead_inside_expected_runtime(self, monkeypatch):
+        monkeypatch.setattr(process_health_module, "_is_bot_expected_running", lambda: True)
+        data = {
+            "main_loop": {
+                "last_beat": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "pid": 99999999,
+            }
+        }
+        HEARTBEAT_PATH.write_text(json.dumps(data), encoding="utf-8")
+
+        result = ProcessHealthDetector().check()
+
+        assert result.severity == "fail"
+        assert "no longer alive" in result.summary

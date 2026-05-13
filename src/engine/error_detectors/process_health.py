@@ -68,8 +68,24 @@ class ProcessHealthDetector(BaseDetector):
         details: dict = {}
         main_loop_timeout = self.main_loop_timeout_sec
         thread_timeout = self.thread_timeout_sec
+        expected_running = _is_bot_expected_running()
+        details["bot_expected_running"] = expected_running
+        details["bot_expected_window"] = {
+            "start": getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_START_HHMM", "07:40"),
+            "end": getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_END_HHMM", "22:55"),
+        }
 
         if not HEARTBEAT_PATH.exists():
+            if not expected_running:
+                details["main_loop_status"] = "expected_stopped"
+                details["heartbeat_path"] = str(HEARTBEAT_PATH)
+                return DetectionResult(
+                    detector_id=self.id,
+                    category=self.category,
+                    severity="pass",
+                    summary="bot_main.py is outside expected runtime window.",
+                    details=details,
+                )
             return DetectionResult(
                 detector_id=self.id,
                 category=self.category,
@@ -110,6 +126,14 @@ class ProcessHealthDetector(BaseDetector):
 
             if not pid_ok:
                 details["main_loop_status"] = "pid_dead"
+                if not expected_running:
+                    return DetectionResult(
+                        detector_id=self.id,
+                        category=self.category,
+                        severity="pass",
+                        summary="bot_main.py PID is dead outside expected runtime window.",
+                        details=details,
+                    )
                 return DetectionResult(
                     detector_id=self.id,
                     category=self.category,
@@ -120,6 +144,14 @@ class ProcessHealthDetector(BaseDetector):
                 )
             if main_age > main_loop_timeout:
                 details["main_loop_status"] = "stale"
+                if not expected_running:
+                    return DetectionResult(
+                        detector_id=self.id,
+                        category=self.category,
+                        severity="pass",
+                        summary="Main loop heartbeat is stale outside expected runtime window.",
+                        details=details,
+                    )
                 return DetectionResult(
                     detector_id=self.id,
                     category=self.category,
@@ -130,6 +162,15 @@ class ProcessHealthDetector(BaseDetector):
                 )
             details["main_loop_status"] = "ok"
         else:
+            if not expected_running:
+                details["main_loop_status"] = "expected_stopped"
+                return DetectionResult(
+                    detector_id=self.id,
+                    category=self.category,
+                    severity="pass",
+                    summary="No main_loop heartbeat entry outside expected runtime window.",
+                    details=details,
+                )
             return DetectionResult(
                 detector_id=self.id,
                 category=self.category,
@@ -193,6 +234,33 @@ def _parse_iso(iso_str: str) -> float | None:
         return dt.timestamp()
     except (ValueError, TypeError):
         return None
+
+
+def _is_bot_expected_running(now: datetime | None = None) -> bool:
+    enabled = bool(getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_RUNTIME_WINDOW_ENABLED", True))
+    if not enabled:
+        return True
+    current = now or datetime.now().astimezone()
+    start = _parse_hhmm(getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_START_HHMM", "07:40"))
+    end = _parse_hhmm(getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_END_HHMM", "22:55"))
+    if start is None or end is None:
+        return True
+    current_minutes = current.hour * 60 + current.minute
+    if start <= end:
+        return start <= current_minutes < end
+    return current_minutes >= start or current_minutes < end
+
+
+def _parse_hhmm(value: str) -> int | None:
+    try:
+        hour_raw, minute_raw = str(value).strip().split(":", 1)
+        hour = int(hour_raw)
+        minute = int(minute_raw)
+    except (TypeError, ValueError):
+        return None
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None
+    return hour * 60 + minute
 
 
 def _pid_exists(pid: int) -> bool:
