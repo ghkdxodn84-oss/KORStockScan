@@ -63,6 +63,8 @@ _FAMILY_DESCRIPTIONS = {
     "swing_scale_in_ofi_qi_confirmation": "스윙 추가매수 직전 OFI/QI 확인 신호가 유효한지 보는 축",
     "swing_exit_ofi_qi_smoothing": "스윙 청산 직전 OFI/QI로 EXIT 확정/보류를 다듬을 수 있는지 보는 축",
     "swing_scale_in_real_canary_phase0": "승인된 실제 스윙 보유분에 한해 PYRAMID/AVG_DOWN 1주 추가매수 canary를 열 수 있는지 보는 정책 축",
+    "panic_sell_defense": "패닉셀 구간의 stop/rebound simulation 결과로 방어 guard와 rollback 조건을 설계하는 축",
+    "panic_buy_runner_tp_canary": "패닉바잉 구간에서 fixed TP 전량청산 대비 runner 유지가 missed upside를 줄이는지 보는 축",
 }
 
 _BASELINE_APPLICATION = {
@@ -77,6 +79,8 @@ _BASELINE_APPLICATION = {
     "overbought_gate_refined_candidate": "관찰/리포트 only: gate 기준 변경 없음",
     "position_sizing_cap_release": "미적용: 1주 cap 유지",
     "swing_scale_in_real_canary_phase0": "미적용: approval artifact 없이는 실주문 추가매수 금지",
+    "panic_sell_defense": "report-only: 주문/청산/threshold/runtime env 변경 없음",
+    "panic_buy_runner_tp_canary": "report-only: TP/trailing/live exit 변경 없음",
 }
 
 _STATE_INTERPRETATIONS = {
@@ -133,6 +137,13 @@ def _format_score(value: Any) -> str:
     except (TypeError, ValueError):
         text = str(value).strip()
         return text or "없음"
+
+
+def _as_int(value: Any) -> int:
+    try:
+        return int(float(value or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _reason_text(reasons: Any) -> str:
@@ -246,6 +257,94 @@ def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
+def _panic_request_state(has_candidate: bool, sample_count: int, runtime_effect: Any) -> tuple[str, list[str]]:
+    reasons: list[str] = []
+    if runtime_effect != "report_only_no_mutation":
+        reasons.append("runtime_effect_not_report_only")
+        return "freeze", reasons
+    if sample_count <= 0:
+        reasons.append("sample_floor_not_met")
+        return "hold_sample", reasons
+    if has_candidate:
+        reasons.append("approval_artifact_missing")
+        return "approval_required", reasons
+    reasons.append("hold")
+    return "hold", reasons
+
+
+def _panic_rows(calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
+    bundle = (
+        calibration_report.get("calibration_source_bundle")
+        if isinstance(calibration_report.get("calibration_source_bundle"), dict)
+        else {}
+    )
+    source_metrics = bundle.get("source_metrics") if isinstance(bundle.get("source_metrics"), dict) else {}
+    rows: list[dict[str, Any]] = []
+
+    panic_sell = source_metrics.get("panic_sell_defense") if isinstance(source_metrics.get("panic_sell_defense"), dict) else {}
+    if panic_sell:
+        candidate_status = panic_sell.get("candidate_status") if isinstance(panic_sell.get("candidate_status"), dict) else {}
+        sample_count = max(
+            _as_int(panic_sell.get("stop_loss_exit_count")),
+            _as_int(panic_sell.get("confirmation_eligible_exit_count")),
+            _as_int(panic_sell.get("active_sim_probe_positions")),
+        )
+        state, reasons = _panic_request_state(bool(candidate_status), sample_count, panic_sell.get("runtime_effect"))
+        rows.append(
+            {
+                "domain": "panic_sell",
+                "family": "panic_sell_defense",
+                "description": _description("panic_sell_defense"),
+                "state": state,
+                "current_application": _current_application("panic_sell_defense", state, False),
+                "state_interpretation": (
+                    "simulation/counterfactual 기반 runtime 전환 승인요청 후보이며 approval artifact 전 live 반영 없음"
+                    if state == "approval_required"
+                    else _state_interpretation(state, False)
+                ),
+                "score": panic_sell.get("microstructure_max_panic_score"),
+                "score_label": _format_score(panic_sell.get("microstructure_max_panic_score")),
+                "sample": {"count": sample_count, "floor": 1},
+                "reasons": reasons,
+                "reason_label": _reason_text(reasons),
+                "selected_auto_bounded_live": False,
+                "candidate_status": candidate_status,
+            }
+        )
+
+    panic_buy = source_metrics.get("panic_buying") if isinstance(source_metrics.get("panic_buying"), dict) else {}
+    if panic_buy:
+        candidate_status = panic_buy.get("candidate_status") if isinstance(panic_buy.get("candidate_status"), dict) else {}
+        sample_count = max(
+            _as_int(panic_buy.get("panic_buy_active_count")),
+            _as_int(panic_buy.get("tp_counterfactual_count")),
+            _as_int(panic_buy.get("trailing_winner_count")),
+        )
+        state, reasons = _panic_request_state(bool(candidate_status), sample_count, panic_buy.get("runtime_effect"))
+        rows.append(
+            {
+                "domain": "panic_buying",
+                "family": "panic_buy_runner_tp_canary",
+                "description": _description("panic_buy_runner_tp_canary"),
+                "state": state,
+                "current_application": _current_application("panic_buy_runner_tp_canary", state, False),
+                "state_interpretation": (
+                    "TP counterfactual 기반 runtime 전환 승인요청 후보이며 approval artifact 전 live TP 변경 없음"
+                    if state == "approval_required"
+                    else _state_interpretation(state, False)
+                ),
+                "score": panic_buy.get("max_panic_buy_score"),
+                "score_label": _format_score(panic_buy.get("max_panic_buy_score")),
+                "sample": {"count": sample_count, "floor": 1},
+                "reasons": reasons,
+                "reason_label": _reason_text(reasons),
+                "selected_auto_bounded_live": False,
+                "candidate_status": candidate_status,
+            }
+        )
+    return rows
+
+
 def _parse_kst_log_time(value: str) -> datetime | None:
     try:
         return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
@@ -303,6 +402,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     calibration_report = _load_json(Path(str(calibration_source))) if calibration_source else {}
     scalping_rows = _scalping_rows(ev_report, calibration_report)
     swing_rows = _swing_rows(swing_report)
+    panic_rows = _panic_rows(calibration_report)
     report = {
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -317,6 +417,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             "scalping_items": len(scalping_rows),
             "scalping_selected_auto_bounded_live": sum(1 for row in scalping_rows if row["selected_auto_bounded_live"]),
             "swing_blocked": len(swing_rows),
+            "panic_approval_requested": sum(1 for row in panic_rows if row.get("state") == "approval_required"),
             "swing_requested": int((swing_report.get("summary") or {}).get("requested") or 0)
             if isinstance(swing_report.get("summary"), dict)
             else 0,
@@ -327,6 +428,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
         "application_timing": _application_timing(target_date, ev_report),
         "scalping": scalping_rows,
         "swing": swing_rows,
+        "panic": panic_rows,
         "warnings": [
             message
             for message in [
@@ -363,6 +465,7 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
     timing = report.get("application_timing") if isinstance(report.get("application_timing"), dict) else {}
     scalping = report.get("scalping") if isinstance(report.get("scalping"), list) else []
     swing = report.get("swing") if isinstance(report.get("swing"), list) else []
+    panic = report.get("panic") if isinstance(report.get("panic"), list) else []
     lines = [
         f"# Runtime Approval Summary - {report.get('date')}",
         "",
@@ -370,6 +473,7 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         "- runtime_mutation_allowed: `False`",
         f"- scalping_items/selected: `{summary.get('scalping_items')}` / `{summary.get('scalping_selected_auto_bounded_live')}`",
         f"- swing_blocked/requested/approved: `{summary.get('swing_blocked')}` / `{summary.get('swing_requested')}` / `{summary.get('swing_approved')}`",
+        f"- panic_approval_requested: `{summary.get('panic_approval_requested')}`",
         f"- env_generated_at: `{timing.get('env_generated_at') or '-'}`",
         f"- first_bot_start_at: `{timing.get('first_bot_start_at') or '-'}`",
         f"- first_bot_start_after_env_at: `{timing.get('first_bot_start_after_env_at') or '-'}`",
@@ -380,6 +484,9 @@ def render_runtime_approval_summary_markdown(report: dict[str, Any]) -> str:
         "",
         "## Swing",
         *_render_rows(swing),
+        "",
+        "## Panic",
+        *_render_rows(panic),
     ]
     warnings = report.get("warnings") if isinstance(report.get("warnings"), list) else []
     if warnings:

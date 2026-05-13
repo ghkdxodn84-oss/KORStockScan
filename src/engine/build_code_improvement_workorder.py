@@ -370,6 +370,134 @@ def _threshold_ev_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, A
     return orders
 
 
+def _calibration_report_from_ev(ev_report: dict[str, Any]) -> dict[str, Any]:
+    sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
+    path_text = sources.get("calibration")
+    if not path_text:
+        return {}
+    return _load_json(Path(str(path_text)))
+
+
+def _calibration_report_path_from_ev(ev_report: dict[str, Any]) -> Path | None:
+    sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
+    path_text = sources.get("calibration")
+    return Path(str(path_text)) if path_text else None
+
+
+def _panic_lifecycle_followup_orders(calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
+    bundle = (
+        calibration_report.get("calibration_source_bundle")
+        if isinstance(calibration_report.get("calibration_source_bundle"), dict)
+        else {}
+    )
+    source_metrics = bundle.get("source_metrics") if isinstance(bundle.get("source_metrics"), dict) else {}
+    orders: list[dict[str, Any]] = []
+
+    panic_sell = source_metrics.get("panic_sell_defense") if isinstance(source_metrics.get("panic_sell_defense"), dict) else {}
+    panic_sell_candidates = panic_sell.get("candidate_status") if isinstance(panic_sell.get("candidate_status"), dict) else {}
+    panic_sell_triggered = bool(panic_sell_candidates) or str(panic_sell.get("panic_state") or "") in {
+        "PANIC_SELL",
+        "RECOVERY_WATCH",
+    }
+    panic_sell_triggered = panic_sell_triggered or (_safe_int(panic_sell.get("active_sim_probe_positions"), 0) > 0)
+    if panic_sell_triggered:
+        orders.append(
+            {
+                "order_id": "order_panic_sell_defense_lifecycle_transition_pack",
+                "title": "panic sell defense lifecycle transition pack",
+                "source_report_type": "threshold_cycle_calibration_source_bundle",
+                "lifecycle_stage": "holding_exit",
+                "target_subsystem": "panic_sell_defense",
+                "route": "auto_family_candidate",
+                "mapped_family": None,
+                "threshold_family": "panic_sell_defense",
+                "improvement_type": "runtime_transition_design",
+                "confidence": "consensus",
+                "priority": 6,
+                "runtime_effect": False,
+                "expected_ev_effect": (
+                    "Use panic-sell simulation and post-sell rebound evidence to propose threshold/guard changes, "
+                    "then request explicit live-runtime approval without mutating exits automatically."
+                ),
+                "evidence": [
+                    f"panic_state={panic_sell.get('panic_state')}",
+                    f"stop_loss_exit_count={panic_sell.get('stop_loss_exit_count')}",
+                    f"confirmation_eligible_exit_count={panic_sell.get('confirmation_eligible_exit_count')}",
+                    f"active_sim_probe_positions={panic_sell.get('active_sim_probe_positions')}",
+                    f"post_sell_rebound_above_sell_10_20m_pct={panic_sell.get('post_sell_rebound_above_sell_10_20m_pct')}",
+                    f"candidate_status={panic_sell_candidates}",
+                    "allowed_runtime_apply=false",
+                ],
+                "next_postclose_metric": (
+                    "panic_sell_defense should expose simulation EV, rollback guard, approval artifact status, "
+                    "and candidate-specific threshold recommendations before any runtime transition."
+                ),
+                "files_likely_touched": [
+                    "src/engine/panic_sell_defense_report.py",
+                    "src/engine/daily_threshold_cycle_report.py",
+                    "src/engine/runtime_approval_summary.py",
+                    "docs/plan-korStockScanPerformanceOptimization.rebase.md",
+                ],
+                "acceptance_tests": [
+                    "pytest panic sell defense/report lifecycle tests",
+                    "pytest src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py",
+                ],
+            }
+        )
+
+    panic_buy = source_metrics.get("panic_buying") if isinstance(source_metrics.get("panic_buying"), dict) else {}
+    panic_buy_candidates = panic_buy.get("candidate_status") if isinstance(panic_buy.get("candidate_status"), dict) else {}
+    panic_buy_triggered = bool(panic_buy_candidates) or (_safe_int(panic_buy.get("panic_buy_active_count"), 0) > 0)
+    panic_buy_triggered = panic_buy_triggered or (_safe_int(panic_buy.get("tp_counterfactual_count"), 0) > 0)
+    panic_buy_triggered = panic_buy_triggered or (_safe_int(panic_buy.get("trailing_winner_count"), 0) > 0)
+    if panic_buy_triggered:
+        orders.append(
+            {
+                "order_id": "order_panic_buy_runner_tp_canary_lifecycle_pack",
+                "title": "panic buy runner TP canary lifecycle pack",
+                "source_report_type": "threshold_cycle_calibration_source_bundle",
+                "lifecycle_stage": "holding_exit",
+                "target_subsystem": "panic_buying",
+                "route": "auto_family_candidate",
+                "mapped_family": None,
+                "threshold_family": "panic_buy_runner_tp_canary",
+                "improvement_type": "runtime_transition_design",
+                "confidence": "consensus",
+                "priority": 7,
+                "runtime_effect": False,
+                "expected_ev_effect": (
+                    "Use panic-buying TP counterfactuals to reduce missed upside versus full fixed-TP exits, "
+                    "while keeping hard/protect/emergency stops and order provenance guards dominant."
+                ),
+                "evidence": [
+                    f"panic_buy_state={panic_buy.get('panic_buy_state')}",
+                    f"panic_buy_active_count={panic_buy.get('panic_buy_active_count')}",
+                    f"exhaustion_confirmed_count={panic_buy.get('exhaustion_confirmed_count')}",
+                    f"tp_counterfactual_count={panic_buy.get('tp_counterfactual_count')}",
+                    f"trailing_winner_count={panic_buy.get('trailing_winner_count')}",
+                    f"candidate_status={panic_buy_candidates}",
+                    "allowed_runtime_apply=false",
+                ],
+                "next_postclose_metric": (
+                    "panic_buying should expose runner-vs-full-TP EV, MAE/giveback/sell-failure rollback guards, "
+                    "approval artifact status, and no live TP mutation before approval."
+                ),
+                "files_likely_touched": [
+                    "src/engine/panic_buying_report.py",
+                    "src/engine/daily_threshold_cycle_report.py",
+                    "src/engine/runtime_approval_summary.py",
+                    "docs/plan-korStockScanPerformanceOptimization.rebase.md",
+                ],
+                "acceptance_tests": [
+                    "pytest src/tests/test_panic_buying_report.py",
+                    "pytest src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py",
+                ],
+            }
+        )
+
+    return orders
+
+
 def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) -> dict[str, Any]:
     target_date = str(target_date).strip()
     json_path, md_path = code_improvement_workorder_paths(target_date)
@@ -382,14 +510,17 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     swing_lab_automation = _load_json(swing_lab_source_path)
     ev_path = threshold_ev_report_path(target_date)
     ev_report = _load_json(ev_path)
-    source_fingerprint = _source_fingerprint(
-        {
+    calibration_source_path = _calibration_report_path_from_ev(ev_report)
+    calibration_report = _calibration_report_from_ev(ev_report)
+    source_paths = {
             "pattern_lab_automation": source_path,
             "swing_improvement_automation": swing_source_path,
             "swing_pattern_lab_automation": swing_lab_source_path,
             "threshold_cycle_ev": ev_path,
-        }
-    )
+    }
+    if calibration_source_path is not None:
+        source_paths["threshold_cycle_calibration"] = calibration_source_path
+    source_fingerprint = _source_fingerprint(source_paths)
     finding_by_order_id, finding_by_title_slug = _finding_maps(automation)
     swing_finding_by_order_id, swing_finding_by_title_slug = _finding_maps(swing_automation)
     swing_lab_finding_by_order_id, swing_lab_finding_by_title_slug = _finding_maps(swing_lab_automation)
@@ -413,7 +544,10 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         for item in (swing_lab_automation.get("code_improvement_orders") or [])
         if isinstance(item, dict)
     ]
-    threshold_ev_orders = _threshold_ev_followup_orders(ev_report)
+    threshold_ev_orders = [
+        *_threshold_ev_followup_orders(ev_report),
+        *_panic_lifecycle_followup_orders(calibration_report),
+    ]
     orders = [*scalping_orders, *swing_orders, *swing_lab_orders, *threshold_ev_orders]
     seen_keys: set[tuple[str, str, str]] = set()
     deduped_orders: list[dict[str, Any]] = []
@@ -453,6 +587,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "swing_improvement_automation": str(swing_source_path) if swing_source_path.exists() else None,
             "swing_pattern_lab_automation": str(swing_lab_source_path) if swing_lab_source_path.exists() else None,
             "threshold_cycle_ev": str(ev_path) if ev_path.exists() else None,
+            "threshold_cycle_calibration": str(calibration_source_path)
+            if calibration_source_path and calibration_source_path.exists()
+            else None,
         },
         "source_fingerprint": source_fingerprint["files"],
         "policy": {
@@ -471,6 +608,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "swing_source_order_count": len(swing_orders),
             "swing_lab_source_order_count": len(swing_lab_orders),
             "threshold_ev_source_order_count": len(threshold_ev_orders),
+            "panic_lifecycle_source_order_count": len(_panic_lifecycle_followup_orders(calibration_report)),
             "selected_order_count": len(selected),
             "decision_counts": counts,
             "gemini_fresh": ((automation.get("ev_report_summary") or {}).get("gemini_fresh")),
@@ -553,6 +691,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- swing_improvement_automation: `{source.get('swing_improvement_automation') or '-'}`",
         f"- swing_pattern_lab_automation: `{source.get('swing_pattern_lab_automation') or '-'}`",
         f"- threshold_cycle_ev: `{source.get('threshold_cycle_ev') or '-'}`",
+        f"- threshold_cycle_calibration: `{source.get('threshold_cycle_calibration') or '-'}`",
         f"- generated_at: `{report.get('generated_at')}`",
         f"- generation_id: `{report.get('generation_id')}`",
         f"- source_hash: `{report.get('source_hash')}`",
@@ -590,6 +729,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- swing_source_order_count: `{summary.get('swing_source_order_count')}`",
         f"- swing_lab_source_order_count: `{summary.get('swing_lab_source_order_count')}`",
         f"- threshold_ev_source_order_count: `{summary.get('threshold_ev_source_order_count')}`",
+        f"- panic_lifecycle_source_order_count: `{summary.get('panic_lifecycle_source_order_count')}`",
         f"- selected_order_count: `{summary.get('selected_order_count')}`",
         f"- decision_counts: `{summary.get('decision_counts')}`",
         f"- gemini_fresh: `{summary.get('gemini_fresh')}`",

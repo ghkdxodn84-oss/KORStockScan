@@ -695,6 +695,7 @@ def _calibration_report_source_paths(target_date: str) -> dict[str, Path]:
         "trade_review": REPORT_DIR / "monitor_snapshots" / f"trade_review_{target_date}.json",
         "holding_exit_sentinel": REPORT_DIR / "holding_exit_sentinel" / f"holding_exit_sentinel_{target_date}.json",
         "panic_sell_defense": REPORT_DIR / "panic_sell_defense" / f"panic_sell_defense_{target_date}.json",
+        "panic_buying": REPORT_DIR / "panic_buying" / f"panic_buying_{target_date}.json",
         "holding_exit_decision_matrix": (
             REPORT_DIR / "holding_exit_decision_matrix" / f"holding_exit_decision_matrix_{target_date}.json"
         ),
@@ -716,6 +717,7 @@ def _holding_exit_report_source_paths(target_date: str) -> dict[str, Path]:
             "trade_review",
             "holding_exit_sentinel",
             "panic_sell_defense",
+            "panic_buying",
             "holding_exit_decision_matrix",
             "statistical_action_weight",
         }
@@ -747,6 +749,7 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     trade_review = _read_json_dict(source_paths["trade_review"])
     holding_exit_sentinel = _read_json_dict(source_paths["holding_exit_sentinel"])
     panic_sell_defense = _read_json_dict(source_paths["panic_sell_defense"])
+    panic_buying = _read_json_dict(source_paths["panic_buying"])
     decision_matrix = _read_json_dict(source_paths["holding_exit_decision_matrix"])
     stat_action = _read_json_dict(source_paths["statistical_action_weight"])
 
@@ -815,6 +818,22 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     panic_candidate_status = {
         str(item.get("family")): item.get("status")
         for item in panic_candidates
+        if isinstance(item, dict) and item.get("family")
+    }
+    panic_buy_metrics = panic_buying.get("panic_buy_metrics") if isinstance(panic_buying, dict) else {}
+    panic_buy_metrics = panic_buy_metrics if isinstance(panic_buy_metrics, dict) else {}
+    panic_buy_exhaustion = panic_buying.get("exhaustion_metrics") if isinstance(panic_buying, dict) else {}
+    panic_buy_exhaustion = panic_buy_exhaustion if isinstance(panic_buy_exhaustion, dict) else {}
+    panic_buy_tp = panic_buying.get("tp_counterfactual_summary") if isinstance(panic_buying, dict) else {}
+    panic_buy_tp = panic_buy_tp if isinstance(panic_buy_tp, dict) else {}
+    panic_buy_candidates = (
+        panic_buying.get("canary_candidates")
+        if isinstance(panic_buying.get("canary_candidates"), list)
+        else []
+    )
+    panic_buy_candidate_status = {
+        str(item.get("family")): item.get("status")
+        for item in panic_buy_candidates
         if isinstance(item, dict) and item.get("family")
     }
     matrix_entries = decision_matrix.get("entries") if isinstance(decision_matrix.get("entries"), list) else []
@@ -1095,6 +1114,26 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             "microstructure_max_panic_score": _safe_float(microstructure_metrics.get("max_panic_score"), None),
             "microstructure_max_recovery_score": _safe_float(microstructure_metrics.get("max_recovery_score"), None),
             "candidate_status": panic_candidate_status,
+            "allowed_runtime_apply": False,
+        },
+        "panic_buying": {
+            "panic_buy_state": panic_buying.get("panic_buy_state") if isinstance(panic_buying, dict) else None,
+            "runtime_effect": (
+                (panic_buying.get("policy") or {}).get("runtime_effect")
+                if isinstance(panic_buying.get("policy"), dict)
+                else None
+            ),
+            "panic_buy_active_count": _safe_int(panic_buy_metrics.get("panic_buy_active_count"), 0) or 0,
+            "panic_buy_watch_count": _safe_int(panic_buy_metrics.get("panic_buy_watch_count"), 0) or 0,
+            "exhaustion_candidate_count": _safe_int(panic_buy_exhaustion.get("exhaustion_candidate_count"), 0) or 0,
+            "exhaustion_confirmed_count": _safe_int(panic_buy_exhaustion.get("exhaustion_confirmed_count"), 0) or 0,
+            "max_panic_buy_score": _safe_float(panic_buy_metrics.get("max_panic_buy_score"), None),
+            "max_exhaustion_score": _safe_float(panic_buy_exhaustion.get("max_exhaustion_score"), None),
+            "avg_confidence": _safe_float(panic_buy_metrics.get("avg_confidence"), None),
+            "tp_counterfactual_count": _safe_int(panic_buy_tp.get("candidate_context_count"), 0) or 0,
+            "tp_like_exit_count": _safe_int(panic_buy_tp.get("tp_like_exit_count"), 0) or 0,
+            "trailing_winner_count": _safe_int(panic_buy_tp.get("trailing_winner_count"), 0) or 0,
+            "candidate_status": panic_buy_candidate_status,
             "allowed_runtime_apply": False,
         },
         "decision_support": {

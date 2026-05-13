@@ -106,6 +106,15 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "window_end": (15, 30),
     },
     {
+        "id": "panic_buying_report",
+        "path_template": "data/report/panic_buying/panic_buying_{date}.md",
+        "max_staleness_sec": 600,
+        "critical": False,
+        "trading_day_only": True,
+        "window_start": (9, 5),
+        "window_end": (15, 30),
+    },
+    {
         "id": "openai_ws_stability_report",
         "path_template": "data/report/openai_ws/openai_ws_stability_{date}.md",
         "max_staleness_sec": 3600,

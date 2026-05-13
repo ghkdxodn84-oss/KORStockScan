@@ -121,3 +121,69 @@ def test_runtime_approval_summary_warns_when_sources_missing(tmp_path, monkeypat
 
     assert "threshold_cycle_ev_missing" in report["warnings"]
     assert "swing_runtime_approval_missing" in report["warnings"]
+
+
+def test_runtime_approval_summary_surfaces_panic_approval_requests(tmp_path, monkeypatch):
+    ev_dir = tmp_path / "threshold_cycle_ev"
+    calibration_dir = tmp_path / "threshold_cycle_calibration"
+    swing_dir = tmp_path / "swing_runtime_approval"
+    out_dir = tmp_path / "runtime_approval_summary"
+    ev_dir.mkdir(parents=True)
+    calibration_dir.mkdir(parents=True)
+    calibration_path = calibration_dir / "threshold_cycle_calibration_2026-05-13.json"
+    calibration_path.write_text(
+        json.dumps(
+            {
+                "calibration_source_bundle": {
+                    "source_metrics": {
+                        "panic_sell_defense": {
+                            "runtime_effect": "report_only_no_mutation",
+                            "panic_state": "PANIC_SELL",
+                            "stop_loss_exit_count": 2,
+                            "confirmation_eligible_exit_count": 1,
+                            "microstructure_max_panic_score": 0.91,
+                            "candidate_status": {"panic_stop_confirmation": "report_only_candidate"},
+                        },
+                        "panic_buying": {
+                            "runtime_effect": "report_only_no_mutation",
+                            "panic_buy_state": "PANIC_BUY",
+                            "panic_buy_active_count": 1,
+                            "tp_counterfactual_count": 3,
+                            "trailing_winner_count": 1,
+                            "max_panic_buy_score": 0.88,
+                            "candidate_status": {"panic_buy_runner_tp_canary": "report_only_candidate"},
+                        },
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (ev_dir / "threshold_cycle_ev_2026-05-13.json").write_text(
+        json.dumps({"sources": {"calibration": str(calibration_path)}, "calibration_outcome": {"decisions": []}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mod,
+        "ev_report_paths",
+        lambda target_date: (
+            ev_dir / f"threshold_cycle_ev_{target_date}.json",
+            ev_dir / f"threshold_cycle_ev_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing_dir)
+    monkeypatch.setattr(mod, "SUMMARY_DIR", out_dir)
+
+    report = mod.build_runtime_approval_summary("2026-05-13")
+
+    assert report["summary"]["panic_approval_requested"] == 2
+    assert {row["family"] for row in report["panic"]} == {
+        "panic_sell_defense",
+        "panic_buy_runner_tp_canary",
+    }
+    assert all(row["state"] == "approval_required" for row in report["panic"])
+    assert all(row["selected_auto_bounded_live"] is False for row in report["panic"])
+    markdown = (out_dir / "runtime_approval_summary_2026-05-13.md").read_text(encoding="utf-8")
+    assert "## Panic" in markdown
+    assert "panic_buy_runner_tp_canary" in markdown

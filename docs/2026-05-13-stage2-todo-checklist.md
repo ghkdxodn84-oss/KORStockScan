@@ -30,6 +30,35 @@
 - 다음 액션: 12:05 intraday calibration은 due 전이므로 장중에는 report-only 상태를 유지하고, panic/holding/buy funnel 원인은 장후 attribution과 postclose threshold-cycle source bundle에서 닫는다.
 - 정정 (`2026-05-13 09:47 KST`): `holding_exit_sentinel.primary=SELL_EXECUTION_DROUGHT`는 probe-only `exit_signal`의 sparse provenance 오분류였다. 같은 `record_id`의 `swing_probe_*` sibling이 있으면 선행 `exit_signal`도 non-real로 귀속하도록 보정했고, 재생성 결과 `holding_exit_sentinel.primary=NORMAL`, `real_exit_signal=0`, `non_real_exit_signal=9`로 닫혔다. 남는 장중 관찰 경고는 `buy_funnel_sentinel.primary=UPSTREAM_AI_THRESHOLD`와 `panic_sell_defense.panic_state=PANIC_SELL`이다.
 
+- [x] `[PanicBuyingReportOnly0513] 패닉바잉 report-only 탐지/자동화체인 구현` (`Due: 2026-05-13`, `Slot: INTRADAY`, `TimeWindow: 10:00~15:30`, `Track: HoldingExit`)
+  - Source: [panic_buying_detection_codex_spec.md](/home/ubuntu/KORStockScan/docs/proposals/panic_buying_detection_codex_spec.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
+  - 판정 기준: pipeline event 복원 기반 `panic_buying_report`가 JSON/Markdown을 생성하고, 장중 wrapper/cron installer, postclose source bundle, error detector coverage, 운영문서가 모두 report-only/no-mutation contract를 유지한다.
+  - 금지: TP 정책, trailing, threshold, provider route, 자동매수/자동매도, bot restart를 변경하지 않는다.
+  - 판정: `implemented_report_only`.
+  - 다음 액션: Project/Calendar 동기화는 표준 동기화 명령으로 사용자가 수행한다.
+
+- [x] `[PanicLifecycleAutomationReview0513] 패닉셀/패닉바잉 전주기 자동화체인 점검` (`Due: 2026-05-13`, `Slot: INTRADAY`, `TimeWindow: 15:00~15:30`, `Track: HoldingExit`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - 판정 기준: `panic_sell_defense`와 `panic_buying`이 report-only source bundle에서 끝나지 않고 simulation/counterfactual 결과 기반 threshold 검토, `code_improvement_workorder`, `runtime_approval_summary` 승인요청 후보까지 이어진다.
+  - 금지: approval artifact, runtime env key, rollback guard, same-stage owner rule이 닫히기 전에는 stop/TP/trailing/threshold/provider/bot restart를 변경하지 않는다.
+  - 판정: `implemented_report_only_lifecycle`.
+  - 근거: `build_code_improvement_workorder`가 threshold-cycle calibration source bundle의 panic sell/buying metrics를 읽어 `runtime_effect=false` 설계 order를 만들고, `runtime_approval_summary`가 panic 후보를 `approval_required`로 표시하되 `selected_auto_bounded_live=false`를 유지하도록 보강했다.
+  - 다음 액션: 장후 `ThresholdDailyEVReport0513`와 `CodeImprovementWorkorderReview0513`에서 panic order 발생 여부를 확인한다.
+
+- [x] `[PanicEntryFreezeGuardV2Definition0513] panic_entry_freeze_guard V2 1차 후보 정의` (`Due: 2026-05-13`, `Slot: INTRADAY`, `TimeWindow: 15:30~15:45`, `Track: HoldingExit`)
+  - Source: [panic_entry_freeze_guard_v2_2026-05-13.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/panic_entry_freeze_guard_v2_2026-05-13.md), [panic_sell_defense_2026-05-13.md](/home/ubuntu/KORStockScan/data/report/panic_sell_defense/panic_sell_defense_2026-05-13.md)
+  - 판정 기준: 패닉셀 V2 1차 runtime 전환 후보를 기존 보유 청산 변경이 아닌 신규 진입 pre-submit freeze guard로 정의하고 approval artifact, rollback guard, runtime env key를 문서화한다.
+  - 금지: 이 정의만으로 env apply, 신규 BUY 차단, stop 완화/지연, 자동매도, bot restart, 스윙 실주문 전환을 수행하지 않는다.
+  - 판정: `defined_approval_required_candidate`.
+  - 다음 액션: 장후 `PanicEntryFreezeGuardWorkorder0513`에서 실제 구현 착수 여부를 `workorder_required|hold_report_only|defer_attribution_gap` 중 하나로 닫는다.
+
+- [x] `[PanicTelegramTransitionNotify0513] 패닉셀/패닉바잉 시작·해제 Telegram 안내 구현` (`Due: 2026-05-13`, `Slot: INTRADAY`, `TimeWindow: 15:45~16:00`, `Track: RuntimeStability`)
+  - Source: [notify_panic_state_transition.py](/home/ubuntu/KORStockScan/src/engine/notify_panic_state_transition.py), [run_panic_sell_defense_intraday.sh](/home/ubuntu/KORStockScan/deploy/run_panic_sell_defense_intraday.sh), [run_panic_buying_intraday.sh](/home/ubuntu/KORStockScan/deploy/run_panic_buying_intraday.sh)
+  - 판정 기준: report 상태가 normal/released에서 active로 바뀌거나 active에서 released로 바뀔 때만 Telegram을 보낸다. runtime wrapper 기본 수신자는 전체 등록 사용자이고, dry-run/test는 admin only다.
+  - 금지: 태그 원문(`PANIC_SELL`, `PANIC_BUY`)을 사용자 메시지에 노출하지 않는다. 알림으로 주문/threshold/provider/bot restart를 변경하지 않는다.
+  - 판정: `implemented_transition_notify`.
+  - 검증: `test_notify_panic_state_transition.py`, wrapper `bash -n`, notifier `--help` 통과.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-05-12` postclose -> `2026-05-13`)
 
@@ -112,7 +141,7 @@
   - 다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.
 
 - [ ] `[PanicEntryFreezeGuardWorkorder0513] panic_entry_freeze_guard 별도 workorder 및 rollback guard 필요 여부 판정` (`Due: 2026-05-13`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:30`, `Track: RuntimeStability`)
-  - Source: [panic_sell_defense_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/panic_sell_defense/panic_sell_defense_2026-05-12.json), [threshold_cycle_ev_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-12.json), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - Source: [panic_entry_freeze_guard_v2_2026-05-13.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/panic_entry_freeze_guard_v2_2026-05-13.md), [panic_sell_defense_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/panic_sell_defense/panic_sell_defense_2026-05-12.json), [threshold_cycle_ev_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-12.json), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
   - 판정 기준: 장후 attribution으로 당일 `panic_state`, stop-loss cluster, active sim/probe recovery, post-sell rebound, microstructure detector signal을 확인하고 `panic_entry_freeze_guard`를 별도 workorder로 열지 판정한다.
   - 금지: workorder 없이 score threshold 완화/동결, stop 완화/지연, 자동매도, bot restart, 스윙 실주문 전환을 수행하지 않는다.
   - 다음 액션: `workorder_required`, `hold_report_only`, `reject_no_panic_evidence`, `defer_attribution_gap` 중 하나로 닫는다. `workorder_required`면 적용 범위, cohort tag, rollback guard, allowed_runtime_apply 기본 false, 다음 장전 bounded canary 조건을 함께 명시한다.

@@ -164,6 +164,70 @@ def test_build_code_improvement_workorder_limits_selected_orders(tmp_path, monke
     assert report["deferred_or_rejected_count"] == 3
 
 
+def test_build_code_improvement_workorder_adds_panic_lifecycle_orders(tmp_path, monkeypatch):
+    automation_dir = tmp_path / "automation"
+    ev_dir = tmp_path / "ev"
+    calibration_dir = tmp_path / "calibration"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    for directory in (automation_dir, ev_dir, calibration_dir):
+        directory.mkdir()
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-13.json").write_text(
+        json.dumps({"date": "2026-05-13", "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    calibration_path = calibration_dir / "threshold_cycle_calibration_2026-05-13.json"
+    calibration_path.write_text(
+        json.dumps(
+            {
+                "calibration_source_bundle": {
+                    "source_metrics": {
+                        "panic_sell_defense": {
+                            "panic_state": "PANIC_SELL",
+                            "runtime_effect": "report_only_no_mutation",
+                            "stop_loss_exit_count": 3,
+                            "confirmation_eligible_exit_count": 2,
+                            "active_sim_probe_positions": 1,
+                            "candidate_status": {"panic_stop_confirmation": "report_only_candidate"},
+                        },
+                        "panic_buying": {
+                            "panic_buy_state": "PANIC_BUY",
+                            "runtime_effect": "report_only_no_mutation",
+                            "panic_buy_active_count": 1,
+                            "tp_counterfactual_count": 4,
+                            "trailing_winner_count": 2,
+                            "candidate_status": {"panic_buy_runner_tp_canary": "report_only_candidate"},
+                        },
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (ev_dir / "threshold_cycle_ev_2026-05-13.json").write_text(
+        json.dumps({"sources": {"calibration": str(calibration_path)}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-13", max_orders=5)
+
+    decisions = {item["order_id"]: item["decision"] for item in report["orders"]}
+    assert decisions["order_panic_sell_defense_lifecycle_transition_pack"] == "design_family_candidate"
+    assert decisions["order_panic_buy_runner_tp_canary_lifecycle_pack"] == "design_family_candidate"
+    assert report["summary"]["panic_lifecycle_source_order_count"] == 2
+    assert report["source"]["threshold_cycle_calibration"] == str(calibration_path)
+    markdown = (doc_dir / "code_improvement_workorder_2026-05-13.md").read_text(encoding="utf-8")
+    assert "panic_buy_runner_tp_canary" in markdown
+    assert "threshold_cycle_calibration" in markdown
+
+
 def test_build_code_improvement_workorder_merges_swing_automation(tmp_path, monkeypatch):
     scalping_dir = tmp_path / "scalping"
     swing_dir = tmp_path / "swing"

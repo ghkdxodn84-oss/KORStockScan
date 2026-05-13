@@ -391,6 +391,54 @@ def test_calibration_source_bundle_includes_panic_sell_defense(monkeypatch, tmp_
     assert metrics["allowed_runtime_apply"] is False
 
 
+def test_calibration_source_bundle_includes_panic_buying_read_only(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "REPORT_DIR", tmp_path / "report")
+    panic_path = tmp_path / "report" / "panic_buying" / "panic_buying_2026-05-13.json"
+    panic_path.parent.mkdir(parents=True, exist_ok=True)
+    panic_path.write_text(
+        json.dumps(
+            {
+                "report_type": "panic_buying",
+                "panic_buy_state": "PANIC_BUY",
+                "policy": {"runtime_effect": "report_only_no_mutation"},
+                "panic_buy_metrics": {
+                    "panic_buy_active_count": 2,
+                    "panic_buy_watch_count": 1,
+                    "max_panic_buy_score": 0.88,
+                    "avg_confidence": 0.72,
+                },
+                "exhaustion_metrics": {
+                    "exhaustion_candidate_count": 1,
+                    "exhaustion_confirmed_count": 0,
+                    "max_exhaustion_score": 0.67,
+                },
+                "tp_counterfactual_summary": {
+                    "candidate_context_count": 3,
+                    "tp_like_exit_count": 2,
+                    "trailing_winner_count": 1,
+                },
+                "canary_candidates": [
+                    {"family": "panic_buy_runner_tp_canary", "status": "report_only_candidate"}
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = report_mod._summarize_calibration_report_sources("2026-05-13")
+    metrics = bundle["source_metrics"]["panic_buying"]
+
+    assert bundle["sources"]["panic_buying"]["exists"] is True
+    assert metrics["panic_buy_state"] == "PANIC_BUY"
+    assert metrics["runtime_effect"] == "report_only_no_mutation"
+    assert metrics["panic_buy_active_count"] == 2
+    assert metrics["max_panic_buy_score"] == 0.88
+    assert metrics["tp_counterfactual_count"] == 3
+    assert metrics["candidate_status"]["panic_buy_runner_tp_canary"] == "report_only_candidate"
+    assert metrics["allowed_runtime_apply"] is False
+
+
 def test_soft_stop_calibration_holds_on_single_post_sell_source_sample():
     report_sources = {
         "schema_version": 1,
