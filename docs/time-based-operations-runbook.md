@@ -1,9 +1,9 @@
 # Time-Based Operations Runbook
 
-작성 기준: `2026-05-10 KST`
+작성 기준: `2026-05-12 KST`
 목적: 장전, 장중, 장후 자동화 체인의 시간대별 실행 주체, 산출물, 운영 확인 기준을 한 장으로 고정한다.
 
-이 문서는 실행 절차 runbook이다. 튜닝 원칙과 active owner는 [Plan Rebase](./plan-korStockScanPerformanceOptimization.rebase.md), 날짜별 작업 소유권은 `docs/YYYY-MM-DD-stage2-todo-checklist.md`, threshold-cycle/apply/daily EV 공통 산출물 정의는 [data/threshold_cycle/README.md](../data/threshold_cycle/README.md)를 기준으로 한다. 이 공통 정의는 스캘핑과 스윙이 threshold-cycle, daily EV, code-improvement workorder 체인에 들어오는 부분에 적용한다. 스윙 전용 lifecycle 산출물은 이 runbook의 `15:45`/장후 확인 절차와 `swing_lifecycle_audit`, `swing_improvement_automation`, `swing_runtime_approval`, `swing_pattern_lab_automation` artifact 정의를 함께 기준으로 본다.
+이 문서는 실행 절차 runbook이다. 튜닝 원칙과 active owner는 [Plan Rebase](./plan-korStockScanPerformanceOptimization.rebase.md), 날짜별 작업 소유권은 `docs/YYYY-MM-DD-stage2-todo-checklist.md`, 산출물 추적성은 [report-based-automation-traceability.md](./report-based-automation-traceability.md), threshold-cycle/apply/daily EV 공통 산출물 정의는 [data/threshold_cycle/README.md](../data/threshold_cycle/README.md)를 기준으로 한다. 이 공통 정의는 스캘핑과 스윙이 threshold-cycle, daily EV, code-improvement workorder 체인에 들어오는 부분에 적용한다. 스윙 전용 lifecycle 산출물은 이 runbook의 `15:45`/장후 확인 절차와 `swing_lifecycle_audit`, `swing_improvement_automation`, `swing_runtime_approval`, `swing_pattern_lab_automation` artifact 정의를 함께 기준으로 본다.
 
 ## 운영 원칙
 
@@ -16,6 +16,7 @@
 - 스윙 runtime 반영은 `proposal -> approval_required -> approved_live(dry-run)`만 허용한다. `swing_runtime_approval`이 hard floor와 EV trade-off score로 승인 요청을 만들 수 있지만, `approval_required`만으로 env를 쓰지 않는다. 사용자가 approval artifact를 남긴 경우에만 다음 장전 preopen apply가 env를 생성하며, 이때도 `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True`와 브로커 주문 차단은 유지한다.
 - 스윙 1주 real canary는 별도 approval-required 축이다. 전체 dry-run 해제가 아니라 승인된 극소수 스윙 후보에만 실제 1주 BUY/SELL을 보내 broker execution 품질을 수집하는 경로이며, phase0에서는 추가매수/AVG_DOWN/PYRAMID 실주문을 열지 않는다.
 - 스캘핑 simulator와 스윙 dry-run 성과는 `real`, `sim`, `combined`로 분리해 본다. `real`은 실제 브로커 주문이 접수된 포지션/체결, `sim`은 `actual_order_submitted=false`인 가상 체결, `combined`는 둘을 합친 calibration view다. tuning 후보 산출에는 combined를 사용할 수 있지만, provenance와 execution-quality 평가는 real/sim을 절대 섞지 않는다.
+- OFI/QI source-quality, DeepSeek data-quality, workorder lineage 같은 report-only 값은 자동화 체인의 입력으로 쓸 수 있다. 단, source-quality blocker나 workorder 생성 자체는 runtime mutation 권한이 아니며, approval artifact 또는 `auto_bounded_live` guard 없이 live env/order guard로 승격하지 않는다.
 - Sentinel은 Telegram 알림 기능을 제거한 운영 감시/report-only 축이다. 이상치는 mutation이 아니라 threshold source bundle, incident, instrumentation gap, normal drift로 라우팅한다.
 - 사람이 반드시 개입하는 지점은 운영 장애, 생성된 code improvement workorder를 Codex 세션에 넣어 구현을 요청하는 단계, 문서 backlog Project/Calendar 동기화다.
 - `build_codex_daily_workorder`는 이 runbook의 장전/장중/장후 확인절차를 `Runbook 운영 확인` 블록으로 자동 포함한다. 단, 같은 날짜 checklist에 `PreopenAutomationHealthCheckYYYYMMDD`/`IntradayAutomationHealthCheckYYYYMMDD`/`PostcloseAutomationHealthCheckYYYYMMDD` 운영 확인 기록이 남은 슬롯은 이미 처리된 것으로 보고 같은 날짜 workorder에서 제외한다. 같은 확인 큐는 `RunbookOps` track으로 GitHub Project와 Google Calendar에도 동기화되어 operator가 놓치지 않게 한다. GitHub Project 동기화가 rate limit 등으로 지연돼도 workorder는 기본값 `CODEX_WORKORDER_INCLUDE_LOCAL_DOCS=true`로 로컬 checklist 미완료 항목을 병합한다.
@@ -205,15 +206,15 @@
 | `12:05` | cron | `deploy/run_threshold_cycle_calibration.sh` with `THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER=openai` | `data/report/threshold_cycle_calibration/threshold_cycle_calibration_YYYY-MM-DD_intraday.json`, `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_intraday.{json,md}`, `logs/threshold_cycle_calibration_intraday_cron.log` | `[START]/[DONE]/[FAIL] threshold-cycle calibration target_date=YYYY-MM-DD phase=intraday` marker와 `calibration_state`, `safety_revert_required`, `ai_status`, `guard_reject_reason` 확인 | 장중 calibration 결과를 당일 runtime에 적용 금지 |
 | `15:20~15:30` | runtime/cron | 오버나이트 flow, HOLD/EXIT sentinel final window | pipeline events, holding sentinel | `SELL_TODAY`, `HOLD_OVERNIGHT`, force-exit/safety 이벤트 확인 | flow `TRIM`을 부분청산 구현 없이 HOLD로 해석 금지 |
 | `15:45` | cron | `deploy/run_swing_live_dry_run_report.sh` | `data/report/swing_selection_funnel/swing_selection_funnel_YYYY-MM-DD.{json,md}`, `data/report/swing_lifecycle_audit/swing_lifecycle_audit_YYYY-MM-DD.{json,md}`, `data/report/swing_threshold_ai_review/swing_threshold_ai_review_YYYY-MM-DD.{json,md}`, `data/report/swing_improvement_automation/swing_improvement_automation_YYYY-MM-DD.{json,md}`, `data/report/swing_runtime_approval/swing_runtime_approval_YYYY-MM-DD.{json,md}`, status JSON, `logs/swing_live_dry_run_cron.log` | `swing_sim_*` stage, `actual_order_submitted=false`, `recommendation_db_load.db_load_skip_reason`, `scale_in_observation`, `ai_contract_metrics`, lifecycle axis coverage, swing threshold AI proposal-only status, `approval_required`/blocked reason 확인 | 스윙 dry-run/lifecycle 리포트 결과로 당일 runtime guard 완화 금지. approval request는 다음 장전 승인 입력일 뿐 즉시 적용 아님 |
-| `16:10` | cron | `deploy/run_threshold_cycle_postclose.sh` with OpenAI correction | threshold partition, `threshold_cycle_YYYY-MM-DD.json`, `statistical_action_weight`, `holding_exit_decision_matrix`, `threshold_cycle_cumulative`, postclose AI review, swing lifecycle automation, swing runtime approval, pattern lab automation, code improvement workorder, daily EV report, runtime approval summary, postclose verification, 다음 영업일 stage2 checklist | `logs/threshold_cycle_postclose_cron.log`, `threshold_cycle_ev_YYYY-MM-DD.md`, `runtime_approval_summary_YYYY-MM-DD.md`, `threshold_cycle_postclose_verification_YYYY-MM-DD.md`, real/sim/combined split, swing/scalping automation freshness, `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md`, 다음 영업일 `docs/YYYY-MM-DD-stage2-todo-checklist.md`를 확인하고 지연/누락은 `warning` 또는 `fail`로 분류 | `2026-05-12`부터 wrapper는 direct predecessor artifact가 없으면 `THRESHOLD_CYCLE_ARTIFACT_WAIT_SEC` 동안 대기하고 JSON 검증 후에만 후행 단계를 실행한다. `threshold_cycle_ev`는 workorder source용 pre-pass와 workorder summary refresh용 post-pass로 2회 생성한다. `threshold_cycle_postclose_verification`은 `[DONE]` 직전 latest `START` 이후 predecessor wait/fail/timeout과 workorder `generation_id/source_hash/lineage`를 자동 점검한다. postclose 실패 시 다음 장전 auto apply 입력이 부정확하므로 먼저 재실행/복구. runtime approval summary는 읽기 전용 엿보기 artifact이며 flow 조정/차단 권한이 없다 |
+| `16:10` | cron | `deploy/run_threshold_cycle_postclose.sh` with OpenAI correction | threshold partition, postclose `panic_sell_defense`, `openai_ws_stability`, `threshold_cycle_YYYY-MM-DD.json`, `statistical_action_weight`, `holding_exit_decision_matrix`, `threshold_cycle_cumulative`, postclose AI review, swing lifecycle automation, swing runtime approval, pattern lab automation, code improvement workorder, daily EV report, runtime approval summary, postclose verification, 다음 영업일 stage2 checklist | `logs/threshold_cycle_postclose_cron.log`, `panic_sell_defense_YYYY-MM-DD.md`, `openai_ws_stability_YYYY-MM-DD.md`, `threshold_cycle_ev_YYYY-MM-DD.md`, `runtime_approval_summary_YYYY-MM-DD.md`, `threshold_cycle_postclose_verification_YYYY-MM-DD.md`, real/sim/combined split, swing/scalping automation freshness, `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md`, 다음 영업일 `docs/YYYY-MM-DD-stage2-todo-checklist.md`를 확인하고 지연/누락은 `warning` 또는 `fail`로 분류 | `2026-05-12`부터 wrapper는 direct predecessor artifact가 없으면 `THRESHOLD_CYCLE_ARTIFACT_WAIT_SEC` 동안 대기하고 JSON 검증 후에만 후행 단계를 실행한다. `2026-05-13`부터 postclose wrapper는 threshold-cycle report 전에 `panic_sell_defense_report`와 `openai_ws_stability_report`를 한 번 더 생성해 panic attribution과 OpenAI WS transport provenance를 다음 장전 checklist source로 고정한다. `threshold_cycle_ev`는 workorder source용 pre-pass와 workorder summary refresh용 post-pass로 2회 생성한다. `threshold_cycle_postclose_verification`은 `[DONE]` 직전 latest `START` 이후 predecessor wait/fail/timeout과 workorder `generation_id/source_hash/lineage`를 자동 점검한다. postclose 실패 시 다음 장전 auto apply 입력이 부정확하므로 먼저 재실행/복구. runtime approval summary는 읽기 전용 엿보기 artifact이며 flow 조정/차단 권한이 없다 |
 | `18:00` | cron | `deploy/run_tuning_monitoring_postclose.sh` | Parquet/DuckDB refresh status, `data/report/tuning_monitoring/status/*` | `canonical_runner=THRESHOLD_CYCLE_POSTCLOSE`인지 확인 | pattern lab 중복 실행 금지 |
 | `18:30~19:00` | checklist checkpoint | 날짜별 checklist의 스윙 실주문/floor 후속 판단 항목 | `swing_runtime_approval`, `swing_live_dry_run` status, `swing_daily_simulation`, `threshold_cycle_ev` | 실주문 전환은 `global dry-run 유지`/`one-share real canary approval request`/`hold_sample|freeze` 중 하나로만 닫고, floor 변경은 `approval_required|hold_sample|freeze`로 닫는다 | 전체 스윙 실주문 전환과 approval artifact 없는 floor env 작성 금지 |
-| `21:00` | cron | `update_kospi.py` | `logs/update_kospi.log`, `data/runtime/update_kospi_status/update_kospi_YYYY-MM-DD.json` | `[START]/[DONE]/[FAIL]` marker와 status JSON의 `status`, `failed_steps`, 최신 DB quote 상태 확인. `2026-05-12`부터 detector window end는 `21:50`으로 보고 그 전 `START-only`는 in-progress로 본다 | 매매 runtime과 무관한 데이터 갱신으로 취급. `completed_with_warnings`는 추천/리포트 후속 chain 실패 여부를 분리 확인 |
+| `21:00` | cron | `update_kospi.py` | `logs/update_kospi.log`, `data/runtime/update_kospi_status/update_kospi_YYYY-MM-DD.json`, `data/daily_recommendations_v2.csv` | `[START]/[DONE]/[FAIL]` marker와 status JSON의 `status`, `failed_steps`, `warning_steps`, `recovered_steps`, 최신 DB quote 상태 확인. `2026-05-12`부터 detector window end는 `21:50`으로 보고 그 전 `START-only`는 in-progress로 본다 | 매매 runtime과 무관한 데이터 갱신으로 취급. `completed_with_warnings`는 DB 적재 실패와 동일하지 않으며 추천/대시보드/스윙 일일 리포트 후속 step 실패를 분리 확인 |
 | `22:30` | cron | `eod_analyzer.py` | `logs/eod_analyzer.log` | EOD 분석 실패 여부 확인 | threshold daily EV를 대체하지 않는다 |
 | `22:55` | cron | 봇 tmux 세션 종료 | tmux session 상태 | 장 종료 후 잔여 세션 확인 | 장중 세션 종료와 혼동 금지 |
 | `23:10` | cron | dashboard DB archive | `logs/dashboard_db_archive_cron.log` | archive skipped/error 확인 | 미검증 파일 강제 삭제 금지 |
 | `23:20` | cron | log rotation cleanup | `logs/log_rotation_cleanup_cron.log` | deleted/size 추세 확인 | 당일 장애 분석 전 로그 수동 삭제 금지 |
-| `*:00/5` | cron | `deploy/run_error_detection.sh full` | `data/report/error_detection/error_detection_YYYY-MM-DD.json`, `logs/run_error_detection.log` | wrapper가 `logs/run_error_detection.log`를 보장하고 `[START]/[DONE]/[FAIL]` marker를 남기는지 확인. 6개 detector (process health, cron, log, artifact, resource, stale lock). 4개 report-only, 2개 filesystem maintenance mutation (flag gated) | 탐지 결과로 runtime threshold/spread/주문 자동 변경 금지 |
+| `*:00/5` | cron | `bash deploy/run_error_detection.sh full` | `data/report/error_detection/error_detection_YYYY-MM-DD.json`, `logs/run_error_detection.log` | wrapper가 `logs/run_error_detection.log`를 보장하고 `[START]/[DONE]/[FAIL]` marker를 남기는지 확인. 6개 detector (process health, cron, log, artifact, resource, stale lock). 4개 report-only, 2개 filesystem maintenance mutation (flag gated). `summary_severity=fail`이면 bot daemon이 떠 있지 않아도 wrapper가 관리자 Telegram 직접 알림을 시도한다 | 탐지 결과로 runtime threshold/spread/주문 자동 변경 금지. Telegram 알림은 report-only 운영 알림이며 자동 복구/재시작 권한이 아니다 |
 
 ## System Error Detector 사용 절차
 
@@ -250,10 +251,12 @@ PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode full --dry-run
 
 | 경로 | 용도 | 명령/트리거 | 결과 |
 | --- | --- | --- | --- |
-| cron | 5분 단위 운영 report 생성 | `deploy/run_error_detection.sh full` | `data/report/error_detection/error_detection_YYYY-MM-DD.json`, `logs/run_error_detection.log` (`touch` 보장) |
+| cron | 5분 단위 운영 report 생성 및 fail 관리자 알림 | `bash deploy/run_error_detection.sh full` | `data/report/error_detection/error_detection_YYYY-MM-DD.json`, `logs/run_error_detection.log` (`touch` 보장), fail 시 `notify_error_detection_admin` Telegram direct notify |
 | bot daemon | 장중 빠른 health alert | `bot_main.py` 내부 `error_detection_loop` | 동일 report 갱신, fail 전환/summary 변경 시 `SYSTEM_HEALTH_ALERT` |
 | 수동 dry-run | 배포 전/수정 후 안전 점검 | `PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode full --dry-run` | report 파일 미작성, filesystem mutation 차단 |
 | 수동 단일 범위 | 특정 detector 재현 | `--mode health_only|cron_only|log_only|auth_only|artifact_only|resource_only` | 해당 detector만 실행 |
+
+`run_error_detection.sh`의 직접 Telegram 알림은 `KORSTOCKSCAN_ERROR_DETECTION_TELEGRAM_NOTIFY_ENABLED=false`로 비활성화할 수 있다. 동일 fail signature는 `tmp/error_detection_telegram_notify_state.json` 기준 10분 cooldown으로 중복 전송을 막는다.
 
 설치/갱신 명령:
 
@@ -277,7 +280,7 @@ ls -l data/report/error_detection/error_detection_$(TZ=Asia/Seoul date +%F).json
 | `cron_completion` | 필수 cron log의 당일 DONE 누락 또는 FAIL 최신 marker | 해당 cron log와 산출물 재확인 후 같은 date 재실행 여부 판단 | 실패를 threshold 성과로 해석 |
 | `log_scanner` | error log burst 또는 신규 error pattern. `ERROR`/`CRITICAL`/traceback/exception/에러/오류/실패 같은 에러 후보 라인만 분류하며, `_error.log`에 섞인 INFO/WARNING성 DB 성공·업로드 로그는 운영 incident에서 제외한다. `TEST`, `123456`, `_DummySession`, `bus fail`처럼 pytest fixture signature가 붙은 라인도 제외한다 | stack trace/source artifact 확인 후 incident 또는 code workorder로 분리. fixture noise나 INFO성 운영 로그가 runtime error log에 섞이면 test/log sink 분리 또는 scanner ignore rule 보강으로 닫는다 | 에러만 보고 live guard 완화 |
 | `kiwoom_auth_8005_restart` | fresh runtime log에서 `8005 Token이 유효하지 않습니다` 계열 인증 실패 감지. 기존 offset 이전 로그, pytest fixture signature, `run_error_detection*` meta log는 제외한다 | `restart.flag` 기반 graceful restart 후 새 PID, WS 수신, REST 시세/잔고 응답 회복을 확인한다. 하루 3회 이상이면 operator가 token 발급/캐시/WS reconnect 경로를 별도 incident로 본다 | hot-refresh, 주문 retry, threshold/spread/order guard 변경 |
-| `artifact_freshness` | 시간창 기준 필수 report/artifact stale/누락 또는 JSON status 값 비정상. 장중 `pipeline_events`는 09:00~09:05 startup grace를 두고, `threshold_events` compact stream은 sparse stream이라 stale을 warning으로 본다 | window, startup grace, trading_day skip, upstream cron 실패, status JSON의 `failed_steps` 확인 | 누락 artifact를 수동 값으로 대체 |
+| `artifact_freshness` | 시간창 기준 필수 report/artifact stale/누락 또는 JSON status 값 비정상. 장중 `pipeline_events`는 09:00~09:05 startup grace를 두고, `threshold_events` compact stream은 sparse stream이라 stale을 warning으로 본다. `threshold_cycle_ev`와 `swing_daily_simulation` 같은 one-shot postclose artifact는 완료 후 age만으로 재실행하지 않는다 | window, startup grace, trading_day skip, upstream cron 실패, status JSON의 `failed_steps`/`recovered_steps` 확인 | 누락 artifact를 수동 값으로 대체 |
 | `resource_usage` | CPU/memory/swap/load/disk threshold 위반, sampler stale | resource pressure 원인 확인. disk-low면 log rotate 결과와 cooldown state 확인. swap만 높고 `mem_available`이 충분한 경우는 즉시 장애보다 reclaim/캐시 잔존 가능성을 먼저 본다 | 전략 runtime parameter 변경 |
 | `stale_lock` | 오래된 lock 발견 또는 cleanup 실패 | active lock인지 확인. 반복되면 wrapper lock lifecycle 보강 | 실행 중인 process lock 강제 삭제 |
 
@@ -370,6 +373,15 @@ grep -n "SWING_LIVE_ORDER_DRY_RUN_ENABLED" data/threshold_cycle/runtime_env/thre
 tmux ls
 ```
 
+### PreopenAutomationHealthCheck20260513 운영 확인 기록
+
+- checked_at: `2026-05-13 08:44 KST`
+- 판정: `pass`
+- 근거: `threshold_cycle_preopen_cron.log`에 `2026-05-13` preopen `[DONE]` marker가 있고, `threshold_apply_2026-05-13.json` status는 `auto_bounded_live_ready`, runtime_change=`true`다. `threshold_runtime_env_2026-05-13.env/json`은 `2026-05-13T08:16:05+09:00` 기준으로 생성됐고 selected family는 `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe`다. bot PID `9785`가 동일 runtime env와 OpenAI Responses WS env를 로드 중이며, error detector full dry-run은 process/cron/artifact/resource/stale-lock 모두 pass 또는 not_yet_due로 닫혔다. `final_ensemble_scanner`는 `2026-05-13T07:29:51` `[DONE]` marker를 남겼고 추천 CSV/diagnostics가 존재한다.
+- warning: 최초 장전 확인 시 checklist Source의 `data/report/openai_ws/openai_ws_stability_2026-05-12.md`가 존재하지 않아 dangling source를 확인했다. `2026-05-13 08:47 KST`에 동일 모듈로 5/12 artifact를 재생성했고 `decision=keep_ws`, unique WS calls=`582`, fallback=`0`, entry_price WS sample=`0`을 확인했다. 재발 방지를 위해 postclose wrapper와 error detector artifact coverage에 `openai_ws_stability_report`를 추가했다. `analyze_target`/`entry_price` transport provenance는 `OpenAIWSIntradaySample0513`에서 장중 표본으로 재확인한다.
+- swing approval: `swing_runtime_approval_2026-05-12.json`은 approval request 2건을 만들었지만 apply plan은 approved=`0`, blocked=`approval_artifact_missing`으로 차단했다. 스윙 관련 env는 장전 runtime env에 반영되지 않았다.
+- 다음 액션: 장중 runtime threshold mutation은 하지 않고 selected family provenance, OpenAI transport 표본, sim/probe source-quality를 각각 장중 체크리스트에서 확인한다.
+
 ## 장중 확인 절차
 
 `build_codex_daily_workorder --slot INTRADAY`는 이 절차를 `IntradayAutomationHealthCheckYYYYMMDD`로 자동 포함한다.
@@ -424,14 +436,15 @@ ls -l data/report/panic_sell_defense/panic_sell_defense_$(TZ=Asia/Seoul date +%F
 7. 스윙 postclose는 `recommendation_db_load`, `scale_in_observation`, `ai_contract_metrics`, `ofi_qi_summary`, `runtime_effect=false`, `allowed_runtime_apply=false`, `approval_requests`, `blocked_requests`를 확인한다.
 8. `swing_runtime_approval`에서 hard floor 통과 여부와 `tradeoff_score >=0.68` 요청을 확인한다. 요청이 생성되어도 approval artifact가 없으면 다음 장전 env 반영은 금지된다.
 9. DeepSeek 스윙 lab re-entry는 `run_manifest.json`의 `analysis_window.start == target_date == end`와 필수 JSON schema 유효성이 닫힌 경우에만 fresh로 본다. stale/range/malformed output은 warning만 남기고 order로 승격하지 않는다.
-10. 스윙 실주문 전환 checkpoint는 전체 live 전환이 아니라 최대 `swing_one_share_real_canary` 승인 요청 여부만 판단한다. 승인 artifact가 없으면 `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True`를 유지한다.
-11. 스윙 숫자 floor checkpoint는 `swing_model_floor` 후보를 `approval_required|hold_sample|freeze`로 닫는다. 사용자 approval artifact가 없으면 다음 장전 floor env를 쓰지 않는다.
-12. code improvement workorder는 same-day `threshold_cycle_ev`, `scalping_pattern_lab_automation`, `swing_improvement_automation`, `swing_pattern_lab_automation`을 source로 읽는다. `2026-05-12`부터 postclose wrapper는 `threshold_cycle_ev` pre-pass artifact를 먼저 확인한 뒤 workorder를 만들고, workorder JSON/Markdown이 닫힌 다음 `threshold_cycle_ev`를 한 번 더 재생성해 workorder summary를 refresh한다.
-13. 신규 code improvement order는 scalping/swing source를 병합해 자동으로 작업지시서로 변환된다. 사용자는 `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md`를 Codex 세션에 넣고 구현을 요청한다.
-14. `build_next_stage2_checklist`가 다음 KRX 영업일 checklist를 생성/갱신한다. 이 checklist가 사람 개입/판정/승인 요구사항의 source of truth이며, `codex_daily_workorder_*.md`는 checklist/Project/RunbookOps를 읽어 만든 downstream 전달물이라 자동화 입력으로 쓰지 않는다.
-15. `threshold_cycle_postclose_verification_YYYY-MM-DD.{json,md}`는 postclose wrapper 마지막 단계에서 생성한다. 이 artifact가 latest `START` 이후 predecessor wait/timeout/fail을 요약하고, same-day workorder 재생성 판단은 `mtime`이 아니라 `generation_id`, `source_hash`, `lineage.{new,removed,decision_changed}_order_ids`를 우선 사용했는지 확인한다.
-16. 날짜별 checklist를 수정했다면 parser 검증 후 Project/Calendar 동기화 명령을 사용자에게 남긴다.
-17. OpenAI AI correction은 품질 우선 `gpt-5.5` 경로라 수 분 단위로 걸릴 수 있다. 2026-05-08 postclose 재측정 기준 `real 744.78s`가 소요됐고, `OPENAI_API_KEY_2`, `gpt-5.5`, `reasoning_effort=high`, `schema_name=threshold_ai_correction_v1`, `ai_status=parsed`로 완료됐다. 15분 이내 실행 중이면 `not_yet_due`, 15분 초과 미생성이면 cron log와 job 종료 여부를 확인해 `warning` 또는 `fail`로 분류한다. cron timeout은 이보다 짧게 잡지 않는다.
+10. OFI/QI source-quality는 `stale_missing_flag` 단일 boolean으로만 보지 않고 `micro_missing`, `micro_stale`, `observer_unhealthy`, `micro_not_ready`, `state_insufficient` reason과 unique record count를 함께 본다. 이 값은 `source_quality_blocked_families`와 approval/workorder blocker 입력으로 쓸 수 있지만, 단독 runtime mutation 근거는 아니다.
+11. 스윙 실주문 전환 checkpoint는 전체 live 전환이 아니라 최대 `swing_one_share_real_canary` 승인 요청 여부만 판단한다. 승인 artifact가 없으면 `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True`를 유지한다.
+12. 스윙 숫자 floor checkpoint는 `swing_model_floor` 후보를 `approval_required|hold_sample|freeze`로 닫는다. 사용자 approval artifact가 없으면 다음 장전 floor env를 쓰지 않는다.
+13. code improvement workorder는 same-day `threshold_cycle_ev`, `scalping_pattern_lab_automation`, `swing_improvement_automation`, `swing_pattern_lab_automation`을 source로 읽는다. `2026-05-12`부터 postclose wrapper는 `threshold_cycle_ev` pre-pass artifact를 먼저 확인한 뒤 workorder를 만들고, workorder JSON/Markdown이 닫힌 다음 `threshold_cycle_ev`를 한 번 더 재생성해 workorder summary를 refresh한다.
+14. 신규 code improvement order는 scalping/swing source를 병합해 자동으로 작업지시서로 변환된다. 사용자는 `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md`를 Codex 세션에 넣고 구현을 요청한다.
+15. `build_next_stage2_checklist`가 다음 KRX 영업일 checklist를 생성/갱신한다. 이 checklist가 사람 개입/판정/승인 요구사항의 source of truth이며, `codex_daily_workorder_*.md`는 checklist/Project/RunbookOps를 읽어 만든 downstream 전달물이라 자동화 입력으로 쓰지 않는다.
+16. `threshold_cycle_postclose_verification_YYYY-MM-DD.{json,md}`는 postclose wrapper 마지막 단계에서 생성한다. 이 artifact가 latest `START` 이후 predecessor wait/timeout/fail을 요약하고, same-day workorder 재생성 판단은 `mtime`이 아니라 `generation_id`, `source_hash`, `lineage.{new,removed,decision_changed}_order_ids`를 우선 사용했는지 확인한다.
+17. 날짜별 checklist를 수정했다면 parser 검증 후 Project/Calendar 동기화 명령을 사용자에게 남긴다.
+18. OpenAI AI correction은 품질 우선 `gpt-5.5` 경로라 수 분 단위로 걸릴 수 있다. 2026-05-08 postclose 재측정 기준 `real 744.78s`가 소요됐고, `OPENAI_API_KEY_2`, `gpt-5.5`, `reasoning_effort=high`, `schema_name=threshold_ai_correction_v1`, `ai_status=parsed`로 완료됐다. 15분 이내 실행 중이면 `not_yet_due`, 15분 초과 미생성이면 cron log와 job 종료 여부를 확인해 `warning` 또는 `fail`로 분류한다. cron timeout은 이보다 짧게 잡지 않는다.
 
 표준 확인 명령:
 
@@ -447,7 +460,36 @@ ls -l data/report/swing_daily_simulation/swing_daily_simulation_$(TZ=Asia/Seoul 
 ls -l data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_$(TZ=Asia/Seoul date +%F).json
 ls -l data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_$(TZ=Asia/Seoul date +%F).md
 ls -l docs/code-improvement-workorders/code_improvement_workorder_$(TZ=Asia/Seoul date +%F).md
+ls -l data/report/runtime_approval_summary/runtime_approval_summary_$(TZ=Asia/Seoul date +%F).md
+ls -l data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_$(TZ=Asia/Seoul date +%F).md
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500
+```
+
+## 21:00 데이터 갱신 확인 절차
+
+`update_kospi.py`는 매매 runtime과 분리된 EOD 데이터 체인이다. DB 적재, dashboard upload, swing recommendation, swing daily reports가 한 status JSON 안에 step별로 남는다.
+
+1. `logs/update_kospi.log`에서 당일 `[START] update_kospi target_date=YYYY-MM-DD`와 `[DONE]` 또는 `[FAIL]` marker를 확인한다.
+2. `data/runtime/update_kospi_status/update_kospi_YYYY-MM-DD.json`의 `status`, `failed_steps`, `warning_steps`, `recovered_steps`, `db_state.latest_quote_date`, `db_state.rows_on_latest_date`를 확인한다.
+3. `status=completed_with_warnings`는 DB 장애와 동일하지 않다. `failed_steps`가 `recommend_daily_v2`, `upload_today_dashboard_files`, `swing_daily_reports` 중 어디인지 분리한다.
+4. `recommend_daily_v2` 실패는 `data/daily_recommendations_v2.csv` 갱신 여부와 traceback을 같이 본다. 2026-05-12 복구 이후 추천 모델 subprocess는 repo root `cwd`와 직접 실행 sys.path bootstrap을 요구한다.
+5. `log_scanner`가 `_error.log` 안의 INFO성 `DB 일괄 삽입 성공`/`DB 업로드 완료`를 DB 장애로 해석하지 않도록, 실제 ERROR/traceback 후보 라인과 status JSON을 우선 본다.
+6. `update_kospi` 실행은 보통 20~40분 걸릴 수 있다. `2026-05-12`부터 detector window end는 `21:50`이며, 그 전 `START-only`는 `in_progress`로 본다.
+
+표준 확인 명령:
+
+```bash
+tail -n 160 logs/update_kospi.log
+STATUS_PATH="data/runtime/update_kospi_status/update_kospi_$(TZ=Asia/Seoul date +%F).json"
+ls -l "$STATUS_PATH"
+PYTHONPATH=. .venv/bin/python - "$STATUS_PATH" <<'PY'
+import json
+import sys
+from pathlib import Path
+payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+print({k: payload.get(k) for k in ["status", "failed_steps", "warning_steps", "recovered_steps", "db_state"]})
+PY
+ls -l data/daily_recommendations_v2.csv data/daily_recommendations_v2_diagnostics.json
 ```
 
 ## real / sim / combined 판정 기준

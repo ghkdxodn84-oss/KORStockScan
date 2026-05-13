@@ -25,6 +25,7 @@ def test_new_operational_feature_must_declare_detector_coverage():
     assert "system_metric_sampler" in REQUIRED_CRON_JOB_IDS
     assert "panic_sell_defense" in REQUIRED_CRON_JOB_IDS
     assert "panic_sell_defense_report" in REQUIRED_ARTIFACT_IDS
+    assert "openai_ws_stability_report" in REQUIRED_ARTIFACT_IDS
     assert "swing_lifecycle_audit_report" in REQUIRED_ARTIFACT_IDS
     assert "swing_improvement_automation_report" in REQUIRED_ARTIFACT_IDS
     assert "swing_live_dry_run_status" in REQUIRED_ARTIFACT_IDS

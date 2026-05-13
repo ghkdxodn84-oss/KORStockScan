@@ -11,16 +11,18 @@ def _event(
     hhmmss: str,
     *,
     stage: str = "exit_signal",
+    pipeline: str = "HOLDING_PIPELINE",
     record_id: int = 1,
+    stock_code: str = "000001",
     fields: dict | None = None,
 ) -> dict:
     return {
         "schema_version": 1,
         "event_type": "pipeline_event",
-        "pipeline": "HOLDING_PIPELINE",
+        "pipeline": pipeline,
         "stage": stage,
         "stock_name": "테스트종목",
-        "stock_code": "000001",
+        "stock_code": stock_code,
         "record_id": record_id,
         "fields": fields or {},
         "emitted_at": f"{TARGET_DATE}T{hhmmss}",
@@ -50,6 +52,25 @@ def _panic_rows() -> list[dict]:
         )
         for idx in range(5)
     ]
+
+
+def _micro_event(hhmmss: str, *, close: float, volume: float = 100.0, buy: float = 52.0, sell: float = 48.0, **fields):
+    payload = {
+        "curr_price": close,
+        "open": fields.pop("open", close),
+        "high": fields.pop("high", close),
+        "low": fields.pop("low", close),
+        "volume": volume,
+        "buy_exec_volume": buy,
+        "sell_exec_volume": sell,
+        **fields,
+    }
+    return _event(
+        hhmmss,
+        pipeline="ENTRY_PIPELINE",
+        stage="orderbook_stability_observed",
+        fields=payload,
+    )
 
 
 def test_normal_state_without_panic_threshold(monkeypatch, tmp_path):
@@ -220,3 +241,68 @@ def test_post_sell_feedback_is_separate_from_closed_pnl(monkeypatch, tmp_path):
     post_sell = report["recovery_metrics"]["post_sell_feedback"]
     assert post_sell["rebound_above_sell_10_20m_pct"] == 55.0
     assert post_sell["rebound_above_buy_10_20m_pct"] == 20.0
+
+
+def test_microstructure_detector_adds_report_only_risk_off_without_order_action(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        [
+            _micro_event("10:00:00", close=100.0),
+            _micro_event("10:01:00", close=100.0),
+            _micro_event(
+                "10:02:00",
+                close=97.5,
+                open=100.0,
+                high=100.1,
+                low=97.45,
+                volume=420,
+                buy=28,
+                sell=72,
+                best_bid=9700,
+                best_ask=9710,
+                bid_depth_l5=540,
+                ask_depth_l5=1400,
+                panic_spread_ratio=2.0,
+                orderbook_micro_ofi_z=-2.7,
+                orderbook_micro_qi_ewma=0.38,
+                orderbook_micro_state="bearish",
+                orderbook_micro_ready=True,
+                orderbook_micro_observer_healthy=True,
+            ),
+            _micro_event(
+                "10:03:00",
+                close=97.0,
+                open=97.6,
+                high=97.7,
+                low=96.9,
+                volume=430,
+                buy=27,
+                sell=73,
+                best_bid=9690,
+                best_ask=9710,
+                bid_depth_l5=500,
+                ask_depth_l5=1500,
+                panic_spread_ratio=2.1,
+                orderbook_micro_ofi_z=-2.8,
+                orderbook_micro_qi_ewma=0.36,
+                orderbook_micro_state="bearish",
+                orderbook_micro_ready=True,
+                orderbook_micro_observer_healthy=True,
+            ),
+        ],
+    )
+
+    report = report_mod.build_panic_sell_defense_report(
+        TARGET_DATE,
+        as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:04:00"),
+    )
+
+    micro = report["microstructure_detector"]
+    assert report["panic_state"] == "PANIC_SELL"
+    assert report["policy"]["runtime_effect"] == "report_only_no_mutation"
+    assert micro["risk_off_advisory_count"] == 1
+    assert micro["allow_new_long_false_count"] == 1
+    assert micro["latest_signals"][0]["risk_off_advisory"] is True
+    assert micro["policy"]["does_not_submit_orders"] is True
+    assert all(item["allowed_runtime_apply"] is False for item in report["canary_candidates"])

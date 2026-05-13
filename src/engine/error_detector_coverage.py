@@ -35,6 +35,7 @@ REQUIRED_ARTIFACT_IDS: set[str] = {
     "buy_funnel_sentinel_report",
     "holding_exit_sentinel_report",
     "panic_sell_defense_report",
+    "openai_ws_stability_report",
     "threshold_postclose_report",
     "code_improvement_workorder",
     "system_metric_samples",

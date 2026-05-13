@@ -5,8 +5,8 @@
 - panic_state: `RECOVERY_WATCH`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-05-12T15:30:19`
-- latest_event_at: `2026-05-12T15:30:18`
+- as_of: `2026-05-13T08:33:25`
+- latest_event_at: `2026-05-12T21:09:27`
 - reasons: `panic thresholds breached; recovery watch triggered by active sim/probe or post-sell rebound above sell`
 
 ## 패닉 지표
@@ -14,7 +14,7 @@
 - real_exit_count: `32`
 - non_real_exit_count: `32`
 - stop_loss_exit_count: `24`
-- current_30m_stop_loss_exit_count: `1`
+- current_30m_stop_loss_exit_count: `0`
 - max_rolling_30m_stop_loss_exit_count: `17`
 - stop_loss_exit_ratio_pct: `75`
 - avg_exit_profit_rate_pct: `-1.1216`
@@ -30,6 +30,19 @@
 - sim_probe_provenance_passed: `true`
 - post_sell_rebound_above_sell_10_20m_pct: `0`
 - post_sell_rebound_above_buy_10_20m_pct: `0`
+
+## Microstructure Detector
+
+- evaluated_symbol_count: `17`
+- risk_off_advisory_count: `0`
+- allow_new_long_false_count: `0`
+- panic_signal_count: `0`
+- recovery_candidate_count: `0`
+- recovery_confirmed_count: `0`
+- missing_orderbook_count: `5`
+- degraded_orderbook_count: `5`
+- max_panic_score: `0.3`
+- max_recovery_score: `0.5793`
 
 ## 방어 액션
 

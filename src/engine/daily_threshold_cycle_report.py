@@ -797,6 +797,16 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     post_sell_recovery = (
         recovery_metrics.get("post_sell_feedback") if isinstance(recovery_metrics.get("post_sell_feedback"), dict) else {}
     )
+    microstructure_detector = (
+        panic_sell_defense.get("microstructure_detector")
+        if isinstance(panic_sell_defense.get("microstructure_detector"), dict)
+        else {}
+    )
+    microstructure_metrics = (
+        microstructure_detector.get("metrics")
+        if isinstance(microstructure_detector.get("metrics"), dict)
+        else {}
+    )
     panic_candidates = (
         panic_sell_defense.get("canary_candidates")
         if isinstance(panic_sell_defense.get("canary_candidates"), list)
@@ -867,6 +877,10 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             "position_rebased_after_fill": _safe_int(buy_stage_events.get("position_rebased_after_fill"), 0) or 0,
             "submitted_to_budget_unique_pct": _safe_float(buy_ratios.get("submitted_to_budget_unique_pct"), None),
             "submitted_to_ai_unique_pct": _safe_float(buy_ratios.get("submitted_to_ai_unique_pct"), None),
+            "panic_state": panic_sell_defense.get("panic_state") if isinstance(panic_sell_defense, dict) else None,
+            "panic_detected": bool(panic_metrics.get("panic_detected")),
+            "panic_by_stop_loss_count": bool(panic_metrics.get("panic_by_stop_loss_count")),
+            "panic_stop_loss_exit_count": _safe_int(panic_metrics.get("stop_loss_exit_count"), 0) or 0,
             "missed_winner_rate": _safe_float(missed_metrics.get("missed_winner_rate"), None),
             "avoided_loser_rate": _safe_float(missed_metrics.get("avoided_loser_rate"), None),
             "blocked_ai_score_evaluated": _safe_int(ai_score_outcome.get("evaluated_candidates"), 0) or 0,
@@ -1058,6 +1072,28 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             "post_sell_rebound_above_buy_10_20m_pct": _safe_float(
                 post_sell_recovery.get("rebound_above_buy_10_20m_pct"), None
             ),
+            "microstructure_evaluated_symbol_count": _safe_int(
+                microstructure_detector.get("evaluated_symbol_count"), 0
+            )
+            or 0,
+            "microstructure_risk_off_advisory_count": _safe_int(
+                microstructure_detector.get("risk_off_advisory_count"), 0
+            )
+            or 0,
+            "microstructure_allow_new_long_false_count": _safe_int(
+                microstructure_detector.get("allow_new_long_false_count"), 0
+            )
+            or 0,
+            "microstructure_missing_orderbook_count": _safe_int(
+                microstructure_detector.get("missing_orderbook_count"), 0
+            )
+            or 0,
+            "microstructure_degraded_orderbook_count": _safe_int(
+                microstructure_detector.get("degraded_orderbook_count"), 0
+            )
+            or 0,
+            "microstructure_max_panic_score": _safe_float(microstructure_metrics.get("max_panic_score"), None),
+            "microstructure_max_recovery_score": _safe_float(microstructure_metrics.get("max_recovery_score"), None),
             "candidate_status": panic_candidate_status,
             "allowed_runtime_apply": False,
         },
@@ -3721,11 +3757,30 @@ def _calibration_state_for_family(
         family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
         avg_ev = _safe_float(source_metrics.get("score65_74_avg_expected_ev_pct"), None)
         avg_close = _safe_float(source_metrics.get("score65_74_avg_close_10m_pct"), None)
+        panic_state = str(source_metrics.get("panic_state") or "")
+        panic_detected = bool(source_metrics.get("panic_detected")) or bool(
+            source_metrics.get("panic_by_stop_loss_count")
+        )
+        panic_adjusted_floor = max(1, int(round(sample_floor * 0.7))) if sample_floor > 0 else 0
         submitted_to_budget = _safe_float(source_metrics.get("submitted_to_budget_unique_pct"), None)
         if sample_count >= sample_floor and ((avg_ev is not None and avg_ev < 2.0) or (avg_close is not None and avg_close < 1.0)):
             return ("hold", "score65~74 EV/close_10m 우위가 efficient trade-off gate에 미달해 값 유지")
         if submitted_to_budget is not None and submitted_to_budget > 60.0:
             return ("hold", "submitted drought가 아니므로 probe live 확대보다 baseline funnel 유지")
+        if (
+            0 < panic_adjusted_floor <= sample_count < sample_floor
+            and (panic_detected or panic_state in {"PANIC_SELL", "RECOVERY_WATCH"})
+            and avg_ev is not None
+            and avg_ev >= 2.0
+            and avg_close is not None
+            and avg_close >= 1.0
+            and (submitted_to_budget is None or submitted_to_budget <= 10.0)
+        ):
+            return (
+                "adjust_up",
+                f"panic-adjusted floor 통과({sample_count}/{sample_floor}, adjusted_floor={panic_adjusted_floor}); "
+                "BUY drought일의 양호한 score65~74 missed EV를 1주/5만원 bounded canary로 유지",
+            )
         if sample_count >= sample_floor and ready:
             return (
                 "adjust_up",
@@ -3910,6 +3965,28 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
         sample_count = max(_family_sample_count(family), source_sample_count)
         sample_floor = int(metadata.get("sample_floor") or 0)
         source_ready = source_sample_count >= sample_floor
+        if output_family == "score65_74_recovery_probe":
+            adjusted_floor = max(1, int(round(sample_floor * 0.7))) if sample_floor > 0 else 0
+            avg_ev = _safe_float(source_metrics.get("score65_74_avg_expected_ev_pct"), None)
+            avg_close = _safe_float(source_metrics.get("score65_74_avg_close_10m_pct"), None)
+            submitted_to_budget = _safe_float(source_metrics.get("submitted_to_budget_unique_pct"), None)
+            panic_state = str(source_metrics.get("panic_state") or "")
+            panic_detected = bool(source_metrics.get("panic_detected")) or bool(
+                source_metrics.get("panic_by_stop_loss_count")
+            )
+            panic_adjusted_ready = (
+                0 < adjusted_floor <= sample_count < sample_floor
+                and (panic_detected or panic_state in {"PANIC_SELL", "RECOVERY_WATCH"})
+                and avg_ev is not None
+                and avg_ev >= 2.0
+                and avg_close is not None
+                and avg_close >= 1.0
+                and (submitted_to_budget is None or submitted_to_budget <= 10.0)
+            )
+            if panic_adjusted_ready:
+                source_ready = True
+                recommended = dict(recommended)
+                recommended["enabled"] = True
         sample_ready = bool(family.get("apply_ready")) or source_ready
         calibration_state, calibration_reason = _calibration_state_for_family(
             output_family,
@@ -3920,6 +3997,8 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
             sample_ready=sample_ready,
         )
         sample_floor_status = "ready" if sample_count >= sample_floor and sample_ready else "hold_sample"
+        if output_family == "score65_74_recovery_probe" and sample_ready and sample_count < sample_floor:
+            sample_floor_status = "panic_adjusted_ready"
         if calibration_state == "freeze":
             sample_floor_status = "direction_conflict_or_live_risk"
         if calibration_state == "hold_no_edge":

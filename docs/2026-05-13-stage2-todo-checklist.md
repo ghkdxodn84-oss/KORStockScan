@@ -13,6 +13,14 @@
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality 입력이며 실주문 전환 근거가 아니다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
+### PreopenAutomationHealthCheck20260513 운영 확인 기록
+
+- checked_at: `2026-05-13 08:44 KST`
+- 판정: `pass`
+- 근거: `threshold_cycle_preopen_cron.log`에 `2026-05-13` preopen `[DONE]` marker가 있고, `threshold_apply_2026-05-13.json` status=`auto_bounded_live_ready`, runtime_change=`true`다. runtime env는 `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe`만 selected family로 반영했고 bot PID `9785`가 동일 env와 OpenAI Responses WS env를 로드 중이다. `final_ensemble_scanner`는 `2026-05-13T07:29:51` `[DONE]` marker를 남겼고, error detector full dry-run도 pass다.
+- warning: 최초 장전 확인 시 `openai_ws_stability_2026-05-12.md` artifact가 없어 `OpenAIWSIntradaySample0513` 장중 표본 재확인을 남겼다. `2026-05-13 08:47 KST`에 동일 모듈로 5/12 artifact를 재생성했고 `decision=keep_ws`, unique WS calls=`582`, fallback=`0`, entry_price WS sample=`0`을 확인했다.
+- 다음 액션: 장중 runtime threshold mutation 없이 selected family provenance, OpenAI transport 표본, sim/probe source-quality만 확인한다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-05-12` postclose -> `2026-05-13`)
 
@@ -22,23 +30,33 @@
 
 ## 장전 체크리스트 (08:45~09:00)
 
-- [ ] `[ThresholdEnvAutoApplyPreopen0513] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-05-13`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
+- [x] `[ThresholdEnvAutoApplyPreopen0513] threshold env 자동 apply 산출물 및 사용자 개입 여부 확인` (`Due: 2026-05-13`, `Slot: PREOPEN`, `TimeWindow: 08:50~08:55`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-12.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)
   - 판정 기준: 전일 postclose EV와 당일 apply plan/runtime env를 확인하고 `auto_bounded_live` guard 통과분만 runtime env로 인정한다.
   - 금지: blocked family, approval artifact missing, same-stage owner conflict를 수동 env override로 우회하지 않는다.
   - 다음 액션: `applied_guard_passed_env`, `blocked_no_env`, `partial_apply_with_blocked_families`, `failed_preopen_wrapper`, `not_yet_due` 중 하나로 닫는다.
+  - 실행 메모 (`2026-05-13 08:11 KST`): 장전 preopen supersede로 `score65_74_recovery_probe`의 panic-adjusted floor 규칙을 추가했다. 5/12 `panic_state=RECOVERY_WATCH`, `panic_detected=true`, score65~74 sample `14/20`, EV `+2.2277%`, close10m `+2.5788%`, submitted drought 조건을 근거로 `panic_adjusted_ready -> adjust_up` 판정했고, `threshold_runtime_env_2026-05-13.env`를 재생성해 `KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true`를 복원했다. 기존 07:44 env는 08:11 env로 superseded됐고, bot PID `9785`가 새 env를 로드했다.
+  - 판정 (`2026-05-13 08:44 KST`): `applied_guard_passed_env`.
+  - 근거: `threshold_apply_2026-05-13.json` status=`auto_bounded_live_ready`, runtime_change=`true`, generated_at=`2026-05-13T08:16:05+09:00`; runtime env는 `KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED=true`, `KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true`만 포함한다. bot PID `9785`의 `/proc` env에서도 동일 값과 `KORSTOCKSCAN_THRESHOLD_RUNTIME_APPLY_DATE=2026-05-13`을 확인했다.
+  - 다음 액션: 장중에는 runtime threshold mutation 없이 selected family provenance와 rollback guard만 관찰한다.
 
-- [ ] `[OpenAIWSPreopenConfirm0513] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-13`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
+- [x] `[OpenAIWSPreopenConfirm0513] OpenAI WS 유지 설정 및 entry_price/analyze_target provenance 확인` (`Due: 2026-05-13`, `Slot: PREOPEN`, `TimeWindow: 08:55~09:00`, `Track: RuntimeStability`)
   - Source: [openai_ws_stability_2026-05-12.md](/home/ubuntu/KORStockScan/data/report/openai_ws/openai_ws_stability_2026-05-12.md), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [ai_engine_openai.py](/home/ubuntu/KORStockScan/src/engine/ai_engine_openai.py)
   - 판정 기준: startup env의 OpenAI route/Responses WS 설정과 `analyze_target`, `entry_price` transport provenance를 분리 확인한다.
   - 금지: provider transport 확인을 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경으로 해석하지 않는다.
   - 다음 액션: entry_price transport 표본이 부족하면 장중 표본 재확인 항목과 연결한다.
+  - 판정 (`2026-05-13 08:44 KST`): `warning_source_report_missing_but_runtime_env_pass`.
+  - 근거: 최초 확인 시 checklist Source의 `openai_ws_stability_2026-05-12.md`는 실제로 존재하지 않았고 최신 openai_ws stability artifact는 `2026-05-11`까지만 있었다. 원인은 `build_next_stage2_checklist.py`가 source_date OpenAI WS report를 무조건 Source로 참조하지만, `run_threshold_cycle_postclose.sh`에는 해당 report 생성 단계가 없었기 때문이다. `2026-05-13 08:47 KST`에 `src.engine.openai_ws_stability_report --date 2026-05-12`로 재생성했고 `decision=keep_ws`, unique WS calls=`582`, fallback=`0/582`, p95 AI response=`2648.2ms`, entry_price WS sample=`0`을 확인했다. 현재 bot PID `9785` env는 `KORSTOCKSCAN_SCALPING_AI_ROUTE=openai`, `KORSTOCKSCAN_OPENAI_TRANSPORT_MODE=responses_ws`, `KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED=true`, pool_size=`2`, timeout_ms=`15000`, reasoning_effort=`auto`를 로드했고, tmux runtime 로그에 `메인 스캘핑 OpenAI 엔진 고정 완료`가 남았다.
+  - 다음 액션: `OpenAIWSIntradaySample0513`에서 `analyze_target`/`entry_price` 실제 transport provenance 표본을 장중 확인한다. 재발 방지를 위해 postclose wrapper가 `openai_ws_stability_report`를 생성하도록 보강했다.
 
-- [ ] `[SwingApprovalArtifactPreopen0513] 스윙 approval request 및 별도 승인 artifact 존재 여부 확인` (`Due: 2026-05-13`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
+- [x] `[SwingApprovalArtifactPreopen0513] 스윙 approval request 및 별도 승인 artifact 존재 여부 확인` (`Due: 2026-05-13`, `Slot: PREOPEN`, `TimeWindow: 08:45~08:50`, `Track: RuntimeStability`)
   - Source: [swing_runtime_approval_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-12.json), [threshold_cycle_ev_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-12.json)
   - 판정 기준: approval request가 있더라도 사용자 승인 artifact가 없으면 env apply 대상이 아니다.
   - 금지: 스윙 dry-run 해제, real canary, floor, scale-in real canary를 서로 자동 승인하지 않는다.
   - 다음 액션: `approval_artifact_present`, `approval_artifact_missing`, `blocked_by_policy` 중 하나로 닫는다.
+  - 판정 (`2026-05-13 08:44 KST`): `approval_artifact_missing`.
+  - 근거: `swing_runtime_approval_2026-05-12.json`은 `swing_model_floor`, `swing_gatekeeper_reject_cooldown` 2건을 `approval_required`로 생성했지만 `threshold_apply_2026-05-13.json`의 `swing_runtime_approval`은 requested=`2`, approved=`0`, blocked=`approval_artifact_missing`, approval_artifact=`null`이다. runtime env에는 스윙 approval env가 추가되지 않았다.
+  - 다음 액션: approval artifact 없는 상태에서는 스윙 floor/cooldown/real canary/scale-in real canary를 적용하지 않는다.
 
 ## 장중 체크리스트 (09:05~15:20)
 
@@ -74,11 +92,19 @@
   - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
   - 다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.
 
+- [ ] `[PanicEntryFreezeGuardWorkorder0513] panic_entry_freeze_guard 별도 workorder 및 rollback guard 필요 여부 판정` (`Due: 2026-05-13`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:30`, `Track: RuntimeStability`)
+  - Source: [panic_sell_defense_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/panic_sell_defense/panic_sell_defense_2026-05-12.json), [threshold_cycle_ev_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-12.json), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
+  - 판정 기준: 장후 attribution으로 당일 `panic_state`, stop-loss cluster, active sim/probe recovery, post-sell rebound, microstructure detector signal을 확인하고 `panic_entry_freeze_guard`를 별도 workorder로 열지 판정한다.
+  - 금지: workorder 없이 score threshold 완화/동결, stop 완화/지연, 자동매도, bot restart, 스윙 실주문 전환을 수행하지 않는다.
+  - 다음 액션: `workorder_required`, `hold_report_only`, `reject_no_panic_evidence`, `defer_attribution_gap` 중 하나로 닫는다. `workorder_required`면 적용 범위, cohort tag, rollback guard, allowed_runtime_apply 기본 false, 다음 장전 bounded canary 조건을 함께 명시한다.
+
 - [ ] `[HumanInterventionSummary0513] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-05-13`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-12.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - 판정 기준: 개입사항을 `승인 artifact 필요`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`으로 분류한다.
   - 금지: 자동화 산출물에 있는 요청을 답변에만 남기고 checklist/Project 대상에서 누락하지 않는다.
   - 다음 액션: 누락된 항목이 있으면 다음 영업일 checklist에 parser-friendly checkbox로 추가한다.
+  - 실행 메모 (`2026-05-13 07:57 KST`): `run_error_detection.sh`가 detector `summary_severity=fail`일 때 bot daemon/EventBus 없이도 `notify_error_detection_admin`으로 관리자 Telegram direct notify를 시도하도록 보강했다. 동일 fail signature는 10분 cooldown으로 중복 억제하고, 알림은 report-only이며 runtime threshold/spread/order/restart mutation 권한은 없다.
+  - 실행 메모 (`2026-05-13 08:35 KST`): `panic_sell_state_detector`는 `panic_sell_defense_report`의 `microstructure_detector`로 소비되고, `panic_sell_defense`는 threshold-cycle source bundle과 `score65_74_recovery_probe` panic-adjusted floor 입력으로 연결된 것을 확인했다. 장중 cron 산출물 의존만으로는 장후 attribution canonical source가 약해질 수 있어 `run_threshold_cycle_postclose.sh`가 threshold-cycle report 전에 `panic_sell_defense_report`를 재생성하도록 보강했다. 이 단계는 report-only이며 score/stop threshold 변경, 자동매도, bot restart 권한이 없다.
 
 - [ ] `[ShadowCanaryCohortReview0513] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-13`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)

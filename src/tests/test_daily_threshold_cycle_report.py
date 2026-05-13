@@ -358,6 +358,17 @@ def test_calibration_source_bundle_includes_panic_sell_defense(monkeypatch, tmp_
                     {"family": "panic_entry_freeze_guard", "status": "report_only_candidate"},
                     {"family": "panic_rebound_probe", "status": "hold_until_recovery_confirmed"},
                 ],
+                "microstructure_detector": {
+                    "evaluated_symbol_count": 3,
+                    "risk_off_advisory_count": 1,
+                    "allow_new_long_false_count": 1,
+                    "missing_orderbook_count": 1,
+                    "degraded_orderbook_count": 1,
+                    "metrics": {
+                        "max_panic_score": 0.84,
+                        "max_recovery_score": 0.41,
+                    },
+                },
             },
             ensure_ascii=False,
         ),
@@ -373,6 +384,10 @@ def test_calibration_source_bundle_includes_panic_sell_defense(monkeypatch, tmp_
     assert metrics["max_rolling_30m_stop_loss_exit_count"] == 17
     assert metrics["active_sim_probe_provenance_passed"] is True
     assert metrics["candidate_status"]["panic_entry_freeze_guard"] == "report_only_candidate"
+    assert metrics["microstructure_evaluated_symbol_count"] == 3
+    assert metrics["microstructure_risk_off_advisory_count"] == 1
+    assert metrics["microstructure_degraded_orderbook_count"] == 1
+    assert metrics["microstructure_max_panic_score"] == 0.84
     assert metrics["allowed_runtime_apply"] is False
 
 
@@ -711,6 +726,55 @@ def test_efficient_tradeoff_calibration_adds_entry_bad_entry_and_adm_candidates(
     assert candidates["holding_exit_decision_matrix_advisory"]["calibration_state"] == "hold_no_edge"
     assert candidates["holding_exit_decision_matrix_advisory"]["apply_mode"] == "report_only_calibration"
     assert candidates["holding_exit_decision_matrix_advisory"]["sample_floor_status"] == "minimum_edge_missing"
+
+
+def test_score65_74_recovery_probe_uses_panic_adjusted_floor():
+    report_sources = {
+        "schema_version": 1,
+        "target_date": "2026-05-12",
+        "sources": {
+            "buy_funnel_sentinel": {"path": "data/report/buy_funnel_sentinel/buy_funnel_sentinel_2026-05-12.json", "exists": True},
+            "wait6579_ev_cohort": {"path": "data/report/monitor_snapshots/wait6579_ev_cohort_2026-05-12.json", "exists": True},
+            "panic_sell_defense": {"path": "data/report/panic_sell_defense/panic_sell_defense_2026-05-12.json", "exists": True},
+        },
+        "source_metrics": {
+            "buy_score65_74": {
+                "sentinel_primary": "UPSTREAM_AI_THRESHOLD",
+                "sentinel_secondary": [],
+                "panic_state": "RECOVERY_WATCH",
+                "panic_detected": True,
+                "panic_by_stop_loss_count": True,
+                "score65_74_candidates": 14,
+                "wait6579_total_candidates": 14,
+                "score65_74_avg_expected_ev_pct": 2.2277,
+                "score65_74_avg_close_10m_pct": 2.5788,
+                "score65_74_avg_mfe_10m_pct": 3.886,
+                "full_samples": 14,
+                "partial_samples": 0,
+                "threshold_relaxation_approved": False,
+                "budget_pass": 0,
+                "latency_pass": 0,
+                "order_bundle_submitted": 0,
+                "submitted_to_budget_unique_pct": 0.0,
+            }
+        },
+        "new_observation_axis_created": False,
+    }
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-12",
+        pipeline_loader=lambda target_date: [],
+        report_source_loader=lambda target_date: report_sources,
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    candidate = {item["family"]: item for item in report["calibration_candidates"]}["score65_74_recovery_probe"]
+    assert candidate["calibration_state"] == "adjust_up"
+    assert candidate["sample_count"] == 14
+    assert candidate["sample_floor"] == 20
+    assert candidate["sample_floor_status"] == "panic_adjusted_ready"
+    assert candidate["recommended_values"]["enabled"] is True
+    assert "panic-adjusted floor" in candidate["calibration_reason"]
 
 
 def test_bad_entry_refined_candidate_waits_for_postclose_lifecycle_attribution(tmp_path, monkeypatch):

@@ -136,7 +136,7 @@ family별 기준 window는 다르게 적용한다.
 | `holding_flow_ofi_smoothing` | `daily_intraday` | `rolling_5d` | defer cost/HOLD_DEFER_DANGER는 장중 운영 상태가 빠르게 변하므로 당일 artifact를 우선하되 재발성만 rolling으로 본다. |
 | `protect_trailing_smoothing` | `rolling_10d` | `daily`, `rolling_20d` | 단일 tick/단일 종목이 아니라 반복 이탈과 safety guard를 본다. |
 | `trailing_continuation` | `rolling_10d` | `daily`, `rolling_20d` | GOOD_EXIT 훼손 리스크 때문에 당일 단독 live apply를 금지한다. |
-| `score65_74_recovery_probe` | `daily_intraday` | `rolling_5d`, `cumulative_since_2026-04-21` | BUY drought는 당일 병목을 빠르게 보되 EV/close 우위와 false-positive risk는 rolling으로 확인한다. |
+| `score65_74_recovery_probe` | `daily_intraday` | `rolling_5d`, `cumulative_since_2026-04-21` | BUY drought는 당일 병목을 빠르게 보되 EV/close 우위와 false-positive risk는 rolling으로 확인한다. 전일 `panic_sell_defense.panic_detected` 또는 `panic_state in {PANIC_SELL, RECOVERY_WATCH}`이고 score65~74 표본이 sample floor의 70% 이상, EV/close 우위와 submitted drought guard를 통과하면 `panic_adjusted_ready`로 다음 장전 bounded canary 유지 후보가 될 수 있다. |
 | `bad_entry_refined_canary` | `rolling_10d` | `daily`, `cumulative_since_2026-04-21` | loser classifier 과적합을 피하기 위해 누적/rolling tail, 당일 safety, 장후 post-sell outcome join을 같이 본다. runtime 후보만으로 배드엔트리 확정 라벨을 붙이지 않는다. |
 | `holding_exit_decision_matrix_advisory` | `latest_report` | `rolling_bucket_context` | 최신 matrix edge가 있어야 하며 bucket confidence는 SAW rolling context를 참조한다. |
 | `scale_in_price_guard` | `rolling_10d` | `cumulative_since_2026-04-21`, `daily` | 물타기/불타기는 체결 표본이 희소하므로 당일만으로 guard 값을 정하지 않는다. |

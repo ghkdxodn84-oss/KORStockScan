@@ -13,9 +13,9 @@
 - swing_improvement_automation: `/home/ubuntu/KORStockScan/data/report/swing_improvement_automation/swing_improvement_automation_2026-05-12.json`
 - swing_pattern_lab_automation: `/home/ubuntu/KORStockScan/data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_2026-05-12.json`
 - threshold_cycle_ev: `/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-12.json`
-- generated_at: `2026-05-12T21:05:54+09:00`
-- generation_id: `2026-05-12-5abbfc31939d`
-- source_hash: `5abbfc31939dffedcaab60313d1641234dbc026363b0f2842778d63b45f9440a`
+- generated_at: `2026-05-13T08:26:08+09:00`
+- generation_id: `2026-05-12-0c2d2c09dd86`
+- source_hash: `0c2d2c09dd8691c4ae652d53976ade20d14c7ffa30f1bd5421e7d2567495b5e7`
 
 ## 운영 원칙
 
@@ -37,8 +37,8 @@
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-05-12-a02cfa1ec079`
-- previous_source_hash: `a02cfa1ec079a773f358b26c4424aa2f3d320fb73f909b51fbda200d09e50ca4`
+- previous_generation_id: `2026-05-12-5abbfc31939d`
+- previous_source_hash: `5abbfc31939dffedcaab60313d1641234dbc026363b0f2842778d63b45f9440a`
 - new_order_ids: `[]`
 - removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`

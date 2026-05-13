@@ -1,8 +1,8 @@
 # KORStockScan 문서 구조
 
-작성 기준: 2026-05-09 KST
+작성 기준: 2026-05-12 KST
 
-이 디렉터리는 Plan Rebase 이후의 운영 의사결정, 날짜별 실행 체크리스트, 감리/리포트 증적을 관리한다. 현재 판단의 원본은 루트 기준 문서와 날짜별 checklist이고, 과거 전환 증적은 `archive/`에 보존한다.
+이 디렉터리는 Plan Rebase 이후의 운영 의사결정, 날짜별 실행 체크리스트, runbook, report traceability, 감리/리포트 증적을 관리한다. 현재 판단의 원본은 루트 기준 문서와 날짜별 checklist이고, 과거 전환 증적은 `archive/`에 보존한다.
 
 ## 먼저 볼 문서
 
@@ -10,8 +10,10 @@
 - `plan-korStockScanPerformanceOptimization.prompt.md`: 작업 시작 프롬프트와 문서 참조 순서.
 - `plan-korStockScanPerformanceOptimization.execution-delta.md`: 원 계획 대비 실행 차이와 보정 기록.
 - `plan-korStockScanPerformanceOptimization.performance-report.md`: Plan Rebase 성과 판정과 반복 성과 기준.
+- `time-based-operations-runbook.md`: 장전, 장중, 장후, 21:00 EOD 데이터 갱신 cron 확인 절차.
+- `report-based-automation-traceability.md`: report 산출물, downstream consumer, runtime mutation 금지선, postclose chain contract.
 - `stage2-todo-checklist-template.md`: 날짜별 checklist 작성 형식.
-- `2026-05-04-stage2-todo-checklist.md` 이후 날짜별 checklist: 실제 실행 작업항목의 소유 문서. 최신 미래 실행표는 `2026-05-11-stage2-todo-checklist.md`다.
+- `2026-05-04-stage2-todo-checklist.md` 이후 날짜별 checklist: 실제 실행 작업항목의 소유 문서. 최신 미래 실행표는 `2026-05-13-stage2-todo-checklist.md`다.
 
 작업 시작 시에는 `plan-korStockScanPerformanceOptimization.rebase.md` §1~§8과 당일 checklist의 `오늘 목적`, `오늘 강제 규칙`을 먼저 확인한다. 당일 checklist가 없으면 Plan Rebase §7~§8과 최신 실행표의 상단 요약을 같이 확인한다.
 
@@ -21,14 +23,14 @@
 
 - 현재 또는 미래 작업을 소유하는 날짜별 checklist.
 - Plan Rebase, prompt, execution delta, performance report처럼 반복 참조되는 기준 문서.
-- 현재 checklist 또는 Plan Rebase가 직접 참조하는 workorder와 운영 runbook.
+- 현재 checklist 또는 Plan Rebase가 직접 참조하는 workorder, 운영 runbook, report traceability 문서.
 - 날짜별 checklist parser가 읽어야 하는 작업항목 소유 문서.
 
 과거 판단 근거이지만 현재 작업항목을 직접 소유하지 않는 문서는 성격별 하위 디렉터리 또는 `archive/`로 이동한다. 이동 시 기존 링크는 새 위치로 보정하고 parser 검증을 수행한다.
 
 ## 날짜별 Checklist
 
-- `2026-05-04-stage2-todo-checklist.md`부터 `2026-05-11-stage2-todo-checklist.md`: 현재 Plan Rebase 흐름의 장전/장중/장후 작업 소유 문서.
+- `2026-05-04-stage2-todo-checklist.md`부터 `2026-05-13-stage2-todo-checklist.md`: 현재 Plan Rebase 흐름의 장전/장중/장후 작업 소유 문서.
 - `2026-04-20-stage2-todo-checklist.md`부터 `2026-05-02-stage2-todo-checklist.md`: 과거 실행 증적. 현재 문서에서 직접 참조되는 동안 루트에 유지한다.
 - 완료된 checklist의 `[x]` 항목은 증적이며 현재 OPEN owner로 보지 않는다. 현재 owner는 Plan Rebase와 최신 checklist에서 확인한다.
 
@@ -42,11 +44,22 @@
 - `personal/`: 개인 보조 메모. 실행 판정의 `Source`로 쓰지 않는다.
 - `reference/`: API 문서, AI coding instruction 등 일반 참조 문서.
 
-## Report/Threshold 운영문서
+## 운영/Traceability 문서
 
+- `time-based-operations-runbook.md`: 시간대별 cron, 산출물, 확인 절차, 운영 금지선. `16:10` postclose chain, `21:00` update_kospi 데이터 갱신 확인 절차를 포함한다.
+- `report-based-automation-traceability.md`: 산출물별 producer/consumer/owner, postclose direct predecessor contract, workorder lineage, source-quality automation input 기준.
 - `../data/report/README.md`: 정기 생성 Markdown report, 입력 JSON/JSONL, 누락 report 후보의 기준.
 - `../data/threshold_cycle/README.md`: threshold cycle 산출물, manifest/report 운영 방법, live mutation 제한 기준.
-- report 또는 threshold 산출물 변경이 작업계획에 영향을 주면 Plan Rebase와 prompt 문서도 함께 현행화한다.
+- report 또는 threshold 산출물 변경이 작업계획에 영향을 주면 Plan Rebase와 날짜별 checklist를 함께 현행화한다.
+
+## 루트 예외 문서
+
+루트에 남은 `workorder-*.md`, `deepseek-*.md` 중 일부는 완료된 과거 문서지만 현재 checklist, Plan Rebase, acceptance spec에서 절대경로로 직접 참조한다. 링크 안정성과 parser 입력 보존을 위해 아래 조건 중 하나에 해당하면 이동하지 않는다.
+
+- Plan Rebase 또는 `2026-05-13-stage2-todo-checklist.md`가 직접 참조한다.
+- 과거 checklist의 `Source`로 남아 감사 추적성이 필요한 문서다.
+- acceptance spec, audit report, build report가 루트 경로를 전제로 참조한다.
+- 이동하려면 참조 링크 보정과 parser 검증을 같은 변경 세트에서 수행해야 한다.
 
 ## 감사/감리 문서
 
@@ -59,7 +72,7 @@
 - `workorder-*.md`: 현재 또는 최근 checklist가 직접 참조하는 작업 지시, 실행 로그, 결과 문서.
 - `code-reviews/`: 현재 개선축에서 참조되는 코드리뷰/성능 감사 증적.
 - `proposals/`: 현재 개선축에서 참조되는 운영 제안 증적.
-- 완료되어 후속 checklist와 Plan Rebase에서 직접 참조하지 않는 workorder는 `archive/legacy-workorders/`로 이동한다.
+- 완료되어 후속 checklist와 Plan Rebase에서 직접 참조하지 않고 루트 예외 조건에도 해당하지 않는 workorder는 `archive/legacy-workorders/`로 이동한다.
 
 ## Archive
 

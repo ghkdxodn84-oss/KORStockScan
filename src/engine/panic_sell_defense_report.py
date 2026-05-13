@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from src.engine.panic_sell_state_detector import summarize_microstructure_detector_from_events
 from src.utils.constants import DATA_DIR
 
 
@@ -467,12 +468,20 @@ def _resolve_panic_state(
     panic_metrics: dict[str, Any],
     active_recovery: dict[str, Any],
     post_sell_recovery: dict[str, Any],
+    microstructure_detector: dict[str, Any] | None = None,
 ) -> tuple[str, list[str]]:
     reasons: list[str] = []
-    if not panic_metrics.get("panic_detected"):
+    micro = microstructure_detector if isinstance(microstructure_detector, dict) else {}
+    micro_risk_off = _safe_int(micro.get("risk_off_advisory_count"), 0) > 0
+    micro_recovery_watch = _safe_int(micro.get("recovery_candidate_count"), 0) > 0
+    micro_recovery_confirmed = _safe_int(micro.get("recovery_confirmed_count"), 0) > 0
+    if not panic_metrics.get("panic_detected") and not micro_risk_off and not micro_recovery_watch and not micro_recovery_confirmed:
         reasons.append("panic thresholds not breached")
         return "NORMAL", reasons
-    reasons.append("panic thresholds breached")
+    if panic_metrics.get("panic_detected"):
+        reasons.append("panic thresholds breached")
+    if micro_risk_off:
+        reasons.append("microstructure risk_off advisory detected")
     active_avg = active_recovery.get("avg_unrealized_profit_rate_pct")
     active_win_rate = active_recovery.get("win_rate_pct")
     post_sell_above_sell = _safe_float(post_sell_recovery.get("rebound_above_sell_10_20m_pct"), 0.0) or 0.0
@@ -485,12 +494,12 @@ def _resolve_panic_state(
         and active_avg > RECOVERY_CONFIRMED_ACTIVE_AVG_FLOOR_PCT
     )
     post_sell_confirmed = post_sell_above_buy >= RECOVERY_CONFIRMED_REBOUND_ABOVE_BUY_FLOOR_PCT
-    if active_confirmed or post_sell_confirmed:
+    if active_confirmed or post_sell_confirmed or micro_recovery_confirmed:
         reasons.append("recovery confirmed by active sim/probe or post-sell rebound above buy")
         return "RECOVERY_CONFIRMED", reasons
     active_watch = active_avg is not None and active_avg > RECOVERY_WATCH_ACTIVE_AVG_FLOOR_PCT
     post_sell_watch = post_sell_above_sell >= RECOVERY_WATCH_REBOUND_ABOVE_SELL_FLOOR_PCT
-    if active_watch or post_sell_watch:
+    if active_watch or post_sell_watch or micro_recovery_watch:
         reasons.append("recovery watch triggered by active sim/probe or post-sell rebound above sell")
         return "RECOVERY_WATCH", reasons
     reasons.append("recovery conditions not yet met")
@@ -590,7 +599,13 @@ def build_panic_sell_defense_report(
     panic_metrics = _summarize_exit_metrics(events, as_of=as_of)
     active_recovery = _summarize_active_recovery()
     post_sell_recovery = _post_sell_recovery_metrics(target_date)
-    panic_state, reasons = _resolve_panic_state(panic_metrics, active_recovery, post_sell_recovery)
+    microstructure_detector = summarize_microstructure_detector_from_events(events, as_of=as_of)
+    panic_state, reasons = _resolve_panic_state(
+        panic_metrics,
+        active_recovery,
+        post_sell_recovery,
+        microstructure_detector,
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "report_type": "panic_sell_defense",
@@ -612,6 +627,7 @@ def build_panic_sell_defense_report(
             "active_sim_probe": active_recovery,
             "post_sell_feedback": post_sell_recovery,
         },
+        "microstructure_detector": microstructure_detector,
         "defense_actions": _defense_actions(panic_state, panic_metrics),
         "canary_candidates": _canary_candidates(panic_state, panic_metrics, active_recovery),
         "source_summary": _load_source_summary(target_date),
@@ -636,6 +652,7 @@ def build_markdown(report: dict[str, Any]) -> str:
     panic = report["panic_metrics"]
     active = report["recovery_metrics"]["active_sim_probe"]
     post_sell = report["recovery_metrics"]["post_sell_feedback"]
+    micro = report.get("microstructure_detector") if isinstance(report.get("microstructure_detector"), dict) else {}
     lines = [
         f"# Panic Sell Defense {report['target_date']}",
         "",
@@ -669,6 +686,19 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- sim_probe_provenance_passed: `{str((active.get('provenance_check') or {}).get('passed', False)).lower()}`",
         f"- post_sell_rebound_above_sell_10_20m_pct: `{_fmt(post_sell['rebound_above_sell_10_20m_pct'])}`",
         f"- post_sell_rebound_above_buy_10_20m_pct: `{_fmt(post_sell['rebound_above_buy_10_20m_pct'])}`",
+        "",
+        "## Microstructure Detector",
+        "",
+        f"- evaluated_symbol_count: `{micro.get('evaluated_symbol_count', 0)}`",
+        f"- risk_off_advisory_count: `{micro.get('risk_off_advisory_count', 0)}`",
+        f"- allow_new_long_false_count: `{micro.get('allow_new_long_false_count', 0)}`",
+        f"- panic_signal_count: `{micro.get('panic_signal_count', 0)}`",
+        f"- recovery_candidate_count: `{micro.get('recovery_candidate_count', 0)}`",
+        f"- recovery_confirmed_count: `{micro.get('recovery_confirmed_count', 0)}`",
+        f"- missing_orderbook_count: `{micro.get('missing_orderbook_count', 0)}`",
+        f"- degraded_orderbook_count: `{micro.get('degraded_orderbook_count', 0)}`",
+        f"- max_panic_score: `{_fmt((micro.get('metrics') or {}).get('max_panic_score') if isinstance(micro.get('metrics'), dict) else 0.0)}`",
+        f"- max_recovery_score: `{_fmt((micro.get('metrics') or {}).get('max_recovery_score') if isinstance(micro.get('metrics'), dict) else 0.0)}`",
         "",
         "## 방어 액션",
         "",

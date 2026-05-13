@@ -19,6 +19,8 @@ SWING_THRESHOLD_AI_REVIEW_PROVIDER="${SWING_THRESHOLD_AI_REVIEW_PROVIDER:-openai
 BUILD_CODE_IMPROVEMENT_WORKORDER="${THRESHOLD_CYCLE_BUILD_CODE_IMPROVEMENT_WORKORDER:-true}"
 CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS="${CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS:-12}"
 RUN_DEEPSEEK_SWING_LAB="${THRESHOLD_CYCLE_RUN_DEEPSEEK_SWING_LAB:-true}"
+RUN_PANIC_SELL_DEFENSE_REPORT="${THRESHOLD_CYCLE_RUN_PANIC_SELL_DEFENSE_REPORT:-true}"
+RUN_OPENAI_WS_STABILITY_REPORT="${THRESHOLD_CYCLE_RUN_OPENAI_WS_STABILITY_REPORT:-true}"
 SNAPSHOT_RETENTION_DAYS="${THRESHOLD_CYCLE_SNAPSHOT_RETENTION_DAYS:-7}"
 ARTIFACT_WAIT_SEC="${THRESHOLD_CYCLE_ARTIFACT_WAIT_SEC:-600}"
 ARTIFACT_WAIT_INTERVAL_SEC="${THRESHOLD_CYCLE_ARTIFACT_WAIT_INTERVAL_SEC:-5}"
@@ -239,6 +241,23 @@ if [ "${completed:-false}" != "true" ]; then
   exit 2
 fi
 
+if [ "$RUN_PANIC_SELL_DEFENSE_REPORT" = "true" ] || [ "$RUN_PANIC_SELL_DEFENSE_REPORT" = "1" ]; then
+  PYTHONPATH=. "$VENV_PY" -m src.engine.panic_sell_defense_report \
+    --date "$TARGET_DATE"
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/panic_sell_defense/panic_sell_defense_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/panic_sell_defense/panic_sell_defense_${TARGET_DATE}.md" \
+    "panic_sell_defense_postclose"
+fi
+if [ "$RUN_OPENAI_WS_STABILITY_REPORT" = "true" ] || [ "$RUN_OPENAI_WS_STABILITY_REPORT" = "1" ]; then
+  PYTHONPATH=. "$VENV_PY" -m src.engine.openai_ws_stability_report \
+    --date "$TARGET_DATE"
+  wait_for_report_artifact \
+    "$PROJECT_DIR/data/report/openai_ws/openai_ws_stability_${TARGET_DATE}.json" \
+    "$PROJECT_DIR/data/report/openai_ws/openai_ws_stability_${TARGET_DATE}.md" \
+    "openai_ws_stability_postclose"
+fi
+
 report_args=(--date "$TARGET_DATE")
 if [ "$SKIP_DB" = "true" ]; then
   report_args+=(--skip-db)
@@ -348,4 +367,4 @@ wait_for_report_artifact \
   "threshold_cycle_postclose_verification"
 PYTHONPATH=. "$VENV_PY" -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500 >/dev/null
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-echo "[DONE] threshold-cycle postclose target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER pattern_labs=$RUN_PATTERN_LABS deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true runtime_approval_summary=true next_stage2_checklist=true finished_at=$finished_at"
+echo "[DONE] threshold-cycle postclose target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER panic_sell_defense=$RUN_PANIC_SELL_DEFENSE_REPORT openai_ws_stability=$RUN_OPENAI_WS_STABILITY_REPORT swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER pattern_labs=$RUN_PATTERN_LABS deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true runtime_approval_summary=true next_stage2_checklist=true finished_at=$finished_at"

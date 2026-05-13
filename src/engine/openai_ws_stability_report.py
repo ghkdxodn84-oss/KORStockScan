@@ -24,6 +24,11 @@ def _safe_float(value: Any) -> float | None:
         return None
 
 
+def _safe_int(value: Any) -> int:
+    numeric = _safe_float(value)
+    return int(numeric) if numeric is not None else 0
+
+
 def _percentile(values: list[float], q: float) -> float | None:
     if not values:
         return None
@@ -273,6 +278,25 @@ def write_report(report: dict[str, Any]) -> tuple[Path, Path]:
     ws = report["ws_summary"]
     base = report["http_late_baseline_summary"]
     improvement = report["baseline_improvement"]
+    entry_price_summary = report.get("entry_price_canary_summary")
+    entry_price_summary = entry_price_summary if isinstance(entry_price_summary, dict) else {}
+    entry_price_canary_events = _safe_int(entry_price_summary.get("canary_event_count"))
+    entry_price_transport_observable = _safe_int(entry_price_summary.get("transport_observable_count"))
+    if entry_price_canary_events > 0 and entry_price_transport_observable <= 0:
+        entry_price_decision = (
+            "- `entry_price`는 canary 적용 이벤트가 있으나 OpenAI transport metadata가 누락되어 "
+            "WS 적용 여부를 이 리포트만으로 확정할 수 없다."
+        )
+        entry_price_next = (
+            "- 이 결함은 rollback 근거가 아니라 instrumentation gap이다. 이후 `entry_ai_price_canary_*` "
+            "이벤트에 `openai_*` provenance를 같이 남겨 재판정한다."
+        )
+    elif report.get("entry_price_ws_sample_count", 0) > 0:
+        entry_price_decision = "- `entry_price` WS transport 표본이 관찰됐다."
+        entry_price_next = "- 장중/장후 표본에서 fallback/fail-closed/latency guard를 계속 분리 확인한다."
+    else:
+        entry_price_decision = "- `entry_price`는 해당 날짜에 WS transport 표본이 없어 hook 미발생 또는 표본 부족으로 분리한다."
+        entry_price_next = "- 이는 OpenAI WS 실패 근거가 아니며, 다음 장중 표본에서 `entry_price` provenance를 재확인한다."
     md = [
         f"# OpenAI WS Stability Report - {target_date}",
         "",
@@ -296,8 +320,8 @@ def write_report(report: dict[str, Any]) -> tuple[Path, Path]:
         "## 판정",
         "",
         "- `analyze_target` WS는 표본수, fallback, p75/p90/p95 latency, HTTP late baseline 대비 개선 기준을 충족한다.",
-        "- `entry_price`는 canary 적용 이벤트가 있으나 OpenAI transport metadata가 누락되어 WS 적용 여부를 이 리포트만으로 확정할 수 없다.",
-        "- 이 결함은 rollback 근거가 아니라 instrumentation gap이다. 이후 `entry_ai_price_canary_*` 이벤트에 `openai_*` provenance를 같이 남겨 재판정한다.",
+        entry_price_decision,
+        entry_price_next,
         "- 런타임 threshold, 주문 guard, provider route를 추가 변경하지 않고 현재 OpenAI WS 설정을 유지한다.",
     ]
     md_path.write_text("\n".join(md) + "\n", encoding="utf-8")

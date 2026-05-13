@@ -16,6 +16,7 @@
 - 현재 또는 미래 checklist 작업항목을 직접 소유하는 문서는 루트에 둔다.
 - Plan Rebase, prompt, report/threshold 운영 기준처럼 반복 참조되는 문서는 루트에 둔다.
 - 현재 문서에서 링크만 필요한 과거 증적은 아카이브로 이동하고 링크를 새 위치로 보정한다.
+- 과거 workorder라도 Plan Rebase, 날짜별 checklist, acceptance spec, audit/build report가 루트 절대경로로 직접 참조하면 링크 보정 없이 이동하지 않는다.
 - parser가 직접 참조하는 고정 입력 문서는 코드 변경 없이 이동하지 않는다.
 
 ## 이동 이력
