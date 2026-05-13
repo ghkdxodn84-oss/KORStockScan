@@ -30,6 +30,7 @@ IONICE_CLASS="${MONITOR_SNAPSHOT_IONICE_CLASS:-2}"
 IONICE_LEVEL="${MONITOR_SNAPSHOT_IONICE_LEVEL:-6}"
 NICE_LEVEL="${MONITOR_SNAPSHOT_NICE_LEVEL:-10}"
 NICE_COMMAND="${MONITOR_SNAPSHOT_NICE_COMMAND:-nice}"
+CPU_AFFINITY="${MONITOR_SNAPSHOT_CPU_AFFINITY:-1}"
 
 if [[ -z "${MONITOR_SNAPSHOT_LOCK_WAIT_SEC:-}" ]]; then
   if [[ "$PROFILE" == "full" ]]; then
@@ -146,6 +147,10 @@ build_throttled_command() {
 
   if command -v "$NICE_COMMAND" >/dev/null 2>&1; then
     output_cmd=("$NICE_COMMAND" -n "$NICE_LEVEL" "${output_cmd[@]}")
+  fi
+
+  if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]] && [[ "$(nproc 2>/dev/null || echo 1)" -gt 1 ]]; then
+    output_cmd=(taskset -c "$CPU_AFFINITY" "${output_cmd[@]}")
   fi
 }
 
