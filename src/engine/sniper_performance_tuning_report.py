@@ -728,7 +728,7 @@ def _build_flow_bottleneck_lane(
                 if blocker_count > 0 and zero_qty_hint:
                     status = "bottleneck"
                     tuning_point = "zero_qty 반복 차단, 추가매수 미발생"
-                    next_action = "add_blocked_lock_report 상세 확인, zero_qty 원인 분석"
+                    next_action = "swing_daily_summary blocker와 raw log 확인, 필요 시 새 workorder로 add_blocked_lock_report 재개"
                 else:
                     status = "waiting"
                     tuning_point = "-"
@@ -1631,10 +1631,24 @@ def _build_latency_guard_miss_ev_recovery_section(metrics: dict, breakdowns: dic
     top_reason = reason_breakdown[0] if reason_breakdown else {}
     top_reason_count = _safe_int(top_reason.get("count"), 0) or 0
     coverage_status = "sample_pending_next_postclose" if latency_block_events <= 0 else "reason_breakdown_ready"
+    provenance_contract = [
+        "latency_block_events",
+        "latency_guard_miss_unique_stocks",
+        "quote_fresh_latency_pass_rate",
+        "latency_reason_breakdown",
+    ]
+    missing_contract_fields = [
+        key
+        for key in provenance_contract
+        if key not in metrics and key not in breakdowns
+    ]
+    counterfactual_join_gap = max(0, latency_block_events - int(metrics.get("latency_guard_counterfactual_joined", 0) or 0))
 
     return {
         "runtime_effect": False,
         "allowed_runtime_apply": False,
+        "instrumentation_status": "implemented",
+        "instrumentation_contract_version": 1,
         "threshold_family": "pre_submit_price_guard",
         "evaluated_candidates": latency_block_events,
         "latency_block_events": latency_block_events,
@@ -1652,17 +1666,19 @@ def _build_latency_guard_miss_ev_recovery_section(metrics: dict, breakdowns: dic
         "top_latency_reason": top_reason.get("label"),
         "top_latency_reason_share_pct": _ratio(top_reason_count, latency_block_events),
         "coverage_status": coverage_status,
+        "coverage_gap_type": (
+            "counterfactual_join_gap"
+            if counterfactual_join_gap > 0
+            else "none"
+        ),
+        "counterfactual_join_gap_count": counterfactual_join_gap,
+        "missing_contract_fields": missing_contract_fields,
         "coverage_warning": (
             "latency_block 표본이 없어 다음 postclose source freshness 확인 필요"
             if latency_block_events <= 0
             else ""
         ),
-        "provenance_contract": [
-            "latency_block_events",
-            "latency_guard_miss_unique_stocks",
-            "quote_fresh_latency_pass_rate",
-            "latency_reason_breakdown",
-        ],
+        "provenance_contract": provenance_contract,
         "automation_reentry": "threshold_cycle.source_metrics.latency_guard_miss_ev_recovery",
         "next_postclose_metric": "source freshness/warning reduction and latency block attribution coverage",
     }

@@ -258,6 +258,7 @@ def test_save_monitor_snapshots_for_date_includes_missed_entry_counterfactual(tm
     assert "missed_entry_counterfactual" in result
     assert "holding_exit_observation" in result
     assert "wait6579_ev_cohort" in result
+    assert "add_blocked_lock" not in result
     assert "snapshot_manifest" in result
     assert "server_comparison_snapshot" in result
     assert "server_comparison_report" in result
@@ -279,6 +280,7 @@ def test_save_monitor_snapshots_for_date_includes_missed_entry_counterfactual(tm
     manifest_payload = json.loads(Path(result["snapshot_manifest"]).read_text(encoding="utf-8"))
     assert manifest_payload["target_date"] == "2026-04-09"
     assert "trade_review" in manifest_payload["snapshot_paths"]
+    assert "add_blocked_lock" not in manifest_payload["snapshot_paths"]
     assert (report_dir / "server_comparison_2026-04-09.md").exists()
     updated_checklist = checklist_path.read_text(encoding="utf-8")
     assert "본서버 vs songstockscan 자동 비교" in updated_checklist

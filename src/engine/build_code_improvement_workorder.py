@@ -198,6 +198,7 @@ def _classify_order(
     finding_by_order_id: dict[str, dict[str, Any]],
     finding_by_title_slug: dict[str, dict[str, Any]],
     auto_family_order_ids: set[str],
+    closed_instrumentation_order_families: dict[str, str],
 ) -> ClassifiedOrder:
     order_id = str(order.get("order_id") or "").strip()
     title = str(order.get("title") or "").strip()
@@ -207,6 +208,17 @@ def _classify_order(
     route = str(finding.get("route") or order.get("route") or "").strip() or None
     mapped_family = str(finding.get("mapped_family") or order.get("mapped_family") or "").strip() or None
     confidence = str(finding.get("confidence") or order.get("confidence") or "").strip() or None
+    closed_family = closed_instrumentation_order_families.get(order_id)
+    if closed_family:
+        return ClassifiedOrder(
+            order=order,
+            decision="attach_existing_family",
+            reason="instrumentation/provenance contract is already implemented; keep as report source for the existing family",
+            mapped_family=closed_family,
+            route="existing_family",
+            confidence=confidence,
+            automation_reentry="Next postclose calibration consumes the implemented report/provenance fields; no runtime mutation.",
+        )
 
     if bool(order.get("runtime_effect")):
         return ClassifiedOrder(
@@ -308,6 +320,8 @@ def _threshold_ev_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, A
         if family != "holding_exit_decision_matrix_advisory" or state != "hold_no_edge":
             continue
         source_metrics = item.get("source_metrics") if isinstance(item.get("source_metrics"), dict) else {}
+        if source_metrics.get("instrumentation_status") == "implemented":
+            continue
         counterfactual_gap_count = _safe_int(source_metrics.get("counterfactual_gap_count"), 0)
         proxy_sample_snapshots = _safe_int(source_metrics.get("eligible_but_not_chosen_sample_snapshots"), 0)
         proxy_joined_candidates = _safe_int(
@@ -368,6 +382,24 @@ def _threshold_ev_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, A
             }
         )
     return orders
+
+
+def _closed_instrumentation_order_families(ev_report: dict[str, Any]) -> dict[str, str]:
+    outcome = ev_report.get("calibration_outcome") if isinstance(ev_report.get("calibration_outcome"), dict) else {}
+    decisions = outcome.get("decisions") if isinstance(outcome.get("decisions"), list) else []
+    closed: dict[str, str] = {}
+    for item in decisions:
+        if not isinstance(item, dict):
+            continue
+        family = str(item.get("family") or "").strip()
+        source_metrics = item.get("source_metrics") if isinstance(item.get("source_metrics"), dict) else {}
+        if source_metrics.get("instrumentation_status") != "implemented":
+            continue
+        if family == "pre_submit_price_guard":
+            closed["order_latency_guard_miss_ev_recovery"] = family
+        elif family == "holding_exit_decision_matrix_advisory":
+            closed["order_holding_exit_decision_matrix_edge_counterfactual"] = family
+    return closed
 
 
 def _calibration_report_from_ev(ev_report: dict[str, Any]) -> dict[str, Any]:
@@ -548,6 +580,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *_threshold_ev_followup_orders(ev_report),
         *_panic_lifecycle_followup_orders(calibration_report),
     ]
+    closed_instrumentation_order_families = _closed_instrumentation_order_families(ev_report)
     orders = [*scalping_orders, *swing_orders, *swing_lab_orders, *threshold_ev_orders]
     seen_keys: set[tuple[str, str, str]] = set()
     deduped_orders: list[dict[str, Any]] = []
@@ -567,6 +600,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
                 finding_by_order_id=finding_by_order_id,
                 finding_by_title_slug=finding_by_title_slug,
                 auto_family_order_ids=auto_family_ids,
+                closed_instrumentation_order_families=closed_instrumentation_order_families,
             )
             for order in orders
         ]

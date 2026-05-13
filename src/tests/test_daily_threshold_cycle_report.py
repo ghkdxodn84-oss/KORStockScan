@@ -439,6 +439,30 @@ def test_calibration_source_bundle_includes_panic_buying_read_only(monkeypatch, 
     assert metrics["allowed_runtime_apply"] is False
 
 
+def test_calibration_source_bundle_audits_report_only_cleanup_candidates(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "REPORT_DIR", tmp_path / "report")
+    sentinel_path = tmp_path / "report" / "sentinel_followup_2026-05-13.md"
+    add_blocked_path = tmp_path / "report" / "monitor_snapshots" / "add_blocked_lock_2026-05-13.json"
+    add_blocked_path.parent.mkdir(parents=True, exist_ok=True)
+    sentinel_path.write_text("# legacy follow-up\n", encoding="utf-8")
+    add_blocked_path.write_text(json.dumps({"total_blocked_events": 3}), encoding="utf-8")
+
+    bundle = report_mod._summarize_calibration_report_sources("2026-05-13")
+    audit = bundle["report_only_cleanup_audit"]
+    candidates = {item["id"]: item for item in audit["cleanup_candidates"]}
+
+    assert audit["metric_role"] == "source_quality_gate"
+    assert audit["decision_authority"] == "source_quality_only"
+    assert audit["primary_decision_metric"] == "cleanup_candidate_count"
+    assert audit["source_quality_gate"] == "cleanup_candidate_count == 0"
+    assert "runtime_threshold_apply" in audit["forbidden_uses"]
+    assert "sentinel_followup" in candidates
+    assert candidates["sentinel_followup"]["runtime_effect"] is False
+    assert candidates["sentinel_followup"]["in_current_source_bundle"] is False
+    assert candidates["add_blocked_lock"]["current_owner"] == "monitor_snapshot_reference_only"
+    assert any("report-only cleanup candidate: sentinel_followup" in warning for warning in bundle["warnings"])
+
+
 def test_soft_stop_calibration_holds_on_single_post_sell_source_sample():
     report_sources = {
         "schema_version": 1,
@@ -1618,6 +1642,9 @@ def test_holding_exit_decision_matrix_artifact_contains_prompt_hints(tmp_path, m
         "prefer_pyramid_wait": 0,
     }
     assert "prompt_hint" in payload["entries"][0]
+    assert payload["instrumentation_status"] == "implemented"
+    assert payload["instrumentation_contract_version"] == 1
+    assert "counterfactual_proxy_summary.per_action_samples" in payload["provenance_contract"]
     assert "counterfactual_coverage" in payload["entries"][0]
     assert payload["counterfactual_coverage_summary"]["entry_count"] == len(payload["entries"])
     assert "exit_only" in payload["counterfactual_coverage_summary"]["per_action_samples"]

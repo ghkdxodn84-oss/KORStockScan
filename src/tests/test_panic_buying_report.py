@@ -140,6 +140,9 @@ def test_microstructure_detector_adds_report_only_runner_flags(monkeypatch, tmp_
     assert micro["allow_runner_count"] == 1
     assert micro["latest_signals"][0]["allow_tp_override"] is True
     assert micro["policy"]["does_not_submit_orders"] is True
+    assert micro["micro_cusum_observer"]["decision_authority"] == "source_quality_only"
+    assert micro["micro_cusum_observer"]["consensus_pass_symbol_count"] == 1
+    assert "order_submit" in micro["micro_cusum_observer"]["forbidden_uses"]
     assert all(item["allowed_runtime_apply"] is False for item in report["canary_candidates"])
 
 

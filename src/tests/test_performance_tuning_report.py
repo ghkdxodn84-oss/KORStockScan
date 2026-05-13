@@ -428,12 +428,16 @@ def test_performance_tuning_report_builds_metrics(monkeypatch):
     latency_ev = report["sections"]["latency_guard_miss_ev_recovery"]
     assert latency_ev["runtime_effect"] is False
     assert latency_ev["allowed_runtime_apply"] is False
+    assert latency_ev["instrumentation_status"] == "implemented"
+    assert latency_ev["instrumentation_contract_version"] == 1
     assert latency_ev["threshold_family"] == "pre_submit_price_guard"
     assert latency_ev["evaluated_candidates"] == 1
     assert latency_ev["latency_block_events"] == 1
     assert latency_ev["latency_guard_miss_unique_stocks"] == 1
     assert latency_ev["coverage_status"] == "reason_breakdown_ready"
+    assert latency_ev["coverage_gap_type"] == "counterfactual_join_gap"
     assert latency_ev["top_latency_reason"] == "latency_state_danger"
+    assert "latency_reason_breakdown" in latency_ev["provenance_contract"]
     assert report["metrics"]["entry_blocked_liquidity_events"] == 1
     assert report["metrics"]["entry_blocked_overbought_events"] == 1
     terminal_blockers = {item["label"]: item for item in report["breakdowns"]["entry_terminal_blocker_breakdown"]}

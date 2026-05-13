@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 import tempfile
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -241,6 +241,113 @@ class TestArtifactFreshnessDetector:
             assert result.severity == "pass"
             assert result.details.get("threshold_postclose_report_status") == "pass_one_shot"
             assert result.details.get("threshold_postclose_report_age_sec", 0) > 1800
+
+    def test_daily_recommendations_csv_content_date_suppresses_mtime_stale_inside_window(self, tmp_path):
+        reco_file = tmp_path / "daily_recommendations_v2.csv"
+        content_date = (datetime.now() - timedelta(days=1)).date().isoformat()
+        reco_file.write_text(
+            "date,code,name,generated_at\n"
+            f"{content_date},005930,삼성전자,{datetime.now().isoformat()}\n",
+            encoding="utf-8",
+        )
+        stale_ts = time.time() - 7200
+        os.utime(reco_file, (stale_ts, stale_ts))
+        now = datetime.now()
+        artifact = {
+            "id": "daily_recommendations_csv",
+            "path_template": str(reco_file),
+            "max_staleness_sec": 3600,
+            "critical": False,
+            "window_start": (now.hour, now.minute),
+            "window_end": (23, 59),
+            "content_freshness": {
+                "format": "csv",
+                "date_field": "date",
+                "max_age_days": 7,
+                "min_rows": 1,
+            },
+        }
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+        ):
+            detector = ArtifactFreshnessDetector()
+            result = detector.check()
+            assert result.severity == "pass"
+            assert result.details.get("daily_recommendations_csv_status") == "pass_content_date"
+            assert result.details.get("daily_recommendations_csv_content_status") == "pass"
+            assert result.details.get("daily_recommendations_csv_content_age_days") == 1
+
+    def test_daily_recommendations_diag_content_date_suppresses_mtime_stale_inside_window(self, tmp_path):
+        diag_file = tmp_path / "daily_recommendations_v2_diagnostics.json"
+        content_date = (datetime.now() - timedelta(days=1)).date().isoformat()
+        diag_file.write_text(
+            f'{{"latest_date": "{content_date}", "selected_count": 3}}',
+            encoding="utf-8",
+        )
+        stale_ts = time.time() - 7200
+        os.utime(diag_file, (stale_ts, stale_ts))
+        now = datetime.now()
+        artifact = {
+            "id": "daily_recommendations_diag",
+            "path_template": str(diag_file),
+            "max_staleness_sec": 3600,
+            "critical": False,
+            "window_start": (now.hour, now.minute),
+            "window_end": (23, 59),
+            "content_freshness": {
+                "format": "json",
+                "date_field": "latest_date",
+                "max_age_days": 7,
+                "min_count_field": "selected_count",
+                "min_count": 1,
+            },
+        }
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+        ):
+            detector = ArtifactFreshnessDetector()
+            result = detector.check()
+            assert result.severity == "pass"
+            assert result.details.get("daily_recommendations_diag_status") == "pass_content_date"
+            assert result.details.get("daily_recommendations_diag_content_status") == "pass"
+            assert result.details.get("daily_recommendations_diag_selected_count") == 3
+
+    def test_daily_recommendations_diag_content_date_stale_warns_inside_window(self, tmp_path):
+        diag_file = tmp_path / "daily_recommendations_v2_diagnostics.json"
+        content_date = (datetime.now() - timedelta(days=9)).date().isoformat()
+        diag_file.write_text(
+            f'{{"latest_date": "{content_date}", "selected_count": 3}}',
+            encoding="utf-8",
+        )
+        stale_ts = time.time() - 7200
+        os.utime(diag_file, (stale_ts, stale_ts))
+        now = datetime.now()
+        artifact = {
+            "id": "daily_recommendations_diag",
+            "path_template": str(diag_file),
+            "max_staleness_sec": 3600,
+            "critical": False,
+            "window_start": (now.hour, now.minute),
+            "window_end": (23, 59),
+            "content_freshness": {
+                "format": "json",
+                "date_field": "latest_date",
+                "max_age_days": 7,
+                "min_count_field": "selected_count",
+                "min_count": 1,
+            },
+        }
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+        ):
+            detector = ArtifactFreshnessDetector()
+            result = detector.check()
+            assert result.severity == "warning"
+            assert result.details.get("daily_recommendations_diag_status") == "warning"
+            assert result.details.get("daily_recommendations_diag_content_status") == "stale_date"
 
     def test_past_window_end_missing_fails(self):
         artifact = {

@@ -71,7 +71,7 @@
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-13.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-13.md`
 - selected_order_count: `12`
-- decision_counts: `{'implement_now': 2, 'attach_existing_family': 6, 'design_family_candidate': 7, 'defer_evidence': 5, 'reject': 4}`
+- decision_counts: `{'attach_existing_family': 7, 'design_family_candidate': 7, 'defer_evidence': 5, 'reject': 4}`
 
 ## Approval Requests
 - none
@@ -82,9 +82,9 @@
 
 ## Calibration Decisions
 ## Code Improvement Top Orders
-- `order_holding_exit_decision_matrix_edge_counterfactual` decision=`implement_now` subsystem=`runtime_instrumentation`
-- `order_latency_guard_miss_ev_recovery` decision=`implement_now` subsystem=`runtime_instrumentation`
 - `order_ai_threshold_dominance` decision=`attach_existing_family` subsystem=`entry_funnel`
+- `order_ai_threshold_miss_ev_recovery` decision=`attach_existing_family` subsystem=`entry_funnel`
+- `order_swing_gatekeeper_reject_threshold_review` decision=`attach_existing_family` subsystem=`swing_entry`
 
 ## Pattern Lab Top Findings
 - `AI threshold dominance` route=`existing_family` family=`score65_74_recovery_probe`
@@ -100,7 +100,7 @@
 - `liquidity_gate_refined_candidate`: `hold` sample=`5595/20`
 - `overbought_gate_refined_candidate`: `hold` sample=`198341/20`
 - `bad_entry_refined_canary`: `adjust_up` sample=`231/10`
-- `holding_exit_decision_matrix_advisory`: `hold_no_edge` sample=`0/1`
+- `holding_exit_decision_matrix_advisory`: `hold_no_edge` sample=`6/1`
 - `scale_in_price_guard`: `hold_sample` sample=`20/20`
 - `position_sizing_cap_release`: `hold_sample` sample=`22/30`
 

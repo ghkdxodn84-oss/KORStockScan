@@ -684,7 +684,6 @@ def _read_json_dict(path: Path) -> dict:
 def _calibration_report_source_paths(target_date: str) -> dict[str, Path]:
     return {
         "buy_funnel_sentinel": REPORT_DIR / "buy_funnel_sentinel" / f"buy_funnel_sentinel_{target_date}.json",
-        "sentinel_followup": REPORT_DIR / f"sentinel_followup_{target_date}.md",
         "wait6579_ev_cohort": REPORT_DIR / "monitor_snapshots" / f"wait6579_ev_cohort_{target_date}.json",
         "missed_entry_counterfactual": (
             REPORT_DIR / "monitor_snapshots" / f"missed_entry_counterfactual_{target_date}.json"
@@ -702,6 +701,100 @@ def _calibration_report_source_paths(target_date: str) -> dict[str, Path]:
         "statistical_action_weight": (
             REPORT_DIR / "statistical_action_weight" / f"statistical_action_weight_{target_date}.json"
         ),
+    }
+
+
+REPORT_ONLY_CLEANUP_AUDIT_REGISTRY: tuple[dict[str, str], ...] = (
+    {
+        "id": "sentinel_followup",
+        "path_template": "sentinel_followup_{date}.md",
+        "status_when_present": "archive_reference_cleanup_candidate",
+        "current_owner": "archive_reference_only",
+        "reason": "single follow-up artifact excluded from the current calibration source bundle",
+        "recommended_action": "keep as dated archive/reference or move out of current report inventory",
+    },
+    {
+        "id": "server_comparison",
+        "path_template": "server_comparison/server_comparison_{date}.md",
+        "status_when_present": "policy_disabled_reference",
+        "current_owner": "remote_comparison_reference_only",
+        "reason": "remote/server comparison is excluded from Plan Rebase decision inputs unless explicitly enabled",
+        "recommended_action": "keep as policy-disabled reference; do not attach to threshold/source bundle",
+    },
+    {
+        "id": "add_blocked_lock",
+        "path_template": "monitor_snapshots/add_blocked_lock_{date}.json",
+        "status_when_present": "dashboard_only_cleanup_candidate",
+        "current_owner": "monitor_snapshot_reference_only",
+        "reason": "add-blocked lock is not a current source-bundle owner unless a new avg-down/scale-in workorder reopens it",
+        "recommended_action": "keep JSON snapshot for dashboard/archive or reopen via new workorder before using as source",
+    },
+    {
+        "id": "preclose_sell_target",
+        "path_template": "preclose_sell_target/preclose_sell_target_{date}.json",
+        "status_when_present": "removed_feature_cleanup_candidate",
+        "current_owner": "removed_legacy_feature",
+        "reason": "preclose sell target was removed and must not re-enter tuning/calibration sources",
+        "recommended_action": "delete stale generated artifact or move to archive if historical evidence is needed",
+    },
+)
+
+
+def _audit_report_only_cleanup_candidates(target_date: str, source_paths: dict[str, Path]) -> dict:
+    managed_source_names = sorted(source_paths)
+    managed_source_paths = {path.resolve() for path in source_paths.values()}
+    excluded_reports: list[dict] = []
+    cleanup_candidates: list[dict] = []
+
+    for item in REPORT_ONLY_CLEANUP_AUDIT_REGISTRY:
+        rel_path = item["path_template"].replace("{date}", target_date)
+        path = REPORT_DIR / rel_path
+        exists = path.exists()
+        in_current_source_bundle = path.resolve() in managed_source_paths
+        status = "absent"
+        if exists:
+            status = item["status_when_present"]
+        if in_current_source_bundle:
+            status = "misconfigured_attached_to_current_source_bundle"
+
+        entry = {
+            "id": item["id"],
+            "path": str(path),
+            "exists": exists,
+            "in_current_source_bundle": in_current_source_bundle,
+            "status": status,
+            "current_owner": item["current_owner"],
+            "reason": item["reason"],
+            "recommended_action": item["recommended_action"],
+            "decision_authority": "source_quality_only",
+            "runtime_effect": False,
+        }
+        excluded_reports.append(entry)
+
+        if exists and (
+            status.endswith("_cleanup_candidate") or status == "misconfigured_attached_to_current_source_bundle"
+        ):
+            cleanup_candidates.append(entry)
+
+    return {
+        "schema_version": 1,
+        "metric_role": "source_quality_gate",
+        "decision_authority": "source_quality_only",
+        "window_policy": "daily_intraday_or_postclose_audit",
+        "sample_floor": 0,
+        "primary_decision_metric": "cleanup_candidate_count",
+        "source_quality_gate": "cleanup_candidate_count == 0",
+        "forbidden_uses": [
+            "runtime_threshold_apply",
+            "order_submit_or_cancel",
+            "auto_buy_or_auto_sell",
+            "bot_restart",
+            "provider_route_change",
+        ],
+        "managed_source_names": managed_source_names,
+        "excluded_reports": excluded_reports,
+        "cleanup_candidate_count": len(cleanup_candidates),
+        "cleanup_candidates": cleanup_candidates,
     }
 
 
@@ -728,6 +821,12 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     sources: dict[str, dict] = {}
     warnings: list[str] = []
     source_paths = _calibration_report_source_paths(target_date)
+    cleanup_audit = _audit_report_only_cleanup_candidates(target_date, source_paths)
+    for candidate in cleanup_audit["cleanup_candidates"]:
+        warnings.append(
+            "report-only cleanup candidate: "
+            f"{candidate['id']} status={candidate['status']} path={candidate['path']}"
+        )
     for name, path in source_paths.items():
         payload = _read_json_dict(path)
         exists = path.exists()
@@ -776,6 +875,12 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     score_mfe = [value for value in score_mfe if value is not None]
     missed_metrics = missed_entry.get("metrics") if isinstance(missed_entry.get("metrics"), dict) else {}
     perf_metrics = performance_tuning.get("metrics") if isinstance(performance_tuning.get("metrics"), dict) else {}
+    perf_sections = performance_tuning.get("sections") if isinstance(performance_tuning.get("sections"), dict) else {}
+    perf_latency_section = (
+        perf_sections.get("latency_guard_miss_ev_recovery")
+        if isinstance(perf_sections.get("latency_guard_miss_ev_recovery"), dict)
+        else {}
+    )
     soft_stop = holding_exit_observation.get("soft_stop_rebound") if isinstance(holding_exit_observation, dict) else {}
     soft_stop = soft_stop if isinstance(soft_stop, dict) else {}
     post_sell_soft = post_sell_feedback.get("soft_stop_forensics") if isinstance(post_sell_feedback, dict) else {}
@@ -910,6 +1015,29 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             "gatekeeper_eval_ms_p95": _safe_float(perf_metrics.get("gatekeeper_eval_ms_p95"), None),
         },
         "latency_guard_miss_ev_recovery": {
+            "instrumentation_status": perf_latency_section.get("instrumentation_status") or "missing_contract",
+            "instrumentation_contract_version": _safe_int(
+                perf_latency_section.get("instrumentation_contract_version"),
+                0,
+            )
+            or 0,
+            "provenance_contract": (
+                perf_latency_section.get("provenance_contract")
+                if isinstance(perf_latency_section.get("provenance_contract"), list)
+                else []
+            ),
+            "coverage_status": perf_latency_section.get("coverage_status"),
+            "coverage_gap_type": perf_latency_section.get("coverage_gap_type"),
+            "counterfactual_join_gap_count": _safe_int(
+                perf_latency_section.get("counterfactual_join_gap_count"),
+                0,
+            )
+            or 0,
+            "missing_contract_fields": (
+                perf_latency_section.get("missing_contract_fields")
+                if isinstance(perf_latency_section.get("missing_contract_fields"), list)
+                else []
+            ),
             "evaluated_candidates": _safe_int(latency_outcome.get("evaluated_candidates"), 0) or 0,
             "missed_winner_count": _safe_int(latency_outcome.get("missed_winner_count"), 0) or 0,
             "avoided_loser_count": _safe_int(latency_outcome.get("avoided_loser_count"), 0) or 0,
@@ -1138,6 +1266,22 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         },
         "decision_support": {
             "matrix_version": decision_matrix.get("matrix_version"),
+            "instrumentation_status": (
+                "implemented"
+                if isinstance(decision_matrix.get("counterfactual_coverage_summary"), dict)
+                and isinstance(decision_matrix.get("counterfactual_proxy_summary"), dict)
+                else "missing_contract"
+            ),
+            "instrumentation_contract_version": _safe_int(
+                decision_matrix.get("instrumentation_contract_version"),
+                0,
+            )
+            or 0,
+            "provenance_contract": (
+                decision_matrix.get("provenance_contract")
+                if isinstance(decision_matrix.get("provenance_contract"), list)
+                else []
+            ),
             "matrix_entries": len(matrix_entries),
             "matrix_non_clear_edge": len(non_clear_matrix_entries),
             "matrix_no_clear_edge": sum(
@@ -1208,6 +1352,7 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         "purpose": "efficient_tradeoff_threshold_calibration_source",
         "sources": sources,
         "source_metrics": source_metrics,
+        "report_only_cleanup_audit": cleanup_audit,
         "warnings": warnings,
         "new_observation_axis_created": False,
     }
@@ -5385,6 +5530,14 @@ def build_holding_exit_decision_matrix(report: dict) -> dict:
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "valid_for_date": "next_preopen",
         "runtime_change": False,
+        "instrumentation_status": "implemented",
+        "instrumentation_contract_version": 1,
+        "provenance_contract": [
+            "summary.non_no_clear_edge_count",
+            "counterfactual_coverage_summary.per_action_samples",
+            "counterfactual_proxy_summary.per_action_samples",
+            "counterfactual_proxy_summary.per_action_joined",
+        ],
         "application_mode": "advisory_canary_live_readiness_until_owner_approval",
         "hard_veto": [
             "emergency_or_hard_stop",

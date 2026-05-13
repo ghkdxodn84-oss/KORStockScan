@@ -95,7 +95,9 @@
 | `R5_bounded_calibrated_apply` | guard 통과 family만 다음 장전 runtime env에 반영 | 있음 |
 | `R6_post_apply_attribution` | selected/applied/not-applied cohort, daily EV, approval summary 제출 | 없음 |
 
-자동화체인은 새 관찰축을 무한히 늘리는 방식이 아니라 기존 source bundle을 재사용한다. BUY 쪽은 `buy_funnel_sentinel`, `sentinel_followup`, `wait6579_ev_cohort`, `missed_entry_counterfactual`; 보유/청산 쪽은 `holding_exit_observation`, `post_sell_feedback`, `trade_review`, `holding_exit_sentinel`; 패닉 쪽은 `panic_sell_defense`, `panic_buying`; decision-support 쪽은 `holding_exit_decision_matrix`, `statistical_action_weight`를 우선 source로 쓴다.
+자동화체인은 새 관찰축을 무한히 늘리는 방식이 아니라 기존 source bundle을 재사용한다. BUY 쪽은 `buy_funnel_sentinel`, `wait6579_ev_cohort`, `missed_entry_counterfactual`, `performance_tuning`; 보유/청산 쪽은 `holding_exit_observation`, `post_sell_feedback`, `trade_review`, `holding_exit_sentinel`; 패닉 쪽은 `panic_sell_defense`, `panic_buying`; decision-support 쪽은 `holding_exit_decision_matrix`, `statistical_action_weight`를 우선 source로 쓴다. `sentinel_followup`은 2026-05-07 단발 follow-up 기록으로 archive/reference이며 현재 자동화체인 source bundle owner가 아니다.
+
+정리되지 못한 report-only/legacy 산출물은 `calibration_source_bundle.report_only_cleanup_audit`로 관리한다. 이 audit는 `source_quality_gate`이며 `cleanup_candidate_count`를 통해 정리 후보를 표면화하지만, `source_quality_only`라서 threshold/env/order/bot/provider 변경 권한은 없다.
 
 `Metric Decision Contract`는 [report-based-automation-traceability](./report-based-automation-traceability.md#23-metric-decision-contract)가 소유한다. 새 report나 새 metric이 이 계약을 만족하지 못하면 threshold candidate가 아니라 source-quality/instrumentation backlog다.
 

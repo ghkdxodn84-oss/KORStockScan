@@ -285,7 +285,7 @@ ls -l data/report/error_detection/error_detection_$(TZ=Asia/Seoul date +%F).json
 | `cron_completion` | 필수 cron log의 당일 DONE 누락 또는 FAIL 최신 marker | 해당 cron log와 산출물 재확인 후 같은 date 재실행 여부 판단 | 실패를 threshold 성과로 해석 |
 | `log_scanner` | error log burst 또는 신규 error pattern. `ERROR`/`CRITICAL`/traceback/exception/에러/오류/실패 같은 에러 후보 라인만 분류하며, `_error.log`에 섞인 INFO/WARNING성 DB 성공·업로드 로그는 운영 incident에서 제외한다. `TEST`, `123456`, `_DummySession`, `bus fail`처럼 pytest fixture signature가 붙은 라인도 제외한다 | stack trace/source artifact 확인 후 incident 또는 code workorder로 분리. fixture noise나 INFO성 운영 로그가 runtime error log에 섞이면 test/log sink 분리 또는 scanner ignore rule 보강으로 닫는다 | 에러만 보고 live guard 완화 |
 | `kiwoom_auth_8005_restart` | fresh runtime log에서 `8005 Token이 유효하지 않습니다` 계열 인증 실패 감지. 기존 offset 이전 로그, pytest fixture signature, `run_error_detection*` meta log는 제외한다 | `restart.flag` 기반 graceful restart 후 새 PID, WS 수신, REST 시세/잔고 응답 회복을 확인한다. 하루 3회 이상이면 operator가 token 발급/캐시/WS reconnect 경로를 별도 incident로 본다 | hot-refresh, 주문 retry, threshold/spread/order guard 변경 |
-| `artifact_freshness` | 시간창 기준 필수 report/artifact stale/누락 또는 JSON status 값 비정상. 장중 `pipeline_events`는 09:00~09:05 startup grace를 두고, `threshold_events` compact stream은 sparse stream이라 stale을 warning으로 본다. `threshold_cycle_ev`와 `swing_daily_simulation` 같은 one-shot postclose artifact는 완료 후 age만으로 재실행하지 않는다 | window, startup grace, trading_day skip, upstream cron 실패, status JSON의 `failed_steps`/`recovered_steps` 확인 | 누락 artifact를 수동 값으로 대체 |
+| `artifact_freshness` | 시간창 기준 필수 report/artifact stale/누락 또는 JSON status 값 비정상. 장중 `pipeline_events`는 09:00~09:05 startup grace를 두고, `threshold_events` compact stream은 sparse stream이라 stale을 warning으로 본다. `threshold_cycle_ev`와 `swing_daily_simulation` 같은 one-shot postclose artifact는 완료 후 age만으로 재실행하지 않는다. `daily_recommendations_v2.csv`와 diagnostics는 장전 입력 특성상 mtime만 보지 않고 내부 `date`/`latest_date`, row/count 계약이 통과하면 `pass_content_date`로 닫는다 | window, startup grace, trading_day skip, upstream cron 실패, status JSON의 `failed_steps`/`recovered_steps`, content date/count 확인 | 누락 artifact를 수동 값으로 대체 |
 | `resource_usage` | CPU/memory/swap/load/disk threshold 위반, sampler stale. CPU busy fail 기준은 `ERROR_DETECTOR_CPU_BUSY_MAX_PCT=95.0`이며 90% 구간부터 warning으로 본다 | resource pressure 원인 확인. disk-low면 log rotate 결과와 cooldown state 확인. swap만 높고 `mem_available`이 충분한 경우는 즉시 장애보다 reclaim/캐시 잔존 가능성을 먼저 본다 | 전략 runtime parameter 변경 |
 | `stale_lock` | 오래된 lock 발견 또는 cleanup 실패 | active lock인지 확인. 반복되면 wrapper lock lifecycle 보강 | 실행 중인 process lock 강제 삭제 |
 
@@ -388,6 +388,16 @@ tmux ls
 - warning: 최초 장전 확인 시 checklist Source의 `data/report/openai_ws/openai_ws_stability_2026-05-12.md`가 존재하지 않아 dangling source를 확인했다. `2026-05-13 08:47 KST`에 동일 모듈로 5/12 artifact를 재생성했고 `decision=keep_ws`, unique WS calls=`582`, fallback=`0`, entry_price WS sample=`0`을 확인했다. 재발 방지를 위해 postclose wrapper와 error detector artifact coverage에 `openai_ws_stability_report`를 추가했다. `analyze_target`/`entry_price` transport provenance는 `OpenAIWSIntradaySample0513`에서 장중 표본으로 재확인한다.
 - swing approval: `swing_runtime_approval_2026-05-12.json`은 approval request 2건을 만들었지만 apply plan은 approved=`0`, blocked=`approval_artifact_missing`으로 차단했다. 스윙 관련 env는 장전 runtime env에 반영되지 않았다.
 - 다음 액션: 장중 runtime threshold mutation은 하지 않고 selected family provenance, OpenAI transport 표본, sim/probe source-quality를 각각 장중 체크리스트에서 확인한다.
+
+### PreopenAutomationHealthCheck20260514 운영 확인 기록
+
+- checked_at: `2026-05-14 07:54 KST`
+- 판정: `warning`
+- 근거: `threshold_cycle_preopen_cron.log`에 `[DONE] threshold-cycle preopen target_date=2026-05-14` marker가 있고, apply plan은 status=`auto_bounded_live_ready`, apply_mode=`auto_bounded_live`, runtime_change=`true`다. runtime env는 `threshold_runtime_env_2026-05-14.env/json`으로 생성됐으며 selected family는 `soft_stop_whipsaw_confirmation`, env override는 `KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED=true`다. `tmux bot` 세션은 alive이고 `bot_history.log`에는 main route=`openai`가 남아 있다. `final_ensemble_scanner target_date=2026-05-14`는 `[DONE]` marker와 추천 3건 적재 로그를 남겼다.
+- warning: 최신 `error_detection_2026-05-14.json`은 process/cron/log/resource/stale-lock은 pass지만 `artifact_freshness`에서 `daily_recommendations_v2.csv`와 diagnostics stale warning을 남겼다. 스캐너 wrapper completion과 추천 3건 적재는 확인됐으므로 preopen chain fail이 아니라 운영 관찰 warning으로 분리한다.
+- warning 해소 메모 (`2026-05-14 08:00 KST`): detector window 종료 후 최신 `error_detection_2026-05-14.json`은 summary_severity=`pass`로 닫혔다. `2026-05-14 08:04 KST` detector 보정 후에는 `daily_recommendations_csv_status=pass_content_date`, `daily_recommendations_diag_status=pass_content_date`로 직접 닫힌다. 파일 mtime은 `2026-05-13 21:26:02 KST`이고 내부 `latest_date=2026-05-13`, selected_count=`3`이므로 다음 거래일 장전 추천 입력으로는 유효하다.
+- swing approval: `swing_runtime_approval_2026-05-13.json`은 runtime_change=`false`, approval request `0`이며 one-share real canary와 scale-in real canary는 `approval_required`/runtime_apply_allowed=`false`다. 별도 approval artifact는 없다.
+- 다음 액션: 장중 runtime threshold mutation은 하지 않고 selected family provenance와 OpenAI `entry_price` 표본 부족을 장중/장후 attribution에서 분리 확인한다.
 
 ## 장중 확인 절차
 

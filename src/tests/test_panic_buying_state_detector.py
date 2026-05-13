@@ -144,6 +144,24 @@ def test_missing_orderbook_is_degraded_not_silent():
     assert signal.panic_buy_score <= 0.82
 
 
+def test_ofi_cusum_is_report_only_metric_not_required_for_state():
+    detector = PanicBuyingStateDetector(_config(panic_buy_confirm_bars=1))
+    detector.update(_candle(0, 100.0), _trade(0, buy=52, sell=48), _book(0, ofi_z=0.0))
+    detector.update(_candle(1, 100.0), _trade(1, buy=52, sell=48), _book(1, ofi_z=0.0))
+    detector.update(_candle(2, 100.1), _trade(2, buy=53, sell=47), _book(2, ofi_z=-0.1))
+
+    signal = detector.update(
+        _candle(3, 100.2, volume=105),
+        _trade(3, buy=54, sell=46),
+        _book(3, spread_ratio=1.0, ofi_z=3.2, ask_drop=0.0, bid_support=1.0),
+    )
+
+    assert signal.state == "NORMAL"
+    assert signal.metrics["ofi_cusum_direction"] == "positive"
+    assert signal.metrics["ofi_cusum_triggered"] is True
+    assert signal.metrics["micro_consensus_pass"] is False
+
+
 def test_single_small_red_bar_does_not_confirm_exhaustion_when_buy_flow_stays_strong():
     detector = PanicBuyingStateDetector(_config())
     _enter_panic_buy(detector)

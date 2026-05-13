@@ -499,6 +499,7 @@ def test_build_code_improvement_workorder_skips_adm_followup_when_instrumentatio
                             "sample_count": 14,
                             "sample_floor": 1,
                             "source_metrics": {
+                                "instrumentation_status": "implemented",
                                 "counterfactual_gap_count": 0,
                                 "eligible_but_not_chosen_sample_snapshots": 12,
                                 "eligible_but_not_chosen_post_sell_joined_candidates": 8,
@@ -522,6 +523,82 @@ def test_build_code_improvement_workorder_skips_adm_followup_when_instrumentatio
 
     assert report["summary"]["threshold_ev_source_order_count"] == 0
     assert all(item["order_id"] != "order_holding_exit_decision_matrix_edge_counterfactual" for item in report["orders"])
+
+
+def test_build_code_improvement_workorder_moves_closed_latency_instrumentation_to_existing_family(
+    tmp_path,
+    monkeypatch,
+):
+    automation_dir = tmp_path / "automation"
+    ev_dir = tmp_path / "ev"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    automation_dir.mkdir()
+    ev_dir.mkdir()
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-11.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-11",
+                "consensus_findings": [
+                    {
+                        "finding_id": "latency_guard_miss_ev_recovery",
+                        "title": "latency guard miss EV recovery",
+                        "confidence": "consensus",
+                        "route": "instrumentation_order",
+                        "target_subsystem": "runtime_instrumentation",
+                    }
+                ],
+                "solo_findings": [],
+                "auto_family_candidates": [],
+                "code_improvement_orders": [
+                    {
+                        "order_id": "order_latency_guard_miss_ev_recovery",
+                        "title": "latency guard miss EV recovery",
+                        "target_subsystem": "runtime_instrumentation",
+                        "runtime_effect": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (ev_dir / "threshold_cycle_ev_2026-05-11.json").write_text(
+        json.dumps(
+            {
+                "calibration_outcome": {
+                    "decisions": [
+                        {
+                            "family": "pre_submit_price_guard",
+                            "calibration_state": "hold_sample",
+                            "source_metrics": {
+                                "instrumentation_status": "implemented",
+                                "provenance_contract": [
+                                    "latency_block_events",
+                                    "latency_guard_miss_unique_stocks",
+                                    "quote_fresh_latency_pass_rate",
+                                    "latency_reason_breakdown",
+                                ],
+                            },
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-11", max_orders=5)
+
+    order = report["orders"][0]
+    assert order["order_id"] == "order_latency_guard_miss_ev_recovery"
+    assert order["decision"] == "attach_existing_family"
+    assert order["mapped_family"] == "pre_submit_price_guard"
 
 
 def test_build_code_improvement_workorder_reports_previous_generation_diff(tmp_path, monkeypatch):

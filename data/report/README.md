@@ -49,7 +49,7 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 
 | profile | 생성 JSON |
 |---|---|
-| `full` | `trade_review`, `performance_tuning`, `wait6579_ev_cohort`, `post_sell_feedback`, `missed_entry_counterfactual`, `holding_exit_observation`, `add_blocked_lock`, `monitor_snapshot_manifest` |
+| `full` | `trade_review`, `performance_tuning`, `wait6579_ev_cohort`, `post_sell_feedback`, `missed_entry_counterfactual`, `holding_exit_observation`, `monitor_snapshot_manifest` |
 | `intraday_light` | `trade_review`, `performance_tuning`, `wait6579_ev_cohort`, `monitor_snapshot_manifest` |
 
 저장 경로는 `data/report/monitor_snapshots/{kind}_YYYY-MM-DD.json`이며 오래된 파일은 `.json.gz`로 압축될 수 있다. 이 계열은 API/dashboard/snapshot용 canonical JSON이며, 현재 설계상 전부 Markdown을 생성하지는 않는다.
@@ -85,7 +85,7 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 | 5 | `post_sell_feedback_YYYY-MM-DD.md` | post-sell 후보/평가 JSON은 있으나 장후 사람이 읽는 요약이 없다. | missed upside, good exit, extra upside 중심 Markdown 추가 권고 |
 | 6 | `missed_entry_counterfactual_YYYY-MM-DD.md` | 미진입 기회비용 분석 JSON만 존재한다. | latency/liquidity/AI threshold/overbought blocker별 Markdown 추가 권고 |
 | 7 | `wait6579_ev_cohort_YYYY-MM-DD.md` | WAIT 65~79 EV cohort JSON만 존재한다. 현재 owner가 약해졌지만 prompt/score 재판정 감사에는 유용하다. | 필요 시 archive 성격 Markdown 또는 dashboard-only 유지 결정 |
-| 8 | `add_blocked_lock_YYYY-MM-DD.md` | 최근 JSON은 계속 있으나 Markdown은 2026-04-16 legacy 단발만 있다. | 추가매수 blocker가 active owner일 때만 Markdown 재개 |
+| 8 | `add_blocked_lock_YYYY-MM-DD.md` | 정기 full snapshot 생성에서 제외한 legacy 축이다. Markdown은 2026-04-16 단발만 있다. | 추가매수 blocker가 active owner일 때만 새 workorder로 JSON/Markdown 재개 |
 | 9 | `daily_report_YYYY-MM-DD.md` | `report_YYYY-MM-DD.json`은 web/API/Flutter 소비용 구조화 리포트다. | 운영자 장후 판정용으로는 우선순위 낮음. dashboard-only 유지 가능 |
 
 ## 정상적으로 Markdown 제외해도 되는 항목
@@ -123,7 +123,6 @@ ON 가능한 시점은 다음 조건이 모두 닫힌 뒤다.
 calibration의 source는 `threshold_cycle` compact event만이 아니다. 아래 기존 report를 함께 읽어 `calibration_source_bundle`에 요약한다.
 
 - `data/report/buy_funnel_sentinel/buy_funnel_sentinel_YYYY-MM-DD.json`
-- `data/report/sentinel_followup_YYYY-MM-DD.md`
 - `data/report/monitor_snapshots/wait6579_ev_cohort_YYYY-MM-DD.json`
 - `data/report/monitor_snapshots/missed_entry_counterfactual_YYYY-MM-DD.json`
 - `data/report/monitor_snapshots/performance_tuning_YYYY-MM-DD.json`
@@ -131,8 +130,14 @@ calibration의 source는 `threshold_cycle` compact event만이 아니다. 아래
 - `data/report/monitor_snapshots/post_sell_feedback_YYYY-MM-DD.json`
 - `data/report/monitor_snapshots/trade_review_YYYY-MM-DD.json`
 - `data/report/holding_exit_sentinel/holding_exit_sentinel_YYYY-MM-DD.json`
+- `data/report/panic_sell_defense/panic_sell_defense_YYYY-MM-DD.json`
+- `data/report/panic_buying/panic_buying_YYYY-MM-DD.json`
 - `data/report/holding_exit_decision_matrix/holding_exit_decision_matrix_YYYY-MM-DD.json`
 - `data/report/statistical_action_weight/statistical_action_weight_YYYY-MM-DD.json`
+
+`sentinel_followup_2026-05-07.md`는 단발 follow-up 기록으로 archive/reference에 남기며, 최신 calibration source bundle에는 포함하지 않는다.
+
+`threshold_cycle`의 `calibration_source_bundle.report_only_cleanup_audit`는 현재 source bundle consumer가 없는 report-only/legacy 산출물을 매 실행마다 관리한다. 대상은 `sentinel_followup`, policy-disabled `server_comparison`, 정기 full snapshot에서 제외된 legacy `add_blocked_lock`, 제거된 `preclose_sell_target`이며, 결과는 source-quality warning/정리 후보로만 쓰고 runtime 변경 권한은 없다.
 
 운영 원칙:
 

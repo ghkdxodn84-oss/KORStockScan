@@ -209,6 +209,57 @@ def _zscore(latest: float, history: list[float]) -> float:
     return (latest - mean) / std
 
 
+def _ofi_cusum(values: list[float], *, direction: str) -> dict[str, Any]:
+    clean = [float(value) for value in values if math.isfinite(float(value))]
+    if len(clean) < 4:
+        return {
+            "direction": direction,
+            "sample_count": len(clean),
+            "triggered": False,
+            "score": 0.0,
+            "sigma": None,
+            "k": None,
+            "h": None,
+            "reason": "insufficient_ofi_samples",
+        }
+    history = clean[:-1]
+    mean = sum(history) / len(history)
+    variance = sum((value - mean) ** 2 for value in history) / len(history)
+    sigma = math.sqrt(variance)
+    if sigma <= 1e-9:
+        return {
+            "direction": direction,
+            "sample_count": len(clean),
+            "triggered": False,
+            "score": 0.0,
+            "sigma": round(sigma, 6),
+            "k": 0.0,
+            "h": 0.0,
+            "reason": "flat_ofi_sigma",
+        }
+    k = 0.5 * sigma
+    h = 4.0 * sigma
+    cumulative = 0.0
+    if direction == "negative":
+        for value in clean:
+            cumulative = min(0.0, cumulative + (value - mean) + k)
+        score = abs(cumulative)
+    else:
+        for value in clean:
+            cumulative = max(0.0, cumulative + (value - mean) - k)
+        score = cumulative
+    return {
+        "direction": direction,
+        "sample_count": len(clean),
+        "triggered": score >= h,
+        "score": round(score, 6),
+        "sigma": round(sigma, 6),
+        "k": round(k, 6),
+        "h": round(h, 6),
+        "reason": "cusum_threshold_breached" if score >= h else "below_cusum_threshold",
+    }
+
+
 def _return_pct(candles: list[PanicCandle], bars: int) -> float:
     if len(candles) < 2:
         return 0.0
@@ -363,6 +414,8 @@ def compute_panic_features(
     bid_depth_refill = _bid_depth_refill(orderbooks, panic_baseline=panic_bid_depth_baseline)
     current_orderbook = orderbooks[-1] if orderbooks else None
     ofi_z = current_orderbook.ofi_z if current_orderbook else None
+    ofi_values = [float(item.ofi_z) for item in orderbooks if item.ofi_z is not None]
+    ofi_cusum = _ofi_cusum(ofi_values, direction="negative")
     qi_ewma = current_orderbook.qi_ewma if current_orderbook else None
     micro_state = current_orderbook.micro_state if current_orderbook else "missing"
     observer_healthy = current_orderbook.observer_healthy if current_orderbook else False
@@ -375,6 +428,17 @@ def compute_panic_features(
     bounce_from_low_pct = 0.0
     if panic_low is not None and panic_low > 0 and candle.close > 0:
         bounce_from_low_pct = ((candle.close / panic_low) - 1.0) * 100.0
+    micro_consensus_count = sum(
+        1
+        for passed in (
+            ofi_z is not None and float(ofi_z) <= -2.5,
+            sell_ratio is not None and float(sell_ratio) >= config.sell_ratio_threshold,
+            volume_ratio >= config.volume_spike_threshold,
+            bid_depth_drop is not None and float(bid_depth_drop) >= config.bid_depth_drop_threshold,
+            spread_ratio is not None and float(spread_ratio) >= config.spread_widen_threshold,
+        )
+        if passed
+    )
 
     return {
         "short_return_pct": round(short_return, 6),
@@ -398,6 +462,16 @@ def compute_panic_features(
         "bid_depth_refill_ratio": None if bid_depth_refill is None else round(bid_depth_refill, 6),
         "spread_ratio": None if spread_ratio is None else round(spread_ratio, 6),
         "ofi_z": None if ofi_z is None else round(float(ofi_z), 6),
+        "ofi_cusum_direction": ofi_cusum["direction"],
+        "ofi_cusum_sample_count": ofi_cusum["sample_count"],
+        "ofi_cusum_triggered": ofi_cusum["triggered"],
+        "ofi_cusum_score": ofi_cusum["score"],
+        "ofi_cusum_sigma": ofi_cusum["sigma"],
+        "ofi_cusum_k": ofi_cusum["k"],
+        "ofi_cusum_h": ofi_cusum["h"],
+        "ofi_cusum_reason": ofi_cusum["reason"],
+        "micro_consensus_signal_count": micro_consensus_count,
+        "micro_consensus_pass": micro_consensus_count >= 2,
         "qi_ewma": None if qi_ewma is None else round(float(qi_ewma), 6),
         "orderbook_micro_state": micro_state,
         "orderbook_ready": bool(orderbook_ready),
@@ -1003,6 +1077,20 @@ def summarize_microstructure_detector_from_events(
     allow_false_count = sum(1 for item in symbol_signals if not item.signal.allow_new_long_advisory)
     panic_scores = [item.signal.panic_score for item in symbol_signals]
     recovery_scores = [item.signal.recovery_score for item in symbol_signals]
+    cusum_triggered = [
+        item
+        for item in symbol_signals
+        if bool(item.signal.metrics.get("ofi_cusum_triggered"))
+    ]
+    cusum_scores = [
+        float(item.signal.metrics.get("ofi_cusum_score") or 0.0)
+        for item in symbol_signals
+    ]
+    consensus_passed = [
+        item
+        for item in symbol_signals
+        if bool(item.signal.metrics.get("micro_consensus_pass"))
+    ]
     return {
         "schema_version": 1,
         "policy": {
@@ -1022,6 +1110,25 @@ def summarize_microstructure_detector_from_events(
         "degraded_orderbook_count": degraded_orderbook,
         "state_counts": dict(sorted(state_counter.items())),
         "top_reasons": [{"reason": key, "count": value} for key, value in reason_counter.most_common(12)],
+        "micro_cusum_observer": {
+            "metric_role": "source_quality_gate",
+            "decision_authority": "source_quality_only",
+            "window_policy": "intraday_observe_only",
+            "sample_floor": 4,
+            "primary_decision_metric": None,
+            "source_quality_gate": "requires timestamp-ordered orderbook_micro_ofi_z samples per symbol",
+            "forbidden_uses": [
+                "runtime_threshold_apply",
+                "order_submit",
+                "auto_sell",
+                "bot_restart",
+                "provider_route_change",
+            ],
+            "ofi_direction": "negative",
+            "triggered_symbol_count": len(cusum_triggered),
+            "consensus_pass_symbol_count": len(consensus_passed),
+            "max_ofi_cusum_score": round(max(cusum_scores), 6) if cusum_scores else 0.0,
+        },
         "metrics": {
             "max_panic_score": round(max(panic_scores), 6) if panic_scores else 0.0,
             "max_recovery_score": round(max(recovery_scores), 6) if recovery_scores else 0.0,

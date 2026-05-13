@@ -8,11 +8,11 @@
 - log_issues: `[]`
 
 ## Workorder Snapshot
-- generation_id: `2026-05-13-33d313ae0112`
-- source_hash: `33d313ae0112131b2b77f268ee8c50f48aa34aedb8dd05c246cd74145071ef87`
-- snapshot_status: `first_generation`
-- previous_generation_id: `-`
-- previous_source_hash: `-`
-- new_order_ids: `['order_ai_threshold_dominance', 'order_ai_threshold_miss_ev_recovery', 'order_budget_pass_without_submit', 'order_holding_exit_decision_matrix_edge_counterfactual', 'order_latency_guard_miss_ev_recovery', 'order_liquidity_gate_miss_ev_recovery', 'order_swing_ai_contract_structured_output_eval', 'order_swing_gatekeeper_reject_threshold_review', 'order_swing_ofi_qi_stale_or_missing_context', 'order_swing_pattern_lab_deepseek_entry_no_submissions', 'order_swing_pattern_lab_deepseek_scale_in_events_observed', 'order_swing_scale_in_ofi_qi_bearish_risk_review']`
+- generation_id: `2026-05-13-24e8c17157ed`
+- source_hash: `24e8c17157edc007caeb2868858eab74a28f33076f94f25ac67541d3c22b35a7`
+- snapshot_status: `source_changed_with_lineage`
+- previous_generation_id: `2026-05-13-855236ba6498`
+- previous_source_hash: `855236ba6498b54c19239499d02e45a1719ea93c24cadb2294ef9e275e0aded7`
+- new_order_ids: `[]`
 - removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`

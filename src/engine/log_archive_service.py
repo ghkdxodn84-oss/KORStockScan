@@ -277,7 +277,6 @@ def save_monitor_snapshots_for_date_with_profile(
     io_delay_sec: float = 0.0,
     include_server_comparison: bool | None = None,
 ) -> dict[str, str]:
-    from src.engine.add_blocked_lock_report import build_add_blocked_lock_report
     from src.engine.buy_pause_guard import evaluate_buy_pause_guard
     from src.engine.holding_exit_observation_report import build_holding_exit_observation_report
     from src.engine.sniper_missed_entry_counterfactual import build_missed_entry_counterfactual_report
@@ -354,12 +353,6 @@ def save_monitor_snapshots_for_date_with_profile(
                 target_date=target_date,
             ),
         ),
-        (
-            "add_blocked_lock",
-            lambda: build_add_blocked_lock_report(
-                target_date=target_date,
-            ),
-        ),
     )
     allowed_by_profile = {
         "full": {
@@ -369,7 +362,6 @@ def save_monitor_snapshots_for_date_with_profile(
             "post_sell_feedback",
             "missed_entry_counterfactual",
             "holding_exit_observation",
-            "add_blocked_lock",
         },
         "intraday_light": {
             "trade_review",

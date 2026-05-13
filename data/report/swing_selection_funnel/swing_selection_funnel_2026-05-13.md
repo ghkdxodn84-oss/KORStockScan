@@ -15,11 +15,11 @@
 
 | stage | raw | unique_records |
 | --- | ---: | ---: |
-| `blocked_gatekeeper_reject` | 86 | 18 |
-| `blocked_swing_gap` | 93429 | 10 |
-| `blocked_swing_score_vpw` | 330940 | 23 |
-| `gatekeeper_fast_reuse_bypass` | 86 | 18 |
-| `swing_probe_discarded` | 9550 | 27 |
+| `blocked_gatekeeper_reject` | 120 | 18 |
+| `blocked_swing_gap` | 167937 | 10 |
+| `blocked_swing_score_vpw` | 554464 | 23 |
+| `gatekeeper_fast_reuse_bypass` | 120 | 18 |
+| `swing_probe_discarded` | 14912 | 27 |
 | `swing_probe_entry_candidate` | 17 | 13 |
 | `swing_probe_exit_signal` | 16 | 15 |
 | `swing_probe_holding_started` | 17 | 13 |
@@ -32,16 +32,16 @@
 
 ## Top Code Stage
 
-- `blocked_swing_score_vpw` 하나금융지주(086790): 19191
-- `blocked_swing_score_vpw` LG씨엔에스(064400): 19191
-- `blocked_swing_score_vpw` 카카오페이(377300): 19191
-- `blocked_swing_score_vpw` 금호석유화학(011780): 19191
-- `blocked_swing_score_vpw` 한화(000880): 19190
-- `blocked_swing_score_vpw` LG(003550): 19190
-- `blocked_swing_score_vpw` DN오토모티브(007340): 19190
-- `blocked_swing_score_vpw` 콜마홀딩스(024720): 19184
-- `blocked_swing_score_vpw` YG PLUS(037270): 18365
-- `blocked_swing_score_vpw` HD한국조선해양(009540): 18364
+- `blocked_swing_score_vpw` 하나금융지주(086790): 31609
+- `blocked_swing_score_vpw` LG씨엔에스(064400): 31609
+- `blocked_swing_score_vpw` 카카오페이(377300): 31609
+- `blocked_swing_score_vpw` 금호석유화학(011780): 31609
+- `blocked_swing_score_vpw` 한화(000880): 31608
+- `blocked_swing_score_vpw` LG(003550): 31608
+- `blocked_swing_score_vpw` DN오토모티브(007340): 31608
+- `blocked_swing_score_vpw` 콜마홀딩스(024720): 31602
+- `blocked_swing_score_vpw` YG PLUS(037270): 30783
+- `blocked_swing_score_vpw` HD한국조선해양(009540): 30782
 
 ## OFI/QI Micro Context
 

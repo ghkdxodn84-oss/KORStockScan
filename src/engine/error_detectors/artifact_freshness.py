@@ -1,13 +1,14 @@
 from __future__ import annotations
 
+import csv
 import json
 import os
 import time
-from datetime import datetime, date
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from src.utils.constants import PROJECT_ROOT, TRADING_RULES
+from src.utils.constants import PROJECT_ROOT
 from src.utils.market_day import is_krx_trading_day
 
 from src.engine.error_detectors.base import (
@@ -50,6 +51,12 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "window_start": (7, 20),
         "window_end": (8, 0),
         "trading_day_only": True,
+        "content_freshness": {
+            "format": "csv",
+            "date_field": "date",
+            "max_age_days": 7,
+            "min_rows": 1,
+        },
     },
     {
         "id": "daily_recommendations_diag",
@@ -59,6 +66,13 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "window_start": (7, 20),
         "window_end": (8, 0),
         "trading_day_only": True,
+        "content_freshness": {
+            "format": "json",
+            "date_field": "latest_date",
+            "max_age_days": 7,
+            "min_count_field": "selected_count",
+            "min_count": 1,
+        },
     },
     {
         "id": "threshold_runtime_env",
@@ -414,6 +428,19 @@ class ArtifactFreshnessDetector(BaseDetector):
                 warnings.append(status_warning)
                 details[f"{aid}_status"] = "warning"
                 continue
+            content_warning, content_passed = self._validate_content_freshness(
+                artifact,
+                artifact_path,
+                details,
+                now_dt,
+            )
+            if content_warning:
+                warnings.append(content_warning)
+                details[f"{aid}_status"] = "warning"
+                continue
+            if content_passed:
+                details[f"{aid}_status"] = "pass_content_date"
+                continue
 
             if artifact.get("one_shot"):
                 details[f"{aid}_status"] = "pass_one_shot"
@@ -516,6 +543,112 @@ class ArtifactFreshnessDetector(BaseDetector):
         if ok_values and status_value not in ok_values:
             return f"{aid}: JSON status is {status_value}"
         return ""
+
+    @staticmethod
+    def _validate_content_freshness(
+        artifact: dict[str, Any],
+        artifact_path: Path,
+        details: dict[str, Any],
+        now_dt: datetime,
+    ) -> tuple[str, bool]:
+        config = artifact.get("content_freshness")
+        if not isinstance(config, dict):
+            return "", False
+
+        aid = artifact["id"]
+        data_format = str(config.get("format") or "").strip().lower()
+        try:
+            payload = ArtifactFreshnessDetector._load_content_payload(data_format, artifact_path)
+        except Exception as exc:
+            details[f"{aid}_content_status"] = "invalid_content"
+            return f"{aid}: invalid content freshness payload ({exc})", False
+
+        min_rows = config.get("min_rows")
+        if min_rows is not None and isinstance(payload, list) and len(payload) < int(min_rows):
+            details[f"{aid}_content_status"] = "insufficient_rows"
+            details[f"{aid}_content_rows"] = len(payload)
+            return f"{aid}: insufficient rows ({len(payload)} < {int(min_rows)})", False
+        if isinstance(payload, list):
+            details[f"{aid}_content_rows"] = len(payload)
+
+        min_count_field = str(config.get("min_count_field") or "").strip()
+        if min_count_field:
+            count_value = ArtifactFreshnessDetector._resolve_field(payload, min_count_field)
+            try:
+                count_int = int(count_value)
+            except (TypeError, ValueError):
+                details[f"{aid}_content_status"] = "invalid_count"
+                return f"{aid}: invalid count field {min_count_field}", False
+            details[f"{aid}_{min_count_field}"] = count_int
+            min_count = int(config.get("min_count") or 0)
+            if count_int < min_count:
+                details[f"{aid}_content_status"] = "insufficient_count"
+                return f"{aid}: insufficient {min_count_field} ({count_int} < {min_count})", False
+
+        date_field = str(config.get("date_field") or "").strip()
+        if not date_field:
+            details[f"{aid}_content_status"] = "pass"
+            return "", True
+        raw_date = ArtifactFreshnessDetector._resolve_field(payload, date_field)
+        content_date = ArtifactFreshnessDetector._parse_date_value(raw_date)
+        if content_date is None:
+            details[f"{aid}_content_status"] = "invalid_date"
+            return f"{aid}: invalid content date field {date_field}", False
+
+        age_days = (now_dt.date() - content_date.date()).days
+        max_age_days = int(config.get("max_age_days") or 0)
+        details[f"{aid}_content_date"] = content_date.date().isoformat()
+        details[f"{aid}_content_age_days"] = age_days
+        if age_days < 0:
+            details[f"{aid}_content_status"] = "future_date"
+            return f"{aid}: content date is in the future ({content_date.date().isoformat()})", False
+        if max_age_days >= 0 and age_days > max_age_days:
+            details[f"{aid}_content_status"] = "stale_date"
+            return f"{aid}: content date stale ({age_days}d > {max_age_days}d)", False
+
+        details[f"{aid}_content_status"] = "pass"
+        return "", True
+
+    @staticmethod
+    def _load_content_payload(data_format: str, artifact_path: Path) -> Any:
+        if data_format == "json":
+            return json.loads(artifact_path.read_text(encoding="utf-8"))
+        if data_format == "csv":
+            with artifact_path.open("r", encoding="utf-8-sig", newline="") as handle:
+                return list(csv.DictReader(handle))
+        raise ValueError(f"unsupported content freshness format: {data_format}")
+
+    @staticmethod
+    def _resolve_field(payload: Any, field_path: str) -> Any:
+        current = payload[0] if isinstance(payload, list) and payload else payload
+        for part in field_path.split("."):
+            if isinstance(current, dict) and part in current:
+                current = current[part]
+            else:
+                return None
+        return current
+
+    @staticmethod
+    def _parse_date_value(value: Any) -> datetime | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text:
+            return None
+        if " " in text and "T" not in text:
+            text = text.split(" ", 1)[0]
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        try:
+            return datetime.fromisoformat(text)
+        except ValueError:
+            pass
+        for fmt in ("%Y%m%d", "%Y/%m/%d"):
+            try:
+                return datetime.strptime(text, fmt)
+            except ValueError:
+                continue
+        return None
 
 
 def _kst_time_tuple(now_kst: datetime | None = None) -> tuple[int, int]:
