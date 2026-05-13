@@ -19,6 +19,7 @@ IONICE_CLASS="${BUY_FUNNEL_SENTINEL_IONICE_CLASS:-2}"
 IONICE_LEVEL="${BUY_FUNNEL_SENTINEL_IONICE_LEVEL:-7}"
 NICE_LEVEL="${BUY_FUNNEL_SENTINEL_NICE_LEVEL:-12}"
 NICE_COMMAND="${BUY_FUNNEL_SENTINEL_NICE_COMMAND:-nice}"
+CPU_AFFINITY="${BUY_FUNNEL_SENTINEL_CPU_AFFINITY:-1}"
 
 mkdir -p "$PROJECT_DIR/tmp" "$PROJECT_DIR/logs"
 cd "$PROJECT_DIR"
@@ -58,6 +59,10 @@ fi
 cmd=(env PYTHONPATH=. "$VENV_PY" -m src.engine.buy_funnel_sentinel --date "$TARGET_DATE" --print-json "$@")
 if [[ "$DRY_RUN" == "1" ]]; then
   cmd+=(--dry-run)
+fi
+
+if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]] && [[ "$(nproc 2>/dev/null || echo 1)" -gt 1 ]]; then
+  cmd=(taskset -c "$CPU_AFFINITY" "${cmd[@]}")
 fi
 
 if command -v ionice >/dev/null 2>&1 && [[ "$IONICE_CLASS" -ge 0 ]]; then

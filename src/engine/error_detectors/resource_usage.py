@@ -31,7 +31,7 @@ class ResourceUsageDetector(BaseDetector):
         issues: list[str] = []
         warnings: list[str] = []
 
-        cpu_busy_max = float(getattr(TRADING_RULES, "ERROR_DETECTOR_CPU_BUSY_MAX_PCT", 90.0))
+        cpu_busy_max = float(getattr(TRADING_RULES, "ERROR_DETECTOR_CPU_BUSY_MAX_PCT", 95.0))
         mem_avail_min = float(getattr(TRADING_RULES, "ERROR_DETECTOR_MEM_AVAILABLE_MIN_MB", 500.0))
         disk_free_min = float(getattr(TRADING_RULES, "ERROR_DETECTOR_DISK_FREE_MIN_MB", 2048.0))
         swap_used_max = float(getattr(TRADING_RULES, "ERROR_DETECTOR_SWAP_USED_MAX_PCT", 80.0))

@@ -119,12 +119,14 @@ def test_trading_rules_ai_cadence_env_override(monkeypatch):
 def test_trading_rules_error_detector_env_override(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_ERROR_DETECTOR_ENABLED", "false")
     monkeypatch.setenv("KORSTOCKSCAN_ERROR_DETECTOR_DAEMON_INTERVAL_SEC", "120")
+    monkeypatch.setenv("KORSTOCKSCAN_ERROR_DETECTOR_CPU_BUSY_MAX_PCT", "95")
     monkeypatch.setenv("KORSTOCKSCAN_ERROR_DETECTOR_RESOURCE_MAX_SAMPLE_AGE_SEC", "900")
 
     reloaded = importlib.reload(constants)
 
     assert reloaded.TRADING_RULES.ERROR_DETECTOR_ENABLED is False
     assert reloaded.TRADING_RULES.ERROR_DETECTOR_DAEMON_INTERVAL_SEC == 120
+    assert reloaded.TRADING_RULES.ERROR_DETECTOR_CPU_BUSY_MAX_PCT == 95
     assert reloaded.TRADING_RULES.ERROR_DETECTOR_RESOURCE_MAX_SAMPLE_AGE_SEC == 900
 
 

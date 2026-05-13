@@ -125,6 +125,12 @@
   - 실행 메모 (`2026-05-13 07:57 KST`): `run_error_detection.sh`가 detector `summary_severity=fail`일 때 bot daemon/EventBus 없이도 `notify_error_detection_admin`으로 관리자 Telegram direct notify를 시도하도록 보강했다. 동일 fail signature는 10분 cooldown으로 중복 억제하고, 알림은 report-only이며 runtime threshold/spread/order/restart mutation 권한은 없다.
   - 실행 메모 (`2026-05-13 08:35 KST`): `panic_sell_state_detector`는 `panic_sell_defense_report`의 `microstructure_detector`로 소비되고, `panic_sell_defense`는 threshold-cycle source bundle과 `score65_74_recovery_probe` panic-adjusted floor 입력으로 연결된 것을 확인했다. 장중 cron 산출물 의존만으로는 장후 attribution canonical source가 약해질 수 있어 `run_threshold_cycle_postclose.sh`가 threshold-cycle report 전에 `panic_sell_defense_report`를 재생성하도록 보강했다. 이 단계는 report-only이며 score/stop threshold 변경, 자동매도, bot restart 권한이 없다.
 
+- [ ] `[BotCPUHotspotSamplingPostclose0513] bot_main.py CPU hotspot 샘플링 및 worker/process 분리 후보 판정` (`Due: 2026-05-13`, `Slot: POSTCLOSE`, `TimeWindow: 18:20~18:40`, `Track: RuntimeStability`)
+  - Source: [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [bot_main.py](/home/ubuntu/KORStockScan/src/bot_main.py), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정 기준: 장후 non-trading 구간에 live threshold/order/provider를 바꾸지 않고 bot process CPU hotspot을 샘플링한다. 병목을 `scalping_scanner_loop`, `pipeline_jsonl_append`, `sentinel_or_detector_overlap`, `db_or_io_wait`, `unknown`으로 분류하고, `scalping_scanner` 루프 또는 pipeline logging/JSONL append가 주 병목이면 별도 worker/process 분리 workorder를 연다.
+  - 금지: 장중 hot patch, 장중 bot restart, threshold mutation, 주문/수량/가격 guard 변경, profiler 설치를 위한 패키지 변경, 근거 없는 구조 분리를 수행하지 않는다.
+  - 다음 액션: `worker_split_workorder_required`, `logging_batching_required`, `scanner_loop_throttle_required`, `observe_only_no_action`, `defer_sampling_tool_missing` 중 하나로 닫는다.
+
 - [ ] `[ShadowCanaryCohortReview0513] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-13`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
   - 판정 기준: 당일 변경/관찰 결과를 기준으로 `remove`, `observe-only`, `baseline-promote`, `active-canary` 상태 변동 여부를 닫는다.

@@ -3,6 +3,7 @@
 THRESHOLD_RUNTIME_ENV_WAIT_SEC="${KORSTOCKSCAN_THRESHOLD_RUNTIME_ENV_WAIT_SEC:-1800}"
 THRESHOLD_RUNTIME_ENV_REQUIRED="${KORSTOCKSCAN_THRESHOLD_RUNTIME_ENV_REQUIRED:-true}"
 THRESHOLD_RUNTIME_ENV_BOOTSTRAP="${KORSTOCKSCAN_THRESHOLD_RUNTIME_ENV_BOOTSTRAP:-true}"
+BOT_CPU_AFFINITY="${KORSTOCKSCAN_BOT_CPU_AFFINITY:-0}"
 
 wait_for_threshold_runtime_env() {
     local env_path="$1"
@@ -67,7 +68,11 @@ while true; do
     fi
 
     # 봇 실행 (경로나 파일명은 환경에 맞게 수정)
-    ../.venv/bin/python bot_main.py
+    cmd=(../.venv/bin/python bot_main.py)
+    if command -v taskset >/dev/null 2>&1 && [ -n "$BOT_CPU_AFFINITY" ] && [ "$(nproc 2>/dev/null || echo 1)" -gt 1 ]; then
+        cmd=(taskset -c "$BOT_CPU_AFFINITY" "${cmd[@]}")
+    fi
+    "${cmd[@]}"
 
     echo "🛑 봇 프로세스가 종료되었습니다."
     echo "⏳ 5초 후 엔진을 재가동합니다. (완전 종료를 원하면 지금 Ctrl+C를 누르세요)"

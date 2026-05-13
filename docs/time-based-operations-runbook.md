@@ -256,6 +256,8 @@ PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode full --dry-run
 | 수동 dry-run | 배포 전/수정 후 안전 점검 | `PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode full --dry-run` | report 파일 미작성, filesystem mutation 차단 |
 | 수동 단일 범위 | 특정 detector 재현 | `--mode health_only|cron_only|log_only|auth_only|artifact_only|resource_only` | 해당 detector만 실행 |
 
+2 vCPU 운영에서는 bot hot path와 report-only job 경합을 줄이기 위해 CPU affinity를 분리한다. [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh)는 기본 `KORSTOCKSCAN_BOT_CPU_AFFINITY=0`으로 bot을 CPU0에 배치하고, wrapper 기본값은 CPU1 affinity를 적용한다. 적용 대상은 `run_error_detection.sh`, `run_buy_funnel_sentinel_intraday.sh`, `run_holding_exit_sentinel_intraday.sh`, `run_panic_sell_defense_intraday.sh`이며, 각각 `ERROR_DETECTION_CPU_AFFINITY`, `BUY_FUNNEL_SENTINEL_CPU_AFFINITY`, `HOLDING_EXIT_SENTINEL_CPU_AFFINITY`, `PANIC_SELL_DEFENSE_CPU_AFFINITY`로 override할 수 있다. `taskset`이 없거나 1 vCPU 환경이면 기존 실행 방식으로 fallback한다. 이 설정은 CPU 배치만 바꾸며 threshold, 주문 guard, bot restart 권한은 없다.
+
 `run_error_detection.sh`의 직접 Telegram 알림은 `KORSTOCKSCAN_ERROR_DETECTION_TELEGRAM_NOTIFY_ENABLED=false`로 비활성화할 수 있다. 동일 fail signature는 `tmp/error_detection_telegram_notify_state.json` 기준 10분 cooldown으로 중복 전송을 막는다.
 
 설치/갱신 명령:
@@ -281,7 +283,7 @@ ls -l data/report/error_detection/error_detection_$(TZ=Asia/Seoul date +%F).json
 | `log_scanner` | error log burst 또는 신규 error pattern. `ERROR`/`CRITICAL`/traceback/exception/에러/오류/실패 같은 에러 후보 라인만 분류하며, `_error.log`에 섞인 INFO/WARNING성 DB 성공·업로드 로그는 운영 incident에서 제외한다. `TEST`, `123456`, `_DummySession`, `bus fail`처럼 pytest fixture signature가 붙은 라인도 제외한다 | stack trace/source artifact 확인 후 incident 또는 code workorder로 분리. fixture noise나 INFO성 운영 로그가 runtime error log에 섞이면 test/log sink 분리 또는 scanner ignore rule 보강으로 닫는다 | 에러만 보고 live guard 완화 |
 | `kiwoom_auth_8005_restart` | fresh runtime log에서 `8005 Token이 유효하지 않습니다` 계열 인증 실패 감지. 기존 offset 이전 로그, pytest fixture signature, `run_error_detection*` meta log는 제외한다 | `restart.flag` 기반 graceful restart 후 새 PID, WS 수신, REST 시세/잔고 응답 회복을 확인한다. 하루 3회 이상이면 operator가 token 발급/캐시/WS reconnect 경로를 별도 incident로 본다 | hot-refresh, 주문 retry, threshold/spread/order guard 변경 |
 | `artifact_freshness` | 시간창 기준 필수 report/artifact stale/누락 또는 JSON status 값 비정상. 장중 `pipeline_events`는 09:00~09:05 startup grace를 두고, `threshold_events` compact stream은 sparse stream이라 stale을 warning으로 본다. `threshold_cycle_ev`와 `swing_daily_simulation` 같은 one-shot postclose artifact는 완료 후 age만으로 재실행하지 않는다 | window, startup grace, trading_day skip, upstream cron 실패, status JSON의 `failed_steps`/`recovered_steps` 확인 | 누락 artifact를 수동 값으로 대체 |
-| `resource_usage` | CPU/memory/swap/load/disk threshold 위반, sampler stale | resource pressure 원인 확인. disk-low면 log rotate 결과와 cooldown state 확인. swap만 높고 `mem_available`이 충분한 경우는 즉시 장애보다 reclaim/캐시 잔존 가능성을 먼저 본다 | 전략 runtime parameter 변경 |
+| `resource_usage` | CPU/memory/swap/load/disk threshold 위반, sampler stale. CPU busy fail 기준은 `ERROR_DETECTOR_CPU_BUSY_MAX_PCT=95.0`이며 90% 구간부터 warning으로 본다 | resource pressure 원인 확인. disk-low면 log rotate 결과와 cooldown state 확인. swap만 높고 `mem_available`이 충분한 경우는 즉시 장애보다 reclaim/캐시 잔존 가능성을 먼저 본다 | 전략 runtime parameter 변경 |
 | `stale_lock` | 오래된 lock 발견 또는 cleanup 실패 | active lock인지 확인. 반복되면 wrapper lock lifecycle 보강 | 실행 중인 process lock 강제 삭제 |
 
 ### 코드수정 필요 에러 처리 절차

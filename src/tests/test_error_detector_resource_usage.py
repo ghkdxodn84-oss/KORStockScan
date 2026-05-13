@@ -91,6 +91,25 @@ class TestResourceUsageDetector:
                 result = detector.check()
             assert result.severity == "fail"
 
+    def test_cpu_above_old_threshold_warns_under_95_fail_threshold(self):
+        import time
+        sample = {
+            "ts": "2026-05-09T18:00:00+09:00",
+            "epoch": int(time.time()),
+            "cpu": {"cpu_busy_pct": 91.0},
+            "memory": {"mem_available_mb": 4096.0, "swap_total_mb": 8192.0, "swap_free_mb": 7000.0},
+            "loadavg": {"15m": 1.5},
+        }
+        with tempfile.TemporaryDirectory() as tmpdir:
+            sample_file = Path(tmpdir) / "samples.jsonl"
+            sample_file.write_text(json.dumps(sample), encoding="utf-8")
+            with patch("src.engine.error_detectors.resource_usage.SAMPLER_JSONL", sample_file), \
+                patch.object(ResourceUsageDetector, "_check_disk_free", return_value=8192.0):
+                detector = ResourceUsageDetector()
+                result = detector.check()
+            assert result.severity == "warning"
+            assert "approaching 95.0%" in result.summary
+
     def test_low_memory_fails(self):
         import time
         sample = {
