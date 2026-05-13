@@ -30,6 +30,14 @@
 - 다음 액션: 12:05 intraday calibration은 due 전이므로 장중에는 report-only 상태를 유지하고, panic/holding/buy funnel 원인은 장후 attribution과 postclose threshold-cycle source bundle에서 닫는다.
 - 정정 (`2026-05-13 09:47 KST`): `holding_exit_sentinel.primary=SELL_EXECUTION_DROUGHT`는 probe-only `exit_signal`의 sparse provenance 오분류였다. 같은 `record_id`의 `swing_probe_*` sibling이 있으면 선행 `exit_signal`도 non-real로 귀속하도록 보정했고, 재생성 결과 `holding_exit_sentinel.primary=NORMAL`, `real_exit_signal=0`, `non_real_exit_signal=9`로 닫혔다. 남는 장중 관찰 경고는 `buy_funnel_sentinel.primary=UPSTREAM_AI_THRESHOLD`와 `panic_sell_defense.panic_state=PANIC_SELL`이다.
 
+### PostcloseAutomationHealthCheck20260513 운영 확인 기록
+
+- checked_at: `2026-05-13 16:55 KST`
+- 판정: `warning`
+- 근거: `threshold_cycle_postclose_cron.log`는 `[START] threshold-cycle postclose target_date=2026-05-13` 이후 `[DONE]` marker로 종료했고, `threshold_cycle_postclose_verification_2026-05-13.json` status=`pass`, predecessor_status=`pass`, wait/timeout/log issues=`0`이다. `threshold_cycle_ev`, `code_improvement_workorder`, `runtime_approval_summary`, `swing_lifecycle_audit`, 다음날 `2026-05-14-stage2-todo-checklist.md` artifact가 모두 생성됐고 JSON 검증을 통과했다. 단, `error_detection` 16:55 full check는 critical artifact freshness는 pass지만 `resource_usage`에서 swap used `85.1%`/memory healthy warning을 남겼고, daily EV도 swing OFI/QI stale/missing `1/161` source-quality warning을 남겼다.
+- 금지 확인: postclose 확인 과정에서 threshold/provider/order guard/bot restart 변경은 수행하지 않았다. `runtime_approval_summary`는 read-only이며 panic 2건은 approval_required, swing real/scale-in canary는 approval artifact 없음으로 미적용이다.
+- 다음 액션: 장후 체인 자체는 복구 재실행 없이 통과로 보되, resource warning은 운영 관찰로만 유지한다. Project/Calendar 동기화는 표준 동기화 명령으로 사용자가 수행한다.
+
 - [x] `[PanicBuyingReportOnly0513] 패닉바잉 report-only 탐지/자동화체인 구현` (`Due: 2026-05-13`, `Slot: INTRADAY`, `TimeWindow: 10:00~15:30`, `Track: HoldingExit`)
   - Source: [panic_buying_detection_codex_spec.md](/home/ubuntu/KORStockScan/docs/proposals/panic_buying_detection_codex_spec.md), [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md)
   - 판정 기준: pipeline event 복원 기반 `panic_buying_report`가 JSON/Markdown을 생성하고, 장중 wrapper/cron installer, postclose source bundle, error detector coverage, 운영문서가 모두 report-only/no-mutation contract를 유지한다.
@@ -128,17 +136,24 @@
 
 ## 장후 체크리스트 (16:30~18:55)
 
-- [ ] `[ThresholdDailyEVReport0513] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-05-13`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
+- [x] `[ThresholdDailyEVReport0513] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-05-13`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-12.json)
   - 판정 기준: real/sim/combined split, selected/blocked family, runtime_change, warning을 분리해 확인한다.
   - 금지: sim/combined EV만으로 broker execution 품질이나 live 전환을 확정하지 않는다.
   - 다음 액션: 다음 장전 apply 입력으로 쓸 수 있는 항목과 hold_sample/freeze 항목을 분리한다.
+  - 판정 (`2026-05-13 16:55 KST`): `pass_with_source_quality_warning`.
+  - 근거: `threshold_cycle_ev_2026-05-13.json` generated_at=`2026-05-13T16:24:05+09:00` 기준 runtime_apply status=`auto_bounded_live_ready`, runtime_change=`true`, selected_families=`soft_stop_whipsaw_confirmation, score65_74_recovery_probe`다. daily realized는 completed=`2`, open=`0`, avg_profit_rate=`4.66%`, realized_pnl_krw=`49504`다. source split은 real sample=`12`, avg_profit_rate=`-1.0933%`, win_rate=`25.0%`; sim sample=`10`, avg_profit_rate=`3.9440%`, win_rate=`70.0%`; combined sample=`22`, avg_profit_rate=`1.1964%`, win_rate=`45.45%`이며 calibration_authority=`sim_equal_weight`로 real execution 품질과 분리돼 있다. warning은 swing OFI/QI stale/missing `1/161` 1건이다.
+  - 자동 반영/보류 분리: 다음 apply 입력으로 볼 수 있는 bounded candidate는 `soft_stop_whipsaw_confirmation` adjust_up뿐이다. `score65_74_recovery_probe`는 당일 selected runtime family였지만 장후 state는 `hold_sample`로 유지하고, `bad_entry_refined_canary` adjust_up은 OFF/관찰 only라 runtime env 적용 대상이 아니다. `holding_flow_ofi_smoothing`, `protect_trailing_smoothing`, `scale_in_price_guard`, `position_sizing_cap_release`는 hold_sample, `trailing_continuation`과 `pre_submit_price_guard`는 freeze, `holding_exit_decision_matrix_advisory`는 hold_no_edge로 닫는다.
+  - 다음 액션: 5/14 장전에는 `ThresholdEnvAutoApplyPreopen0514`에서 5/13 EV source를 기준으로 auto_bounded_live guard를 다시 확인한다. sim/combined EV와 missed probe EV는 broker execution 품질이나 실주문 전환 근거로 쓰지 않는다.
 
-- [ ] `[CodeImprovementWorkorderReview0513] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-05-13`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:00`, `Track: ScalpingLogic`)
+- [x] `[CodeImprovementWorkorderReview0513] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-05-13`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:00`, `Track: ScalpingLogic`)
   - Source: [code_improvement_workorder_2026-05-12.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-12.md), [code_improvement_workorder_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-12.json)
   - 판정 기준: selected_order_count=12와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인한다.
   - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
   - 다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.
+  - 판정 (`2026-05-13 16:55 KST`): `implementation_required_manual_codex_request`.
+  - 근거: Source의 5/12 workorder는 selected_order_count=`12`, decision_counts=`implement_now:2`, `attach_existing_family:5`, `design_family_candidate:4`, `defer_evidence:5`, `reject:4`이고 lineage는 previous_exists=`true`, new/removed/decision_changed=`0`이라 5/12 기준 신규 재실행 대상은 없다. 당일 postclose가 새로 생성한 `code_improvement_workorder_2026-05-13.json`은 generation_id=`2026-05-13-33d313ae0112`, selected_order_count=`12`, decision_counts=`implement_now:2`, `attach_existing_family:6`, `design_family_candidate:7`, `defer_evidence:5`, `reject:4`이며 first_generation snapshot이다. 구현 지시 대상은 runtime_effect=`false`인 `order_holding_exit_decision_matrix_edge_counterfactual`, `order_latency_guard_miss_ev_recovery` 2건이고, 나머지는 existing family attachment/design/reject/defer로 분리한다.
+  - 다음 액션: 이 확인 항목만으로 repo 코드는 수정하지 않는다. 실제 구현을 열려면 `docs/code-improvement-workorders/code_improvement_workorder_2026-05-13.md`의 2-pass 기준으로 Codex 구현 지시를 별도로 넣고, 구현 후 report/workorder 재생성과 parser 검증을 실행한다. 5/14 자동 체크리스트에는 `CodeImprovementWorkorderReview0514`가 이미 생성돼 최신 5/13 workorder를 소유한다.
 
 - [ ] `[PanicEntryFreezeGuardWorkorder0513] panic_entry_freeze_guard 별도 workorder 및 rollback guard 필요 여부 판정` (`Due: 2026-05-13`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:30`, `Track: RuntimeStability`)
   - Source: [panic_entry_freeze_guard_v2_2026-05-13.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/panic_entry_freeze_guard_v2_2026-05-13.md), [panic_sell_defense_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/panic_sell_defense/panic_sell_defense_2026-05-12.json), [threshold_cycle_ev_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-12.json), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
@@ -184,3 +199,18 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-05-13 15:47:57`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-05-13.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->

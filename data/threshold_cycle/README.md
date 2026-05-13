@@ -13,7 +13,7 @@ report 기반 자동화의 전체 추적성은 [report-based-automation-traceabi
 | 시점 | wrapper | 역할 | 산출물 |
 |---|---|---|---|
 | runtime | `src.utils.pipeline_event_logger` | threshold 후보 stage를 compact stream에 적재 | `threshold_events_YYYY-MM-DD.jsonl` |
-| POSTCLOSE 16:10 | `deploy/run_threshold_cycle_postclose.sh` | raw pipeline event를 family partition으로 backfill하고 장후 report, AI correction, scalping/swing automation, daily EV report 생성 | `date=YYYY-MM-DD/family=*/part-*.jsonl`, `data/report/threshold_cycle_YYYY-MM-DD.json`, 파생 `statistical_action_weight`, `holding_exit_decision_matrix`, `threshold_cycle_cumulative` JSON/MD, `threshold_cycle_ai_review_YYYY-MM-DD_postclose.{json,md}`, `scalping_pattern_lab_automation_YYYY-MM-DD.{json,md}`, `swing_improvement_automation_YYYY-MM-DD.{json,md}`, `swing_runtime_approval_YYYY-MM-DD.{json,md}`, `swing_pattern_lab_automation_YYYY-MM-DD.{json,md}`, `threshold_cycle_ev_YYYY-MM-DD.{json,md}` |
+| POSTCLOSE 16:10 | `deploy/run_threshold_cycle_postclose.sh` | raw pipeline event를 family partition으로 backfill하고 장후 report, AI correction, scalping/swing automation, daily EV report, Plan Rebase renewal proposal 생성 | `date=YYYY-MM-DD/family=*/part-*.jsonl`, `data/report/threshold_cycle_YYYY-MM-DD.json`, 파생 `statistical_action_weight`, `holding_exit_decision_matrix`, `threshold_cycle_cumulative` JSON/MD, `threshold_cycle_ai_review_YYYY-MM-DD_postclose.{json,md}`, `scalping_pattern_lab_automation_YYYY-MM-DD.{json,md}`, `swing_improvement_automation_YYYY-MM-DD.{json,md}`, `swing_runtime_approval_YYYY-MM-DD.{json,md}`, `swing_pattern_lab_automation_YYYY-MM-DD.{json,md}`, `threshold_cycle_ev_YYYY-MM-DD.{json,md}`, `runtime_approval_summary_YYYY-MM-DD.{json,md}`, `plan_rebase_daily_renewal_YYYY-MM-DD.{json,md}` |
 | INTRADAY 12:05 | `deploy/run_threshold_cycle_calibration.sh` | 기존 report source bundle을 읽어 장중 calibration 및 AI correction artifact 생성 | `data/report/threshold_cycle_calibration/threshold_cycle_calibration_YYYY-MM-DD_intraday.json`, `data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_YYYY-MM-DD_intraday.{json,md}` |
 | PREOPEN 07:35 | `deploy/run_threshold_cycle_preopen.sh` | 최신 threshold report와 AI correction guard를 읽어 auto bounded runtime env 생성 | `apply_plans/threshold_apply_YYYY-MM-DD.json`, `runtime_env/threshold_runtime_env_YYYY-MM-DD.{env,json}` |
 
@@ -56,6 +56,8 @@ cron completion detector는 wrapper log의 terminal marker를 source of truth로
 | `data/threshold_cycle/approvals/swing_runtime_approvals_YYYY-MM-DD.json` | 사용자가 승인한 스윙 approval artifact. 여기에 승인 id가 있어야 다음 장전 `threshold_cycle_preopen_apply`가 env override를 쓴다 |
 | `data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_YYYY-MM-DD.{json,md}` | DeepSeek 스윙 pattern lab 기반 automation artifact. fresh single-day 조건 미충족 시 warning만 남기고 order로 승격하지 않음 |
 | `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.{json,md}` | 완전 무인 반영 이후 daily EV 성과 제출 artifact |
+| `data/report/runtime_approval_summary/runtime_approval_summary_YYYY-MM-DD.{json,md}` | 스캘핑 selected family, 스윙 approval request, panic approval 후보를 묶은 read-only 요약 artifact. runtime mutation 권한 없음 |
+| `data/report/plan_rebase_daily_renewal/plan_rebase_daily_renewal_YYYY-MM-DD.{json,md}` | Plan Rebase/prompt/AGENTS daily renewal proposal. 기본 `proposal_only`, `document_mutation_allowed=false`, `runtime_mutation_allowed=false` |
 
 ## 누적/rolling threshold cycle report
 

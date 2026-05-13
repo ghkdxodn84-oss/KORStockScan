@@ -1,7 +1,7 @@
 # Scalp Sim EV Midcheck 2026-05-13
 
-- generated_at: `2026-05-13T10:01:27`
-- latest_event_at: `2026-05-13T10:01:27.292839`
+- generated_at: `2026-05-13T14:29:51`
+- latest_event_at: `2026-05-13T14:29:51.208291`
 - source: `/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-05-13.jsonl`
 - judgement: `non_positive_or_no_sample`
 - runtime_mutation: `false`
@@ -19,6 +19,11 @@
 
 ## Sim Stage Counts
 
+- `scalp_sim_buy_order_assumed_filled`: `1`
+- `scalp_sim_buy_order_virtual_pending`: `1`
+- `scalp_sim_duplicate_buy_signal`: `340`
+- `scalp_sim_entry_armed`: `1`
+- `scalp_sim_holding_started`: `1`
 
 ## Arm Split
 
@@ -41,7 +46,7 @@
 - filled_by_add_type: `{}`
 - unfilled_by_add_type: `{}`
 - actual_order_submitted_false_only: `true`
-- actual_order_checked_values: `0`
+- actual_order_checked_values: `4`
 
 ## Scale-In Position Outcomes
 

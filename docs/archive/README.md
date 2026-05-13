@@ -23,3 +23,6 @@
 
 - `archive-manifest-2026-04-21.md`: 2026-04-21 기준 1차 아카이빙 계획.
 - `archive-manifest-2026-05-03.md`: 2026-05-03 기준 docs README 현행화와 Plan Rebase 전환 증적 이동.
+- `plan-korStockScanPerformanceOptimization.rebase.pre-automation-renewal-2026-05-13.md`: 2026-05-13 자동화체인 기준 Plan Rebase 리뉴얼 전 원문.
+- `plan-korStockScanPerformanceOptimization.prompt.pre-automation-renewal-2026-05-13.md`: 2026-05-13 자동화체인 기준 prompt 리뉴얼 전 원문.
+- `plan-korStockScanPerformanceOptimization.qna.pre-automation-renewal-2026-05-13.md`: 2026-05-13 자동화체인 기준 Q&A 리뉴얼 전 원문.

@@ -1,85 +1,85 @@
 {
-  "bundle_as_of": "2026-05-11T22:20:18Z",
+  "bundle_as_of": "2026-05-12T22:20:18Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7412.84,
-    "prev_value": 7398.93,
-    "change": 13.91,
-    "change_pct": 0.19,
-    "as_of": "2026-05-11T20:00:00Z",
-    "source": "Morningstar / Associated Press"
+    "value": 7400.96,
+    "prev_value": 7412.84,
+    "change": -11.88,
+    "change_pct": -0.16,
+    "as_of": "2026-05-12T20:26:00Z",
+    "source": "Morningstar / Dow Jones"
   },
   "nasdaq": {
-    "name": "NASDAQ Composite",
-    "value": 26274.13,
-    "prev_value": 26247.08,
-    "change": 27.05,
-    "change_pct": 0.1,
-    "as_of": "2026-05-11T20:00:00Z",
-    "source": "Morningstar / Associated Press"
+    "name": "NASDAQ",
+    "value": 26088.2,
+    "prev_value": 26274.12,
+    "change": -185.92,
+    "change_pct": -0.71,
+    "as_of": "2026-05-12T20:26:00Z",
+    "source": "Morningstar / Dow Jones"
   },
   "vix": {
     "name": "VIX",
-    "value": 18.34,
-    "prev_value": 17.19,
-    "change": 1.15,
-    "change_pct": 6.69,
-    "as_of": "2026-05-11T20:00:00Z",
-    "source": "Investing.com"
+    "value": 18.93,
+    "prev_value": 18.38,
+    "change": 0.55,
+    "change_pct": 2.99,
+    "as_of": "2026-05-12T22:20:18Z",
+    "source": "Investing.com / CBOE"
   },
   "us10y": {
-    "name": "US 10-Year Treasury Yield",
-    "value": 4.41,
-    "prev_value": 4.38,
-    "change": 0.03,
-    "change_pct": 0.68,
-    "as_of": "2026-05-11T20:00:00Z",
-    "source": "Seeking Alpha / Post-Gazette"
+    "name": "US10Y",
+    "value": 4.461,
+    "prev_value": 4.412,
+    "change": 0.049,
+    "change_pct": 1.11,
+    "as_of": "2026-05-12T22:20:18Z",
+    "source": "TheStreet / Seeking Alpha"
   },
   "brent": {
-    "name": "Brent Crude",
-    "value": 104.21,
-    "prev_value": 101.29,
-    "change": 2.92,
-    "change_pct": 2.88,
-    "as_of": "2026-05-11T20:00:00Z",
-    "source": "Associated Press"
+    "name": "BRENT",
+    "value": 107.77,
+    "prev_value": 104.2,
+    "change": 3.57,
+    "change_pct": 3.42,
+    "as_of": "2026-05-12T22:20:18Z",
+    "source": "Invezz"
   },
   "headlines": [
     {
-      "title": "Oil prices rise as the Iran war drags on, but U.S. stocks inch to more records",
-      "source": "Los Angeles Times / Associated Press",
-      "published_at": "2026-05-11T20:56:00Z",
-      "url": "https://www.latimes.com/business/story/2026-05-11/oil-prices-rise-as-the-iran-war-drags-on-but-stocks-inch-to-more-records"
-    },
-    {
-      "title": "Wall Street ends slightly higher as U.S.-Iran resolution talks fizzle",
+      "title": "Wall Street ended mostly lower after a hotter CPI print landed",
       "source": "Seeking Alpha",
-      "published_at": "2026-05-11T20:09:00Z",
-      "url": "https://seekingalpha.com/news/wall-street-ends-slightly-higher-as-us-iran-resolution-talks-fizzle"
+      "published_at": "2026-05-12T20:06:00Z",
+      "url": "https://seekingalpha.com"
     },
     {
-      "title": "A 'race against time.' Hormuz closure could push Brent to $150 a barrel by summer, warns Morgan Stanley.",
-      "source": "MarketWatch / Morningstar",
-      "published_at": "2026-05-11T09:34:00Z",
-      "url": "https://www.morningstar.com/news/marketwatch/20260511419/a-race-against-time-hormuz-closure-could-push-brent-to-150-a-barrel-by-summer-warns-morgan-stanley"
+      "title": "Dow ends 50 points higher as Nasdaq slides on inflation, chip selloff",
+      "source": "Invezz",
+      "published_at": "2026-05-12T20:44:00Z",
+      "url": "https://invezz.com"
     },
     {
-      "title": "Trump Rejects Iran Proposal 'Totally Unacceptable' as Brent Surges; Warsh Confirmation Vote Today",
-      "source": "Capital Street FX",
-      "published_at": "2026-05-11T12:00:00Z",
-      "url": "https://capitalstreetfx.com/en/trump-rejects-iran-proposal-totally-unacceptable/"
+      "title": "Is the global financial system making the Hormuz shock worse?",
+      "source": "The Japan Times",
+      "published_at": "2026-05-12T12:00:00Z",
+      "url": "https://www.japantimes.co.jp"
     },
     {
-      "title": "Stock Market Today, May 11: Markets Inch Upwards Even As Oil Prices Rise",
-      "source": "The Motley Fool",
-      "published_at": "2026-05-11T16:00:00Z",
-      "url": "https://www.fool.com/investing/2026/05/11/stock-market-today-markets-inch-upwards-even-as-oi/"
+      "title": "Markets Turn to US CPI as Geopolitical Traders Hold Fire",
+      "source": "ActionForex",
+      "published_at": "2026-05-12T17:42:00Z",
+      "url": "https://www.actionforex.com"
+    },
+    {
+      "title": "Stock Market Today: Nasdaq, Russell 2000 recover some losses after inflation, oil prices rise",
+      "source": "TheStreet",
+      "published_at": "2026-05-12T20:00:00Z",
+      "url": "https://www.thestreet.com"
     }
   ],
   "notes": [
-    "All market data reflects the closing values for Monday, May 11, 2026.",
-    "Global crude oil prices experienced a strong surge after diplomatic talks to end the US-Iran conflict faltered over the weekend.",
-    "US Treasury yields rose slightly while major equity benchmarks including the S&P 500 and NASDAQ Composite continued their rally to fresh record highs."
+    "U.S. equities closed mixed/lower as the April CPI report came in hotter than expected (3.8% Y/Y).",
+    "Semiconductor and AI-linked stocks reversed from recent massive rallies, dragging down the tech-heavy NASDAQ.",
+    "Brent crude extended its gains past $107 per barrel amid fading hopes for a U.S.-Iran ceasefire in the Middle East, amplifying inflation fears."
   ]
 }

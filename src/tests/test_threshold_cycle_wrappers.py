@@ -33,8 +33,10 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     workorder_idx = script.index("src.engine.build_code_improvement_workorder")
     post_ev_idx = script.index('run_threshold_cycle_ev_and_wait "post_workorder_refresh"')
     runtime_summary_idx = script.index("src.engine.runtime_approval_summary")
+    rebase_renewal_idx = script.index("src.engine.plan_rebase_daily_renewal")
+    next_checklist_idx = script.rindex("src.engine.build_next_stage2_checklist")
 
-    assert pre_ev_idx < workorder_idx < post_ev_idx < runtime_summary_idx
+    assert pre_ev_idx < workorder_idx < post_ev_idx < runtime_summary_idx < rebase_renewal_idx < next_checklist_idx
 
 
 def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_steps():
@@ -46,6 +48,7 @@ def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_st
     assert "next_stage2_checklist_path()" in script
     assert '"$PROJECT_DIR/data/report/code_improvement_workorder/code_improvement_workorder_${TARGET_DATE}.json"' in script
     assert '"$PROJECT_DIR/data/report/runtime_approval_summary/runtime_approval_summary_${TARGET_DATE}.json"' in script
+    assert '"$PROJECT_DIR/data/report/plan_rebase_daily_renewal/plan_rebase_daily_renewal_${TARGET_DATE}.json"' in script
     assert 'wait_for_file_artifact "$(next_stage2_checklist_path)" "next_stage2_checklist"' in script
     assert "src.engine.verify_threshold_cycle_postclose_chain" in script
     assert '"$PROJECT_DIR/data/report/threshold_cycle_postclose_verification/threshold_cycle_postclose_verification_${TARGET_DATE}.json"' in script

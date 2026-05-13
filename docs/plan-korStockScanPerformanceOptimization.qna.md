@@ -1,221 +1,203 @@
 # KORStockScan 성능 최적화 Q&A
 
-이 문서는 `계획서 원문(prompt)`에 남기기에는 길지만 반복적으로 참조해야 하는 운영 판단 기준을 모아둔 문서다.
+기준일: `2026-05-13 KST`
+
+이 문서는 Plan Rebase 본문에 길게 두기에는 크지만 반복적으로 참조해야 하는 운영 판단 기준을 모아둔 문서다. 현재 역할은 과거 latency/composite 세부 판단 FAQ가 아니라, 자동화체인에서 `승률/EV`, `daily/rolling`, `real/sim/probe`, `proposal/apply`를 혼동해 오판하지 않도록 막는 반복 Q&A다.
+
+2026-05-13 자동화체인 리뉴얼 전 원문은 [qna pre-automation-renewal archive](./archive/plan-korStockScanPerformanceOptimization.qna.pre-automation-renewal-2026-05-13.md)에 보존했다.
 
 ## 이 문서를 읽을 때의 전제
 
 1. 최종 목적은 `손실 억제`가 아니라 `기대값/순이익 극대화`다.
-2. 현재 단계는 `Plan Rebase`다. 중심 기준은 [plan-korStockScanPerformanceOptimization.rebase.md](./plan-korStockScanPerformanceOptimization.rebase.md)를 본다.
-3. `한 번에 한 축 canary`, `shadow 금지`, `즉시 롤백 가드`는 보수적 철학이 아니라 `원인 귀속 정확도`와 `실전 리스크 관리`를 위한 운영 규율이다.
-4. `rebase`는 중심 기준, `prompt`는 세션 시작용 포인터, `execution-delta`는 기본계획 대비 변경사항, `performance-report`는 정기 성과측정 baseline, `archive`는 과거 경과 보관용이다.
-5. `fallback_scout/main`, `fallback_single`, `latency fallback split-entry` 같은 영문 축 표현은 [Plan Rebase 용어 범례](./plan-korStockScanPerformanceOptimization.rebase.md#2-용어-범례)를 우선한다.
+2. 중심 기준은 [Plan Rebase](./plan-korStockScanPerformanceOptimization.rebase.md)다. Q&A는 반복 판단 해설이며 active/open owner의 source of truth가 아니다.
+3. 자동화체인 산출물/consumer/apply 계약은 [report-based-automation-traceability](./report-based-automation-traceability.md)가 소유한다.
+4. 실행 작업항목은 날짜별 `stage2 todo checklist`가 소유한다. 완료된 `[x]` 항목은 현재 OPEN owner가 아니라 증적이다.
+5. 장중 runtime threshold mutation은 금지한다. 적용은 장후 report/calibration/AI review와 다음 장전 runtime env를 통해서만 한다.
+6. 새 관찰지표는 `Metric Decision Contract`를 가져야 한다. 계약이 없으면 `instrumentation_gap` 또는 `source_quality_blocker`로만 라우팅한다.
 
 ## 운영/문서 Q&A
 
-### Q1. Reason code 집계 자동화는 이미 있나, 아니면 새로 만들어야 하나?
+### Q1. Q&A 문서는 아직 유효한가?
 
 답변:
 
-1. 현재 시점의 blocker 분포를 보는 자동화는 이미 있다.
-2. `일자별 추세 비교`, `reason code 상위 변화 알림`, `sig_delta 상위 필드 랭킹`은 아직 부족하다.
-3. 따라서 새로 만들 대상은 완전 신규 대시보드보다 기존 `performance-tuning` 확장이다.
+1. 유효하다. 단, 역할은 `과거 latency 실험 FAQ`가 아니라 `자동화체인 오판 방지 FAQ`다.
+2. 현재 원칙과 active/open 상태는 Plan Rebase가 소유한다.
+3. Q&A는 반복 질의가 생기는 판정축의 해석 기준만 남긴다.
 
 운영 기준:
 
-1. 1차는 기존 `성능 튜닝 모니터`의 blocker 집계를 일자/기간 기준으로 확장한다.
-2. 2차는 `sig_delta` 상위 필드와 경고 알림을 붙인다.
+1. 현재 owner 상태를 Q&A에 복제하지 않는다.
+2. 지나간 실험 수치와 장문 경과는 archive 또는 execution-delta에서 본다.
+3. Q&A가 Plan Rebase와 충돌하면 Plan Rebase가 우선한다.
 
-### Q2. Gatekeeper 캐시 TTL은 먼저 키워야 하나, 아니면 동적 TTL로 바로 가야 하나?
-
-답변:
-
-1. 현재 병목은 TTL 부족보다 `저장 lifecycle`과 `sig_changed` 우회가 더 크다.
-2. 따라서 단순 TTL 확대를 1단계 해법으로 두지 않는다.
-3. 동적 TTL도 `원인 분해 -> 국소 정책화` 이후에 본다.
-
-채택안:
-
-1. 현행 TTL을 먼저 유지한다.
-2. `missing_action`, `missing_allow_flag`, `sig_changed`의 실제 발생 원인을 추적한다.
-3. 그 다음 전략/장세 기준 동적 TTL을 검토한다.
-
-### Q3. `missing_action`, `missing_allow_flag`, `sig_changed`는 로그만 더 모을까, 저장 경로를 바로 고칠까?
+### Q2. 승률과 EV 중 무엇으로 판정해야 하나?
 
 답변:
 
-1. 1단계는 `로그/추적 강화`를 먼저 한다.
-2. 저장 로직이 완전히 없는지보다 `언제 비어 있고 언제 초기화되는지`가 핵심이다.
-3. `reason_codes`는 안정적으로 유지하고, 상세 변화는 `sig_delta` 같은 별도 필드로 남긴다.
-
-채택안:
-
-1. `gatekeeper_fast_reuse_bypass` 같은 기존 stage에 상세 필드를 붙인다.
-2. lifecycle 원인이 확인되면 그 다음 단계에서 저장 경로 수정으로 간다.
-
-### Q4. 모니터링 기간은 모두 1주일로 잡아야 하나?
-
-답변:
-
-1. 아니다. `보유 AI 공통 정책`과 `스캘핑 국소 튜닝`은 관찰 기간을 다르게 본다.
-2. `보유 AI 공통 정책`은 기본 `5거래일~1주일`이 맞다.
-3. `스캘핑 국소 canary`는 `당일 30~60분 + 장후 평가 + 필요 시 1~2세션`이 기본이다.
+1. 기대값/순이익 판정은 `primary_ev`가 맡는다.
+2. `win_rate`는 `diagnostic_win_rate`다.
+3. 승률이 높아도 평균 손익, downside tail, 체결품질이 나쁘면 live/canary 승인 근거가 아니다.
 
 운영 기준:
 
-1. 공통 정책 변경은 최소 `5거래일`을 본다.
-2. 국소 canary는 `한 번에 한 축`이고 집계 축이 분리돼 있으면 더 짧게 판정한다.
-3. 목적은 보수적 대기가 아니라 `기대값 개선 속도`를 높이는 것이다.
+1. EV 필드는 `equal_weight_avg_profit_pct`, `notional_weighted_ev_pct`, `source_quality_adjusted_ev_pct` 중 하나로 명명한다.
+2. 단순 손익 합산은 EV가 아니며 `simple_sum_profit_pct`로 표시한다.
+3. `diagnostic_win_rate` 단독으로 threshold apply, canary 승격, 실주문 전환을 승인하지 않는다.
 
-### Q5. counterfactual(`missed_entry`, `extra_upside`) 수치는 손익과 합산해도 되나?
-
-답변:
-
-1. 안 된다.
-2. counterfactual은 직접 실현손익이 아니라 `우선순위 판단용 진단 가치`다.
-3. 실현손익 판단은 항상 `COMPLETED + valid profit_rate`만 쓴다.
-
-해석 기준:
-
-1. `missed_entry counterfactual`은 진입 차단 기회비용 크기를 보여준다.
-2. `post_sell extra_upside`는 HOLDING/청산 품질 개선 여지를 보여준다.
-3. 둘 다 `어느 축을 먼저 건드릴지` 결정할 때만 사용하고, 실현손익과 섞지 않는다.
-
-### Q6. 기본계획과 실제 실행이 달라지면 어디에 기록하나?
+### Q3. daily-only 지표와 rolling/cumulative 지표는 어떻게 나누나?
 
 답변:
 
-1. 먼저 [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)에 남긴다.
-2. 그 다음 현재 기준만 [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)에 반영한다.
-3. 세부 경과와 지나간 일정은 archive로 보낸다.
-
-기록 원칙:
-
-1. `무엇이 달라졌는가`
-2. `왜 달라졌는가`
-3. `현재 기준은 무엇인가`
-4. `다음 판정 시점은 언제인가`
-
-### Q7. `prompt`, `checklist`, `execution-delta`, `performance-report`, `archive`는 각각 언제 업데이트하나?
-
-답변:
-
-1. `prompt`: 현재 기준 우선순위나 주간 실행 맵이 바뀔 때
-2. `checklist`: 당일 실행/보류/다음 시각이 생길 때
-3. `execution-delta`: 기본계획 대비 실행이 달라졌을 때
-4. `performance-report`: 장후/주간 성과 baseline과 반복 측정값이 갱신될 때
-5. `archive`: 지나간 일정, 장문 경과, 상세 구현 이력을 옮길 때
-
-판단 기준:
-
-1. 지금 당장 실행에 필요한 정보면 `prompt` 또는 `checklist`
-2. 원안 대비 변경이면 `execution-delta`
-3. 반복 성과값이면 `performance-report`
-4. 과거 맥락이면 `archive`
-
-### Q8. 정기 성과측정보고서는 어떤 순서와 지표로 써야 하나?
-
-답변:
-
-1. 순서는 항상 `거래수 -> 퍼널 -> blocker -> 체결품질 -> missed_upside -> 손익`이다.
-2. `손익`은 마지막 결과값으로만 본다.
-3. HOLDING 판단은 `missed_upside_rate`, `capture_efficiency`, `GOOD_EXIT`를 함께 본다.
-
-기본 집계 기준:
-
-1. `거래수`: `total_trades`, `completed_trades`
-2. `퍼널`: `AI BUY -> entry_armed -> budget_pass -> submitted -> filled`
-3. `blocker`: `latency/liquidity/AI threshold/overbought`
-4. `체결품질`: `full_fill`, `partial_fill`, `rebase`, `same_symbol_repeat`
-5. `HOLDING/청산`: `MISSED_UPSIDE`, `GOOD_EXIT`, `capture_efficiency`
-6. `손익`: `COMPLETED + valid profit_rate` 기준 실현값
-
-### Q9. broad relax(`latency/tag/threshold`)는 언제 다시 열 수 있나?
-
-답변:
-
-1. `split-entry leakage` 1차 판정이 먼저다.
-2. HOLDING D+2 판정이 아직 안 닫혔으면 broad relax를 다시 넓히지 않는다.
-3. 거래수 확대보다 손실축 제거가 앞선다.
-
-현재 기준:
-
-1. bugfix-only latency 재판정은 가능하다.
-2. broad relax 재오픈은 `split-entry leakage` 판정 이후에만 검토한다.
-
-### Q10. Project/Calendar 자동화가 막히면 어떻게 처리하나?
-
-답변:
-
-1. 우회 수동처리보다 먼저 `env`, `권한`, `필드명`, `옵션명`을 점검한다.
-2. 문서는 먼저 수정하되, 같은 턴에 `sync_docs_backlog_to_project -> sync_github_project_calendar`를 시도한다.
-3. 막히면 막힌 env와 재실행 명령 `1개`만 남긴다.
-
-기록 기준:
-
-1. 무엇이 막혔는지
-2. 어떤 문서가 수정됐는지
-3. 사용자가 실행할 명령 `1개`
-
-### Q11. 왜 `latency_quote_fresh_composite`의 baseline을 `same bundle + canary_applied=False`로 고정하나?
-
-답변:
-
-1. 같은 bundle 안의 `canary_applied=False` 표본이 가장 가까운 비교군이기 때문이다.
-2. 이 기준을 쓰면 장중 장세 변화와 snapshot 시각 차이를 최소화할 수 있다.
-3. 같은 날 다른 bundle이나 과거 일자의 수치를 baseline으로 쓰면 `canary 효과`와 `시장 상태 변화`가 섞인다.
+1. `daily_only`는 incident, safety veto, freshness/source-quality, 장중 운영 trigger에 쓴다.
+2. edge apply 승인은 rolling/cumulative 또는 `post_apply_version_window`와 함께 본다.
+3. 단일 당일 수치만으로 threshold 완화/강화, live/canary 승격, 실주문 전환을 확정하지 않는다.
 
 운영 기준:
 
-1. primary baseline은 `same bundle + quote_fresh_composite_canary_applied=False + normal_only + post_fallback_deprecation`이다.
-2. 이 baseline이 `N_min` 미달이면 hard pass/fail을 닫지 않는다.
-3. 이 경우 판정은 `direction-only`로 격하한다.
+1. safety breach는 daily-only여도 차단/rollback 후보가 될 수 있다.
+2. 기대값 개선은 family별 `window_policy`와 sample floor를 따른다.
+3. daily/rolling/cumulative 방향이 다른 경우 `hold_sample`, `hold_no_edge`, `freeze`, `instrumentation_gap` 중 하나로 닫는다.
 
-### Q12. 왜 `2026-04-27 15:00 offline bundle`은 hard baseline이 아니라 참고선인가?
-
-답변:
-
-1. 해당 bundle은 주병목 확인과 방향성 확인에는 유용하지만, 같은 bundle 내 `canary_applied=False` 대조군보다 우선할 수는 없다.
-2. 또 `submitted/full/partial` mismatch가 남아 있어 hard pass/fail 기준선으로 쓰면 감리상 약하다.
-3. 따라서 이 값은 `어느 정도로 나빴는가`를 보여주는 reference이고, 승격/종료를 닫는 1차 근거는 아니다.
-
-운영 기준:
-
-1. `2026-04-27 15:00 offline bundle`은 direction reference만 제공한다.
-2. baseline과 reference를 문서에서 섞어 쓰지 않는다.
-3. baseline 부족 또는 data-quality gate 미해소 시 `reference 기반 방향성 판정`까지만 허용한다.
-
-### Q13. `direction-only`와 `hard pass/fail`은 어떻게 다르나?
+### Q4. sim/probe/counterfactual 결과는 어디까지 쓸 수 있나?
 
 답변:
 
-1. `hard pass/fail`은 baseline, 표본수, data-quality gate가 모두 충족된 상태의 판정이다.
-2. `direction-only`는 효과의 방향은 읽히지만 승격/종료를 확정할 정도로 증거가 잠기지 않은 상태다.
-3. 둘을 섞으면 `표본 부족인데도 승격`하거나 `집계 불일치인데도 종료`하는 오류가 생긴다.
+1. source bundle, approval request, workorder evidence에는 쓸 수 있다.
+2. real execution 품질이나 broker order enable 근거로 단독 사용하지 않는다.
+3. `actual_order_submitted=false` 표본은 실주문 표본과 분리한다.
 
 운영 기준:
 
-1. `trade_count < 50`이고 `submitted_orders < 20`이면 hard pass/fail 금지다.
-2. `ShadowDiff0428` 미해소면 hard baseline 승격 금지다.
-3. `direction-only` 판정에는 반드시 추가 확인 항목과 다음 절대시각이 따라야 한다.
+1. `sim_equal_weight`, `probe_observe_only`, `counterfactual_only`, `combined_diagnostic` authority를 JSON/Markdown에 드러낸다.
+2. combined 진단은 튜닝 후보 산출에만 쓰고, 주문 실패율/receipt/fill 품질은 real-only로 본다.
+3. counterfactual은 실현손익과 합산하지 않고 우선순위 판단 자료로만 쓴다.
 
-### Q14. 감리인이 이번 entry composite 축에서 먼저 볼 핵심 4개는 무엇인가?
+### Q5. `runtime_approval_summary`는 무엇을 승인하나?
 
 답변:
 
-1. baseline이 `same bundle + canary_applied=False + normal_only + post_fallback_deprecation`로 고정됐는가
-2. `2026-04-27 15:00 offline bundle`이 hard baseline이 아니라 참고선으로만 쓰이는가
-3. 성공 기준과 rollback guard가 한 문장으로 섞이지 않고 분리됐는가
-4. baseline 부족 또는 `ShadowDiff0428` 미해소 시 `direction-only`로 격하하는 규칙이 살아 있는가
+1. 아무 것도 직접 승인하지 않는다.
+2. `runtime_approval_summary`는 read-only 요약 artifact다.
+3. 스캘핑 selected family, 스윙 approval request, panic approval 후보를 한 화면에 모아 보여준다.
 
 운영 기준:
 
-1. 위 4개는 외부 반출용 감리 문서와 checklist에 모두 일치해야 한다.
-2. 셋 중 하나라도 깨지면 composite 판정 문구를 다시 연다.
+1. `runtime_mutation_allowed=false`면 flow 조정, 주문 차단, threshold mutation 권한이 없다.
+2. summary에 `approval_required`가 있어도 approval artifact가 없으면 env apply 대상이 아니다.
+3. 다음 장전 적용 여부는 preopen apply manifest와 approval artifact가 닫힌 뒤에만 본다.
+
+### Q6. `plan_rebase_daily_renewal`은 Plan Rebase를 자동으로 고치나?
+
+답변:
+
+1. 아니다. 기본은 `proposal_only`다.
+2. 이 artifact는 Plan Rebase/prompt/AGENTS daily renewal 제안만 만든다.
+3. 생성만으로 Plan Rebase, prompt, AGENTS.md, checklist, runtime env를 수정하지 않는다.
+
+운영 기준:
+
+1. `document_mutation_allowed=false`가 기본이다.
+2. 허용 범위는 기준일, 현재 runtime state summary, prompt source-of-truth summary, AGENTS current snapshot 제안 정도다.
+3. 금지 범위는 Metric Decision Contract 변경, rollback guard 완화, live/real order approval, runtime threshold mutation, archive 삭제다.
+
+### Q7. 새 관찰지표가 생기면 무엇을 같이 정해야 하나?
+
+답변:
+
+1. 지표값만 만들면 안 된다.
+2. 자동화체인이 소비하는 새 관찰지표는 생성 시점에 판정 계약을 가져야 한다.
+3. 계약이 없으면 threshold candidate가 아니라 instrumentation/source-quality backlog다.
+
+필수 항목:
+
+1. `metric_role`
+2. `metric_definition`
+3. `decision_authority`
+4. `window_policy`
+5. `sample_floor`
+6. `primary_decision_metric`
+7. `secondary_diagnostics`
+8. `source_quality_gate`
+9. `runtime_effect`
+10. `forbidden_uses`
+
+### Q8. Sentinel, panic, error detector 이상치는 자동 튜닝 명령인가?
+
+답변:
+
+1. 아니다.
+2. 이들은 report-only/source-quality/incident 입력이다.
+3. 반복 이상치가 있어도 먼저 `incident/playbook`, `threshold-family 후보`, `instrumentation_gap`, `normal drift`로 라우팅한다.
+
+운영 기준:
+
+1. Sentinel 결과로 score/spread/fallback/restart를 자동 변경하지 않는다.
+2. panic 결과로 stop/TP/trailing/자동매도/자동매수/provider route를 자동 변경하지 않는다.
+3. System Error Detector 결과로 전략 threshold/order guard를 자동 변경하지 않는다.
+
+### Q9. 스윙 approval request가 있으면 다음 장전 env에 반영하나?
+
+답변:
+
+1. approval request만으로는 반영하지 않는다.
+2. 별도 approval artifact가 있어야 한다.
+3. 승인 후에도 기본 스윙 dry-run과 `actual_order_submitted=false` 원칙은 유지된다. real canary는 별도 approval-required 축이다.
+
+운영 기준:
+
+1. `swing_runtime_approval`은 proposal/approval request layer다.
+2. `swing_one_share_real_canary`와 `swing_scale_in_real_canary_phase0`는 전체 스윙 실주문 전환이 아니다.
+3. approval artifact 없이 floor, cooldown, scale-in, real canary env를 수동으로 쓰지 않는다.
+
+### Q10. code-improvement workorder가 생성되면 자동으로 repo를 수정하나?
+
+답변:
+
+1. 아니다.
+2. workorder는 Codex 구현 세션 입력용 작업지시다.
+3. 사용자가 구현을 명시적으로 요청한 경우에만 repo 수정으로 넘어간다.
+
+운영 기준:
+
+1. `runtime_effect=false`, `allowed_runtime_apply=false` order는 실운영 변경으로 해석하지 않는다.
+2. workorder 생성은 evidence 정리이지 code mutation이 아니다.
+3. 구현 후에는 관련 테스트와 parser 검증을 실행하고, 다음 postclose EV/report에서 metric을 확인한다.
+
+### Q11. Project/Calendar 동기화는 누가 실행하나?
+
+답변:
+
+1. AI가 직접 GitHub Project/Calendar 동기화를 실행하지 않는다.
+2. 문서/checklist 변경 후 parser 검증은 AI가 실행한다.
+3. 실제 Project/Calendar 동기화는 사용자가 표준 명령으로 수동 실행한다.
+
+표준 명령:
+
+```bash
+PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
+```
+
+### Q12. legacy latency/composite Q&A는 어디서 보나?
+
+답변:
+
+1. 현재 Q&A 본문에서는 제거한다.
+2. 과거 latency composite, offline bundle, split-entry leakage 같은 판단은 historical/reference다.
+3. 필요하면 2026-05-13 이전 Q&A archive와 closed observation archive에서 본다.
+
+운영 기준:
+
+1. legacy 기준을 현재 auto-bounded apply 판정에 직접 섞지 않는다.
+2. legacy 축을 재개하려면 새 workorder, 새 rollback guard, 새 checklist가 필요하다.
+3. 현재 자동화체인에서는 family별 `Metric Decision Contract`, source-quality gate, window policy를 우선한다.
 
 ## 참고 문서
 
+- [plan-korStockScanPerformanceOptimization.rebase.md](./plan-korStockScanPerformanceOptimization.rebase.md)
+- [report-based-automation-traceability.md](./report-based-automation-traceability.md)
 - [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)
 - [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)
 - [plan-korStockScanPerformanceOptimization.performance-report.md](./plan-korStockScanPerformanceOptimization.performance-report.md)
-- [plan-korStockScanPerformanceOptimization.archive-2026-04-19.md](./archive/legacy-tuning-2026-04-06-to-2026-04-20/plan-korStockScanPerformanceOptimization.archive-2026-04-19.md)
-- [2026-04-18-nextweek-validation-axis-table-audited.md](/home/ubuntu/KORStockScan/docs/archive/legacy-tuning-2026-04-06-to-2026-04-20/2026-04-18-nextweek-validation-axis-table-audited.md)
+- [qna pre-automation-renewal archive](./archive/plan-korStockScanPerformanceOptimization.qna.pre-automation-renewal-2026-05-13.md)
+- [closed observation archive](./archive/closed-observation-axes-2026-05-01.md)
