@@ -278,6 +278,43 @@ def test_swing_lifecycle_audit_separates_intraday_probe_evidence_quality():
                 },
             },
         ],
+        panic_sell_defense_report={
+            "report_type": "panic_sell_defense",
+            "panic_state": "RECOVERY_CONFIRMED",
+            "panic_state_reasons": ["recovery confirmed by active sim/probe"],
+            "policy": {"runtime_effect": "report_only_no_mutation"},
+            "panic_metrics": {
+                "panic_detected": True,
+                "stop_loss_exit_count": 8,
+                "max_rolling_30m_stop_loss_exit_count": 7,
+            },
+            "recovery_metrics": {
+                "active_sim_probe": {
+                    "active_positions": 2,
+                    "profit_sample": 2,
+                    "avg_unrealized_profit_rate_pct": 1.5,
+                    "win_rate_pct": 50.0,
+                    "wins": 1,
+                    "losses": 1,
+                    "flat": 0,
+                    "provenance_check": {"passed": True, "violations": []},
+                    "positions": [
+                        {
+                            "probe_origin_stage": "blocked_gatekeeper_reject",
+                            "profit_rate_pct": 2.5,
+                            "actual_order_submitted": False,
+                            "broker_order_forbidden": True,
+                        },
+                        {
+                            "probe_origin_stage": "blocked_swing_gap",
+                            "profit_rate_pct": 0.5,
+                            "actual_order_submitted": False,
+                            "broker_order_forbidden": True,
+                        },
+                    ],
+                }
+            },
+        },
     )
 
     events = report["lifecycle_events"]
@@ -286,6 +323,14 @@ def test_swing_lifecycle_audit_separates_intraday_probe_evidence_quality():
     assert events["evidence_quality_counts"]["blocked_stage_intraday_probe"] == 2
     assert events["evidence_quality_counts"]["daily_next_open_proxy"] == 1
     assert events["actual_order_submitted_flags"]["false"] == 3
+    assert report["panic_context"]["panic_state"] == "RECOVERY_CONFIRMED"
+    assert report["panic_context"]["panic_detected"] is True
+    assert report["panic_context"]["active_sim_probe"]["active_positions"] == 2
+    assert report["panic_context"]["origin_outcome"]["blocked_gatekeeper_reject"]["avg_profit_rate_pct"] == 2.5
+    assert report["panic_context"]["provenance_passed"] is True
+
+    approval = build_swing_runtime_approval_report(report)
+    assert approval["rolling_source_bundle"]["panic_context"]["panic_state"] == "RECOVERY_CONFIRMED"
 
 
 def test_swing_micro_context_advice_is_observe_only():
@@ -1453,6 +1498,7 @@ def test_swing_lifecycle_audit_tracks_full_funnel_and_observation_axes():
     axis_status = {axis["axis_id"]: axis["status"] for axis in report["observation_axes"]}
     assert axis_status["swing_scale_in_avg_down_pyramid"] == "ready"
     assert axis_status["swing_scale_in_ofi_qi_confirmation"] == "ready"
+
     families = {family["family"] for family in report["threshold_families"]}
     assert "swing_entry_ofi_qi_execution_quality" in families
     assert "swing_scale_in_ofi_qi_confirmation" in families

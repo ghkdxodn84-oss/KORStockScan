@@ -38,6 +38,7 @@ SWING_THRESHOLD_AI_REVIEW_DIR = Path(DATA_DIR) / "report" / "swing_threshold_ai_
 SWING_IMPROVEMENT_AUTOMATION_DIR = Path(DATA_DIR) / "report" / "swing_improvement_automation"
 SWING_RUNTIME_APPROVAL_DIR = Path(DATA_DIR) / "report" / "swing_runtime_approval"
 SWING_DAILY_SIMULATION_DIR = Path(DATA_DIR) / "report" / "swing_daily_simulation"
+PANIC_SELL_DEFENSE_DIR = Path(DATA_DIR) / "report" / "panic_sell_defense"
 SWING_TRADEOFF_SCORE_THRESHOLD = 0.68
 SWING_RUNTIME_APPROVAL_LIVE_FAMILIES = {
     "swing_model_floor",
@@ -392,8 +393,88 @@ def _swing_daily_simulation_path(date_key: str) -> Path:
     return SWING_DAILY_SIMULATION_DIR / f"swing_daily_simulation_{date_key}.json"
 
 
+def _panic_sell_defense_path(date_key: str) -> Path:
+    return PANIC_SELL_DEFENSE_DIR / f"panic_sell_defense_{date_key}.json"
+
+
 def load_swing_daily_simulation_report(target_date: str | date | datetime) -> dict[str, Any]:
     return _safe_read_json(_swing_daily_simulation_path(_date_text(target_date)))
+
+
+def load_panic_sell_defense_report(target_date: str | date | datetime) -> dict[str, Any]:
+    return _safe_read_json(_panic_sell_defense_path(_date_text(target_date)))
+
+
+def summarize_panic_context(panic_report: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(panic_report, dict) or not panic_report:
+        return {
+            "available": False,
+            "runtime_effect": "report_only_no_mutation",
+            "panic_state": None,
+            "panic_detected": False,
+            "active_sim_probe": {},
+            "origin_outcome": {},
+            "provenance_passed": None,
+            "violations": [],
+        }
+
+    panic_metrics = panic_report.get("panic_metrics") if isinstance(panic_report.get("panic_metrics"), dict) else {}
+    recovery_metrics = (
+        panic_report.get("recovery_metrics") if isinstance(panic_report.get("recovery_metrics"), dict) else {}
+    )
+    active = (
+        recovery_metrics.get("active_sim_probe")
+        if isinstance(recovery_metrics.get("active_sim_probe"), dict)
+        else {}
+    )
+    provenance = active.get("provenance_check") if isinstance(active.get("provenance_check"), dict) else {}
+    positions = active.get("positions") if isinstance(active.get("positions"), list) else []
+    origin_counts: Counter[str] = Counter()
+    origin_values: dict[str, list[float]] = defaultdict(list)
+    for position in positions:
+        if not isinstance(position, dict):
+            continue
+        origin = str(position.get("probe_origin_stage") or position.get("origin_stage") or "unknown")
+        origin_counts[origin] += 1
+        value = _safe_float(position.get("profit_rate_pct"), default=None)
+        if value is not None:
+            origin_values[origin].append(value)
+
+    policy = panic_report.get("policy") if isinstance(panic_report.get("policy"), dict) else {}
+    return {
+        "available": True,
+        "report_type": panic_report.get("report_type"),
+        "panic_state": panic_report.get("panic_state"),
+        "panic_state_reasons": list(panic_report.get("panic_state_reasons") or []),
+        "runtime_effect": policy.get("runtime_effect") or "report_only_no_mutation",
+        "panic_detected": bool(panic_metrics.get("panic_detected")),
+        "stop_loss_exit_count": _safe_int(panic_metrics.get("stop_loss_exit_count"), 0),
+        "max_rolling_30m_stop_loss_exit_count": _safe_int(
+            panic_metrics.get("max_rolling_30m_stop_loss_exit_count"), 0
+        ),
+        "active_sim_probe": {
+            "active_positions": _safe_int(active.get("active_positions"), 0),
+            "profit_sample": _safe_int(active.get("profit_sample"), 0),
+            "avg_unrealized_profit_rate_pct": _safe_float(
+                active.get("avg_unrealized_profit_rate_pct"), default=None
+            ),
+            "win_rate_pct": _safe_float(active.get("win_rate_pct"), default=None),
+            "wins": _safe_int(active.get("wins"), 0),
+            "losses": _safe_int(active.get("losses"), 0),
+            "flat": _safe_int(active.get("flat"), 0),
+        },
+        "origin_outcome": {
+            origin: {
+                "count": count,
+                "avg_profit_rate_pct": round(sum(origin_values[origin]) / len(origin_values[origin]), 4)
+                if origin_values.get(origin)
+                else None,
+            }
+            for origin, count in sorted(origin_counts.items())
+        },
+        "provenance_passed": provenance.get("passed"),
+        "violations": list(provenance.get("violations") or []),
+    }
 
 
 def _outcome_bucket(net_ret: float | None) -> str:
@@ -1333,6 +1414,7 @@ def _source_paths(date_key: str, paths: dict[str, str | None] | None = None) -> 
         "recommendation_diagnostic_json": str(RECO_DIAGNOSTIC_JSON_PATH),
         "pipeline_events": str(Path(DATA_DIR) / "pipeline_events" / f"pipeline_events_{date_key}.jsonl"),
         "swing_daily_simulation": str(_swing_daily_simulation_path(date_key)),
+        "panic_sell_defense": str(_panic_sell_defense_path(date_key)),
     }
     if paths:
         base.update(paths)
@@ -1347,6 +1429,7 @@ def build_swing_lifecycle_audit_report(
     db_rows: Iterable[dict[str, Any]] | None = None,
     event_rows: Iterable[dict[str, Any]] | None = None,
     daily_simulation_report: dict[str, Any] | None = None,
+    panic_sell_defense_report: dict[str, Any] | None = None,
     recommendation_path: str | Path = RECO_PATH,
     diagnostic_json_path: str | Path = RECO_DIAGNOSTIC_JSON_PATH,
     db_url: str = POSTGRES_URL,
@@ -1371,6 +1454,8 @@ def build_swing_lifecycle_audit_report(
     event_rows = list(event_rows or [])
     if daily_simulation_report is None:
         daily_simulation_report = load_swing_daily_simulation_report(date_key)
+    if panic_sell_defense_report is None:
+        panic_sell_defense_report = load_panic_sell_defense_report(date_key)
 
     model_selection = _model_selection_summary(diagnostic_summary or {})
     recommendation_csv = summarize_recommendation_rows(recommendation_rows)
@@ -1383,6 +1468,7 @@ def build_swing_lifecycle_audit_report(
     pipeline_summary = summarize_pipeline_events(event_rows)
     lifecycle_events = summarize_lifecycle_events(event_rows)
     simulation_opportunity = summarize_simulation_opportunity(daily_simulation_report or {})
+    panic_context = summarize_panic_context(panic_sell_defense_report or {})
     observation_axes = build_observation_axes(
         model_selection=model_selection,
         recommendation_csv=recommendation_csv,
@@ -1415,6 +1501,7 @@ def build_swing_lifecycle_audit_report(
         "pipeline_events": pipeline_summary,
         "lifecycle_events": lifecycle_events,
         "simulation_opportunity": simulation_opportunity,
+        "panic_context": panic_context,
         "observation_axes": observation_axes,
         "observation_axis_coverage": observation_axis_coverage,
         "observation_axis_summary": {
@@ -2196,6 +2283,7 @@ def build_swing_runtime_approval_report(
             },
             "source_reports": {
                 "swing_lifecycle_audit": str(SWING_LIFECYCLE_AUDIT_DIR / f"swing_lifecycle_audit_{date_key}.json"),
+                "panic_sell_defense": str(PANIC_SELL_DEFENSE_DIR / f"panic_sell_defense_{date_key}.json"),
                 "swing_threshold_ai_review": str(
                     SWING_THRESHOLD_AI_REVIEW_DIR / f"swing_threshold_ai_review_{date_key}.json"
                 ),
@@ -2217,6 +2305,7 @@ def build_swing_runtime_approval_report(
                 "probe_sell_stage_count": (events.get("raw_counts") or {}).get("swing_probe_sell_order_assumed_filled", 0),
                 "evidence_quality_counts": events.get("evidence_quality_counts"),
             },
+            "panic_context": audit_report.get("panic_context") or {},
             "combined": _completed_ev_summary(audit_report),
             "funnel": {
                 "submitted_unique_records": events.get("submitted_unique_records"),
@@ -2355,6 +2444,7 @@ def _build_ai_review_input_context(audit_report: dict[str, Any], candidates: lis
             "recommendation_csv": audit_report.get("recommendation_csv"),
             "db_lifecycle": audit_report.get("db_lifecycle"),
             "observation_axis_summary": audit_report.get("observation_axis_summary"),
+            "panic_context": audit_report.get("panic_context"),
             "group_unique_counts": (audit_report.get("lifecycle_events") or {}).get("group_unique_counts"),
             "gatekeeper_actions": (audit_report.get("lifecycle_events") or {}).get("gatekeeper_actions"),
         },
@@ -3075,6 +3165,7 @@ def build_swing_improvement_automation_report(
         "source_reports": {
             "swing_lifecycle_audit": str(SWING_LIFECYCLE_AUDIT_DIR / f"swing_lifecycle_audit_{date_key}.json"),
             "swing_daily_simulation": str(SWING_DAILY_SIMULATION_DIR / f"swing_daily_simulation_{date_key}.json"),
+            "panic_sell_defense": str(PANIC_SELL_DEFENSE_DIR / f"panic_sell_defense_{date_key}.json"),
             "swing_threshold_ai_review": str(
                 SWING_THRESHOLD_AI_REVIEW_DIR / f"swing_threshold_ai_review_{date_key}.json"
             ),
@@ -3094,6 +3185,7 @@ def build_swing_improvement_automation_report(
             "simulation_opportunity_sample_state": sim_opportunity.get("sample_state"),
             "simulation_opportunity_closed_count": sim_opportunity.get("closed_count"),
             "simulation_opportunity_winner_count": sim_opportunity.get("winner_count"),
+            "panic_context": audit_report.get("panic_context") or {},
             "source_quality_blocked_family_count": len(source_quality_blocked_families),
             "source_quality_blocked_families": source_quality_blocked_families,
             "scale_in_ofi_qi_source_quality": scale_in_ofi_qi_quality,
@@ -3113,6 +3205,8 @@ def render_swing_lifecycle_audit_markdown(report: dict[str, Any]) -> str:
     db = report.get("db_lifecycle") or {}
     db_load = report.get("recommendation_db_load") or {}
     events = report.get("lifecycle_events") or {}
+    panic_context = report.get("panic_context") or {}
+    panic_active = panic_context.get("active_sim_probe") if isinstance(panic_context.get("active_sim_probe"), dict) else {}
     axis_summary = report.get("observation_axis_summary") or {}
     lines = [
         f"# Swing Lifecycle Audit - {report.get('date')}",
@@ -3129,6 +3223,9 @@ def render_swing_lifecycle_audit_markdown(report: dict[str, Any]) -> str:
         f"- submitted_unique_records: `{events.get('submitted_unique_records')}`",
         f"- simulated_order_unique_records: `{events.get('simulated_order_unique_records')}`",
         f"- observation_axis_status: `{axis_summary.get('status_counts')}`",
+        f"- panic_state: `{panic_context.get('panic_state')}`",
+        f"- panic_active_sim_probe: `{panic_active}`",
+        f"- panic_origin_outcome: `{panic_context.get('origin_outcome', {})}`",
         "",
         "## Lifecycle Funnel",
         "",
