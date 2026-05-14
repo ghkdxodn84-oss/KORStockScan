@@ -138,7 +138,7 @@ def get_performance_report(db):
         if subset.empty: continue
 
         profits = []
-        for _, row in subset.iterrows():
+        for row in subset.to_dict('records'):
             try:
                 # 💡 [핵심 교정 2] 종목코드 6자리 규격화 및 가격 유효성 검사
                 target_code = str(row.get(code_col, '')).replace('.0', '').strip().zfill(6)
@@ -230,7 +230,7 @@ def run_integrated_scanner():
             df_krx = fdr.StockListing('KOSPI')
             top_m = df_krx.sort_values(by='Marcap', ascending=False).head(TRADING_RULES.TOP_N_MARCAP)
             target_df = top_m.sort_values(by='Volume', ascending=False).head(TRADING_RULES.TOP_N_VOLUME)
-            target_list = [{'Code': r['Code'], 'Name': r['Name']} for _, r in target_df.iterrows()]
+            target_list = target_df[['Code', 'Name']].to_dict('records')
         except Exception as e:
             query = """
                 SELECT stock_code AS "Code", stock_name AS "Name" 
@@ -340,7 +340,7 @@ def run_integrated_scanner():
         if os.path.exists(csv_path):
             try:
                 df_csv = pd.read_csv(csv_path)
-                for _, row in df_csv.iterrows():
+                for row in df_csv.to_dict('records'):
                     csv_code = str(row['code']).replace('.0', '').strip().zfill(6)
                     csv_name = row.get('name', 'Unknown')
                     csv_price = int(row.get('close', 0)) if 'close' in df_csv.columns else 0

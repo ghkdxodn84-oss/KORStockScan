@@ -550,6 +550,34 @@ def _simulate_path_from_entry(
     }
 
 
+def _quote_groups_by_code(quotes: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    if quotes.empty or "stock_code" not in quotes.columns or "quote_date" not in quotes.columns:
+        return {}
+    quote_df = quotes.copy()
+    quote_df["stock_code"] = quote_df["stock_code"].astype(str).str.zfill(6)
+    quote_df["quote_date"] = pd.to_datetime(quote_df["quote_date"], errors="coerce").dt.normalize()
+    quote_df = quote_df.dropna(subset=["quote_date"]).sort_values(["stock_code", "quote_date"])
+    return {
+        str(code).zfill(6): group.reset_index(drop=True)
+        for code, group in quote_df.groupby("stock_code", sort=False)
+    }
+
+
+def _future_quotes_for_signal(
+    quote_groups: dict[str, pd.DataFrame],
+    code: str,
+    signal_date: pd.Timestamp,
+    *,
+    limit: int = 6,
+) -> pd.DataFrame:
+    future = quote_groups.get(str(code).zfill(6))
+    if future is None or future.empty:
+        return pd.DataFrame()
+    if pd.notna(signal_date):
+        future = future[future["quote_date"] > signal_date]
+    return future.head(limit).copy() if not future.empty else pd.DataFrame()
+
+
 def simulate_swing_recommendations(
     recommendations: pd.DataFrame,
     quotes: pd.DataFrame,
@@ -565,23 +593,14 @@ def simulate_swing_recommendations(
         if simulation_cash_krw is not None
         else getattr(TRADING_RULES, "SIM_VIRTUAL_BUDGET_KRW", 10_000_000)
     )
-    quote_df = quotes.copy()
-    if not quote_df.empty:
-        quote_df["quote_date"] = pd.to_datetime(quote_df["quote_date"], errors="coerce").dt.normalize()
+    quote_groups = _quote_groups_by_code(quotes)
     rows = []
     as_of = pd.to_datetime(target_date).normalize() if target_date else None
 
     for _, row in recommendations.iterrows():
         signal_date = pd.to_datetime(row.get("date"), errors="coerce").normalize()
         code = str(row.get("code") or row.get("stock_code") or "").zfill(6)
-        if quote_df.empty or "stock_code" not in quote_df.columns or "quote_date" not in quote_df.columns:
-            future = pd.DataFrame()
-        else:
-            future = quote_df[quote_df["stock_code"] == code].copy()
-        if pd.notna(signal_date) and not future.empty:
-            future = future[future["quote_date"] > signal_date]
-        if not future.empty:
-            future = future.sort_values("quote_date").head(6)
+        future = _future_quotes_for_signal(quote_groups, code, signal_date)
 
         base = {
             "signal_date": _date_text(signal_date) if pd.notna(signal_date) else "",
@@ -642,9 +661,7 @@ def simulate_swing_observation_arms(
         if simulation_cash_krw is not None
         else getattr(TRADING_RULES, "SIM_VIRTUAL_BUDGET_KRW", 10_000_000)
     )
-    quote_df = quotes.copy()
-    if not quote_df.empty:
-        quote_df["quote_date"] = pd.to_datetime(quote_df["quote_date"], errors="coerce").dt.normalize()
+    quote_groups = _quote_groups_by_code(quotes)
     rows: list[dict] = []
     as_of = pd.to_datetime(target_date).normalize() if target_date else None
     arms = ("selection_only", "gap_pass", "gatekeeper_pass")
@@ -652,14 +669,7 @@ def simulate_swing_observation_arms(
     for _, row in recommendations.iterrows():
         signal_date = pd.to_datetime(row.get("date"), errors="coerce").normalize()
         code = str(row.get("code") or row.get("stock_code") or "").zfill(6)
-        if quote_df.empty or "stock_code" not in quote_df.columns or "quote_date" not in quote_df.columns:
-            future = pd.DataFrame()
-        else:
-            future = quote_df[quote_df["stock_code"] == code].copy()
-        if pd.notna(signal_date) and not future.empty:
-            future = future[future["quote_date"] > signal_date]
-        if not future.empty:
-            future = future.sort_values("quote_date").head(6)
+        future = _future_quotes_for_signal(quote_groups, code, signal_date)
 
         base = {
             "signal_date": _date_text(signal_date) if pd.notna(signal_date) else "",

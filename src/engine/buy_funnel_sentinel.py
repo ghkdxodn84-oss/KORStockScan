@@ -155,6 +155,14 @@ def _is_truthy_text(value: Any) -> bool:
     return _safe_str(value).lower() in {"1", "true", "t", "yes", "y"}
 
 
+def _contains_text_token(value: Any, token: str) -> bool:
+    if isinstance(value, dict):
+        return any(token in str(key) or _contains_text_token(item, token) for key, item in value.items())
+    if isinstance(value, (list, tuple, set)):
+        return any(_contains_text_token(item, token) for item in value)
+    return token in _safe_str(value)
+
+
 def _payload_requires_lossless_cache(payload: dict[str, Any], fields: dict[str, Any]) -> bool:
     for key in ("actual_order_submitted", "broker_order_submitted", "order_submitted"):
         if _is_truthy_text(payload.get(key)) or _is_truthy_text(fields.get(key)):
@@ -180,7 +188,6 @@ def _payload_to_cache_row(
     raw_field_dict = raw_fields if isinstance(raw_fields, dict) else {}
     if exclude_summary_stages and stage in SUMMARY_STAGES and not _payload_requires_lossless_cache(payload, raw_field_dict):
         return None
-    fields_text = json.dumps(raw_fields, ensure_ascii=False) if isinstance(raw_fields, dict) else ""
     if not (
         stage in ENTRY_STAGES
         or stage in HOLDING_STAGES
@@ -188,7 +195,7 @@ def _payload_to_cache_row(
         or stage in UPSTREAM_BLOCK_STAGES
         or stage in PRICE_GUARD_STAGES
         or stage.startswith(BLOCKER_STAGE_PREFIXES)
-        or "ai_score_50_buy_hold_override" in fields_text
+        or _contains_text_token(raw_field_dict, "ai_score_50_buy_hold_override")
     ):
         return None
     emitted_at = _parse_iso_datetime(_safe_str(payload.get("emitted_at")))
@@ -493,7 +500,7 @@ def _summarize_events(
         event
         for event in lossless_scoped
         if event.stage in UPSTREAM_BLOCK_STAGES
-        or "ai_score_50_buy_hold_override" in json.dumps(event.fields, ensure_ascii=False)
+        or _contains_text_token(event.fields, "ai_score_50_buy_hold_override")
     ]
     price_guard_events = [event for event in lossless_scoped if event.stage in PRICE_GUARD_STAGES]
     latency_blocks = [
@@ -503,7 +510,7 @@ def _summarize_events(
         and (
             _field_first(event.fields, ("reason", "latency_danger_reasons", "decision"))
             in {"latency_state_danger", "REJECT_DANGER"}
-            or "latency_state_danger" in json.dumps(event.fields, ensure_ascii=False)
+            or _contains_text_token(event.fields, "latency_state_danger")
         )
     ]
     upstream_counter = Counter(_blocker_label(event) for event in upstream_events)

@@ -54,15 +54,14 @@ def _attach_recommendation_provenance(score_df, stats_df):
 
 def _save_recommendation_outputs(score_df, picks, stats_df, latest_date, *, bull_mode):
     score_df = _attach_recommendation_provenance(score_df, stats_df)
-    selected_keys = set()
+    selected_index = pd.MultiIndex.from_arrays([[], []], names=['date', 'code'])
     if not picks.empty:
-        selected_keys = set(zip(picks['date'], picks['code']))
+        selected_index = pd.MultiIndex.from_frame(picks[['date', 'code']])
 
     diagnostic = score_df.copy()
-    diagnostic['selection_mode'] = diagnostic.apply(
-        lambda row: 'SELECTED' if (row['date'], row['code']) in selected_keys else 'DIAGNOSTIC_ONLY',
-        axis=1,
-    )
+    diagnostic_index = pd.MultiIndex.from_frame(diagnostic[['date', 'code']])
+    diagnostic['selection_mode'] = 'DIAGNOSTIC_ONLY'
+    diagnostic.loc[diagnostic_index.isin(selected_index), 'selection_mode'] = 'SELECTED'
 
     if picks.empty:
         diagnostic = diagnostic.sort_values('meta_score', ascending=False).head(10).copy()
@@ -72,9 +71,8 @@ def _save_recommendation_outputs(score_df, picks, stats_df, latest_date, *, bull
         empty_reco.to_csv(RECO_PATH, index=False, encoding='utf-8-sig')
         selection_mode = 'EMPTY'
     else:
-        pick_df = score_df[
-            score_df.apply(lambda row: (row['date'], row['code']) in selected_keys, axis=1)
-        ].copy()
+        score_index = pd.MultiIndex.from_frame(score_df[['date', 'code']])
+        pick_df = score_df[score_index.isin(selected_index)].copy()
         pick_df['selection_mode'] = 'SELECTED'
         pick_df = pick_df.sort_values('meta_score', ascending=False).reset_index(drop=True)
         pick_df.to_csv(RECO_PATH, index=False, encoding='utf-8-sig')

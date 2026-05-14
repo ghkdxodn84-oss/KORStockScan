@@ -5,14 +5,14 @@
 - panic_state: `NORMAL`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-05-14T14:46:15`
-- latest_event_at: `2026-05-14T14:46:13`
+- as_of: `2026-05-14T17:11:49`
+- latest_event_at: `2026-05-14T17:11:49`
 - reasons: `panic thresholds not breached`
 
 ## 패닉 지표
 
 - real_exit_count: `0`
-- non_real_exit_count: `29`
+- non_real_exit_count: `32`
 - stop_loss_exit_count: `0`
 - current_30m_stop_loss_exit_count: `0`
 - max_rolling_30m_stop_loss_exit_count: `0`
@@ -23,11 +23,11 @@
 
 ## 회복 지표
 
-- active_positions: `11`
-- active_profit_sample: `11`
-- active_avg_unrealized_profit_rate_pct: `0.8149`
-- active_win_rate_pct: `72.7`
-- sim_probe_provenance_passed: `false`
+- active_positions: `10`
+- active_profit_sample: `10`
+- active_avg_unrealized_profit_rate_pct: `1.5556`
+- active_win_rate_pct: `80`
+- sim_probe_provenance_passed: `true`
 - post_sell_rebound_above_sell_10_20m_pct: `0`
 - post_sell_rebound_above_buy_10_20m_pct: `0`
 

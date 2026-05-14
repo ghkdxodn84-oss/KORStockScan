@@ -244,6 +244,43 @@ def backfill_threshold_cycle_events(
     raw_line_count = int(checkpoint.get("raw_line_count", 0) or 0)
     written_total = int(checkpoint.get("written_count", 0) or 0)
     partition_state = _initial_partition_state(checkpoint)
+    if checkpoint and byte_offset >= int(source_fp["source_size"]):
+        recommended_next_input_lines_per_chunk = int(
+            checkpoint.get("recommended_next_input_lines_per_chunk") or max_input_lines_per_chunk
+        )
+        checkpoint_payload = {
+            **source_fp,
+            "target_date": target_date,
+            "mode": mode,
+            "byte_offset": byte_offset,
+            "raw_line_count": raw_line_count,
+            "written_count": written_total,
+            "written_this_run": 0,
+            "processed_this_run": 0,
+            "partitions": partition_state,
+            "completed": True,
+            "paused_reason": None,
+            "recommended_next_input_lines_per_chunk": recommended_next_input_lines_per_chunk,
+            "last_sample_metrics": checkpoint.get("last_sample_metrics") or {},
+            "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+        }
+        _save_json(checkpoint_file, checkpoint_payload)
+        return {
+            "target_date": target_date,
+            "source_exists": True,
+            "status": "completed",
+            "mode": mode,
+            "written": 0,
+            "written_total": written_total,
+            "processed": 0,
+            "byte_offset": byte_offset,
+            "source_size": source_fp["source_size"],
+            "completed": True,
+            "paused_reason": None,
+            "recommended_next_input_lines_per_chunk": recommended_next_input_lines_per_chunk,
+            "checkpoint": str(checkpoint_file),
+            "partition_root": str(THRESHOLD_CYCLE_DIR / f"date={target_date}"),
+        }
 
     before_sample = _sample_metrics()
     written_this_run = 0

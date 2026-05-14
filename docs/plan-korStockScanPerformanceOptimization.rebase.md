@@ -109,8 +109,8 @@
 | entry price | `dynamic_entry_price_resolver_p1` + `dynamic_entry_ai_price_canary_p2`; passive probe submit revalidation이 stale이면 제출 전 block | `ws_data.curr` 직접 추격, stale quote submit 금지 |
 | holding/exit | `soft_stop_micro_grace`, `soft_stop_whipsaw_confirmation` selected family, `holding_flow_override` 운영 override | hard/protect/emergency/order safety 우회 금지 |
 | scale-in/position sizing | scale-in price resolver와 dynamic qty safety 유지. `position_sizing_dynamic_formula`는 score/strategy/volatility/liquidity/spread/price band/recent loss/portfolio exposure를 입력으로 보는 별도 owner이며, 신규/추가매수 1주 cap 해제는 `position_sizing_cap_release` approval request 이후만 검토 | sim/probe 단독 실주문 cap 해제, cap 해제 자동 apply 금지 |
-| scalp sim | AI/Gatekeeper BUY 확정 지점 sim은 `actual_order_submitted=false`, equal-weight authority | real order나 real-like execution 품질로 해석 금지 |
-| swing dry-run | lifecycle audit, threshold AI review, improvement automation, runtime approval summary가 장후 생성 | approval artifact 없는 env/live order 전환 금지 |
+| sim lifecycle | sim-first lifecycle 탐색은 신규 report chain이 아니라 기존 threshold-cycle 자동화체인의 입력 범위/해석 범위다. 스캘핑 `scalp_ai_buy_all`, wait/missed-entry counterfactual, swing dry-run/probe는 모두 `actual_order_submitted=false` source로 daily/cumulative EV, runtime approval summary, code-improvement workorder에 들어간다 | real order나 real-like execution 품질로 해석 금지. 단, sim 탐색은 예수금/실주문 가능 여부/현재 selected family 때문에 후보를 좁히지 않는다 |
+| swing dry-run | lifecycle audit, threshold AI review, improvement automation, runtime approval summary가 장후 생성되며 기존 threshold-cycle 자동화체인의 swing source bundle 입력이 된다 | approval artifact 없는 env/live order 전환 금지 |
 | swing real canary | one-share real canary와 scale-in real canary는 별도 approval-required 축 | 스윙 전체 실주문 전환으로 해석 금지 |
 | OpenAI route | main live AI route는 OpenAI, Responses WS hot path provenance 확인 | provider route 확인을 threshold/주문가/수량 변경 근거로 사용 금지 |
 | Sentinel/panic | BUY/HOLD/EXIT/panic sell/panic buying은 report-only source bundle | 자동매도, TP/trailing/threshold/provider/bot restart 변경 금지 |
@@ -136,6 +136,7 @@
 | --- | --- | --- |
 | threshold auto apply | `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe` selected runtime family | 장후 `threshold_cycle_ev`, `runtime_approval_summary`, post-apply attribution |
 | entry funnel | `BUY Funnel Sentinel` + `wait6579_ev_cohort` + selected `score65_74_recovery_probe` | BUY/submitted drought는 daily/rolling/cumulative EV와 blocker attribution으로 판정 |
+| sim-first lifecycle threshold scope | 신규 산출물 owner가 아니라 기존 `R0_collect -> R1_daily_report -> R2_cumulative_report -> R3_manifest_only -> R4_preopen_apply_candidate -> R5_bounded_calibrated_apply -> R6_post_apply_attribution` 체인의 범위 규칙이다. 스캘핑과 스윙의 BUY/selection 가능 후보 전체를 `selection -> entry -> holding -> scale_in -> exit` virtual lifecycle로 넓게 실행해 최적 threshold 후보와 기능개선 workorder를 찾는다 | 실주문/예수금/cap/selected runtime family는 sim exclusion 사유가 아니라 provenance tag로만 남긴다. 별도 standalone report가 threshold-cycle consumer나 apply authority가 되지 않는다 |
 | entry price quality | P1/P2 price resolver, passive probe lifecycle, submit revalidation block | `pre_submit_price_guard` family와 daily EV attribution |
 | holding/exit | `soft_stop_micro_grace`, selected `soft_stop_whipsaw_confirmation`, `holding_flow_override` | HOLD/EXIT Sentinel, post-sell feedback, threshold-cycle EV |
 | position sizing | scale-in resolver/dynamic qty safety, 1주 cap default ON. 동적수량 산식 튜닝 owner는 `position_sizing_dynamic_formula`, cap 해제 승인 owner는 `position_sizing_cap_release`로 분리 | 산식 변경은 `notional_weighted_ev_pct` 또는 `source_quality_adjusted_ev_pct` 기준으로 별도 검토하고, 실주문 수량 확대는 approval request 기준 충족 시 사용자 승인 요청 |

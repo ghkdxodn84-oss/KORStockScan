@@ -274,6 +274,61 @@ def test_threshold_cycle_report_routes_entry_filter_ev_sources_to_calibration_fa
     assert candidates["overbought_gate_refined_candidate"]["calibration_state"] == "freeze"
 
 
+def test_window_policy_registry_demotes_score65_daily_trigger_without_rolling_denominator():
+    report = {
+        "calibration_candidates": [
+            {
+                "family": "score65_74_recovery_probe",
+                "source_family": "score65_74_recovery_probe",
+                "threshold_version": "score65_74_recovery_probe:observe_only:ready",
+                "stage": "entry",
+                "priority": 10,
+                "current_value": False,
+                "recommended_value": True,
+                "current_values": {"enabled": False},
+                "recommended_values": {"enabled": True},
+                "sample_count": 191,
+                "source_sample_count": 191,
+                "sample_floor": 20,
+                "sample_floor_status": "ready",
+                "window_policy": {
+                    "primary": "rolling_5d",
+                    "secondary": ["daily_intraday", "cumulative_since_2026-04-21"],
+                    "daily_only_allowed": False,
+                },
+                "calibration_state": "adjust_up",
+                "calibration_reason": "daily BUY drought trigger",
+                "apply_mode": "efficient_tradeoff_canary_candidate",
+                "allowed_runtime_apply": True,
+            }
+        ]
+    }
+    cumulative = {
+        "threshold_snapshot_by_window": {
+            "rolling_5d": {
+                "score65_74_recovery_probe": {
+                    "sample": {
+                        "wait65_79_score65_74_candidate": 0,
+                        "blocked_score65_74": 0,
+                        "budget_pass": 999,
+                    },
+                    "sample_ready": False,
+                }
+            }
+        }
+    }
+
+    report_mod.apply_window_policy_registry_to_report(report, cumulative)
+
+    candidate = report["calibration_candidates"][0]
+    assert candidate["calibration_state"] == "hold_sample"
+    assert candidate["runtime_apply_blocker"] == "window_policy_primary_not_ready"
+    assert candidate["window_policy_resolution"]["primary"] == "rolling_5d"
+    assert candidate["window_policy_resolution"]["primary_sample_count"] == 0
+    assert candidate["apply_mode"] == "report_only_calibration"
+    assert report["window_policy_audit"]["issue_counts"] == {"daily_only_leak_blocked": 1}
+
+
 def test_threshold_cycle_calibration_uses_holding_exit_report_sources():
     report_sources = {
         "schema_version": 1,
@@ -1896,3 +1951,151 @@ def test_cumulative_threshold_cycle_report_artifacts_render_markdown(tmp_path, m
     assert "Cumulative Threshold Cycle Report" in markdown
     assert "Cohort Summary" in markdown
     assert "runtime_change: `False`" in markdown
+
+
+def test_cumulative_threshold_cycle_report_renders_family_specific_denominator():
+    report = report_mod.build_cumulative_threshold_cycle_report(
+        "2026-04-30",
+        start_date="2026-04-30",
+        rolling_days=(1,),
+        pipeline_loader=lambda target_date: [{"stage": "budget_pass", "fields": {"signal_score": "72"}}],
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    markdown = report_mod.render_cumulative_threshold_cycle_markdown(report)
+
+    assert "| cumulative | score65_74_recovery_probe | entry | 0 | False | report_only_reference |" in markdown
+
+
+def test_window_policy_audit_uses_registered_denominators_for_position_sizing():
+    report = {
+        "calibration_candidates": [
+            {
+                "family": "position_sizing_dynamic_formula",
+                "sample_count": 4,
+                "source_sample_count": 0,
+                "sample_floor": 30,
+                "calibration_state": "hold_sample",
+                "apply_mode": "report_only_calibration",
+                "window_policy": {
+                    "primary": "rolling_10d",
+                    "secondary": ["daily", "cumulative_since_2026-04-21"],
+                    "daily_only_allowed": False,
+                },
+            }
+        ]
+    }
+    cumulative = {
+        "threshold_snapshot_by_window": {
+            "rolling_10d": {
+                "position_sizing_dynamic_formula": {
+                    "sample": {
+                        "real_completed_valid": 16,
+                        "sizing_event_count": 4280,
+                    },
+                    "sample_ready": False,
+                }
+            }
+        }
+    }
+
+    report_mod.apply_window_policy_registry_to_report(report, cumulative)
+
+    item = report["window_policy_audit"]["items"][0]
+    assert item["sample_denominator_keys"] == ["real_completed_valid"]
+    assert item["primary_sample_count"] == 16
+
+
+def test_window_policy_registry_recomputes_candidate_from_ready_rolling_snapshot():
+    report = {
+        "calibration_candidates": [
+            {
+                "family": "protect_trailing_smoothing",
+                "sample_count": 0,
+                "source_sample_count": 0,
+                "sample_floor": 20,
+                "calibration_state": "hold_sample",
+                "apply_mode": "report_only_calibration",
+                "allowed_runtime_apply": True,
+                "window_policy": {
+                    "primary": "rolling_10d",
+                    "secondary": ["daily"],
+                    "daily_only_allowed": False,
+                },
+            }
+        ]
+    }
+    cumulative = {
+        "threshold_snapshot_by_window": {
+            "rolling_10d": {
+                "protect_trailing_smoothing": {
+                    "sample": {"smooth_hold": 10, "smooth_confirmed": 10},
+                    "sample_ready": True,
+                    "current": {"window_sec": 20},
+                    "recommended": {"window_sec": 30},
+                }
+            }
+        }
+    }
+
+    report_mod.apply_window_policy_registry_to_report(report, cumulative)
+
+    candidate = report["calibration_candidates"][0]
+    assert candidate["calibration_state"] == "adjust_up"
+    assert candidate["sample_count"] == 20
+    assert candidate["decision_sample_window"] == "rolling_10d"
+    assert candidate["apply_mode"] == "calibrated_apply_candidate"
+    assert report["window_policy_audit"]["issue_counts"] == {}
+
+
+def test_window_policy_registry_consumes_rolling_source_metrics_when_snapshot_sample_is_empty():
+    report = {
+        "calibration_candidates": [
+            {
+                "family": "liquidity_gate_refined_candidate",
+                "sample_count": 0,
+                "source_sample_count": 0,
+                "sample_floor": 20,
+                "calibration_state": "hold_sample",
+                "apply_mode": "report_only_calibration",
+                "allowed_runtime_apply": False,
+                "window_policy": {
+                    "primary": "rolling_5d",
+                    "secondary": ["daily_intraday"],
+                    "daily_only_allowed": False,
+                },
+            }
+        ]
+    }
+    cumulative = {
+        "threshold_snapshot_by_window": {
+            "rolling_5d": {
+                "liquidity_gate_refined_candidate": {
+                    "sample": {"blocked_events": 0},
+                    "sample_ready": False,
+                    "current": {"enabled": False},
+                    "recommended": {"enabled": False},
+                }
+            }
+        },
+        "calibration_source_bundle_by_window": {
+            "rolling_5d": {
+                "source_metrics": {
+                    "liquidity_gate_refined_candidate": {
+                        "evaluated_candidates": 30,
+                        "missed_winner_rate": 35.0,
+                        "avoided_loser_rate": 15.0,
+                    }
+                }
+            }
+        },
+    }
+
+    report_mod.apply_window_policy_registry_to_report(report, cumulative)
+
+    candidate = report["calibration_candidates"][0]
+    assert candidate["calibration_state"] == "hold"
+    assert candidate["sample_count"] == 30
+    assert candidate["source_metrics"]["evaluated_candidates"] == 30
+    assert candidate["allowed_runtime_apply"] is False
+    assert report["window_policy_audit"]["issue_counts"] == {"rolling_source_snapshot_mismatch": 1}

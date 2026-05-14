@@ -287,6 +287,90 @@ def test_build_threshold_cycle_ev_report_warns_when_pattern_lab_artifact_missing
     assert report["pattern_lab_automation"]["available"] is False
     assert "pattern_lab_automation_missing" in report["warnings"]
     assert "code_improvement_workorder_missing" in report["warnings"]
+    assert "codebase_performance_workorder_missing" in report["warnings"]
+
+
+def test_threshold_cycle_ev_report_exposes_codebase_performance_source_as_ops_summary(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    monitor_dir = report_dir / "monitor_snapshots"
+    calibration_dir = report_dir / "threshold_cycle_calibration"
+    perf_dir = report_dir / "codebase_performance_workorder"
+    apply_dir = tmp_path / "apply_plans"
+    ev_dir = report_dir / "threshold_cycle_ev"
+    workorder_report_dir = report_dir / "code_improvement_workorder"
+    workorder_doc_dir = tmp_path / "docs" / "code-improvement-workorders"
+    for path in (monitor_dir, calibration_dir, perf_dir, apply_dir, workorder_report_dir, workorder_doc_dir):
+        path.mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "MONITOR_SNAPSHOT_DIR", monitor_dir)
+    monkeypatch.setattr(mod, "CALIBRATION_REPORT_DIR", calibration_dir)
+    monkeypatch.setattr(mod, "EV_REPORT_DIR", ev_dir)
+    monkeypatch.setattr(mod, "apply_manifest_path", lambda target_date: apply_dir / f"threshold_apply_{target_date}.json")
+    monkeypatch.setattr(
+        mod,
+        "automation_report_paths",
+        lambda target_date: (
+            report_dir / "missing" / f"scalping_pattern_lab_automation_{target_date}.json",
+            report_dir / "missing" / f"scalping_pattern_lab_automation_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(
+        mod,
+        "code_improvement_workorder_paths",
+        lambda target_date: (
+            workorder_report_dir / f"code_improvement_workorder_{target_date}.json",
+            workorder_doc_dir / f"code_improvement_workorder_{target_date}.md",
+        ),
+    )
+
+    (monitor_dir / "trade_review_2026-05-14.json").write_text(json.dumps({"metrics": {}}), encoding="utf-8")
+    (monitor_dir / "performance_tuning_2026-05-14.json").write_text(json.dumps({"metrics": {}}), encoding="utf-8")
+    (calibration_dir / "threshold_cycle_calibration_2026-05-14_postclose.json").write_text(
+        json.dumps({"run_phase": "postclose"}),
+        encoding="utf-8",
+    )
+    (apply_dir / "threshold_apply_2026-05-14.json").write_text(json.dumps({"status": "manifest_ready"}), encoding="utf-8")
+    (workorder_report_dir / "code_improvement_workorder_2026-05-14.json").write_text(
+        json.dumps({"summary": {}, "orders": []}),
+        encoding="utf-8",
+    )
+    (workorder_doc_dir / "code_improvement_workorder_2026-05-14.md").write_text("# workorder\n", encoding="utf-8")
+    (perf_dir / "codebase_performance_workorder_2026-05-14.json").write_text(
+        json.dumps(
+            {
+                "source_doc_hash": "abc123",
+                "summary": {"accepted_count": 7, "deferred_count": 3, "rejected_count": 2},
+                "policy": {
+                    "runtime_effect": False,
+                    "strategy_effect": False,
+                    "data_quality_effect": False,
+                    "tuning_axis_effect": False,
+                    "decision_authority": "ops_performance_workorder_source",
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_threshold_cycle_ev_report("2026-05-14")
+
+    summary = report["codebase_performance_workorder"]
+    assert summary["available"] is True
+    assert summary["accepted_count"] == 7
+    assert summary["deferred_count"] == 3
+    assert summary["rejected_count"] == 2
+    assert summary["runtime_effect"] is False
+    assert summary["strategy_effect"] is False
+    assert summary["data_quality_effect"] is False
+    assert summary["tuning_axis_effect"] is False
+    assert report["sources"]["codebase_performance_workorder"] == str(
+        perf_dir / "codebase_performance_workorder_2026-05-14.json"
+    )
+    markdown = (ev_dir / "threshold_cycle_ev_2026-05-14.md").read_text(encoding="utf-8")
+    assert "Codebase Performance Workorder Source" in markdown
+    assert "ops_performance_workorder_source" in markdown
 
 
 def test_threshold_cycle_ev_report_prefers_candidate_sample_counts_from_calibration(tmp_path, monkeypatch):

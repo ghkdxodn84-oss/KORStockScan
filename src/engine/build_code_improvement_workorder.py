@@ -19,6 +19,7 @@ SWING_IMPROVEMENT_AUTOMATION_DIR = REPORT_DIR / "swing_improvement_automation"
 SWING_PATTERN_LAB_AUTOMATION_DIR = REPORT_DIR / "swing_pattern_lab_automation"
 THRESHOLD_CYCLE_EV_DIR = REPORT_DIR / "threshold_cycle_ev"
 PIPELINE_EVENT_VERBOSITY_DIR = REPORT_DIR / "pipeline_event_verbosity"
+CODEBASE_PERFORMANCE_WORKORDER_DIR = REPORT_DIR / "codebase_performance_workorder"
 CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-workorders"
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
 WORKORDER_SCHEMA_VERSION = 1
@@ -243,6 +244,38 @@ def _classify_order(
             automation_reentry="Next postclose pipeline_event_verbosity report must show producer summary freshness and parity status.",
         )
 
+    if order.get("source_report_type") == "codebase_performance_workorder":
+        state = str(order.get("performance_candidate_state") or order.get("candidate_state") or "").strip()
+        if state == "accepted":
+            return ClassifiedOrder(
+                order=order,
+                decision="implement_now",
+                reason="accepted codebase performance order is logic-preserving and report/workorder-only; implementation still requires parity tests",
+                mapped_family=mapped_family,
+                route=route or "performance_optimization_order",
+                confidence=confidence,
+                automation_reentry="After implementation, rerun the same artifact/report parity tests before postclose workorder refresh.",
+            )
+        if state == "deferred":
+            return ClassifiedOrder(
+                order=order,
+                decision="defer_evidence",
+                reason=str(order.get("defer_reason") or "performance order requires manual review before implementation"),
+                mapped_family=mapped_family,
+                route=route or "performance_optimization_order",
+                confidence=confidence,
+                automation_reentry="Keep as deferred performance backlog until scope/risk is reviewed separately.",
+            )
+        return ClassifiedOrder(
+            order=order,
+            decision="reject",
+            reason=str(order.get("defer_reason") or "performance order is outside current no-logic-change scope"),
+            mapped_family=mapped_family,
+            route=route or "performance_optimization_order",
+            confidence=confidence,
+            automation_reentry="Do not implement from this workorder source.",
+        )
+
     if _contains_any(text, ("fallback", "shadow")):
         return ClassifiedOrder(
             order=order,
@@ -400,6 +433,10 @@ def _pipeline_event_verbosity_report_path(target_date: str) -> Path:
     return PIPELINE_EVENT_VERBOSITY_DIR / f"pipeline_event_verbosity_{target_date}.json"
 
 
+def _codebase_performance_report_path(target_date: str) -> Path:
+    return CODEBASE_PERFORMANCE_WORKORDER_DIR / f"codebase_performance_workorder_{target_date}.json"
+
+
 def _pipeline_event_verbosity_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
     if not report:
         return []
@@ -470,6 +507,61 @@ def _pipeline_event_verbosity_followup_orders(report: dict[str, Any]) -> list[di
     return []
 
 
+def _codebase_performance_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+    if not report:
+        return []
+    result: list[dict[str, Any]] = []
+    for state, section in (
+        ("accepted", "accepted_candidates"),
+        ("deferred", "deferred_candidates"),
+        ("rejected", "rejected_candidates"),
+    ):
+        candidates = report.get(section) if isinstance(report.get(section), list) else []
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            order_id = str(item.get("order_id") or item.get("item_id") or "").strip()
+            if not order_id:
+                continue
+            result.append(
+                {
+                    "order_id": order_id,
+                    "title": item.get("title"),
+                    "source_report_type": "codebase_performance_workorder",
+                    "lifecycle_stage": item.get("lifecycle_stage") or "ops_performance",
+                    "target_subsystem": item.get("target_subsystem"),
+                    "route": item.get("route") or "performance_optimization_order",
+                    "confidence": item.get("confidence") or "consensus",
+                    "priority": item.get("priority"),
+                    "runtime_effect": False,
+                    "strategy_effect": False,
+                    "data_quality_effect": False,
+                    "tuning_axis_effect": False,
+                    "performance_candidate_state": state,
+                    "risk_tier": item.get("risk_tier"),
+                    "forbidden_uses": item.get("forbidden_uses") or [],
+                    "evidence": [
+                        f"source_doc_hash={report.get('source_doc_hash')}",
+                        f"candidate_state={state}",
+                        f"risk_tier={item.get('risk_tier')}",
+                        "runtime_effect=false",
+                        "strategy_effect=false",
+                        "data_quality_effect=false",
+                        "tuning_axis_effect=false",
+                        f"parity_contract={item.get('parity_contract')}",
+                    ],
+                    "intent": "Create a user-instructed, parity-tested code performance improvement without changing trading logic.",
+                    "expected_ev_effect": "none_direct_ops_cpu_io_reduction_only",
+                    "next_postclose_metric": "same report/output parity with lower runtime or CPU/IO overhead",
+                    "files_likely_touched": item.get("files_likely_touched") or [],
+                    "acceptance_tests": item.get("acceptance_tests") or [],
+                    "parity_contract": item.get("parity_contract"),
+                    "defer_reason": item.get("defer_reason"),
+                }
+            )
+    return result
+
+
 def _closed_instrumentation_order_families(ev_report: dict[str, Any]) -> dict[str, str]:
     outcome = ev_report.get("calibration_outcome") if isinstance(ev_report.get("calibration_outcome"), dict) else {}
     decisions = outcome.get("decisions") if isinstance(outcome.get("decisions"), list) else []
@@ -500,6 +592,73 @@ def _calibration_report_path_from_ev(ev_report: dict[str, Any]) -> Path | None:
     sources = ev_report.get("sources") if isinstance(ev_report.get("sources"), dict) else {}
     path_text = sources.get("calibration")
     return Path(str(path_text)) if path_text else None
+
+
+def _window_policy_audit_followup_orders(calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
+    audit = (
+        calibration_report.get("window_policy_audit")
+        if isinstance(calibration_report.get("window_policy_audit"), dict)
+        else {}
+    )
+    issue_counts = audit.get("issue_counts") if isinstance(audit.get("issue_counts"), dict) else {}
+    if not issue_counts:
+        return []
+    items = [item for item in audit.get("items") or [] if isinstance(item, dict) and item.get("issues")]
+    if not items:
+        return []
+    affected = [str(item.get("family") or "") for item in items if item.get("family")]
+    evidence = [
+        f"issue_counts={json.dumps(issue_counts, ensure_ascii=False, sort_keys=True)}",
+        "affected_families=" + ",".join(affected),
+    ]
+    for item in items[:8]:
+        evidence.append(
+            "family={family} primary={primary} state={state} primary_sample={sample} "
+            "snapshot_sample={snapshot} source_sample={source} issues={issues}".format(
+                family=item.get("family"),
+                primary=item.get("primary"),
+                state=item.get("candidate_state"),
+                sample=item.get("primary_sample_count"),
+                snapshot=item.get("primary_snapshot_sample_count"),
+                source=item.get("primary_source_sample_count"),
+                issues=",".join(str(value) for value in item.get("issues") or []),
+            )
+        )
+    return [
+        {
+            "order_id": "order_threshold_window_policy_source_snapshot_alignment",
+            "title": "threshold window policy source snapshot alignment",
+            "source_report_type": "threshold_cycle_calibration",
+            "lifecycle_stage": "threshold_cycle",
+            "target_subsystem": "threshold_cycle_report",
+            "route": "instrumentation_order",
+            "mapped_family": None,
+            "threshold_family": "window_policy_registry",
+            "improvement_type": "source_quality_alignment",
+            "confidence": "consensus",
+            "priority": 3,
+            "runtime_effect": False,
+            "expected_ev_effect": (
+                "Prevent daily-only or snapshot-only calibration blind spots by aligning rolling/cumulative "
+                "source metrics, snapshot denominators, AI correction context, and EV/workorder rendering."
+            ),
+            "evidence": evidence,
+            "next_postclose_metric": (
+                "window_policy_audit should have no daily_only_leak or rolling_consumer_gap; "
+                "rolling_source_snapshot_mismatch must be explained as rendering-only or eliminated."
+            ),
+            "files_likely_touched": [
+                "src/engine/daily_threshold_cycle_report.py",
+                "src/engine/threshold_cycle_ev_report.py",
+                "src/engine/build_code_improvement_workorder.py",
+                "data/threshold_cycle/README.md",
+            ],
+            "acceptance_tests": [
+                "PYTHONPATH=. .venv/bin/pytest src/tests/test_daily_threshold_cycle_report.py src/tests/test_build_code_improvement_workorder.py",
+                "threshold_cycle_YYYY-MM-DD.json includes window_policy_audit and calibration_source_bundle_by_window lineage",
+            ],
+        }
+    ]
 
 
 def _panic_lifecycle_followup_orders(calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
@@ -642,6 +801,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     ev_report = _load_json(ev_path)
     pipeline_event_verbosity_path = _pipeline_event_verbosity_report_path(target_date)
     pipeline_event_verbosity = _load_json(pipeline_event_verbosity_path)
+    codebase_performance_path = _codebase_performance_report_path(target_date)
+    codebase_performance = _load_json(codebase_performance_path)
     calibration_source_path = _calibration_report_path_from_ev(ev_report)
     calibration_report = _calibration_report_from_ev(ev_report)
     source_paths = {
@@ -650,6 +811,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "swing_pattern_lab_automation": swing_lab_source_path,
             "threshold_cycle_ev": ev_path,
             "pipeline_event_verbosity": pipeline_event_verbosity_path,
+            "codebase_performance_workorder": codebase_performance_path,
     }
     if calibration_source_path is not None:
         source_paths["threshold_cycle_calibration"] = calibration_source_path
@@ -679,8 +841,10 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     ]
     threshold_ev_orders = [
         *_threshold_ev_followup_orders(ev_report),
+        *_window_policy_audit_followup_orders(calibration_report),
         *_panic_lifecycle_followup_orders(calibration_report),
         *_pipeline_event_verbosity_followup_orders(pipeline_event_verbosity),
+        *_codebase_performance_followup_orders(codebase_performance),
     ]
     closed_instrumentation_order_families = _closed_instrumentation_order_families(ev_report)
     orders = [*scalping_orders, *swing_orders, *swing_lab_orders, *threshold_ev_orders]
@@ -726,6 +890,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "pipeline_event_verbosity": str(pipeline_event_verbosity_path)
             if pipeline_event_verbosity_path.exists()
             else None,
+            "codebase_performance_workorder": str(codebase_performance_path)
+            if codebase_performance_path.exists()
+            else None,
             "threshold_cycle_calibration": str(calibration_source_path)
             if calibration_source_path and calibration_source_path.exists()
             else None,
@@ -749,6 +916,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "threshold_ev_source_order_count": len(threshold_ev_orders),
             "pipeline_event_verbosity_source_order_count": len(
                 _pipeline_event_verbosity_followup_orders(pipeline_event_verbosity)
+            ),
+            "codebase_performance_source_order_count": len(
+                _codebase_performance_followup_orders(codebase_performance)
             ),
             "panic_lifecycle_source_order_count": len(_panic_lifecycle_followup_orders(calibration_report)),
             "selected_order_count": len(selected),
@@ -785,6 +955,10 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
                 "acceptance_tests": item.order.get("acceptance_tests") or [],
                 "automation_reentry": item.automation_reentry,
                 "runtime_effect": bool(item.order.get("runtime_effect")),
+                "strategy_effect": bool(item.order.get("strategy_effect")),
+                "data_quality_effect": bool(item.order.get("data_quality_effect")),
+                "tuning_axis_effect": bool(item.order.get("tuning_axis_effect")),
+                "parity_contract": item.order.get("parity_contract"),
             }
             for item in selected
         ],
@@ -834,6 +1008,8 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- swing_pattern_lab_automation: `{source.get('swing_pattern_lab_automation') or '-'}`",
         f"- threshold_cycle_ev: `{source.get('threshold_cycle_ev') or '-'}`",
         f"- threshold_cycle_calibration: `{source.get('threshold_cycle_calibration') or '-'}`",
+        f"- pipeline_event_verbosity: `{source.get('pipeline_event_verbosity') or '-'}`",
+        f"- codebase_performance_workorder: `{source.get('codebase_performance_workorder') or '-'}`",
         f"- generated_at: `{report.get('generated_at')}`",
         f"- generation_id: `{report.get('generation_id')}`",
         f"- source_hash: `{report.get('source_hash')}`",
@@ -872,6 +1048,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- swing_lab_source_order_count: `{summary.get('swing_lab_source_order_count')}`",
         f"- threshold_ev_source_order_count: `{summary.get('threshold_ev_source_order_count')}`",
         f"- pipeline_event_verbosity_source_order_count: `{summary.get('pipeline_event_verbosity_source_order_count')}`",
+        f"- codebase_performance_source_order_count: `{summary.get('codebase_performance_source_order_count')}`",
         f"- panic_lifecycle_source_order_count: `{summary.get('panic_lifecycle_source_order_count')}`",
         f"- selected_order_count: `{summary.get('selected_order_count')}`",
         f"- decision_counts: `{summary.get('decision_counts')}`",
@@ -933,8 +1110,12 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
                 f"- confidence: `{item.get('confidence') or '-'}`",
                 f"- priority: `{item.get('priority')}`",
                 f"- runtime_effect: `{item.get('runtime_effect')}`",
+                f"- strategy_effect: `{item.get('strategy_effect')}`",
+                f"- data_quality_effect: `{item.get('data_quality_effect')}`",
+                f"- tuning_axis_effect: `{item.get('tuning_axis_effect')}`",
                 f"- expected_ev_effect: {item.get('expected_ev_effect')}",
                 f"- evidence: {_format_list(item.get('evidence'))}",
+                f"- parity_contract: {item.get('parity_contract') or '-'}",
                 f"- next_postclose_metric: {item.get('next_postclose_metric') or '-'}",
                 f"- files_likely_touched: {_format_list(item.get('files_likely_touched'))}",
                 f"- acceptance_tests: {_format_list(item.get('acceptance_tests'))}",

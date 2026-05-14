@@ -125,7 +125,8 @@ deterministic guard는 AI 제안을 그대로 적용하지 않는다.
 - 값 제안은 family bounds와 `max_step_per_day` 안으로 clamp한다.
 - `sample_window/window_policy`와 맞지 않으면 reject 또는 `hold_sample`로 둔다.
 - `soft_stop_whipsaw_confirmation`, `bad_entry_refined_canary`, `scale_in_price_guard`처럼 rolling/cumulative가 필요한 family는 단일 당일 이상치만으로 live 후보를 승격하지 않는다.
-- `holding_flow_ofi_smoothing`, `score65_74_recovery_probe`처럼 daily_intraday family는 장중 anomaly correction 후보가 될 수 있지만 runtime mutation은 금지하고 다음 장전 apply 후보로만 넘긴다.
+- `holding_flow_ofi_smoothing`처럼 daily_intraday family는 장중 anomaly correction 후보가 될 수 있지만 runtime mutation은 금지하고 다음 장전 apply 후보로만 넘긴다.
+- `score65_74_recovery_probe`, `protect_trailing_smoothing`, `scale_in_price_guard`처럼 rolling/cumulative primary를 가진 family는 daily source가 있더라도 `window_policy_resolution.primary_sample_count` 기준으로 후보 상태를 재평가한다.
 - AI API/parse 실패 시 deterministic calibration artifact는 정상 생성되고 `ai_status=unavailable|parse_rejected`, family item은 `ai_review_state=unavailable`로 남는다.
 
 ## calibration window policy
@@ -138,10 +139,12 @@ family별 기준 window는 다르게 적용한다.
 | `holding_flow_ofi_smoothing` | `daily_intraday` | `rolling_5d` | defer cost/HOLD_DEFER_DANGER는 장중 운영 상태가 빠르게 변하므로 당일 artifact를 우선하되 재발성만 rolling으로 본다. |
 | `protect_trailing_smoothing` | `rolling_10d` | `daily`, `rolling_20d` | 단일 tick/단일 종목이 아니라 반복 이탈과 safety guard를 본다. |
 | `trailing_continuation` | `rolling_10d` | `daily`, `rolling_20d` | GOOD_EXIT 훼손 리스크 때문에 당일 단독 live apply를 금지한다. |
-| `score65_74_recovery_probe` | `daily_intraday` | `rolling_5d`, `cumulative_since_2026-04-21` | BUY drought는 당일 병목을 빠르게 보되 EV/close 우위와 false-positive risk는 rolling으로 확인한다. 전일 `panic_sell_defense.panic_detected` 또는 `panic_state in {PANIC_SELL, RECOVERY_WATCH}`이고 score65~74 표본이 sample floor의 70% 이상, EV/close 우위와 submitted drought guard를 통과하면 `panic_adjusted_ready`로 다음 장전 bounded canary 유지 후보가 될 수 있다. |
+| `score65_74_recovery_probe` | `rolling_5d` | `daily_intraday`, `cumulative_since_2026-04-21` | BUY drought는 당일 병목을 trigger로 쓰되 EV/close 우위와 false-positive risk는 rolling/cumulative 전용 표본으로 확인한다. 당일만으로 회수축 부활 또는 live/bounded canary 승격을 확정하지 않는다. 전일 `panic_sell_defense.panic_detected` 또는 `panic_state in {PANIC_SELL, RECOVERY_WATCH}`이고 score65~74 표본이 sample floor의 70% 이상, EV/close 우위와 submitted drought guard를 통과하면 `panic_adjusted_ready` 후보가 될 수 있지만, 최종 승격은 window policy guard를 통과해야 한다. |
 | `bad_entry_refined_canary` | `rolling_10d` | `daily`, `cumulative_since_2026-04-21` | loser classifier 과적합을 피하기 위해 누적/rolling tail, 당일 safety, 장후 post-sell outcome join을 같이 본다. runtime 후보만으로 배드엔트리 확정 라벨을 붙이지 않는다. |
 | `holding_exit_decision_matrix_advisory` | `latest_report` | `rolling_bucket_context` | 최신 matrix edge가 있어야 하며 bucket confidence는 SAW rolling context를 참조한다. |
 | `scale_in_price_guard` | `rolling_10d` | `cumulative_since_2026-04-21`, `daily` | 물타기/불타기는 체결 표본이 희소하므로 당일만으로 guard 값을 정하지 않는다. |
+
+`threshold_cycle_cumulative`는 `threshold_snapshot_by_window`와 별도로 `calibration_source_bundle_by_window`를 생성한다. pipeline snapshot denominator가 비어 있어도 기존 source report의 rolling/cumulative metric이 있으면 `window_policy_resolution.primary_source_sample_count`로 소비한다. 이때 snapshot과 source denominator가 다르면 `window_policy_audit.rolling_source_snapshot_mismatch`로 표시해 report rendering/source alignment 보강 대상으로 남긴다.
 
 새 관찰축 추가는 기본 금지다. follow-up이 어려운 신규 observe/report axis를 늘리지 않고 BUY 쪽 `buy_funnel_sentinel`, `wait6579_ev_cohort`, `missed_entry_counterfactual`, `performance_tuning`, 보유/청산 쪽 `holding_exit_observation`, `post_sell_feedback`, `holding_exit_sentinel`, `trade_review`, decision-support 쪽 `holding_exit_decision_matrix`, `statistical_action_weight`의 기존 source를 calibration 입력으로 재사용한다. `sentinel_followup`은 2026-05-07 단발 Markdown follow-up으로 현재 calibration 입력에서 제외한다. `preclose_sell_target`은 2026-05-10 제거된 operator review 축이므로 calibration 입력에서 제외한다.
 
@@ -152,6 +155,8 @@ family별 기준 window는 다르게 적용한다.
 `position_sizing_cap_release`는 1주 수량 cap 해제 승인요청 전용 family다. 완벽한 개별 threshold 동시 충족이 아니라 overall EV 중심 efficient trade-off score로 판단한다. 표본, EV floor, severe downside, 주문 실패율만 hard floor로 두고, win rate/full-fill/soft-stop tail/cap opportunity는 가중 점수에 반영한다. 기준이 충족되어도 `allowed_runtime_apply=false`를 유지하며, `calibration_candidates[].human_approval_required=true`, daily EV `approval_requests`, preopen apply `approval_requests`에만 노출한다. 사용자가 승인하기 전에는 신규 BUY, wait6579 probe, REVERSAL_ADD/PYRAMID 모두 1주 cap을 유지한다.
 
 `position_sizing_dynamic_formula`는 cap 해제와 다른 동적수량 산식 튜닝 owner다. 입력은 `score`, `strategy`, `volatility`, `liquidity`, `spread`, `price_band`, `recent_loss`, `portfolio_exposure`로 고정하고, primary metric은 `notional_weighted_ev_pct` 또는 `source_quality_adjusted_ev_pct`를 사용한다. 산식 후보는 source bundle/approval request 근거가 될 수 있지만, sim/probe 단독으로 실주문 cap 해제나 수량 확대를 승인하지 않는다. 실주문 수량 확대는 별도 approval artifact, same-stage owner guard, rollback guard가 닫힌 경우에만 다음 장전 적용 후보로 본다. 상세 구현 단계와 approval schema는 [workorder-position-sizing-dynamic-formula](../../docs/workorder-position-sizing-dynamic-formula.md)를 따른다.
+
+sim-first lifecycle 탐색은 별도 canonical report chain이 아니라 기존 threshold-cycle 자동화체인의 입력 범위와 판정 방식이다. 목적은 `scalp_ai_buy_all`처럼 BUY 확정 이후만 따라가거나 스캘핑 진입만 보는 것이 아니라, 스캘핑과 스윙의 BUY/selection 가능 후보 전체를 `selection -> entry -> holding -> scale_in -> exit` virtual lifecycle로 넓게 실행해 최적 threshold 후보와 기능개선 workorder를 찾는 것이다. 예수금 부족, 1주 cap, current selected family, 실주문 미제출은 sim exclusion 사유가 아니며 `real_blocker`/`actual_order_submitted=false` provenance로만 남긴다. 산출과 승격은 기존 `threshold_cycle_ev`, `threshold_cycle_cumulative`, `runtime_approval_summary`, `code_improvement_workorder`가 소유한다. sim 결과는 실주문 enable/cap 해제/provider 변경/bot restart의 단독 근거가 아니며, 손실이 난 arm은 전체 탐색축 폐기가 아니라 해당 bucket tighten 후보로 라우팅한다.
 
 스윙은 `swing_lifecycle_audit`와 `swing_improvement_automation`이 lifecycle 관찰축과 proposal/workorder를 만들고, `swing_runtime_approval`이 보수적 runtime 승인 요청만 만든다. hard floor는 family sample floor, critical instrumentation gap 없음, DB load gap 없음, fallback diagnostic contamination 없음, severe downside guard, same-stage owner 충돌 없음이다. 그 위에서 `overall_ev 45% + downside_tail 20% + participation/funnel 15% + regime_robustness 10% + attribution_quality 10%`의 `tradeoff_score >=0.68`이면 승인 요청을 생성한다. 완벽한 개별 threshold spot을 찾지 않고 전체 EV trade-off가 충분한 지점을 요청 기준으로 본다. 1차 env 적용 가능 family는 `swing_model_floor`, `swing_selection_top_k`, `swing_gatekeeper_reject_cooldown`, `swing_market_regime_sensitivity`이며, `AVG_DOWN`, `PYRAMID`, exit OFI/QI smoothing, AI contract 변경은 approval request까지만 허용한다.
 

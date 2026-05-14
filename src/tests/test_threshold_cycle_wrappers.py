@@ -29,6 +29,7 @@ def test_postclose_wrapper_runs_swing_daily_simulation_before_lifecycle_audit():
 def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
+    perf_source_idx = script.index("src.engine.codebase_performance_workorder_report")
     pre_ev_idx = script.index('run_threshold_cycle_ev_and_wait "pre_workorder"')
     workorder_idx = script.index("src.engine.build_code_improvement_workorder")
     post_ev_idx = script.index('run_threshold_cycle_ev_and_wait "post_workorder_refresh"')
@@ -36,7 +37,7 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     rebase_renewal_idx = script.index("src.engine.plan_rebase_daily_renewal")
     next_checklist_idx = script.rindex("src.engine.build_next_stage2_checklist")
 
-    assert pre_ev_idx < workorder_idx < post_ev_idx < runtime_summary_idx < rebase_renewal_idx < next_checklist_idx
+    assert perf_source_idx < pre_ev_idx < workorder_idx < post_ev_idx < runtime_summary_idx < rebase_renewal_idx < next_checklist_idx
 
 
 def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_steps():

@@ -44,6 +44,7 @@
 | `data/threshold_cycle/runtime_env/threshold_runtime_env_YYYY-MM-DD.{env,json}` | `threshold_cycle_preopen_apply` | `src/run_bot.sh` | `R5_bounded_calibrated_apply` | `ThresholdUnattendedApply0508` | env override provenance, selected family, source report, generated_at |
 | `data/report/threshold_cycle_ev/threshold_cycle_ev_YYYY-MM-DD.{json,md}` | `threshold_cycle_ev_report` | postclose daily EV submission | `R6_post_apply_attribution` | `ThresholdDailyEVReport0508` | selected families, completed valid PnL, entry funnel, holding/exit latency, calibration decisions, pattern lab automation summary |
 | `data/report/pipeline_event_verbosity/pipeline_event_verbosity_YYYY-MM-DD.{json,md}` + `data/pipeline_event_summaries/pipeline_event_producer_summary_YYYY-MM-DD.jsonl` | `pipeline_event_verbosity_report`, optional producer-side `pipeline_event_logger` compactor | postclose ops/source-quality summary, code improvement workorder source | `R6_post_apply_attribution` support artifact | `PipelineEventCompactionV2Shadow0514` | raw size/line count, high-volume diagnostic share, V1 raw-derived summary vs producer summary parity, suppress eligibility; `decision_authority=diagnostic_aggregation`, `runtime_effect=false`, default compaction mode `off` |
+| `data/report/codebase_performance_workorder/codebase_performance_workorder_YYYY-MM-DD.{json,md}` | `codebase_performance_workorder_report` | postclose ops performance workorder source | `R6_post_apply_attribution` support artifact | `CodebasePerformanceWorkorder0514` | accepted/deferred/rejected performance candidates from `docs/codebase-performance-bottleneck-analysis.md`; `runtime_effect=false`, `strategy_effect=false`, `data_quality_effect=false`, `tuning_axis_effect=false`; user-instructed implementation only |
 | `data/report/runtime_approval_summary/runtime_approval_summary_YYYY-MM-DD.{json,md}` | `runtime_approval_summary` | operator postclose review, next checklist, approval/workorder triage | `R6_post_apply_attribution` read-only summary | `RuntimeApprovalSummary0512` | `warnings`, scalping selected count, swing requested/approved/blocked, `runtime_mutation_allowed=false`; flow 조정/차단 권한 없음 |
 | `data/report/plan_rebase_daily_renewal/plan_rebase_daily_renewal_YYYY-MM-DD.{json,md}` | `plan_rebase_daily_renewal` | Plan Rebase/prompt/AGENTS daily renewal proposal review | `R6_post_apply_attribution` proposal-only artifact | `PlanRebaseDailyRenewal0513` | postclose source bundle 기반 bounded renewal proposal, `document_mutation_allowed=false`, `runtime_mutation_allowed=false`, no file mutation |
 | `data/report/code_improvement_workorder/code_improvement_workorder_YYYY-MM-DD.json` + `docs/code-improvement-workorders/code_improvement_workorder_YYYY-MM-DD.md` | `build_code_improvement_workorder` | Codex implementation session, operator triage | implementation-intake artifact | `CodeImprovementWorkorderReview0512` | `generation_id`, `source_hash`, `lineage`, `decision_counts`, `runtime_effect=false`, `allowed_runtime_apply=false`; 생성만으로 repo/runtime 수정 금지 |
@@ -59,14 +60,15 @@
 
 1. `swing_daily_simulation_report`를 먼저 생성하고, `swing_lifecycle_audit`/`swing_runtime_approval`은 해당 JSON/Markdown이 존재하고 JSON 검증이 끝난 뒤에만 실행한다.
 2. `daily_threshold_cycle_report`는 immutable snapshot/checkpoint를 우선 사용한다. 같은 날짜 retry는 기존 snapshot/checkpoint를 재사용하고 중복 snapshot retention을 정리한다.
-3. `threshold_cycle_ev` pre-pass를 생성해 workorder source로 사용한다.
-4. `pipeline_event_verbosity_report`가 raw volume과 V1/V2 producer summary parity를 생성한다. 이 artifact는 workorder source-quality/ops 입력이며 threshold/order/provider/bot restart 권한이 없다.
-5. `build_code_improvement_workorder`가 code improvement JSON/Markdown을 생성한다.
-6. `threshold_cycle_ev` post-pass를 다시 생성해 workorder summary와 source-quality blocker를 refresh한다.
-7. `runtime_approval_summary`는 refreshed EV/workorder가 닫힌 뒤에만 실행한다.
-8. `plan_rebase_daily_renewal`은 `runtime_approval_summary` 이후 Plan Rebase/prompt/AGENTS 갱신 제안 artifact만 만든다. 기본은 `proposal_only`이며 `document_mutation_allowed=false`, `runtime_mutation_allowed=false`다.
-9. 다음 영업일 checklist를 생성한다.
-10. `threshold_cycle_postclose_verification`이 최신 run의 predecessor wait/fail/timeout과 workorder lineage를 기록한다.
+3. `pipeline_event_verbosity_report`가 raw volume과 V1/V2 producer summary parity를 생성한다. 이 artifact는 workorder source-quality/ops 입력이며 threshold/order/provider/bot restart 권한이 없다.
+4. `codebase_performance_workorder_report`가 코드베이스 성능점검 문서를 workorder source artifact로 변환한다. 이 artifact는 user-instructed performance backlog이며 전략 로직/데이터품질/튜닝축 변경 권한이 없다.
+5. `threshold_cycle_ev` pre-pass를 생성해 workorder source로 사용한다.
+6. `build_code_improvement_workorder`가 code improvement JSON/Markdown을 생성한다.
+7. `threshold_cycle_ev` post-pass를 다시 생성해 workorder summary와 source-quality blocker를 refresh한다.
+8. `runtime_approval_summary`는 refreshed EV/workorder가 닫힌 뒤에만 실행한다.
+9. `plan_rebase_daily_renewal`은 `runtime_approval_summary` 이후 Plan Rebase/prompt/AGENTS 갱신 제안 artifact만 만든다. 기본은 `proposal_only`이며 `document_mutation_allowed=false`, `runtime_mutation_allowed=false`다.
+10. 다음 영업일 checklist를 생성한다.
+11. `threshold_cycle_postclose_verification`이 최신 run의 predecessor wait/fail/timeout과 workorder lineage를 기록한다.
 
 2026-05-12 기준 검증 결과는 `threshold_cycle_postclose_verification_2026-05-12` `status=pass`, `predecessor_wait_count=0`, `timeout_count=0`, workorder `generation_id=2026-05-12-5abbfc31939d`, `source_hash=5abbfc31939dffedcaab60313d1641234dbc026363b0f2842778d63b45f9440a`, `lineage.new_order_ids=[]`, `lineage.removed_order_ids=[]`, `lineage.decision_changed_order_ids=[]`다.
 
@@ -95,7 +97,13 @@ Pipeline Event Compaction V2는 producer-side compactor를 `PIPELINE_EVENT_HIGH_
 
 보관 정책은 runbook의 `Pipeline Event Verbosity/Retention Policy`를 따른다. `compress_db_backfilled_files --days 7`은 verified/backfilled raw와 snapshot만 압축하며, 미검증 파일 삭제나 당일 raw 수동 삭제는 허용하지 않는다.
 
-## 2.4 Metric Decision Contract
+## 2.4 Codebase Performance Workorder Contract
+
+`codebase_performance_workorder_report`는 `docs/codebase-performance-bottleneck-analysis.md`의 성능개선 후보를 자동화체인 source artifact로 승격한다. accepted 후보도 즉시 코드 변경이 아니라 사용자가 별도 구현 지시할 수 있는 workorder 입력이며, 모든 후보는 `runtime_effect=false`, `strategy_effect=false`, `data_quality_effect=false`, `tuning_axis_effect=false`와 parity contract를 가져야 한다.
+
+이 artifact의 금지선은 `runtime_threshold_mutation`, `provider_route_change`, `broker_order_guard_change`, `bot_restart`, `tuning_axis_change`, `source_quality_policy_change`, `raw_forensic_stream_suppression`이다. `kiwoom_orders` transport 재사용, config cache, legacy dashboard DB pool, WS tick parsing, raw suppression처럼 runtime/data-quality semantics가 바뀔 수 있는 후보는 accepted로 승격하지 않고 deferred/rejected로 남긴다.
+
+## 2.5 Metric Decision Contract
 
 자동화 체인이 소비하는 새 관찰지표와 새 report section은 생성 시점에 판정 계약을 함께 선언해야 한다. 계약이 없으면 해당 지표는 `instrumentation_gap` 또는 `source_quality_blocker`로만 라우팅하고, threshold candidate, approval request, runtime env apply 입력으로 쓰지 않는다.
 
@@ -213,7 +221,7 @@ Panic Telegram 안내는 report 결과의 상태 전환만 소비한다. `notify
 8. 적용 후 threshold version별 post-apply attribution과 daily EV report가 생성된다.
 9. 조건 미달은 다음 manifest의 `calibration_state`로 조정한다. safety guard 위반 시에만 `safety_revert_required=true`로 원복 후보 처리한다.
 
-현재 auto-bounded calibration 후보군은 `score65_74_recovery_probe`, `soft_stop_whipsaw_confirmation`, `holding_flow_ofi_smoothing`, `protect_trailing_smoothing`, `holding_exit_decision_matrix_advisory`, `bad_entry_refined_canary` 등이다. 단, 후보군에 있다는 사실은 apply 승인과 다르다. `bad_entry_refined_canary`는 2026-05-12 기준 joined lifecycle 표본 부족으로 observe-only hold이며, `trailing_continuation`은 GOOD_EXIT 훼손 리스크가 커서 report/calibration만 수행하고 live apply는 후순위로 둔다. calibration source는 `threshold_cycle` compact event와 함께 `data/report`의 BUY source(`buy_funnel_sentinel`, `wait6579_ev_cohort`, `missed_entry_counterfactual`, `performance_tuning`), 보유/청산 source(`holding_exit_observation`, `post_sell_feedback`, `trade_review`, `holding_exit_sentinel`), decision-support source(`holding_exit_decision_matrix`, `statistical_action_weight`) 요약을 사용한다. `sentinel_followup`은 2026-05-07 단발 Markdown follow-up으로 현재 source bundle에서 제외한다. `preclose_sell_target`은 2026-05-10 제거되어 source bundle과 traceability inventory에서 제외한다.
+현재 auto-bounded calibration 후보군은 `score65_74_recovery_probe`, `soft_stop_whipsaw_confirmation`, `holding_flow_ofi_smoothing`, `protect_trailing_smoothing`, `holding_exit_decision_matrix_advisory`, `bad_entry_refined_canary` 등이다. 단, 후보군에 있다는 사실은 apply 승인과 다르다. `bad_entry_refined_canary`는 2026-05-12 기준 joined lifecycle 표본 부족으로 observe-only hold이며, `trailing_continuation`은 GOOD_EXIT 훼손 리스크가 커서 report/calibration만 수행하고 live apply는 후순위로 둔다. calibration source는 `threshold_cycle` compact event와 함께 `data/report`의 BUY source(`buy_funnel_sentinel`, `wait6579_ev_cohort`, `missed_entry_counterfactual`, `performance_tuning`), 보유/청산 source(`holding_exit_observation`, `post_sell_feedback`, `trade_review`, `holding_exit_sentinel`), decision-support source(`holding_exit_decision_matrix`, `statistical_action_weight`) 요약을 사용한다. rolling/cumulative primary family는 `threshold_snapshot_by_window`뿐 아니라 창별 `calibration_source_bundle_by_window`를 같이 소비하고, source denominator가 snapshot denominator를 보완한 경우 `window_policy_audit`에 rendering/source alignment gap을 남긴다. `sentinel_followup`은 2026-05-07 단발 Markdown follow-up으로 현재 source bundle에서 제외한다. `preclose_sell_target`은 2026-05-10 제거되어 source bundle과 traceability inventory에서 제외한다.
 
 `calibration_source_bundle.report_only_cleanup_audit`는 source bundle consumer가 없는 report-only/legacy 산출물을 매 실행마다 `source_quality_gate`로 감사한다. 현재 관리 대상은 `sentinel_followup`, policy-disabled `server_comparison`, 정기 full snapshot에서 제외된 legacy `add_blocked_lock`, 제거된 `preclose_sell_target`이다. `cleanup_candidate_count > 0`이면 source-quality warning과 정리 후보로 표면화하지만, 이 audit는 `source_quality_only`이며 runtime threshold, 주문, 자동매수/자동매도, bot restart, provider route 변경 권한이 없다.
 

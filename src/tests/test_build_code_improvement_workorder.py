@@ -203,6 +203,7 @@ def test_build_code_improvement_workorder_adds_pipeline_event_verbosity_order(tm
     monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
     monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", verbosity_dir)
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
     monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
 
@@ -215,6 +216,164 @@ def test_build_code_improvement_workorder_adds_pipeline_event_verbosity_order(tm
     assert report["source"]["pipeline_event_verbosity"] == str(
         verbosity_dir / "pipeline_event_verbosity_2026-05-14.json"
     )
+
+
+def test_build_code_improvement_workorder_adds_window_policy_audit_order(tmp_path, monkeypatch):
+    automation_dir = tmp_path / "automation"
+    ev_dir = tmp_path / "ev"
+    calibration_dir = tmp_path / "calibration"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    for directory in (automation_dir, ev_dir, calibration_dir):
+        directory.mkdir()
+    calibration_path = calibration_dir / "threshold_cycle_calibration_2026-05-14_postclose.json"
+    calibration_path.write_text(
+        json.dumps(
+            {
+                "window_policy_audit": {
+                    "issue_counts": {"rolling_source_snapshot_mismatch": 2},
+                    "items": [
+                        {
+                            "family": "score65_74_recovery_probe",
+                            "primary": "rolling_5d",
+                            "candidate_state": "hold",
+                            "primary_sample_count": 177,
+                            "primary_snapshot_sample_count": 0,
+                            "primary_source_sample_count": 177,
+                            "issues": ["rolling_source_snapshot_mismatch"],
+                        }
+                    ],
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-14.json").write_text(
+        json.dumps({"date": "2026-05-14", "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    (ev_dir / "threshold_cycle_ev_2026-05-14.json").write_text(
+        json.dumps({"sources": {"calibration": str(calibration_path)}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-14", max_orders=3)
+
+    order = next(
+        item
+        for item in report["orders"]
+        if item["order_id"] == "order_threshold_window_policy_source_snapshot_alignment"
+    )
+    assert order["decision"] == "implement_now"
+    assert order["runtime_effect"] is False
+    assert "rolling_source_snapshot_mismatch" in "\n".join(order["evidence"])
+
+
+def test_build_code_improvement_workorder_adds_codebase_performance_orders(tmp_path, monkeypatch):
+    automation_dir = tmp_path / "automation"
+    ev_dir = tmp_path / "ev"
+    perf_dir = tmp_path / "perf"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    for directory in (automation_dir, ev_dir, perf_dir):
+        directory.mkdir()
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-14.json").write_text(
+        json.dumps({"date": "2026-05-14", "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    (ev_dir / "threshold_cycle_ev_2026-05-14.json").write_text("{}", encoding="utf-8")
+    perf_path = perf_dir / "codebase_performance_workorder_2026-05-14.json"
+    perf_path.write_text(
+        json.dumps(
+            {
+                "source_doc_hash": "abc123",
+                "accepted_candidates": [
+                    {
+                        "item_id": "order_perf_buy_funnel_json_scan",
+                        "title": "BUY funnel sentinel field scan without repeated json.dumps",
+                        "risk_tier": "low",
+                        "target_subsystem": "buy_funnel_sentinel",
+                        "priority": 1,
+                        "runtime_effect": False,
+                        "strategy_effect": False,
+                        "data_quality_effect": False,
+                        "tuning_axis_effect": False,
+                        "files_likely_touched": ["src/engine/buy_funnel_sentinel.py"],
+                        "acceptance_tests": ["pytest src/tests/test_buy_funnel_sentinel.py"],
+                        "parity_contract": "classification parity",
+                        "forbidden_uses": ["runtime_threshold_mutation"],
+                    }
+                ],
+                "deferred_candidates": [
+                    {
+                        "item_id": "order_perf_kiwoom_orders_http_session_review",
+                        "title": "Kiwoom orders HTTP session reuse manual review",
+                        "risk_tier": "high",
+                        "target_subsystem": "broker_transport",
+                        "priority": 20,
+                        "runtime_effect": False,
+                        "strategy_effect": False,
+                        "data_quality_effect": False,
+                        "tuning_axis_effect": False,
+                        "files_likely_touched": ["src/engine/kiwoom_orders.py"],
+                        "acceptance_tests": ["pytest src/tests/test_kiwoom_orders.py"],
+                        "parity_contract": "broker request parity",
+                        "defer_reason": "manual broker lifecycle review required",
+                    }
+                ],
+                "rejected_candidates": [
+                    {
+                        "item_id": "order_perf_raw_event_suppression_out_of_scope",
+                        "title": "Raw pipeline event suppression out of scope",
+                        "risk_tier": "high",
+                        "target_subsystem": "pipeline_event_storage",
+                        "priority": 30,
+                        "runtime_effect": False,
+                        "strategy_effect": False,
+                        "data_quality_effect": False,
+                        "tuning_axis_effect": False,
+                        "files_likely_touched": ["src/utils/pipeline_event_logger.py"],
+                        "acceptance_tests": ["pytest pipeline tests"],
+                        "parity_contract": "out of scope",
+                        "defer_reason": "raw suppression excluded",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", perf_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-14", max_orders=10)
+
+    decisions = {item["order_id"]: item["decision"] for item in report["orders"]}
+    assert decisions["order_perf_buy_funnel_json_scan"] == "implement_now"
+    assert decisions["order_perf_kiwoom_orders_http_session_review"] == "defer_evidence"
+    assert decisions["order_perf_raw_event_suppression_out_of_scope"] == "reject"
+    accepted = next(item for item in report["orders"] if item["order_id"] == "order_perf_buy_funnel_json_scan")
+    assert accepted["runtime_effect"] is False
+    assert accepted["strategy_effect"] is False
+    assert accepted["data_quality_effect"] is False
+    assert accepted["tuning_axis_effect"] is False
+    assert accepted["parity_contract"] == "classification parity"
+    assert report["summary"]["codebase_performance_source_order_count"] == 3
+    assert report["source"]["codebase_performance_workorder"] == str(perf_path)
 
 
 def test_build_code_improvement_workorder_adds_panic_lifecycle_orders(tmp_path, monkeypatch):

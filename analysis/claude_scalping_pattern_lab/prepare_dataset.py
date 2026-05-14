@@ -21,6 +21,7 @@ import json
 import logging
 import sys
 from collections import defaultdict
+from collections.abc import Iterable, Iterator
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -59,6 +60,19 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 _DUCKDB_VIEW_READY = False
+_PIPELINE_DUCKDB_COLUMNS = (
+    "stage",
+    "record_id",
+    "stock_code",
+    "emitted_at",
+    "fields_fill_qty",
+    "fields_cum_filled_qty",
+    "fields_requested_qty",
+    "fields_remaining_qty",
+    "fields_fill_quality",
+    "fields_entry_mode",
+    "fields_exit_rule",
+)
 
 
 def _load_json(path: Path) -> dict | None:
@@ -94,6 +108,25 @@ def _load_jsonl(path: Path) -> list[dict]:
     return rows
 
 
+def _iter_jsonl(path: Path) -> Iterator[dict[str, Any]]:
+    try:
+        if path.suffix == ".gz":
+            stream = gzip.open(path, "rt", encoding="utf-8")
+        else:
+            stream = open(path, encoding="utf-8")
+        with stream as f:
+            for raw_line in f:
+                raw_line = raw_line.strip()
+                if not raw_line:
+                    continue
+                try:
+                    yield json.loads(raw_line)
+                except json.JSONDecodeError:
+                    continue
+    except Exception as e:
+        print(f"  [WARN] jsonl stream failed: {path.name} — {e}")
+
+
 def _normalize_pipeline_row(row: dict[str, Any]) -> dict[str, Any]:
     """DuckDB parquet row를 pipeline_event 원형 스키마로 보정."""
     normalized = dict(row)
@@ -122,9 +155,15 @@ def _load_pipeline_rows_from_duckdb(target_date: str) -> list[dict]:
             if not _DUCKDB_VIEW_READY:
                 repo.register_parquet_dataset("pipeline_events")
                 _DUCKDB_VIEW_READY = True
+            stage_placeholders = ", ".join("?" for _ in SEQUENCE_STAGES)
             df = repo.query(
-                "SELECT * FROM v_pipeline_events WHERE emitted_date = ?",
-                [target_date],
+                f"""
+                SELECT {", ".join(_PIPELINE_DUCKDB_COLUMNS)}
+                FROM v_pipeline_events
+                WHERE emitted_date = ?
+                  AND stage IN ({stage_placeholders})
+                """,
+                [target_date, *sorted(SEQUENCE_STAGES)],
             )
         if df.empty:
             return []
@@ -159,15 +198,13 @@ def _load_snapshot_payload(kind: str, target_date: str) -> tuple[dict | None, st
     return None, "none"
 
 
-def _load_pipeline_rows(target_date: str) -> tuple[list[dict], str]:
+def _load_pipeline_rows(target_date: str) -> tuple[Iterable[dict[str, Any]], str]:
     # 신규 아키텍처: DuckDB 우선(옵션) + 파일 fallback + DB fallback
-    def _load_from_file() -> tuple[list[dict], str]:
+    def _load_from_file() -> tuple[Iterable[dict[str, Any]], str]:
         for suffix in (".jsonl", ".jsonl.gz"):
             path = PIPELINE_EVENT_DIR / f"pipeline_events_{target_date}{suffix}"
             if path.exists():
-                rows = _load_jsonl(path)
-                if rows:
-                    return rows, f"jsonl:{suffix}"
+                return _iter_jsonl(path), f"jsonl:{suffix}"
         return [], "none"
 
     candidates = ["duckdb", "jsonl"] if USE_DUCKDB_PRIMARY else ["jsonl", "duckdb"]
@@ -320,7 +357,7 @@ def build_funnel_fact() -> pd.DataFrame:
 # ── sequence_fact 파싱 (JSONL 스트리밍) ──────────────────────────────────────
 
 def _stream_sequence_events(
-    rows: list[dict],
+    rows: Iterable[dict[str, Any]],
     date_str: str,
     server: str,
 ) -> list[dict]:
@@ -471,7 +508,7 @@ def build_sequence_fact() -> tuple[pd.DataFrame, dict[str, Any]]:
         ds = d.isoformat()
         rows, source = _load_pipeline_rows(ds)
         source_count[source] += 1
-        if not rows:
+        if source == "none":
             continue
         covered_dates.add(ds)
         print(f"  streaming pipeline_events_{ds} ({source}) …")

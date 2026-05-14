@@ -201,33 +201,74 @@
 
 ## 장후 체크리스트 (16:30~18:55)
 
-- [ ] `[ThresholdDailyEVReport0514] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-05-14`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
+### PostcloseAutomationHealthCheck20260514 운영 확인 기록
+
+- checked_at: `2026-05-14 19:05 KST`
+- 판정: `pass_with_operational_warnings`
+- 대상: `[Runbook 운영 확인] 장후 자동화체인 상태 확인`, `[ThresholdDailyEVReport0514]`, `[CodeImprovementWorkorderReview0514]`, `[HumanInterventionSummary0514]`, `[PanicEntryFreezeGuardImplementationScope0514]`, `[BotCPUHotspotFollowup0514]`, `[ShadowCanaryCohortReview0514]`
+- 근거: `threshold_cycle_postclose_cron.log` 최신 run은 `[START] threshold-cycle postclose target_date=2026-05-14 started_at=2026-05-14T17:11:35+0900` 이후 `[DONE]`으로 종료했고, `threshold_cycle_postclose_verification_2026-05-14.json`은 status=`pass`, predecessor wait/timeout/log issues=`0`이다. 필수 artifact인 `threshold_cycle_ev`, `code_improvement_workorder`, `runtime_approval_summary`, `swing_daily_simulation`, `swing_lifecycle_audit`, 다음 영업일 checklist가 모두 존재하고 JSON 검증을 통과했다.
+- 운영 warning: `bash deploy/run_error_detection.sh full` 최신 결과는 summary_severity=`warning`이다. `cron_completion`은 `threshold_cycle_postclose`를 `pass`로 보며 `done over error` note를 남겼고, warning은 `artifact_freshness.threshold_events=warning`과 `resource_usage.swap_high_memory_healthy`다. 이는 sparse compact stream/메모리 여유 있는 swap 경고로 분리하며 threshold/provider/order guard, bot restart, broker 주문 상태를 변경하지 않는다.
+- 금지 확인: 장후 확인 과정에서 runtime threshold mutation, provider route 변경, 주문 guard 변경, bot restart, 실주문 전환은 수행하지 않았다.
+- 다음 액션: Project/Calendar 상태는 사용자가 표준 동기화 명령으로 갱신한다. `threshold_events` sparse warning과 swap warning은 운영 관찰로 유지하고, 전략 tuning 결론에는 real/sim/combined split 및 window policy source만 사용한다.
+
+- [x] `[ThresholdDailyEVReport0514] daily EV real/sim/combined split 및 자동 반영 결과 확인` (`Due: 2026-05-14`, `Slot: POSTCLOSE`, `TimeWindow: 16:30~16:45`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-13.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-13.json), [threshold_cycle_cumulative_2026-05-13.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_2026-05-13.json), [threshold_cycle_cumulative_2026-05-12.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_cumulative/threshold_cycle_cumulative_2026-05-12.json), [verify_threshold_cycle_postclose_chain.py](/home/ubuntu/KORStockScan/src/engine/verify_threshold_cycle_postclose_chain.py)
   - 판정 기준: real/sim/combined split, selected/blocked family, runtime_change, warning을 분리해 확인한다. 누적/rolling report는 전일 대비 `completed_valid_cumulative`와 `completed_by_source.real.sample`이 비정상적으로 0 또는 급감하지 않았는지 확인하고, 전일 real 표본이 있는데 당일 real 표본이 0이면 `--skip-db` 오염 또는 DB read 실패로 보고 DB 포함 재생성 후 다시 판정한다.
   - 금지: sim/combined EV만으로 broker execution 품질이나 live 전환을 확정하지 않는다.
   - 다음 액션: `db_sample_ok`, `db_sample_drop_regenerated`, `source_quality_blocker`, `apply_input_ready`, `hold_sample`, `freeze` 중 하나로 닫고, 다음 장전 apply 입력으로 쓸 수 있는 항목과 hold_sample/freeze 항목을 분리한다.
+  - 완료 판정: `db_sample_ok_apply_input_ready_with_warning`.
+  - 완료 근거: 최신 `threshold_cycle_ev_2026-05-14.json`은 generated_at=`2026-05-14T18:49:14+09:00`, runtime_apply status=`auto_bounded_live_ready`, runtime_change=`true`, selected_families=`soft_stop_whipsaw_confirmation`이다. daily EV source split은 real sample=`4`, avg_profit_rate=`-1.0225%`, win_rate=`25.0%`; sim sample=`12`, avg_profit_rate=`3.1658%`, win_rate=`66.67%`; combined sample=`16`, avg_profit_rate=`2.1187%`, win_rate=`56.25%`이며 authority는 real family candidate=`real_only`, sim=`sim_equal_weight`, combined=`diagnostic_only_not_family_candidate_input`으로 분리된다. `threshold_cycle_cumulative_2026-05-14.json`은 completed_valid_cumulative=`177`, cumulative real sample=`177`, sim sample=`12`, combined sample=`189`라 DB sample 급감/`--skip-db` 오염으로 보지 않는다.
+  - 완료 다음 액션: 다음 장전 apply 입력은 selected `soft_stop_whipsaw_confirmation`만 자동 반영 근거로 본다. sim/combined EV는 tuning 후보와 workorder 입력으로만 사용하고 broker execution 품질/실주문 전환 근거로 단독 사용하지 않는다. warning은 `swing_lab_dq` OFI/QI stale/missing `59/1111` source-quality로 분리한다.
 
-- [ ] `[CodeImprovementWorkorderReview0514] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-05-14`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:00`, `Track: ScalpingLogic`)
+- [x] `[SimFirstThresholdExploration0514] 기존 threshold-cycle 체인 내 스캘핑/스윙 전주기 sim-first 범위 확정` (`Due: 2026-05-14`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:05`, `Track: StrategyLogic`)
+  - Source: [plan-korStockScanPerformanceOptimization.rebase.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.rebase.md), [threshold_cycle_ev_2026-05-14.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-14.json), [runtime_approval_summary_2026-05-14.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-05-14.json), [code_improvement_workorder_2026-05-14.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-14.json), [wait6579_ev_cohort_2026-05-14.json](/home/ubuntu/KORStockScan/data/report/monitor_snapshots/wait6579_ev_cohort_2026-05-14.json), [missed_entry_counterfactual_2026-05-14.json](/home/ubuntu/KORStockScan/data/report/monitor_snapshots/missed_entry_counterfactual_2026-05-14.json), [swing_lifecycle_audit_2026-05-14.json](/home/ubuntu/KORStockScan/data/report/swing_lifecycle_audit/swing_lifecycle_audit_2026-05-14.json), [swing_threshold_ai_review_2026-05-14.json](/home/ubuntu/KORStockScan/data/report/swing_threshold_ai_review/swing_threshold_ai_review_2026-05-14.json), [swing_improvement_automation_2026-05-14.json](/home/ubuntu/KORStockScan/data/report/swing_improvement_automation/swing_improvement_automation_2026-05-14.json)
+  - 판정 기준: 신규 standalone report chain을 만들지 않고, 기존 threshold-cycle 자동화체인 안에서 스캘핑과 스윙의 BUY/selection 가능 후보 전체를 `selection -> entry -> holding -> scale_in -> exit` virtual lifecycle universe로 올리는 범위를 확정한다. 예수금 부족, 1주 cap, selected runtime family 미선정, real submit 불가는 sim exclusion이 아니라 `real_blocker` provenance로만 남긴다.
+  - 금지: sim-first source만으로 실주문 enable, cap 해제, provider 변경, bot restart, 장중 runtime threshold mutation을 수행하지 않는다.
+  - 다음 액션: `threshold_cycle_existing_chain_scope_confirmed`, `instrumentation_gap`, `source_quality_blocker`, `defer_to_next_session` 중 하나로 닫는다.
+  - 완료 판정: `threshold_cycle_existing_chain_scope_confirmed`.
+  - 완료 근거: 사용자 범위 정정에 따라 sim-first lifecycle 탐색을 신규 리포트/신규 owner가 아니라 기존 `R0_collect -> R1_daily_report -> R2_cumulative_report -> R3_manifest_only -> R4_preopen_apply_candidate -> R5_bounded_calibrated_apply -> R6_post_apply_attribution` 체인의 입력 범위와 판정 방식으로 고정했다. 스캘핑은 wait/missed-entry/scalp sim source, 스윙은 lifecycle audit/threshold AI review/improvement automation/runtime approval source가 기존 threshold-cycle report, approval summary, code-improvement workorder에 들어가야 한다.
+  - 완료 다음 액션: P2에서는 기존 `threshold_cycle_ev`, `threshold_cycle_cumulative`, `runtime_approval_summary`, `code_improvement_workorder` 내부에서 score/model/gate/entry/holding/scale-in/exit arm을 확장한다. 실주문 enable, cap 해제, provider 변경, bot restart, 장중 runtime threshold mutation은 계속 금지한다.
+
+- [x] `[PostclosePatternLabFailureRecovery0514] postclose pattern lab fatal abort 복구 규칙 반영` (`Due: 2026-05-14`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:20`, `Track: RunbookOps`)
+  - Source: [threshold_cycle_postclose_cron.log](/home/ubuntu/KORStockScan/logs/threshold_cycle_postclose_cron.log), [run_threshold_cycle_postclose.sh](/home/ubuntu/KORStockScan/deploy/run_threshold_cycle_postclose.sh), [prepare_dataset.py](/home/ubuntu/KORStockScan/analysis/claude_scalping_pattern_lab/prepare_dataset.py), [scalping_pattern_lab_automation_2026-05-14.json](/home/ubuntu/KORStockScan/data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_2026-05-14.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정 기준: `claude_scalping_pattern_lab` 등 pattern lab subprocess가 OOM/kill/timeout으로 실패해도 source-quality freshness 경고로 흡수하고, 기존 threshold-cycle 후단 산출물(`scalping_pattern_lab_automation`, `swing_pattern_lab_automation`, `threshold_cycle_ev`, `code_improvement_workorder`, `runtime_approval_summary`, verification)은 계속 생성한다.
+  - 완료 판정: `wrapper_nonfatal_pattern_lab_failure_and_lab_root_fix_completed`.
+  - 완료 근거: `2026-05-14 17:00:28 KST` postclose 실패 원인은 `analysis/claude_scalping_pattern_lab/prepare_dataset.py` kill이었다. 직접 원인은 16:10 postclose 시점에 `2026-05-14` analytics parquet가 아직 없어 `data/pipeline_events/pipeline_events_2026-05-14.jsonl` raw fallback을 통째로 메모리에 올린 것이다. wrapper non-fatal 처리는 후단 EV/workorder/runtime summary 누락을 막기 위한 격리 조치이고, 장애 종결 조건은 별도 root fix와 lab fresh 복구다.
+  - root fix: Claude pattern lab의 DuckDB query를 sequence stage와 필요한 컬럼으로 제한하고, raw JSONL fallback은 `_iter_jsonl` streaming으로 처리하도록 보정했다. 동일 범위 `ANALYSIS_START_DATE=2026-04-21`, `ANALYSIS_END_DATE=2026-05-14` 재실행 결과 Claude lab은 20초에 완료됐고 `max_rss=767660KB`, `claude_fresh=true`, `coverage_end=2026-05-14`로 복구됐다.
+  - 추가 복구 메모: 같은 날짜 복구 재실행에서 완료 checkpoint가 source 끝에 도달한 상태인데도 availability sampler가 `disk_read_mb_delta>=128`로 latest cron 실패를 만들 수 있어, 완료 checkpoint replay는 sampler 없이 `completed`로 통과하도록 backfill guard를 보정했다.
+  - 금지: pattern lab 실패를 이유로 실주문 guard, threshold, provider, bot restart, sim scope를 수동 변경하지 않는다.
+  - 복구 액션: same-day `scalping_pattern_lab_automation`, `threshold_cycle_ev`, `code_improvement_workorder`, `runtime_approval_summary`, `threshold_cycle_postclose_verification`을 재생성해 stale Claude 입력을 제거했다.
+
+- [x] `[CodeImprovementWorkorderReview0514] code improvement workorder 구현 필요 여부 및 Codex 지시 대상 확인` (`Due: 2026-05-14`, `Slot: POSTCLOSE`, `TimeWindow: 16:45~17:00`, `Track: ScalpingLogic`)
   - Source: [code_improvement_workorder_2026-05-13.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-13.md), [code_improvement_workorder_2026-05-13.json](/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-13.json)
   - 판정 기준: selected_order_count=12와 `implement_now`, `attach_existing_family`, `design_family_candidate`, `reject` 분류를 확인한다.
   - 기준 메모: 2026-05-13 2-pass 구현 후 최신 workorder generation_id=`2026-05-13-855236ba6498`는 `implement_now:0`이다. `order_holding_exit_decision_matrix_edge_counterfactual`은 removed, `order_latency_guard_miss_ev_recovery`는 `attach_existing_family(pre_submit_price_guard)`로 재분류됐다.
   - 금지: code-improvement workorder를 자동 repo 수정으로 취급하지 않는다. 사용자가 Codex 구현을 지시한 경우에만 실행한다.
   - 다음 액션: 구현 필요, 설계 보류, reject, already_implemented 중 하나로 닫는다.
+  - 완료 판정: `already_implemented_2pass_no_new_runtime_effect_false`.
+  - 완료 근거: 최신 `code_improvement_workorder_2026-05-14.json`은 generation_id=`2026-05-14-3924b7a14fb5`, selected_order_count=`12`, source_order_count=`38`, decision_counts=`implement_now:9`, `attach_existing_family:7`, `design_family_candidate:6`, `defer_evidence:10`, `reject:6`이다. 사용자가 지시한 2-pass 구현 이후 lineage는 previous=`2026-05-14-4a6ef2164d8e` 대비 new/removed/decision_changed=`0`이고, selected non-implement는 `order_ai_threshold_dominance`, `order_ai_threshold_miss_ev_recovery`, `order_latency_guard_miss_ev_recovery` 3건 모두 `attach_existing_family`다.
+  - 완료 다음 액션: 현재 selected `implement_now` 9건은 runtime_effect=`false` 성능/계측/report/provenance 범위로 구현·검증 완료된 항목으로 분리한다. 신규 workorder 구현은 열지 않고, 5/15 `CodeImprovementWorkorderReview0515`에서 새 lineage 변화와 non-implement triage를 다시 본다.
 
-- [ ] `[HumanInterventionSummary0514] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-05-14`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
+- [x] `[HumanInterventionSummary0514] 자동화체인 사용자 개입 요구사항 분류 및 누락 확인` (`Due: 2026-05-14`, `Slot: POSTCLOSE`, `TimeWindow: 17:00~17:15`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-13.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-13.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - 판정 기준: 개입사항을 `승인 artifact 필요`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`으로 분류한다.
   - 금지: 자동화 산출물에 있는 요청을 답변에만 남기고 checklist/Project 대상에서 누락하지 않는다.
   - 다음 액션: 누락된 항목이 있으면 다음 영업일 checklist에 parser-friendly checkbox로 추가한다.
+  - 완료 판정: `classified_no_new_checklist_gap`.
+  - 완료 근거: 승인 artifact 필요 항목은 `swing_runtime_approval_2026-05-14.json`의 `swing_model_floor`, `swing_gatekeeper_reject_cooldown` 2건이며 approved=`0`, runtime_change=`false`, 별도 approval artifact가 없으므로 다음 장전 env/실주문 적용 금지다. `runtime_approval_summary_2026-05-14.json` 기준 scalping selected_auto_bounded_live는 `soft_stop_whipsaw_confirmation` 1건뿐이고, panic approval requested는 `0`이다. Codex 구현 필요는 5/14 workorder 2-pass에서 이미 처리됐고 신규 lineage 변화는 없다. 수동 동기화 필요는 Project/Calendar 표준 명령 1건이다.
+  - 완료 다음 액션: 5/15 checklist에는 preopen swing approval artifact 확인, postclose workorder review, human intervention summary가 이미 생성되어 있으므로 신규 parser-friendly checkbox를 추가하지 않는다. approval artifact 없는 swing/panic/position sizing 실주문 전환은 계속 금지한다.
 
-- [ ] `[PanicEntryFreezeGuardImplementationScope0514] panic_entry_freeze_guard 구현 착수 범위 및 approval guard 확인` (`Due: 2026-05-14`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:30`, `Track: RuntimeStability`)
+- [x] `[PanicEntryFreezeGuardImplementationScope0514] panic_entry_freeze_guard 구현 착수 범위 및 approval guard 확인` (`Due: 2026-05-14`, `Slot: POSTCLOSE`, `TimeWindow: 17:15~17:30`, `Track: RuntimeStability`)
   - Source: [panic_entry_freeze_guard_v2_2026-05-13.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/panic_entry_freeze_guard_v2_2026-05-13.md), [runtime_approval_summary_2026-05-13.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-05-13.json), [panic_sell_defense_2026-05-13.json](/home/ubuntu/KORStockScan/data/report/panic_sell_defense/panic_sell_defense_2026-05-13.json), [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py), [daily_threshold_cycle_report.py](/home/ubuntu/KORStockScan/src/engine/daily_threshold_cycle_report.py), [runtime_approval_summary.py](/home/ubuntu/KORStockScan/src/engine/runtime_approval_summary.py), [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)
   - 판정 기준: `panic_entry_freeze_guard` 현재 구현 여부를 `report_only_candidate_only`, `approval_env_contract_ready`, `entry_hook_ready_flag_off`, `implementation_workorder_opened`, `hold_report_only`, `defer_attribution_gap` 중 하나로 닫는다. implementation open 시 1차는 approval artifact loader/env mapping/report attribution/runtime approval summary, 2차는 feature flag OFF 기본의 entry pre-submit hook/provenance로 분리한다.
   - 구현 체크: approval artifact 경로 `data/threshold_cycle/approvals/panic_entry_freeze_guard_YYYY-MM-DD.json`, `KORSTOCKSCAN_PANIC_ENTRY_FREEZE_GUARD_*` env key mapping, stale panic source guard, same-stage owner conflict guard, `panic_entry_freeze_block` event의 `actual_order_submitted=false` provenance가 모두 테스트 대상인지 확인한다.
   - 금지: approval artifact, rollback guard, same-stage owner rule이 닫히기 전에는 신규 BUY 차단, score threshold 완화/동결, stop 완화/지연, 자동매도, bot restart, 스윙 실주문 전환을 수행하지 않는다.
   - 다음 액션: 구현 착수 시 runtime 기본값은 OFF로 유지하고, `src/tests/test_threshold_cycle_preopen_apply.py`, `src/tests/test_daily_threshold_cycle_report.py`, `src/tests/test_runtime_approval_summary.py`와 entry hook 단위 테스트를 추가/수정한다. 실제 신규 BUY block은 별도 approval artifact와 preopen apply manifest 확인 전까지 열지 않는다.
+  - 완료 판정: `hold_report_only`.
+  - 완료 근거: 최신 `panic_sell_defense_2026-05-14.json`은 panic_state=`NORMAL`이고 `panic_entry_freeze_guard` candidate status=`inactive_no_panic`, allowed_runtime_apply=`false`다. microstructure context는 market_risk_state=`NEUTRAL`, risk_off_advisory_count=`0`, confirmed_risk_off_advisory=`false`이며, runtime summary에서도 panic approval requested=`0`이다. 따라서 approval env contract/entry hook 구현 착수보다 report-only candidate 유지가 맞다.
+  - 완료 다음 액션: `panic_entry_freeze_guard_v2_2026-05-13.md`는 설계 기준으로 보존한다. PANIC_SELL 또는 confirmed risk-off가 반복되고 approval artifact/rollback guard/same-stage owner rule이 닫힐 때만 별도 implementation workorder를 연다.
 
-- [ ] `[BotCPUHotspotFollowup0514] 장후 bot CPU hotspot throttle/worker split 후속 범위 확인` (`Due: 2026-05-14`, `Slot: POSTCLOSE`, `TimeWindow: 18:20~18:40`, `Track: RuntimeStability`)
+- [x] `[BotCPUHotspotFollowup0514] 장후 bot CPU hotspot throttle/worker split 후속 범위 확인` (`Due: 2026-05-14`, `Slot: POSTCLOSE`, `TimeWindow: 18:20~18:40`, `Track: RuntimeStability`)
   - Source: [2026-05-13-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-13-stage2-todo-checklist.md), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [bot_main.py](/home/ubuntu/KORStockScan/src/bot_main.py), [pipeline_event_logger.py](/home/ubuntu/KORStockScan/src/utils/pipeline_event_logger.py), [compress_db_backfilled_files.py](/home/ubuntu/KORStockScan/src/engine/compress_db_backfilled_files.py), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - 판정 기준: 5/13 장후 `scanner_loop_throttle_required` 판정의 재현 여부와 5/14 `pipeline_event_storage_pressure`를 분리 확인하고, 장외 스캘핑 scanner throttle, pipeline event verbosity/throttle, pipeline logging batching, 별도 worker/process split 중 구현 범위를 하나로 좁힌다.
   - 금지: 장중 hot patch, bot restart, threshold/provider/order guard 변경, profiler 패키지 설치를 수행하지 않는다.
@@ -239,13 +280,21 @@
   - P3 실행 메모(2026-05-14): Pipeline Event Compaction V2는 producer-side `PIPELINE_EVENT_HIGH_VOLUME_COMPACTION_MODE=off|shadow|suppress` 인터페이스와 `pipeline_event_verbosity_report`를 자동화체인에 편입했다. 기본값은 `off`이고 `shadow`는 raw JSONL/DB upsert를 보존하면서 `data/pipeline_event_summaries/pipeline_event_producer_summary_YYYY-MM-DD.jsonl`과 manifest만 생성한다. `suppress`는 구현돼도 기본 비활성이며 2영업일 이상 V1 raw-derived summary parity 통과와 별도 approval owner 전에는 열지 않는다.
   - P3 자동화체인 메모: `deploy/run_threshold_cycle_postclose.sh`는 code improvement workorder 생성 전에 `data/report/pipeline_event_verbosity/pipeline_event_verbosity_YYYY-MM-DD.{json,md}`를 생성하고, `build_code_improvement_workorder`는 `order_pipeline_event_compaction_v2_shadow`/`order_pipeline_event_compaction_v2_suppress_guard`를 instrumentation order로 분류한다. `threshold_cycle_ev_report`에는 ops/source-quality summary로만 노출하며, `artifact_freshness`와 `error_detector_coverage`에도 등록했다.
   - P3 금지선: V2 summary와 verbosity report는 `decision_authority=diagnostic_aggregation`, `runtime_effect=false`다. 실주문 승인, threshold apply, EV primary metric, provider route, bot restart, 실매매 cap 해제의 단독 근거로 쓰지 않는다.
+  - P4 실행 메모(2026-05-14): `docs/codebase-performance-bottleneck-analysis.md`를 자동화체인 source artifact로 승격하는 `codebase_performance_workorder_report`를 추가했다. 산출물은 `data/report/codebase_performance_workorder/codebase_performance_workorder_YYYY-MM-DD.{json,md}`이고, `build_code_improvement_workorder`는 accepted 성능 후보를 `implement_now`, deferred/rejected 후보를 각각 `defer_evidence`/`reject`로 분류한다. 모든 후보는 `runtime_effect=false`, `strategy_effect=false`, `data_quality_effect=false`, `tuning_axis_effect=false`와 parity contract를 가져야 한다.
+  - P4 금지선: 이번 작업은 성능개선 자체 실행이 아니라 workorder source 편입이다. 실주문 수량/주문가, threshold, provider route, bot restart, 관찰튜닝축, source-quality 정책, raw forensic stream은 변경하지 않는다.
   - 다음 액션: `scanner_loop_throttle_workorder`, `worker_split_workorder`, `logging_batching_workorder`, `pipeline_event_verbosity_compaction_workorder`, `observe_only_no_action` 중 하나로 닫는다.
+  - 완료 판정: `pipeline_event_verbosity_compaction_workorder_completed`.
+  - 완료 근거: 5/13의 장후 CPU hotspot은 5/14에 slim sentinel cache, BUY summary sidecar, producer-side compaction V2 shadow interface, pipeline event verbosity report, codebase performance workorder source 편입으로 좁혀 처리했다. 최신 `pipeline_event_verbosity_2026-05-14.json`은 state=`v2_shadow_missing`, recommended_workorder_state=`open_shadow_order`로 raw suppression 없이 diagnostic aggregation만 남기며, `codebase_performance_workorder_2026-05-14.json`은 accepted performance 후보 `7`, deferred `3`, rejected `2`를 runtime_effect=`false` contract로 분리했다. 최신 error detector는 process_health pass, CPU busy `47.04%`, 메모리 여유 `10129.9MB`, swap_high_memory_healthy warning만 보고한다.
+  - 완료 다음 액션: worker/process split은 현 시점에 열지 않는다. V2 shadow parity와 accepted performance workorder는 다음 5/15 postclose workorder review에서 lineage/효과를 다시 확인한다.
 
-- [ ] `[ShadowCanaryCohortReview0514] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-14`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
+- [x] `[ShadowCanaryCohortReview0514] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-14`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)
   - 판정 기준: 당일 변경/관찰 결과를 기준으로 `remove`, `observe-only`, `baseline-promote`, `active-canary` 상태 변동 여부를 닫는다.
   - 금지: shadow 금지, canary-only, baseline 승격 원칙을 코드/문서 상태와 분리하지 않는다.
   - 다음 액션: 변경이 있으면 기준문서와 checklist를 함께 갱신하고 cohort 잠금 필드를 남긴다.
+  - 완료 판정: `no_runtime_classification_change_with_snapshot_update`.
+  - 완료 근거: 최신 runtime approval summary 기준 scalping selected_auto_bounded_live는 `soft_stop_whipsaw_confirmation` 1건뿐이다. `score65_74_recovery_probe`는 selected runtime이 아니라 existing entry family 유지/관찰로 분리되고, `bad_entry_refined_canary`는 adjust_up 점수지만 current_application=`OFF/관찰 only`라 live 승격이 아니다. `pipeline_event_compaction_v2_shadow`는 default `off`, shadow는 raw JSONL/DB upsert 보존 조건의 diagnostic aggregation일 뿐 active canary가 아니다. 스윙은 approval_required 2건/approved 0건이며 실주문 전환 없음, panic entry freeze는 inactive_no_panic/report-only다.
+  - 완료 다음 액션: `workorder-shadow-canary-runtime-classification.md`에 2026-05-14 postclose snapshot addendum을 반영했다. 신규 remove/baseline-promote/active-canary 전환은 없고, 5/15 postclose에서 selected runtime family와 V2 shadow parity를 재확인한다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_END -->
 
@@ -256,3 +305,18 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-05-14 15:48:29`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-05-14.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->

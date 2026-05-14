@@ -46,16 +46,17 @@ def load_json_line(path: Path | str | None) -> dict[str, Any]:
     if not target.exists():
         return {}
     payload: dict[str, Any] = {}
-    for raw_line in target.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = raw_line.strip()
-        if not line.startswith("{") or not line.endswith("}"):
-            continue
-        try:
-            parsed = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(parsed, dict):
-            payload = parsed
+    with target.open("r", encoding="utf-8", errors="replace") as handle:
+        for raw_line in handle:
+            line = raw_line.strip()
+            if not line.startswith("{") or not line.endswith("}"):
+                continue
+            try:
+                parsed = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                payload = parsed
     return payload
 
 
