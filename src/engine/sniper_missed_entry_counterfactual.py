@@ -8,7 +8,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from src.utils.constants import DATA_DIR
+from src.engine import kiwoom_orders
+from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.logger import log_error
 
 
@@ -78,6 +79,48 @@ def _safe_float(value, default: float = 0.0) -> float:
         return float(value)
     except Exception:
         return default
+
+
+def _sim_virtual_budget_krw() -> int:
+    return max(0, int(getattr(TRADING_RULES, "SIM_VIRTUAL_BUDGET_KRW", 10_000_000) or 0))
+
+
+def _scalp_ratio_from_score(ai_score: float) -> float:
+    min_ratio = float(getattr(TRADING_RULES, "INVEST_RATIO_SCALPING_MIN", 0.07) or 0.07)
+    max_ratio = float(getattr(TRADING_RULES, "INVEST_RATIO_SCALPING_MAX", 0.22) or 0.22)
+    score = max(0.0, min(100.0, float(ai_score or 0.0)))
+    return min_ratio + (score / 100.0) * (max_ratio - min_ratio)
+
+
+def _sim_virtual_qty(entry_price: int, ai_score: float) -> dict:
+    virtual_budget = _sim_virtual_budget_krw()
+    ratio = _scalp_ratio_from_score(ai_score)
+    max_budget = int(getattr(TRADING_RULES, "SCALPING_MAX_BUY_BUDGET_KRW", 0) or 0)
+    if entry_price <= 0 or virtual_budget <= 0:
+        return {
+            "qty": 0,
+            "ratio": ratio,
+            "virtual_budget_krw": virtual_budget,
+            "target_budget": 0,
+            "safe_budget": 0,
+            "safety_ratio": 0.0,
+            "max_budget": max_budget,
+        }
+    target_budget, safe_budget, qty, safety_ratio = kiwoom_orders.describe_buy_capacity(
+        entry_price,
+        virtual_budget,
+        ratio,
+        max_budget=max_budget,
+    )
+    return {
+        "qty": max(1, _safe_int(qty, 0)),
+        "ratio": ratio,
+        "virtual_budget_krw": virtual_budget,
+        "target_budget": target_budget,
+        "safe_budget": safe_budget,
+        "safety_ratio": safety_ratio,
+        "max_budget": max_budget,
+    }
 
 
 def _avg(values: list[float]) -> float:
@@ -546,7 +589,8 @@ def build_missed_entry_counterfactual_report(
         metrics_10m = _compute_window_metrics(candidate, candles, 10)
         outcome = _classify_candidate(metrics_5m, metrics_10m)
         entry_price_used = _safe_int(metrics_10m.get("entry_price_used"), 0)
-        qty = _safe_int(candidate.get("target_qty"), 0)
+        capacity = _sim_virtual_qty(entry_price_used, _safe_float(candidate.get("ai_score"), 0.0))
+        qty = _safe_int(capacity.get("qty"), 0)
         est_pnl_10m = int(round(entry_price_used * qty * (_safe_float(metrics_10m.get("close_ret_pct"), 0.0) / 100.0))) if entry_price_used > 0 and qty > 0 else 0
         evaluations.append(
             {
@@ -556,6 +600,17 @@ def build_missed_entry_counterfactual_report(
                 "metrics_10m": metrics_10m,
                 "entry_price_used": entry_price_used,
                 "price_source": "explicit_target_buy_price" if _safe_int(candidate.get("signal_price"), 0) > 0 else "minute_candle_proxy",
+                "counterfactual_qty": int(qty),
+                "counterfactual_qty_source": "sim_virtual_budget_dynamic_formula" if qty > 0 else "unpriced",
+                "virtual_budget_override": True,
+                "virtual_budget_krw": int(capacity.get("virtual_budget_krw") or 0),
+                "counterfactual_ratio": round(float(capacity.get("ratio") or 0.0), 4),
+                "counterfactual_target_budget": int(capacity.get("target_budget") or 0),
+                "counterfactual_safe_budget": int(capacity.get("safe_budget") or 0),
+                "counterfactual_safety_ratio": round(float(capacity.get("safety_ratio") or 0.0), 4),
+                "counterfactual_max_budget": int(capacity.get("max_budget") or 0),
+                "counterfactual_notional_krw": int(entry_price_used * qty) if entry_price_used > 0 and qty > 0 else 0,
+                "real_target_qty_observed": _safe_int(candidate.get("target_qty"), 0),
                 "estimated_counterfactual_pnl_10m_krw": est_pnl_10m,
             }
         )
@@ -663,6 +718,10 @@ def build_missed_entry_counterfactual_report(
             "signal_price": int(_safe_int(item.get("signal_price"), 0)),
             "entry_price_used": int(_safe_int(item.get("entry_price_used"), 0)),
             "target_qty": int(_safe_int(item.get("target_qty"), 0)),
+            "counterfactual_qty": int(_safe_int(item.get("counterfactual_qty"), 0)),
+            "counterfactual_qty_source": str(item.get("counterfactual_qty_source") or ""),
+            "virtual_budget_krw": int(_safe_int(item.get("virtual_budget_krw"), 0)),
+            "counterfactual_notional_krw": int(_safe_int(item.get("counterfactual_notional_krw"), 0)),
             "ai_score": round(_safe_float(item.get("ai_score"), 0.0), 1),
             "price_source": str(item.get("price_source") or "minute_candle_proxy"),
             "confidence_tier": _confidence_tier(item),

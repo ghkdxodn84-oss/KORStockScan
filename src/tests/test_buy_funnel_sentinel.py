@@ -193,3 +193,247 @@ def test_followup_route_is_report_only_for_upstream_threshold(monkeypatch, tmp_p
     assert report["followup"]["route"] == "score65_74_counterfactual_review"
     assert report["followup"]["operator_action_required"] is False
     assert report["followup"]["runtime_effect"] == "report_only_no_mutation"
+
+
+def test_use_cache_reads_only_appended_raw_bytes(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event("2026-05-06", "10:00:00", "ai_confirmed", record_id=1),
+            _event("2026-05-06", "10:01:00", "blocked_ai_score", record_id=2, fields={"score": "65"}),
+        ],
+    )
+
+    first = sentinel.build_buy_funnel_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:05:00"),
+        use_cache=True,
+    )
+    assert first["event_load"]["cache_enabled"] is True
+    assert first["current"]["session"]["stage_unique"]["ai_confirmed"] == 1
+
+    event_path = tmp_path / "pipeline_events" / "pipeline_events_2026-05-06.jsonl"
+    with event_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                _event("2026-05-06", "10:06:00", "ai_confirmed", record_id=3),
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+
+    second = sentinel.build_buy_funnel_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:10:00"),
+        use_cache=True,
+    )
+    assert second["current"]["session"]["stage_unique"]["ai_confirmed"] == 2
+    meta_path = tmp_path / "runtime" / "sentinel_event_cache" / "buy_funnel_sentinel_events_2026-05-06.meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["cache_event_count"] == 3
+    assert meta["appended_raw_lines"] == 1
+
+
+def test_use_summary_counts_high_volume_blockers_and_keeps_lossless_cache_slim(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event("2026-05-06", "10:00:00", "ai_confirmed", record_id=1),
+            _event(
+                "2026-05-06",
+                "10:00:10",
+                "blocked_strength_momentum",
+                record_id=2,
+                fields={"reason": "below_buy_ratio", "buy_ratio": "0.41", "strategy": "SCALP"},
+            ),
+            _event(
+                "2026-05-06",
+                "10:00:20",
+                "blocked_strength_momentum",
+                record_id=3,
+                fields={"reason": "below_buy_ratio", "buy_ratio": "0.43", "strategy": "SCALP"},
+            ),
+            _event(
+                "2026-05-06",
+                "10:01:00",
+                "strength_momentum_observed",
+                record_id=4,
+                fields={"buy_ratio": "0.44"},
+            ),
+        ],
+    )
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:05:00"),
+        use_cache=True,
+        use_summary=True,
+    )
+
+    assert report["event_load"]["summary_status"] == "ok"
+    assert report["event_load"]["summary_lossless_cache_excludes_summary_stages"] is True
+    assert report["current"]["session"]["stage_unique"]["ai_confirmed"] == 1
+    assert report["current"]["session"]["stage_events"]["blocked_strength_momentum"] == 2
+    assert report["current"]["session"]["stage_events"]["strength_momentum_observed"] == 1
+    assert report["current"]["session"]["blocker_top"][0] == {
+        "label": "blocked_strength_momentum:below_buy_ratio",
+        "count": 2,
+    }
+
+    meta_path = tmp_path / "runtime" / "sentinel_event_cache" / "buy_funnel_sentinel_events_2026-05-06.meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["schema_version"] == sentinel.LOSSLESS_EVENT_CACHE_SCHEMA_VERSION
+    assert meta["cache_event_count"] == 1
+
+
+def test_summary_window_counts_bucket_boundary_by_second(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event(
+                "2026-05-06",
+                "10:04:20",
+                "blocked_overbought",
+                record_id=1,
+                fields={"reason": "near_day_high"},
+            ),
+            _event(
+                "2026-05-06",
+                "10:04:40",
+                "blocked_overbought",
+                record_id=2,
+                fields={"reason": "near_day_high"},
+            ),
+            _event(
+                "2026-05-06",
+                "10:05:10",
+                "blocked_overbought",
+                record_id=3,
+                fields={"reason": "near_day_high"},
+            ),
+        ],
+    )
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:05:30"),
+        windows_min=(1,),
+        use_summary=True,
+    )
+
+    assert report["current"]["session"]["blocker_top"][0]["count"] == 3
+    assert report["current"]["windows"]["1m"]["blocker_top"][0] == {
+        "label": "blocked_overbought:near_day_high",
+        "count": 2,
+    }
+
+
+def test_summary_end_boundary_matches_raw_microsecond_exclusion(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event(
+                "2026-05-06",
+                "10:04:59.900000",
+                "blocked_overbought",
+                record_id=1,
+                fields={"reason": "near_day_high"},
+            ),
+            _event(
+                "2026-05-06",
+                "10:05:00.100000",
+                "blocked_overbought",
+                record_id=2,
+                fields={"reason": "near_day_high"},
+            ),
+        ],
+    )
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:05:00"),
+        windows_min=(1,),
+        use_summary=True,
+    )
+
+    assert report["current"]["session"]["blocker_top"][0] == {
+        "label": "blocked_overbought:near_day_high",
+        "count": 1,
+    }
+
+
+def test_summary_stage_actual_order_payload_stays_lossless_without_double_count(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event(
+                "2026-05-06",
+                "10:00:00",
+                "blocked_overbought",
+                record_id=1,
+                fields={"reason": "near_day_high", "actual_order_submitted": "true"},
+            )
+        ],
+    )
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:05:00"),
+        use_cache=True,
+        use_summary=True,
+    )
+
+    assert report["current"]["session"]["stage_events"]["blocked_overbought"] == 1
+    assert report["current"]["session"]["blocker_top"][0] == {
+        "label": "blocked_overbought:near_day_high",
+        "count": 1,
+    }
+    meta_path = tmp_path / "runtime" / "sentinel_event_cache" / "buy_funnel_sentinel_events_2026-05-06.meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["cache_event_count"] == 1
+
+
+def test_summary_failure_falls_back_to_raw_events(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event(
+                "2026-05-06",
+                "10:00:00",
+                "blocked_swing_gap",
+                record_id=1,
+                fields={"reason": "gap_pct_high"},
+            )
+        ],
+    )
+
+    monkeypatch.setattr(
+        sentinel,
+        "load_pipeline_event_summaries",
+        lambda target_date: ([], {"enabled": True, "status": "summary_unavailable"}),
+    )
+
+    report = sentinel.build_buy_funnel_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:05:00"),
+        use_summary=True,
+    )
+
+    assert report["event_load"]["summary_status"] == "summary_unavailable"
+    assert report["event_load"]["fallback_to_raw_cache"] is True
+    assert report["current"]["session"]["blocker_top"][0] == {
+        "label": "blocked_swing_gap:gap_pct_high",
+        "count": 1,
+    }

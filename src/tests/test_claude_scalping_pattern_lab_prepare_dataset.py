@@ -1,0 +1,93 @@
+import json
+
+from analysis.claude_scalping_pattern_lab import prepare_dataset as prepare
+
+
+def test_claude_pattern_lab_jsonl_fallback_is_streaming(monkeypatch, tmp_path):
+    event_dir = tmp_path / "pipeline_events"
+    event_dir.mkdir()
+    target = "2026-05-14"
+    path = event_dir / f"pipeline_events_{target}.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "stage": "holding_started",
+                        "record_id": 1,
+                        "stock_code": "005930",
+                        "emitted_at": f"{target}T09:00:00",
+                        "fields": {},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "stage": "position_rebased_after_fill",
+                        "record_id": 1,
+                        "stock_code": "005930",
+                        "emitted_at": f"{target}T09:00:01",
+                        "fields": {
+                            "fill_qty": "1",
+                            "cum_filled_qty": "1",
+                            "requested_qty": "1",
+                            "fill_quality": "FULL_FILL",
+                            "entry_mode": "normal",
+                        },
+                    }
+                ),
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(prepare, "PIPELINE_EVENT_DIR", event_dir)
+    monkeypatch.setattr(prepare, "USE_DUCKDB_PRIMARY", False)
+
+    rows, source = prepare._load_pipeline_rows(target)
+
+    assert source == "jsonl:.jsonl"
+    assert not isinstance(rows, list)
+    parsed = prepare._stream_sequence_events(rows, target, prepare.SERVER_LOCAL)
+    assert len(parsed) == 1
+    assert parsed[0]["trade_id"] == 1
+    assert parsed[0]["holding_started_count"] == 1
+    assert parsed[0]["rebase_count"] == 1
+
+
+def test_claude_pattern_lab_duckdb_query_is_column_bounded(monkeypatch):
+    captured = {}
+
+    class _FakeFrame:
+        empty = True
+
+        def to_dict(self, orient):
+            return []
+
+    class _FakeRepo:
+        def __init__(self, read_only=False):
+            self.read_only = read_only
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            return None
+
+        def register_parquet_dataset(self, dataset):
+            return True
+
+        def query(self, sql, params):
+            captured["sql"] = sql
+            captured["params"] = params
+            return _FakeFrame()
+
+    monkeypatch.setattr(prepare, "DUCKDB_AVAILABLE", True)
+    monkeypatch.setattr(prepare, "TuningDuckDBRepository", _FakeRepo)
+    monkeypatch.setattr(prepare, "_DUCKDB_VIEW_READY", False)
+
+    assert prepare._load_pipeline_rows_from_duckdb("2026-05-14") == []
+    sql = " ".join(captured["sql"].split())
+
+    assert "SELECT *" not in sql
+    assert "stage IN" in sql
+    assert "fields_json" not in sql
+    assert captured["params"][0] == "2026-05-14"

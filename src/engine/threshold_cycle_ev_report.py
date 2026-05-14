@@ -407,6 +407,79 @@ def _code_improvement_workorder_summary(target_date: str) -> tuple[dict[str, Any
     )
 
 
+def _pipeline_event_verbosity_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+    json_path = REPORT_DIR / "pipeline_event_verbosity" / f"pipeline_event_verbosity_{target_date}.json"
+    payload = _load_json(json_path)
+    if not payload:
+        return (
+            {
+                "available": False,
+                "artifact": None,
+                "state": "missing",
+                "recommended_workorder_state": "missing",
+            },
+            None,
+            ["pipeline_event_verbosity_missing"],
+        )
+    raw = payload.get("raw_stream") if isinstance(payload.get("raw_stream"), dict) else {}
+    parity = payload.get("parity") if isinstance(payload.get("parity"), dict) else {}
+    return (
+        {
+            "available": True,
+            "artifact": str(json_path),
+            "state": payload.get("state"),
+            "recommended_workorder_state": payload.get("recommended_workorder_state"),
+            "raw_size_bytes": raw.get("raw_size_bytes"),
+            "high_volume_line_count": raw.get("high_volume_line_count"),
+            "high_volume_byte_share_pct": raw.get("high_volume_byte_share_pct"),
+            "parity_ok": parity.get("ok"),
+            "suppress_eligibility": parity.get("suppress_eligibility"),
+            "runtime_effect": ((payload.get("policy") or {}).get("runtime_effect"))
+            if isinstance(payload.get("policy"), dict)
+            else False,
+        },
+        str(json_path),
+        [],
+    )
+
+
+def _codebase_performance_workorder_summary(target_date: str) -> tuple[dict[str, Any], str | None, list[str]]:
+    json_path = REPORT_DIR / "codebase_performance_workorder" / f"codebase_performance_workorder_{target_date}.json"
+    payload = _load_json(json_path)
+    if not payload:
+        return (
+            {
+                "available": False,
+                "artifact": None,
+                "accepted_count": 0,
+                "deferred_count": 0,
+                "rejected_count": 0,
+                "runtime_effect": False,
+            },
+            None,
+            ["codebase_performance_workorder_missing"],
+        )
+    summary = payload.get("summary") if isinstance(payload.get("summary"), dict) else {}
+    policy = payload.get("policy") if isinstance(payload.get("policy"), dict) else {}
+    return (
+        {
+            "available": True,
+            "artifact": str(json_path),
+            "source_doc_hash": payload.get("source_doc_hash"),
+            "accepted_count": _safe_int(summary.get("accepted_count"), 0),
+            "deferred_count": _safe_int(summary.get("deferred_count"), 0),
+            "rejected_count": _safe_int(summary.get("rejected_count"), 0),
+            "runtime_effect": bool(policy.get("runtime_effect")),
+            "strategy_effect": bool(policy.get("strategy_effect")),
+            "data_quality_effect": bool(policy.get("data_quality_effect")),
+            "tuning_axis_effect": bool(policy.get("tuning_axis_effect")),
+            "decision_authority": policy.get("decision_authority"),
+        },
+        str(json_path),
+        [],
+    )
+
+
 def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     target_date = str(target_date).strip()
     trade_review_path = MONITOR_SNAPSHOT_DIR / f"trade_review_{target_date}.json"
@@ -430,6 +503,8 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
     pattern_lab_summary, pattern_lab_path, pattern_lab_warnings = _pattern_lab_automation_summary(target_date)
     swing_lab_summary, swing_lab_path, swing_lab_warnings = _swing_pattern_lab_automation_summary(target_date)
     code_workorder_summary, code_workorder_path, code_workorder_warnings = _code_improvement_workorder_summary(target_date)
+    pipeline_verbosity_summary, pipeline_verbosity_path, pipeline_verbosity_warnings = _pipeline_event_verbosity_summary(target_date)
+    codebase_perf_summary, codebase_perf_path, codebase_perf_warnings = _codebase_performance_workorder_summary(target_date)
     selected_families = _selected_families(apply_manifest)
     swing_runtime_approval = _swing_runtime_approval_summary(apply_manifest)
     completed = _safe_int(trade_metrics.get("completed_trades"), 0)
@@ -490,6 +565,8 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
         "swing_runtime_approval": swing_runtime_approval,
         "pattern_lab_automation": pattern_lab_summary,
         "swing_pattern_lab_automation": swing_lab_summary,
+        "pipeline_event_verbosity": pipeline_verbosity_summary,
+        "codebase_performance_workorder": codebase_perf_summary,
         "code_improvement_workorder": code_workorder_summary,
         "sources": {
             "trade_review": str(trade_review_path) if trade_review_path.exists() else None,
@@ -498,6 +575,8 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
             "apply_manifest": str(apply_path) if apply_path.exists() else None,
             "pattern_lab_automation": pattern_lab_path,
             "swing_pattern_lab_automation": swing_lab_path,
+            "pipeline_event_verbosity": pipeline_verbosity_path,
+            "codebase_performance_workorder": codebase_perf_path,
             "code_improvement_workorder": code_workorder_path,
             "missed_probe_counterfactual": wait6579_counterfactual_path,
         },
@@ -510,6 +589,8 @@ def build_threshold_cycle_ev_report(target_date: str) -> dict[str, Any]:
                 "apply_manifest_missing" if not apply_path.exists() else "",
                 *pattern_lab_warnings,
                 *swing_lab_warnings,
+                *pipeline_verbosity_warnings,
+                *codebase_perf_warnings,
                 *code_workorder_warnings,
             ]
             if message
@@ -531,6 +612,8 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
     runtime = report.get("runtime_apply") if isinstance(report.get("runtime_apply"), dict) else {}
     pattern_lab = report.get("pattern_lab_automation") if isinstance(report.get("pattern_lab_automation"), dict) else {}
     swing_lab = report.get("swing_pattern_lab_automation") if isinstance(report.get("swing_pattern_lab_automation"), dict) else {}
+    pipeline_verbosity = report.get("pipeline_event_verbosity") if isinstance(report.get("pipeline_event_verbosity"), dict) else {}
+    codebase_perf = report.get("codebase_performance_workorder") if isinstance(report.get("codebase_performance_workorder"), dict) else {}
     swing_runtime = report.get("swing_runtime_approval") if isinstance(report.get("swing_runtime_approval"), dict) else {}
     code_workorder = report.get("code_improvement_workorder") if isinstance(report.get("code_improvement_workorder"), dict) else {}
     approval_requests = report.get("approval_requests") if isinstance(report.get("approval_requests"), list) else []
@@ -591,6 +674,24 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- source_quality_blocked_families: `{swing_lab.get('source_quality_blocked_families') or []}`",
         f"- carryover_warnings: `{swing_lab.get('carryover_warning_count')}`",
         f"- population_split_available: `{swing_lab.get('population_split_available')}`",
+        "",
+        "## Pipeline Event Verbosity",
+        f"- artifact: `{pipeline_verbosity.get('artifact') or '-'}`",
+        f"- state: `{pipeline_verbosity.get('state') or '-'}`",
+        f"- recommended_workorder_state: `{pipeline_verbosity.get('recommended_workorder_state') or '-'}`",
+        f"- high_volume_line_count: `{pipeline_verbosity.get('high_volume_line_count')}`",
+        f"- high_volume_byte_share_pct: `{pipeline_verbosity.get('high_volume_byte_share_pct')}`",
+        f"- parity_ok: `{pipeline_verbosity.get('parity_ok')}`",
+        f"- suppress_eligibility: `{pipeline_verbosity.get('suppress_eligibility')}`",
+        "",
+        "## Codebase Performance Workorder Source",
+        f"- artifact: `{codebase_perf.get('artifact') or '-'}`",
+        f"- authority: `{codebase_perf.get('decision_authority') or '-'}`",
+        f"- accepted/deferred/rejected: `{codebase_perf.get('accepted_count')}` / `{codebase_perf.get('deferred_count')}` / `{codebase_perf.get('rejected_count')}`",
+        f"- runtime_effect: `{codebase_perf.get('runtime_effect')}`",
+        f"- strategy_effect: `{codebase_perf.get('strategy_effect')}`",
+        f"- data_quality_effect: `{codebase_perf.get('data_quality_effect')}`",
+        f"- tuning_axis_effect: `{codebase_perf.get('tuning_axis_effect')}`",
         "",
         "## Swing Runtime Approval",
         f"- request_report: `{swing_runtime.get('request_report') or '-'}`",

@@ -300,6 +300,7 @@ def _runtime_entry_dry_run(row: pd.Series, entry_quote: pd.Series, *, simulation
         ratio,
         max_budget=0,
     )
+    qty = max(1, _safe_int(qty, 0)) if curr_price > 0 and simulation_cash_krw > 0 and ratio > 0 else _safe_int(qty, 0)
     result.update(
         {
             "entry_guard": "PASS_DRY_RUN",
@@ -310,6 +311,11 @@ def _runtime_entry_dry_run(row: pd.Series, entry_quote: pd.Series, *, simulation
             "safe_budget": safe_budget,
             "safety_ratio": safety_ratio,
             "buy_qty": qty,
+            "qty_source": "sim_virtual_budget_dynamic_formula",
+            "virtual_budget_override": True,
+            "virtual_budget_krw": int(simulation_cash_krw),
+            "counterfactual_notional_krw": int(curr_price * qty) if curr_price > 0 and qty > 0 else 0,
+            "budget_authority": "sim_virtual_not_real_orderable_amount",
         }
     )
     if qty <= 0:
@@ -345,6 +351,7 @@ def _arm_entry_decision(
         ratio,
         max_budget=0,
     )
+    qty = max(1, _safe_int(qty, 0)) if curr_price > 0 and simulation_cash_krw > 0 and ratio > 0 else _safe_int(qty, 0)
     base = {
         "sim_arm": sim_arm,
         "strategy": strategy,
@@ -368,6 +375,11 @@ def _arm_entry_decision(
         "safe_budget": safe_budget,
         "safety_ratio": safety_ratio,
         "buy_qty": qty,
+        "qty_source": "sim_virtual_budget_dynamic_formula",
+        "virtual_budget_override": True,
+        "virtual_budget_krw": int(simulation_cash_krw),
+        "counterfactual_notional_krw": int(curr_price * qty) if curr_price > 0 and qty > 0 else 0,
+        "budget_authority": "sim_virtual_not_real_orderable_amount",
     }
     if curr_price <= 0:
         return {
@@ -538,33 +550,57 @@ def _simulate_path_from_entry(
     }
 
 
+def _quote_groups_by_code(quotes: pd.DataFrame) -> dict[str, pd.DataFrame]:
+    if quotes.empty or "stock_code" not in quotes.columns or "quote_date" not in quotes.columns:
+        return {}
+    quote_df = quotes.copy()
+    quote_df["stock_code"] = quote_df["stock_code"].astype(str).str.zfill(6)
+    quote_df["quote_date"] = pd.to_datetime(quote_df["quote_date"], errors="coerce").dt.normalize()
+    quote_df = quote_df.dropna(subset=["quote_date"]).sort_values(["stock_code", "quote_date"])
+    return {
+        str(code).zfill(6): group.reset_index(drop=True)
+        for code, group in quote_df.groupby("stock_code", sort=False)
+    }
+
+
+def _future_quotes_for_signal(
+    quote_groups: dict[str, pd.DataFrame],
+    code: str,
+    signal_date: pd.Timestamp,
+    *,
+    limit: int = 6,
+) -> pd.DataFrame:
+    future = quote_groups.get(str(code).zfill(6))
+    if future is None or future.empty:
+        return pd.DataFrame()
+    if pd.notna(signal_date):
+        future = future[future["quote_date"] > signal_date]
+    return future.head(limit).copy() if not future.empty else pd.DataFrame()
+
+
 def simulate_swing_recommendations(
     recommendations: pd.DataFrame,
     quotes: pd.DataFrame,
     *,
     target_date: str | None = None,
-    simulation_cash_krw: int = 10_000_000,
+    simulation_cash_krw: int | None = None,
     roundtrip_fee_rate: float = 0.0023,
 ) -> list[dict]:
     if recommendations.empty:
         return []
-    quote_df = quotes.copy()
-    if not quote_df.empty:
-        quote_df["quote_date"] = pd.to_datetime(quote_df["quote_date"], errors="coerce").dt.normalize()
+    simulation_cash_krw = int(
+        simulation_cash_krw
+        if simulation_cash_krw is not None
+        else getattr(TRADING_RULES, "SIM_VIRTUAL_BUDGET_KRW", 10_000_000)
+    )
+    quote_groups = _quote_groups_by_code(quotes)
     rows = []
     as_of = pd.to_datetime(target_date).normalize() if target_date else None
 
     for _, row in recommendations.iterrows():
         signal_date = pd.to_datetime(row.get("date"), errors="coerce").normalize()
         code = str(row.get("code") or row.get("stock_code") or "").zfill(6)
-        if quote_df.empty or "stock_code" not in quote_df.columns or "quote_date" not in quote_df.columns:
-            future = pd.DataFrame()
-        else:
-            future = quote_df[quote_df["stock_code"] == code].copy()
-        if pd.notna(signal_date) and not future.empty:
-            future = future[future["quote_date"] > signal_date]
-        if not future.empty:
-            future = future.sort_values("quote_date").head(6)
+        future = _future_quotes_for_signal(quote_groups, code, signal_date)
 
         base = {
             "signal_date": _date_text(signal_date) if pd.notna(signal_date) else "",
@@ -615,14 +651,17 @@ def simulate_swing_observation_arms(
     quotes: pd.DataFrame,
     *,
     target_date: str | None = None,
-    simulation_cash_krw: int = 10_000_000,
+    simulation_cash_krw: int | None = None,
     roundtrip_fee_rate: float = 0.0023,
 ) -> list[dict]:
     if recommendations.empty:
         return []
-    quote_df = quotes.copy()
-    if not quote_df.empty:
-        quote_df["quote_date"] = pd.to_datetime(quote_df["quote_date"], errors="coerce").dt.normalize()
+    simulation_cash_krw = int(
+        simulation_cash_krw
+        if simulation_cash_krw is not None
+        else getattr(TRADING_RULES, "SIM_VIRTUAL_BUDGET_KRW", 10_000_000)
+    )
+    quote_groups = _quote_groups_by_code(quotes)
     rows: list[dict] = []
     as_of = pd.to_datetime(target_date).normalize() if target_date else None
     arms = ("selection_only", "gap_pass", "gatekeeper_pass")
@@ -630,14 +669,7 @@ def simulate_swing_observation_arms(
     for _, row in recommendations.iterrows():
         signal_date = pd.to_datetime(row.get("date"), errors="coerce").normalize()
         code = str(row.get("code") or row.get("stock_code") or "").zfill(6)
-        if quote_df.empty or "stock_code" not in quote_df.columns or "quote_date" not in quote_df.columns:
-            future = pd.DataFrame()
-        else:
-            future = quote_df[quote_df["stock_code"] == code].copy()
-        if pd.notna(signal_date) and not future.empty:
-            future = future[future["quote_date"] > signal_date]
-        if not future.empty:
-            future = future.sort_values("quote_date").head(6)
+        future = _future_quotes_for_signal(quote_groups, code, signal_date)
 
         base = {
             "signal_date": _date_text(signal_date) if pd.notna(signal_date) else "",
@@ -817,12 +849,17 @@ def build_swing_daily_simulation_report(
     quote_rows: pd.DataFrame | None = None,
     db_url: str = POSTGRES_URL,
     backtest_path: str | Path | None = None,
-    simulation_cash_krw: int = 10_000_000,
+    simulation_cash_krw: int | None = None,
     include_runtime_funnel: bool = False,
     pipeline_events_path: str | Path | None = None,
     include_db_recommendations: bool = True,
 ) -> dict:
     date_key = _date_text(target_date)
+    simulation_cash_krw = int(
+        simulation_cash_krw
+        if simulation_cash_krw is not None
+        else getattr(TRADING_RULES, "SIM_VIRTUAL_BUDGET_KRW", 10_000_000)
+    )
     if recommendation_rows is not None:
         rec_df = recommendation_rows
         db_rec_df = pd.DataFrame()

@@ -393,7 +393,11 @@ def test_swing_intraday_probe_starts_virtual_holding_without_real_order(monkeypa
     monkeypatch.setattr(state_handlers, "EVENT_BUS", event_bus)
     monkeypatch.setattr(state_handlers, "HIGHEST_PRICES", {})
     monkeypatch.setattr(state_handlers, "SWING_INTRADAY_PROBE_STATE_PATH", tmp_path / "swing_probe_state.json")
-    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 1_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "get_deposit",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("swing probe must not read real deposit")),
+    )
     monkeypatch.setattr(
         state_handlers.kiwoom_orders,
         "send_buy_order",
@@ -439,8 +443,14 @@ def test_swing_intraday_probe_starts_virtual_holding_without_real_order(monkeypa
     assert probe["simulation_book"] == "swing_intraday_live_equiv_probe"
     assert probe["source_record_id"] == 501
     assert probe["buy_price"] == 10_000
-    assert probe["buy_qty"] > 0
+    assert probe["buy_qty"] == 95
     assert [stage for stage, _ in logs] == ["swing_probe_entry_candidate", "swing_probe_holding_started"]
+    assert logs[0][1]["qty_source"] == "sim_virtual_budget_dynamic_formula"
+    assert logs[0][1]["virtual_budget_krw"] == 10_000_000
+    assert logs[0][1]["target_budget"] == 1_000_000
+    assert logs[0][1]["safe_budget"] == 950_000
+    assert logs[0][1]["virtual_notional_used_krw"] == 950_000
+    assert logs[0][1]["budget_authority"] == "sim_virtual_not_real_orderable_amount"
     assert event_bus.published == [("COMMAND_WS_REG", {"codes": ["000001"], "source": "swing_intraday_probe"})]
     assert (tmp_path / "swing_probe_state.json").exists()
 
@@ -1198,6 +1208,9 @@ def test_swing_daily_simulation_closes_tp_path():
     assert rows[0]["entry_guard"] == "PASS_DRY_RUN"
     assert rows[0]["actual_order_submitted"] is False
     assert rows[0]["order_type_code"] == "6"
+    assert rows[0]["qty_source"] == "sim_virtual_budget_dynamic_formula"
+    assert rows[0]["virtual_budget_krw"] == 10_000_000
+    assert rows[0]["counterfactual_notional_krw"] == rows[0]["buy_qty"] * 100
     assert rows[0]["exit_reason"] == "PRESET_TARGET"
     assert round(rows[0]["net_ret"], 4) == 0.0477
 

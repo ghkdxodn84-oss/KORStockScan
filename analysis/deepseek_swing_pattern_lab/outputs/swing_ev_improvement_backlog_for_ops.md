@@ -2,7 +2,7 @@
 
 ## 개요
 
-- total_findings: `4`
+- total_findings: `5`
 - runtime_change: `False`
 - purpose: report-only / proposal-only improvement backlog
 
@@ -35,7 +35,7 @@
 - route: `attach_existing_family`
 - priority: `MEDIUM`
 - mapped_family: `swing_scale_in_ofi_qi_confirmation`
-- confidence: `consensus`
+- confidence: `solo`
 - expected_ev_effect: Evaluate PYRAMID/AVG_DOWN outcome quality with OFI/QI confirmation.
 
 ### 4. OFI/QI stale/missing quality review
@@ -47,4 +47,14 @@
 - mapped_family: `swing_entry_ofi_qi_execution_quality`
 - confidence: `consensus`
 - expected_ev_effect: If stale ratio > 0.3, consider instrumentation/observer enhancement.
+
+### 5. OFI/QI exit smoothing action distribution
+
+- finding_id: `swing_pattern_lab_deepseek_ofi_qi_smoothing_review`
+- lifecycle_stage: `ofi_qi`
+- route: `attach_existing_family`
+- priority: `MEDIUM`
+- mapped_family: `swing_exit_ofi_qi_smoothing`
+- confidence: `solo`
+- expected_ev_effect: Monitor DEBOUNCE_EXIT/CONFIRM_EXIT rate for holding flow quality.
 

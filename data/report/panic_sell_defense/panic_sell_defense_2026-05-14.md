@@ -5,14 +5,14 @@
 - panic_state: `NORMAL`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-05-14T10:48:05`
-- latest_event_at: `2026-05-14T10:48:04`
+- as_of: `2026-05-14T17:11:49`
+- latest_event_at: `2026-05-14T17:11:49`
 - reasons: `panic thresholds not breached`
 
 ## 패닉 지표
 
 - real_exit_count: `0`
-- non_real_exit_count: `23`
+- non_real_exit_count: `32`
 - stop_loss_exit_count: `0`
 - current_30m_stop_loss_exit_count: `0`
 - max_rolling_30m_stop_loss_exit_count: `0`
@@ -25,32 +25,32 @@
 
 - active_positions: `10`
 - active_profit_sample: `10`
-- active_avg_unrealized_profit_rate_pct: `0.8332`
-- active_win_rate_pct: `70`
+- active_avg_unrealized_profit_rate_pct: `1.5556`
+- active_win_rate_pct: `80`
 - sim_probe_provenance_passed: `true`
 - post_sell_rebound_above_sell_10_20m_pct: `0`
 - post_sell_rebound_above_buy_10_20m_pct: `0`
 
 ## Microstructure Detector
 
-- evaluated_symbol_count: `16`
+- evaluated_symbol_count: `18`
 - risk_off_advisory_count: `0`
 - allow_new_long_false_count: `0`
 - panic_signal_count: `0`
 - recovery_candidate_count: `0`
 - recovery_confirmed_count: `0`
-- missing_orderbook_count: `3`
-- degraded_orderbook_count: `3`
+- missing_orderbook_count: `7`
+- degraded_orderbook_count: `7`
 - max_panic_score: `0.45`
 - max_recovery_score: `0.5793`
-- micro_cusum_triggered_symbol_count: `2`
+- micro_cusum_triggered_symbol_count: `1`
 - micro_consensus_pass_symbol_count: `0`
 - micro_cusum_decision_authority: `source_quality_only`
 
 ## Microstructure Market Context
 
 - market_risk_state: `NEUTRAL`
-- evaluated_symbol_count: `16`
+- evaluated_symbol_count: `18`
 - risk_off_advisory_ratio_pct: `0`
 - confirmed_risk_off_advisory: `false`
 - portfolio_local_risk_off_only: `false`

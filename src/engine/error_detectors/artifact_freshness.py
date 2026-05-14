@@ -167,6 +167,20 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
         "window_end": (17, 0),
     },
     {
+        "id": "pipeline_event_verbosity_report",
+        "path_template": "data/report/pipeline_event_verbosity/pipeline_event_verbosity_{date}.md",
+        "max_staleness_sec": 3600,
+        "critical": False,
+        "trading_day_only": True,
+        "window_start": (16, 10),
+        "window_end": (17, 0),
+        "suppress_missing_while_cron_in_progress": {
+            "id": "threshold_cycle_postclose",
+            "log": "logs/threshold_cycle_postclose_cron.log",
+        },
+        "allow_missing_after_window_while_cron_in_progress": True,
+    },
+    {
         "id": "system_metric_samples",
         "path_template": "logs/system_metric_samples.jsonl",
         "max_staleness_sec": 180,

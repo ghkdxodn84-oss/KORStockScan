@@ -15,6 +15,8 @@ COOLDOWN_STATE_FILE="${BUY_FUNNEL_SENTINEL_COOLDOWN_STATE_FILE:-$PROJECT_DIR/tmp
 COOLDOWN_SEC="${BUY_FUNNEL_SENTINEL_COOLDOWN_SEC:-240}"
 LOG_FILE="${BUY_FUNNEL_SENTINEL_LOG_FILE:-$PROJECT_DIR/logs/run_buy_funnel_sentinel.log}"
 DRY_RUN="${BUY_FUNNEL_SENTINEL_DRY_RUN:-0}"
+USE_CACHE="${BUY_FUNNEL_SENTINEL_USE_CACHE:-1}"
+USE_SUMMARY="${BUY_FUNNEL_SENTINEL_USE_SUMMARY:-1}"
 IONICE_CLASS="${BUY_FUNNEL_SENTINEL_IONICE_CLASS:-2}"
 IONICE_LEVEL="${BUY_FUNNEL_SENTINEL_IONICE_LEVEL:-7}"
 NICE_LEVEL="${BUY_FUNNEL_SENTINEL_NICE_LEVEL:-12}"
@@ -60,6 +62,12 @@ cmd=(env PYTHONPATH=. "$VENV_PY" -m src.engine.buy_funnel_sentinel --date "$TARG
 if [[ "$DRY_RUN" == "1" ]]; then
   cmd+=(--dry-run)
 fi
+if [[ "$USE_CACHE" == "1" ]]; then
+  cmd+=(--use-cache)
+fi
+if [[ "$USE_SUMMARY" == "1" ]]; then
+  cmd+=(--use-summary)
+fi
 
 if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]] && [[ "$(nproc 2>/dev/null || echo 1)" -gt 1 ]]; then
   cmd=(taskset -c "$CPU_AFFINITY" "${cmd[@]}")
@@ -74,7 +82,7 @@ if command -v "$NICE_COMMAND" >/dev/null 2>&1; then
 fi
 
 started_at="$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')"
-echo "[START] buy funnel sentinel target_date=${TARGET_DATE} started_at=${started_at} dry_run=${DRY_RUN}" | tee -a "$LOG_FILE"
+echo "[START] buy funnel sentinel target_date=${TARGET_DATE} started_at=${started_at} dry_run=${DRY_RUN} use_cache=${USE_CACHE} use_summary=${USE_SUMMARY}" | tee -a "$LOG_FILE"
 
 if "${cmd[@]}" 2>&1 | tee -a "$LOG_FILE"; then
   touch "$COOLDOWN_STATE_FILE"

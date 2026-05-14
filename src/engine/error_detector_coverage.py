@@ -40,6 +40,7 @@ REQUIRED_ARTIFACT_IDS: set[str] = {
     "openai_ws_stability_report",
     "threshold_postclose_report",
     "code_improvement_workorder",
+    "pipeline_event_verbosity_report",
     "system_metric_samples",
     "swing_selection_funnel_report",
     "swing_lifecycle_audit_report",

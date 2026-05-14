@@ -2,7 +2,7 @@
 
 ## 판정
 
-- 상태: `candidate_weight_source_review`
+- 상태: `collect_more_samples`
 - weight_source_ready: `False`
 - runtime_change: `False`
 
@@ -10,8 +10,8 @@
 
 | metric | value |
 | --- | ---: |
-| completed_valid | 22 |
-| exit_only | 22 |
+| completed_valid | 12 |
+| exit_only | 12 |
 | avg_down_wait | 0 |
 | pyramid_wait | 0 |
 | compact_exit_signal | 16 |
@@ -23,7 +23,7 @@
 
 | field | known |
 | --- | ---: |
-| price_known | 22 |
+| price_known | 12 |
 | volume_known | 11 |
 | time_known | 12 |
 
@@ -31,18 +31,17 @@
 
 | policy | count |
 | --- | ---: |
-| candidate_weight_source | 6 |
 | defensive_only_high_loss_rate | 1 |
-| insufficient_sample | 6 |
+| insufficient_sample | 11 |
 
 ## Price Bucket
 
 | bucket | best_action | score | edge | sample | avg_profit | loss_rate | policy |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
-| price_10k_30k | exit_only | -0.0898 | - | 5 | -0.296 | 0.6 | candidate_weight_source |
-| price_30k_70k | exit_only | -2.4726 | - | 7 | 4.7757 | 0.4286 | candidate_weight_source |
-| price_gte_70k | exit_only | -0.3488 | - | 5 | -0.618 | 0.6 | candidate_weight_source |
-| price_lt_10k | exit_only | -0.4149 | - | 5 | -0.508 | 0.6 | candidate_weight_source |
+| price_10k_30k | insufficient_sample | - | - | - | - | - | insufficient_sample |
+| price_30k_70k | insufficient_sample | - | - | - | - | - | insufficient_sample |
+| price_gte_70k | insufficient_sample | - | - | - | - | - | insufficient_sample |
+| price_lt_10k | insufficient_sample | - | - | - | - | - | insufficient_sample |
 
 ## Volume Bucket
 
@@ -52,7 +51,7 @@
 | volume_500k_2m | insufficient_sample | - | - | - | - | - | insufficient_sample |
 | volume_gte_10m | insufficient_sample | - | - | - | - | - | insufficient_sample |
 | volume_lt_500k | insufficient_sample | - | - | - | - | - | insufficient_sample |
-| volume_unknown | exit_only | -0.6288 | - | 11 | 3.7745 | 0.2727 | candidate_weight_source |
+| volume_unknown | insufficient_sample | - | - | - | - | - | insufficient_sample |
 
 ## Time Bucket
 
@@ -60,8 +59,7 @@
 | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
 | time_0900_0930 | insufficient_sample | - | - | - | - | - | insufficient_sample |
 | time_0930_1030 | insufficient_sample | - | - | - | - | - | insufficient_sample |
-| time_1030_1400 | exit_only | -0.394 | - | 6 | -1.4683 | 0.8333 | defensive_only_high_loss_rate |
-| time_unknown | exit_only | -0.9403 | - | 10 | 3.944 | 0.3 | candidate_weight_source |
+| time_1030_1400 | exit_only | -1.7024 | - | 6 | -1.4683 | 0.8333 | defensive_only_high_loss_rate |
 
 ## Eligible But Not Chosen
 

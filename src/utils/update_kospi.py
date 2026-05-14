@@ -523,9 +523,9 @@ def update_kospi_data():
         
         # Filter final_bulk_df
         if existing_keys:
-            mask = final_bulk_df.apply(
-                lambda row: (row['quote_date'], row['stock_code']) not in existing_keys, axis=1
-            )
+            row_keys = pd.MultiIndex.from_frame(final_bulk_df[['quote_date', 'stock_code']])
+            existing_index = pd.MultiIndex.from_tuples(list(existing_keys), names=['quote_date', 'stock_code'])
+            mask = ~row_keys.isin(existing_index)
             final_bulk_df = final_bulk_df[mask].copy()
             logger.info(f"⏩ Filtered out {len(existing_keys)} existing rows, {len(final_bulk_df)} new rows to insert")
         

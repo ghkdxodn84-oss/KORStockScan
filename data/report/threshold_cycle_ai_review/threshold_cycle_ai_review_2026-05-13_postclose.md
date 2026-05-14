@@ -11,7 +11,7 @@
 | protect_trailing_smoothing | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=hold_sample, effective_value=20, runtime_change=False | ai_unavailable |
 | trailing_continuation | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=freeze, effective_value=0.4, runtime_change=False | ai_unavailable |
 | pre_submit_price_guard | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=freeze, effective_value=80, runtime_change=False | ai_unavailable |
-| score65_74_recovery_probe | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=hold_sample, effective_value=False, runtime_change=False | ai_unavailable |
+| score65_74_recovery_probe | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=adjust_up, effective_value=False, runtime_change=False | ai_unavailable |
 | liquidity_gate_refined_candidate | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=hold, effective_value=False, runtime_change=False | ai_unavailable |
 | overbought_gate_refined_candidate | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=hold, effective_value=False, runtime_change=False | ai_unavailable |
 | bad_entry_refined_canary | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=adjust_up, effective_value=False, runtime_change=False | ai_unavailable |

@@ -33,6 +33,7 @@ def test_new_operational_feature_must_declare_detector_coverage():
     assert "swing_daily_simulation_report" in REQUIRED_ARTIFACT_IDS
     assert "swing_pattern_lab_automation_report" in REQUIRED_ARTIFACT_IDS
     assert "scalping_pattern_lab_automation_report" in REQUIRED_ARTIFACT_IDS
+    assert "pipeline_event_verbosity_report" in REQUIRED_ARTIFACT_IDS
     assert "swing_model_registry_current" in REQUIRED_ARTIFACT_IDS
     assert "update_kospi_status" in REQUIRED_ARTIFACT_IDS
     assert "main_loop" in REQUIRED_HEARTBEAT_COMPONENTS

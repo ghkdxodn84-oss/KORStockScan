@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -199,13 +199,14 @@ CALIBRATION_FAMILY_METADATA = {
             "max_budget_krw": {"min": 10_000, "max": 50_000, "max_step_per_day": 10_000},
         },
         "sample_floor": 20,
-        "sample_window": "daily_intraday_with_rolling_confirmation",
+        "sample_window": "rolling_5d_with_daily_trigger",
         "window_policy": {
-            "primary": "daily_intraday",
-            "secondary": ["rolling_5d", "cumulative_since_2026-04-21"],
-            "use": "BUY drought/score65~74는 당일 병목을 빠르게 보되, EV/close 우위와 false-positive risk는 rolling으로 확인한다.",
-            "daily_only_allowed": True,
+            "primary": "rolling_5d",
+            "secondary": ["daily_intraday", "cumulative_since_2026-04-21"],
+            "use": "BUY drought/score65~74는 당일 병목을 trigger로 쓰되, 회수축 부활과 EV/close 우위는 rolling/cumulative 전용 표본으로 확인한다.",
+            "daily_only_allowed": False,
         },
+        "sample_denominator_keys": ["wait65_79_score65_74_candidate", "blocked_score65_74"],
         "allowed_runtime_apply": True,
     },
     "liquidity_gate_refined_candidate": {
@@ -222,6 +223,7 @@ CALIBRATION_FAMILY_METADATA = {
             "use": "liquidity gate miss는 당일 단일 종목이 아니라 차단 후 5/10분 EV와 avoided-loser 비율을 같이 본 뒤 refined family 설계 후보로만 둔다.",
             "daily_only_allowed": False,
         },
+        "sample_denominator_keys": ["blocked_events"],
         "allowed_runtime_apply": False,
     },
     "overbought_gate_refined_candidate": {
@@ -238,6 +240,7 @@ CALIBRATION_FAMILY_METADATA = {
             "use": "overbought gate miss는 naive hard block 완화가 아니라 과열 차단 후 missed-upside/avoided-loss trade-off를 닫는 family 설계 후보로만 둔다.",
             "daily_only_allowed": False,
         },
+        "sample_denominator_keys": ["blocked_events"],
         "allowed_runtime_apply": False,
     },
     "bad_entry_refined_canary": {
@@ -333,6 +336,25 @@ CALIBRATION_FAMILY_METADATA = {
             "use": "1주 cap 해제는 완벽한 spot이 아니라 전체 EV가 충분하고 safety floor를 통과한 efficient trade-off 지점에서 사용자 승인 요청으로 승격한다.",
             "daily_only_allowed": False,
         },
+        "sample_denominator_keys": ["normal_completed_valid"],
+        "allowed_runtime_apply": False,
+        "human_approval_required": True,
+    },
+    "position_sizing_dynamic_formula": {
+        "priority": 42,
+        "source_family": "position_sizing_dynamic_formula",
+        "target_env_keys": [],
+        "primary_key": "formula_version",
+        "bounds": {},
+        "sample_floor": 30,
+        "sample_window": "rolling_10d_with_real_denominator",
+        "window_policy": {
+            "primary": "rolling_10d",
+            "secondary": ["daily", "cumulative_since_2026-04-21", "sim_probe_counterfactual_diagnostic"],
+            "use": "동적수량 산식은 score/strategy/volatility/liquidity/spread/price band/recent loss/portfolio exposure 입력 품질과 real-only EV를 먼저 report-only로 검증한다.",
+            "daily_only_allowed": False,
+        },
+        "sample_denominator_keys": ["real_completed_valid"],
         "allowed_runtime_apply": False,
         "human_approval_required": True,
     },
@@ -526,6 +548,7 @@ def save_threshold_calibration_report(report: dict, *, run_phase: str | None = N
         "completed_by_source": report.get("completed_by_source") or {},
         "scalp_simulator": report.get("scalp_simulator") or {},
         "calibration_candidates": report.get("calibration_candidates") or [],
+        "window_policy_audit": report.get("window_policy_audit") or {},
         "post_apply_attribution": report.get("post_apply_attribution") or {},
         "safety_guard_pack": report.get("safety_guard_pack") or [],
         "calibration_trigger_pack": report.get("calibration_trigger_pack") or [],
@@ -1097,6 +1120,8 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         },
         "liquidity_gate_refined_candidate": {
             "evaluated_candidates": _safe_int(liquidity_outcome.get("evaluated_candidates"), 0) or 0,
+            "missed_winner_count": _safe_int(liquidity_outcome.get("missed_winner_count"), 0) or 0,
+            "avoided_loser_count": _safe_int(liquidity_outcome.get("avoided_loser_count"), 0) or 0,
             "missed_winner_rate": _safe_float(liquidity_outcome.get("missed_winner_rate"), None),
             "avoided_loser_rate": _safe_float(liquidity_outcome.get("avoided_loser_rate"), None),
             "avg_close_10m_pct": _safe_float(liquidity_outcome.get("avg_close_10m_pct"), None),
@@ -1108,6 +1133,8 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         },
         "overbought_gate_refined_candidate": {
             "evaluated_candidates": _safe_int(overbought_outcome.get("evaluated_candidates"), 0) or 0,
+            "missed_winner_count": _safe_int(overbought_outcome.get("missed_winner_count"), 0) or 0,
+            "avoided_loser_count": _safe_int(overbought_outcome.get("avoided_loser_count"), 0) or 0,
             "missed_winner_rate": _safe_float(overbought_outcome.get("missed_winner_rate"), None),
             "avoided_loser_rate": _safe_float(overbought_outcome.get("avoided_loser_rate"), None),
             "avg_close_10m_pct": _safe_float(overbought_outcome.get("avg_close_10m_pct"), None),
@@ -1413,6 +1440,141 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
 
 def _summarize_holding_exit_report_sources(target_date: str) -> dict:
     return _summarize_calibration_report_sources(target_date)
+
+
+def _is_count_like_metric_key(key: str) -> bool:
+    text = str(key or "").lower()
+    return (
+        text.endswith("_count")
+        or text.endswith("_counts")
+        or text.endswith("_events")
+        or text.endswith("_candidates")
+        or text.endswith("_attempts")
+        or text.endswith("_samples")
+        or text.endswith("_records")
+        or text in {
+            "matrix_entries",
+            "matrix_non_clear_edge",
+            "matrix_no_clear_edge",
+            "evaluated_candidates",
+            "performance_blocked_liquidity_events",
+            "performance_blocked_overbought_events",
+            "performance_latency_block_events",
+            "performance_latency_pass_events",
+            "scale_in_price_resolved",
+            "scale_in_price_guard_block",
+            "scale_in_price_p2_observe",
+            "compact_scale_in_executed",
+            "avg_down_wait",
+            "pyramid_wait",
+        }
+    )
+
+
+def _is_average_like_metric_key(key: str) -> bool:
+    text = str(key or "").lower()
+    return (
+        text.endswith("_rate")
+        or text.endswith("_pct")
+        or text.startswith("avg_")
+        or text.endswith("_avg")
+        or text.endswith("_p95")
+        or text.endswith("_p90")
+    )
+
+
+def _aggregate_numeric_metric(key: str, values: list[Any], parents: list[dict]) -> Any:
+    numeric = [_safe_float(value, None) for value in values]
+    numeric = [value for value in numeric if value is not None]
+    if not numeric:
+        return None
+    if _is_count_like_metric_key(key):
+        return int(round(sum(numeric)))
+    if _is_average_like_metric_key(key):
+        weighted_pairs: list[tuple[float, float]] = []
+        for value, parent in zip(values, parents):
+            number = _safe_float(value, None)
+            if number is None or not isinstance(parent, dict):
+                continue
+            denominator = (
+                _safe_float(parent.get("evaluated_candidates"), None)
+                or _safe_float(parent.get("sample_count"), None)
+                or _safe_float(parent.get("source_sample_count"), None)
+            )
+            if denominator is not None and denominator > 0:
+                weighted_pairs.append((number, denominator))
+        if weighted_pairs:
+            total_weight = sum(weight for _, weight in weighted_pairs)
+            if total_weight > 0:
+                return round(sum(value * weight for value, weight in weighted_pairs) / total_weight, 4)
+        return round(sum(numeric) / len(numeric), 4)
+    return numeric[-1]
+
+
+def _aggregate_metric_dicts(dicts: list[dict]) -> dict:
+    result: dict[str, Any] = {}
+    keys = sorted({key for item in dicts if isinstance(item, dict) for key in item})
+    for key in keys:
+        values = [item.get(key) for item in dicts if isinstance(item, dict) and key in item]
+        if not values:
+            continue
+        dict_values = [value for value in values if isinstance(value, dict)]
+        if dict_values and len(dict_values) == len(values):
+            result[key] = _aggregate_metric_dicts(dict_values)
+            continue
+        list_values = [value for value in values if isinstance(value, list)]
+        if list_values and len(list_values) == len(values):
+            merged: list[Any] = []
+            for value in list_values:
+                merged.extend(value)
+            result[key] = merged
+            continue
+        bool_values = [value for value in values if isinstance(value, bool)]
+        if bool_values and len(bool_values) == len(values):
+            result[key] = any(bool_values)
+            continue
+        numeric_values = [value for value in values if _safe_float(value, None) is not None]
+        if numeric_values and len(numeric_values) == len(values):
+            result[key] = _aggregate_numeric_metric(key, values, dicts)
+            continue
+        text_values = [str(value) for value in values if value not in (None, "", "-", "None")]
+        if text_values:
+            result[key] = text_values[-1]
+    return result
+
+
+def _aggregate_calibration_source_contexts(contexts: list[dict], *, target_date: str, window_label: str) -> dict:
+    contexts = [context for context in contexts if isinstance(context, dict)]
+    metrics_by_name: dict[str, list[dict]] = defaultdict(list)
+    source_exists: dict[str, int] = Counter()
+    warnings: list[str] = []
+    for context in contexts:
+        metrics = context.get("source_metrics") if isinstance(context.get("source_metrics"), dict) else {}
+        for name, payload in metrics.items():
+            if isinstance(payload, dict):
+                metrics_by_name[str(name)].append(payload)
+        sources = context.get("sources") if isinstance(context.get("sources"), dict) else {}
+        for name, source in sources.items():
+            if isinstance(source, dict) and source.get("exists"):
+                source_exists[str(name)] += 1
+        for warning in context.get("warnings") or []:
+            warnings.append(str(warning))
+    return {
+        "schema_version": 1,
+        "target_date": target_date,
+        "window": window_label,
+        "purpose": "rolling_calibration_source_bundle",
+        "sources": {
+            name: {"exists_count": count, "window_date_count": len(contexts)}
+            for name, count in sorted(source_exists.items())
+        },
+        "source_metrics": {
+            name: _aggregate_metric_dicts(payloads)
+            for name, payloads in sorted(metrics_by_name.items())
+        },
+        "warnings": warnings,
+        "new_observation_axis_created": False,
+    }
 
 
 def _default_pipeline_load_result(target_date: str) -> PipelineLoadResult:
@@ -2527,6 +2689,198 @@ def _build_position_sizing_cap_release_family(events: list[dict], completed_rows
             "완벽한 spot을 기다리지 않고 overall EV와 체결품질, 손실 tail, cap opportunity를 가중한 efficient trade-off score로 판단한다.",
             "표본, overall EV floor, severe downside, 주문 실패율만 safety floor로 hard하게 본다.",
             "승인 전에는 신규 BUY, wait6579 probe, REVERSAL_ADD/PYRAMID 모두 1주 cap을 유지한다.",
+        ],
+    }
+
+
+def _notional_weighted_ev_pct(rows: list[dict]) -> float | None:
+    weighted_sum = 0.0
+    total_notional = 0.0
+    for row in _valid_profit_rows(rows):
+        profit_rate = _safe_float(row.get("profit_rate"), None)
+        if profit_rate is None:
+            continue
+        buy_price = _safe_float(row.get("buy_price"), None)
+        buy_qty = _safe_float(row.get("buy_qty"), None)
+        notional = None
+        if buy_price is not None and buy_qty is not None and buy_price > 0 and buy_qty > 0:
+            notional = buy_price * buy_qty
+        if notional is None:
+            notional = _safe_float(row.get("notional_krw"), None)
+        if notional is None or notional <= 0:
+            continue
+        weighted_sum += float(profit_rate) * float(notional)
+        total_notional += float(notional)
+    if total_notional <= 0:
+        return None
+    return round(weighted_sum / total_notional, 4)
+
+
+def _bucket_counter(events: list[dict], *field_names: str) -> dict:
+    values: list[str] = []
+    for event in events:
+        fields = _event_fields(event)
+        for field_name in field_names:
+            value = fields.get(field_name)
+            if value not in (None, "", "-"):
+                values.append(str(value))
+                break
+    return dict(Counter(values).most_common(10))
+
+
+def _numeric_event_values(events: list[dict], *field_names: str) -> list[float]:
+    values: list[float] = []
+    for event in events:
+        fields = _event_fields(event)
+        for field_name in field_names:
+            value = _safe_float(fields.get(field_name), None)
+            if value is not None:
+                values.append(float(value))
+                break
+    return values
+
+
+def _build_position_sizing_dynamic_formula_family(events: list[dict], completed_rows: list[dict]) -> dict:
+    sizing_stages = {
+        "budget_pass",
+        "blocked_zero_qty",
+        "auth_zero_qty",
+        "initial_entry_qty_cap_applied",
+        "wait6579_probe_canary_applied",
+        "scale_in_price_resolved",
+        "scalp_sim_entry_armed",
+        "scalp_sim_buy_order_assumed_filled",
+        "swing_probe_entry_assumed_filled",
+        "swing_sim_entry_assumed_filled",
+    }
+    sizing_events = [event for event in events if str(event.get("stage") or "") in sizing_stages]
+    real_rows = [row for row in _valid_profit_rows(completed_rows) if _is_normal_only_row(row)]
+    real_summary = _completed_profit_summary(real_rows)
+    real_sample = int(real_summary.get("sample") or 0)
+    notional_ev = _notional_weighted_ev_pct(real_rows)
+
+    qty_source_counts = _bucket_counter(
+        sizing_events,
+        "qty_source",
+        "scalp_sim_entry_qty_source",
+        "counterfactual_qty_source",
+    )
+    sim_probe_rows = [
+        event
+        for event in sizing_events
+        if str(_event_fields(event).get("actual_order_submitted") or "").strip().lower() == "false"
+        or str(_event_fields(event).get("budget_authority") or "").strip()
+        == "sim_virtual_not_real_orderable_amount"
+        or str(_event_fields(event).get("qty_source") or "").strip() == "sim_virtual_budget_dynamic_formula"
+        or str(_event_fields(event).get("scalp_sim_entry_qty_source") or "").strip()
+        == "sim_virtual_budget_dynamic_formula"
+    ]
+    real_order_rows = [
+        event
+        for event in sizing_events
+        if str(_event_fields(event).get("actual_order_submitted") or "").strip().lower() == "true"
+    ]
+
+    baseline_qty_values = _numeric_event_values(sizing_events, "baseline_qty", "original_qty", "would_qty")
+    candidate_qty_values = _numeric_event_values(
+        sizing_events,
+        "candidate_qty",
+        "effective_qty",
+        "qty",
+        "real_buy_qty",
+        "requested_buy_qty",
+    )
+    spread_values = _numeric_event_values(sizing_events, "spread_bps")
+    liquidity_values = _numeric_event_values(sizing_events, "liquidity_value")
+    score_values = _numeric_event_values(sizing_events, "score", "ai_score", "current_ai_score")
+
+    required_inputs = {
+        "score": bool(score_values),
+        "strategy": bool(_bucket_counter(sizing_events, "strategy", "trade_type")),
+        "volatility": bool(_bucket_counter(sizing_events, "volatility_bucket", "volatility_mode")),
+        "liquidity": bool(liquidity_values or _bucket_counter(sizing_events, "liquidity_bucket")),
+        "spread": bool(spread_values),
+        "price_band": bool(_bucket_counter(sizing_events, "price_band", "price_bucket")),
+        "recent_loss": bool(_bucket_counter(sizing_events, "recent_loss_bucket", "loss_bucket")),
+        "portfolio_exposure": bool(_bucket_counter(sizing_events, "portfolio_exposure_bucket", "exposure_bucket")),
+    }
+    source_quality_blockers = [
+        f"missing_input_{key}" for key, present in required_inputs.items() if not bool(present)
+    ]
+    source_quality_passed = not source_quality_blockers
+    source_quality_adjusted_ev = (
+        round(float(notional_ev) * 0.5, 4) if notional_ev is not None and source_quality_blockers else notional_ev
+    )
+    sample_ready = real_sample >= 30 and source_quality_passed
+
+    current = {
+        "formula_version": "baseline_describe_buy_capacity",
+        "formula_mode": "current_runtime_formula",
+        "runtime_apply_allowed": False,
+    }
+    recommended = {
+        "formula_version": "position_sizing_dynamic_formula:v1_report_only",
+        "formula_mode": "report_only",
+        "runtime_apply_allowed": False,
+        "approval_artifact_path": "data/threshold_cycle/approvals/position_sizing_dynamic_formula_YYYY-MM-DD.json",
+    }
+    return {
+        "family": "position_sizing_dynamic_formula",
+        "stage": "position_sizing",
+        "sample": {
+            "real_completed_valid": real_sample,
+            "sizing_event_count": len(sizing_events),
+            "sim_probe_sizing_event_count": len(sim_probe_rows),
+            "real_order_sizing_event_count": len(real_order_rows),
+            "qty_source_counts": qty_source_counts,
+            "input_coverage": required_inputs,
+            "source_quality_passed": source_quality_passed,
+            "source_quality_blockers": source_quality_blockers,
+            "primary_metric": "notional_weighted_ev_pct"
+            if notional_ev is not None
+            else "source_quality_adjusted_ev_pct",
+            "notional_weighted_ev_pct": notional_ev,
+            "source_quality_adjusted_ev_pct": source_quality_adjusted_ev,
+            "real_completed_summary": real_summary,
+            "baseline_qty_avg": round(_avg(baseline_qty_values) or 0.0, 4) if baseline_qty_values else None,
+            "candidate_qty_avg": round(_avg(candidate_qty_values) or 0.0, 4) if candidate_qty_values else None,
+            "score_avg": round(_avg(score_values) or 0.0, 4) if score_values else None,
+            "spread_bps_p90": round(_percentile(spread_values, 90, 0.0), 4) if spread_values else None,
+            "liquidity_value_p50": round(_percentile(liquidity_values, 50, 0.0), 4)
+            if liquidity_values
+            else None,
+            "strategy_counts": _bucket_counter(sizing_events, "strategy", "trade_type"),
+            "price_band_counts": _bucket_counter(sizing_events, "price_band", "price_bucket"),
+            "volatility_bucket_counts": _bucket_counter(sizing_events, "volatility_bucket", "volatility_mode"),
+            "recent_loss_bucket_counts": _bucket_counter(sizing_events, "recent_loss_bucket", "loss_bucket"),
+            "portfolio_exposure_bucket_counts": _bucket_counter(
+                sizing_events,
+                "portfolio_exposure_bucket",
+                "exposure_bucket",
+            ),
+        },
+        "apply_ready": sample_ready,
+        "current": current,
+        "recommended": recommended,
+        "apply_mode": "report_only_design",
+        "metric_contract": {
+            "metric_role": "primary_ev",
+            "decision_authority": "report_only_until_approval_artifact",
+            "window_policy": "rolling_10d_with_real_denominator",
+            "sample_floor": 30,
+            "primary_decision_metric": ["notional_weighted_ev_pct", "source_quality_adjusted_ev_pct"],
+            "source_quality_gate": "all_required_inputs_present_and_real_sim_probe_split",
+            "forbidden_uses": [
+                "sim_probe_single_source_live_cap_release",
+                "runtime_order_qty_change_without_approval",
+                "reuse_position_sizing_cap_release_approval",
+            ],
+        },
+        "notes": [
+            "동적수량 산식 튜닝 owner를 자동화체인 report-only source bundle에 편입한다.",
+            "position_sizing_cap_release와 분리하며 cap 해제 approval을 재사용하지 않는다.",
+            "sim/probe/counterfactual은 diagnostic 가속 입력이며 real denominator를 대체하지 않는다.",
+            "실주문 수량 확대는 별도 approval artifact, same-stage owner guard, rollback guard가 필요하다.",
         ],
     }
 
@@ -3734,6 +4088,7 @@ def _build_family_reports(
         _build_holding_flow_ofi_smoothing_family(events),
         _build_scale_in_price_guard_family(events),
         _build_position_sizing_cap_release_family(events, completed_rows),
+        _build_position_sizing_dynamic_formula_family(events, completed_rows),
         _build_statistical_action_weight_family(events, completed_rows, target_date=target_date),
     ]
 
@@ -4122,6 +4477,23 @@ def _calibration_state_for_family(
             "approval_required",
             f"1주 cap 해제 efficient trade-off 기준 충족(score={tradeoff_score:.2f}/{required_score:.2f}): 자동 적용하지 않고 사용자 승인 요청 artifact로만 승격한다.",
         )
+    if output_family == "position_sizing_dynamic_formula":
+        sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+        blockers = sample.get("source_quality_blockers") if isinstance(sample.get("source_quality_blockers"), list) else []
+        if sample_count < sample_floor:
+            return (
+                "hold_sample",
+                f"동적수량 산식 real denominator sample floor 미달({sample_count}/{sample_floor}); report-only source bundle만 유지",
+            )
+        if blockers:
+            return (
+                "hold_sample",
+                "동적수량 산식 입력 coverage 미충족: " + ",".join(str(item) for item in blockers[:8]),
+            )
+        return (
+            "hold",
+            "동적수량 산식 source bundle은 준비됐지만 runtime 수량 변경은 별도 approval artifact 전까지 금지한다.",
+        )
     if output_family == "soft_stop_whipsaw_confirmation":
         source_count = _source_sample_count_for_family(output_family, source_metrics)
         if 0 < source_count < sample_floor:
@@ -4201,7 +4573,15 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                     source_sample_count,
                     _safe_int(lifecycle.get("post_sell_joined_records"), 0) or 0,
                 )
-        sample_count = max(_family_sample_count(family), source_sample_count)
+        if output_family == "score65_74_recovery_probe":
+            # The family sample includes broad funnel events such as budget_pass.
+            # Runtime readiness must use the score65~74 source cohort only.
+            sample_count = source_sample_count
+        elif output_family == "position_sizing_dynamic_formula":
+            family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+            sample_count = _safe_int(family_sample.get("real_completed_valid"), 0) or 0
+        else:
+            sample_count = max(_family_sample_count(family), source_sample_count)
         sample_floor = int(metadata.get("sample_floor") or 0)
         source_ready = source_sample_count >= sample_floor
         if output_family == "score65_74_recovery_probe":
@@ -4398,6 +4778,356 @@ def _allowed_sample_windows_for_candidate(candidate: dict) -> set[str]:
     if policy and not bool(policy.get("daily_only_allowed")):
         allowed.discard("daily_intraday")
     return allowed or set(AI_CORRECTION_ALLOWED_SAMPLE_WINDOWS)
+
+
+def _candidate_primary_window(candidate: dict) -> str | None:
+    policy = candidate.get("window_policy") if isinstance(candidate.get("window_policy"), dict) else {}
+    return _normalize_ai_sample_window(policy.get("primary") or candidate.get("sample_window"))
+
+
+def _sample_denominator_keys_for_family(family: str) -> list[str]:
+    metadata = CALIBRATION_FAMILY_METADATA.get(str(family) or "")
+    if isinstance(metadata, dict) and isinstance(metadata.get("sample_denominator_keys"), list):
+        return [str(value) for value in metadata.get("sample_denominator_keys") or [] if str(value or "").strip()]
+    return []
+
+
+def _snapshot_relevant_sample_count(family: str, snapshot: dict | None) -> int | None:
+    if not isinstance(snapshot, dict):
+        return None
+    sample = snapshot.get("sample") if isinstance(snapshot.get("sample"), dict) else {}
+    keys = _sample_denominator_keys_for_family(family)
+    if keys:
+        values = [_safe_int(sample.get(key), None) for key in keys]
+        values = [int(value) for value in values if value is not None]
+        return max(values) if values else 0
+    scale_in_counts = [
+        _safe_int(sample.get("resolved"), None),
+        _safe_int(sample.get("guard_block"), None),
+        _safe_int(sample.get("p2_observe"), None),
+    ]
+    if any(value is not None for value in scale_in_counts):
+        return sum(int(value or 0) for value in scale_in_counts)
+    smooth_hold = _safe_int(sample.get("smooth_hold"), None)
+    smooth_confirmed = _safe_int(sample.get("smooth_confirmed"), None)
+    if smooth_hold is not None or smooth_confirmed is not None:
+        return int(smooth_hold or 0) + int(smooth_confirmed or 0)
+    for key in (
+        "completed_valid",
+        "observed",
+        "exit_signal",
+        "touches",
+        "soft_stop_micro_grace",
+        "resolved",
+        "guard_block",
+        "p2_observe",
+    ):
+        value = _safe_int(sample.get(key), None)
+        if value is not None:
+            return int(value)
+    numeric_values = [_safe_int(value, None) for value in sample.values() if not isinstance(value, (dict, list))]
+    numeric_values = [int(value) for value in numeric_values if value is not None]
+    return max(numeric_values) if numeric_values else None
+
+
+def _window_snapshot(cumulative_report: dict | None, family: str, window: str | None) -> dict | None:
+    if not isinstance(cumulative_report, dict) or not window:
+        return None
+    snapshots = cumulative_report.get("threshold_snapshot_by_window")
+    snapshots = snapshots if isinstance(snapshots, dict) else {}
+    window_pack = snapshots.get(window)
+    if not isinstance(window_pack, dict):
+        return None
+    snapshot = window_pack.get(family)
+    if not isinstance(snapshot, dict):
+        metadata = CALIBRATION_FAMILY_METADATA.get(str(family) or "")
+        source_family = str((metadata or {}).get("source_family") or "")
+        if source_family and source_family != family:
+            snapshot = window_pack.get(source_family)
+    return snapshot if isinstance(snapshot, dict) else None
+
+
+def _window_source_context(cumulative_report: dict | None, window: str | None) -> dict:
+    if not isinstance(cumulative_report, dict) or not window:
+        return {}
+    by_window = cumulative_report.get("calibration_source_bundle_by_window")
+    by_window = by_window if isinstance(by_window, dict) else {}
+    context = by_window.get(window)
+    return context if isinstance(context, dict) else {}
+
+
+def _sample_floor_status_for_candidate_state(state: str, sample_count: int, sample_floor: int, sample_ready: bool) -> str:
+    if state == "freeze":
+        return "direction_conflict_or_live_risk"
+    if state == "hold_no_edge":
+        return "minimum_edge_missing"
+    if state == "approval_required":
+        return "manual_approval_required"
+    if state == "hold_sample":
+        return "hold_sample"
+    return "ready" if sample_count >= sample_floor and sample_ready else "hold_sample"
+
+
+def _runtime_apply_candidate_for_state(candidate: dict, state: str, sample_ready: bool) -> bool:
+    return (
+        bool(sample_ready)
+        and bool(candidate.get("allowed_runtime_apply"))
+        and state not in {"freeze", "hold_sample", "hold_no_edge", "approval_required"}
+    )
+
+
+def _apply_mode_for_candidate_state(candidate: dict, state: str, sample_ready: bool) -> str:
+    if not _runtime_apply_candidate_for_state(candidate, state, sample_ready):
+        return "report_only_calibration"
+    if str(candidate.get("family") or "") in {
+        "score65_74_recovery_probe",
+        "bad_entry_refined_canary",
+        "holding_exit_decision_matrix_advisory",
+    }:
+        return "efficient_tradeoff_canary_candidate"
+    return "calibrated_apply_candidate"
+
+
+def _refresh_candidate_from_primary_window(
+    candidate: dict,
+    *,
+    primary_snapshot: dict | None,
+    primary_source_metrics: dict,
+    primary_sample_count: int,
+    primary_ready: bool,
+    primary_window: str,
+) -> None:
+    family = str(candidate.get("family") or "")
+    metadata = CALIBRATION_FAMILY_METADATA.get(family)
+    if not isinstance(metadata, dict):
+        return
+    family_like = primary_snapshot if isinstance(primary_snapshot, dict) else {}
+    source_metrics = primary_source_metrics if primary_source_metrics else candidate.get("source_metrics")
+    source_metrics = source_metrics if isinstance(source_metrics, dict) else {}
+    state, reason = _calibration_state_for_family(
+        family,
+        family_like,
+        metadata,
+        source_metrics=source_metrics,
+        sample_count=primary_sample_count,
+        sample_ready=primary_ready,
+    )
+    sample_floor = _safe_int(candidate.get("sample_floor"), 0) or 0
+    sample_floor_status = _sample_floor_status_for_candidate_state(
+        state,
+        primary_sample_count,
+        sample_floor,
+        primary_ready,
+    )
+    primary_key = str(metadata.get("primary_key") or "")
+    current = family_like.get("current") if isinstance(family_like.get("current"), dict) else candidate.get("current_values")
+    recommended = (
+        family_like.get("recommended")
+        if isinstance(family_like.get("recommended"), dict)
+        else candidate.get("recommended_values")
+    )
+    current = current if isinstance(current, dict) else {}
+    recommended = recommended if isinstance(recommended, dict) else {}
+    apply_mode = _apply_mode_for_candidate_state(candidate, state, primary_ready)
+    candidate.update(
+        {
+            "sample_count": primary_sample_count,
+            "confidence": round(min(1.0, primary_sample_count / sample_floor), 4) if sample_floor > 0 else 0.0,
+            "current_value": current.get(primary_key),
+            "current_values": current,
+            "recommended_value": recommended.get(primary_key),
+            "recommended_values": recommended,
+            "calibration_state": state,
+            "calibration_reason": f"window_policy primary={primary_window} 기준 재평가: {reason}",
+            "sample_floor_status": sample_floor_status,
+            "apply_mode": apply_mode,
+            "threshold_version": f"{family}:{apply_mode}:{sample_floor_status}",
+            "window_policy_primary_applied": True,
+            "decision_sample_window": primary_window,
+        }
+    )
+    if primary_source_metrics:
+        candidate["source_metrics"] = primary_source_metrics
+
+
+def _build_window_policy_resolution(candidate: dict, cumulative_report: dict | None) -> dict:
+    policy = candidate.get("window_policy") if isinstance(candidate.get("window_policy"), dict) else {}
+    primary = _candidate_primary_window(candidate)
+    sample_floor = _safe_int(candidate.get("sample_floor"), 0) or 0
+    daily_sample = _safe_int(candidate.get("source_sample_count"), None)
+    if daily_sample is None:
+        daily_sample = _safe_int(candidate.get("sample_count"), 0) or 0
+    primary_snapshot = _window_snapshot(cumulative_report, str(candidate.get("family") or ""), primary)
+    primary_sample = _snapshot_relevant_sample_count(str(candidate.get("family") or ""), primary_snapshot)
+    primary_source_context = _window_source_context(cumulative_report, primary)
+    primary_source_metrics = _source_metrics_for_family(str(candidate.get("family") or ""), primary_source_context)
+    primary_source_sample = _source_sample_count_for_family(str(candidate.get("family") or ""), primary_source_metrics)
+    effective_primary_sample = max(
+        [value for value in (primary_sample, primary_source_sample) if value is not None],
+        default=None,
+    )
+    if primary == "daily_intraday":
+        effective_primary_sample = daily_sample if effective_primary_sample is None else effective_primary_sample
+    snapshot_ready = bool(primary_snapshot.get("sample_ready")) if isinstance(primary_snapshot, dict) else False
+    sample_count_ready = (
+        effective_primary_sample is not None and effective_primary_sample >= sample_floor
+        if sample_floor > 0
+        else bool(effective_primary_sample)
+    )
+    primary_ready = snapshot_ready or sample_count_ready
+    secondary: dict[str, dict[str, Any]] = {}
+    for raw_window in policy.get("secondary") or []:
+        window = _normalize_ai_sample_window(raw_window)
+        if not window:
+            continue
+        snapshot = _window_snapshot(cumulative_report, str(candidate.get("family") or ""), window)
+        sample = _snapshot_relevant_sample_count(str(candidate.get("family") or ""), snapshot)
+        source_context = _window_source_context(cumulative_report, window)
+        source_metrics = _source_metrics_for_family(str(candidate.get("family") or ""), source_context)
+        source_sample = _source_sample_count_for_family(str(candidate.get("family") or ""), source_metrics)
+        effective_sample = max([value for value in (sample, source_sample) if value is not None], default=None)
+        secondary[window] = {
+            "sample_count": effective_sample,
+            "snapshot_sample_count": sample,
+            "source_sample_count": source_sample,
+            "sample_ready": bool(snapshot.get("sample_ready")) if isinstance(snapshot, dict) else None,
+            "available": isinstance(snapshot, dict),
+        }
+    return {
+        "primary": primary,
+        "daily_only_allowed": bool(policy.get("daily_only_allowed")) if policy else True,
+        "primary_sample_count": effective_primary_sample,
+        "primary_snapshot_sample_count": primary_sample,
+        "primary_source_sample_count": primary_source_sample,
+        "primary_sample_ready": bool(primary_ready),
+        "primary_snapshot_available": isinstance(primary_snapshot, dict),
+        "primary_source_available": bool(primary_source_metrics),
+        "primary_source_metrics": primary_source_metrics,
+        "sample_floor": sample_floor,
+        "secondary": secondary,
+    }
+
+
+def apply_window_policy_registry_to_report(report: dict, cumulative_report: dict | None) -> dict:
+    candidates = report.get("calibration_candidates")
+    if not isinstance(candidates, list):
+        return report
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        resolution = _build_window_policy_resolution(candidate, cumulative_report)
+        candidate["window_policy_resolution"] = resolution
+        primary = resolution.get("primary")
+        daily_only_allowed = bool(resolution.get("daily_only_allowed"))
+        primary_ready = bool(resolution.get("primary_sample_ready"))
+        changes_value_or_state = str(candidate.get("calibration_state") or "") in {"adjust_up", "adjust_down"}
+        if primary and primary != "daily_intraday" and not daily_only_allowed and changes_value_or_state and not primary_ready:
+            candidate["calibration_state"] = "hold_sample"
+            candidate["calibration_reason"] = (
+                f"window_policy primary={primary} 표본/ready 미충족; daily trigger만으로 runtime 후보 승격 금지"
+            )
+            candidate["sample_floor_status"] = "window_policy_hold_sample"
+            candidate["apply_mode"] = "report_only_calibration"
+            candidate["runtime_apply_blocker"] = "window_policy_primary_not_ready"
+            candidate["threshold_version"] = f"{candidate.get('family')}:{candidate.get('apply_mode', 'observe_only')}:window_policy_hold_sample"
+        elif primary and primary != "daily_intraday" and primary_ready:
+            primary_sample = _safe_int(resolution.get("primary_sample_count"), None)
+            primary_snapshot = _window_snapshot(cumulative_report, str(candidate.get("family") or ""), str(primary))
+            primary_source_metrics = (
+                resolution.get("primary_source_metrics")
+                if isinstance(resolution.get("primary_source_metrics"), dict)
+                else {}
+            )
+            if primary_sample is not None:
+                _refresh_candidate_from_primary_window(
+                    candidate,
+                    primary_snapshot=primary_snapshot,
+                    primary_source_metrics=primary_source_metrics,
+                    primary_sample_count=int(primary_sample),
+                    primary_ready=primary_ready,
+                    primary_window=str(primary),
+                )
+    report["window_policy_audit"] = _build_window_policy_audit(candidates)
+    report["post_apply_attribution"] = _build_post_apply_attribution(candidates)
+    report["safety_guard_pack"] = _build_safety_guard_pack(candidates)
+    report["calibration_trigger_pack"] = _build_calibration_trigger_pack(candidates)
+    return report
+
+
+def _build_window_policy_audit(candidates: list[dict]) -> dict:
+    items: list[dict] = []
+    issue_counts: Counter[str] = Counter()
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        family = str(candidate.get("family") or "")
+        resolution = candidate.get("window_policy_resolution") if isinstance(candidate.get("window_policy_resolution"), dict) else {}
+        primary = str(resolution.get("primary") or "")
+        daily_only_allowed = bool(resolution.get("daily_only_allowed"))
+        primary_ready = bool(resolution.get("primary_sample_ready"))
+        primary_available = bool(resolution.get("primary_snapshot_available"))
+        primary_source_available = bool(resolution.get("primary_source_available"))
+        state = str(candidate.get("calibration_state") or "")
+        sample_floor = _safe_int(candidate.get("sample_floor"), 0) or 0
+        source_sample = _safe_int(candidate.get("source_sample_count"), 0) or 0
+        issues: list[str] = []
+        if (
+            primary
+            and primary not in {"daily_intraday", "latest_report"}
+            and not daily_only_allowed
+            and not primary_available
+            and not primary_source_available
+        ):
+            issues.append("rolling_consumer_gap")
+        snapshot_sample = _safe_int(resolution.get("primary_snapshot_sample_count"), None)
+        source_window_sample = _safe_int(resolution.get("primary_source_sample_count"), None)
+        if (
+            primary
+            and primary not in {"daily_intraday", "latest_report"}
+            and source_window_sample is not None
+            and source_window_sample >= sample_floor
+            and (snapshot_sample is None or snapshot_sample < sample_floor)
+        ):
+            issues.append("rolling_source_snapshot_mismatch")
+        if str(candidate.get("runtime_apply_blocker") or "") == "window_policy_primary_not_ready":
+            issues.append("daily_only_leak_blocked")
+        if (
+            primary
+            and primary not in {"daily_intraday", "latest_report"}
+            and not daily_only_allowed
+            and primary_ready
+            and state == "hold_sample"
+            and source_sample < sample_floor
+        ):
+            issues.append("rolling_ready_but_daily_source_hold_sample")
+        denominator_keys = _sample_denominator_keys_for_family(family)
+        if family in {"score65_74_recovery_probe", "position_sizing_cap_release", "position_sizing_dynamic_formula"} and not denominator_keys:
+            issues.append("sample_denominator_missing")
+        for issue in issues:
+            issue_counts[issue] += 1
+        items.append(
+            {
+                "family": family,
+                "primary": primary,
+                "daily_only_allowed": daily_only_allowed,
+                "candidate_state": state,
+                "source_sample_count": source_sample,
+                "sample_floor": sample_floor,
+                "primary_sample_count": resolution.get("primary_sample_count"),
+                "primary_snapshot_sample_count": resolution.get("primary_snapshot_sample_count"),
+                "primary_source_sample_count": resolution.get("primary_source_sample_count"),
+                "primary_sample_ready": primary_ready,
+                "primary_snapshot_available": primary_available,
+                "primary_source_available": primary_source_available,
+                "sample_denominator_keys": denominator_keys,
+                "issues": issues,
+            }
+        )
+    return {
+        "status": "issues_found" if issue_counts else "pass",
+        "issue_counts": dict(sorted(issue_counts.items())),
+        "items": items,
+    }
 
 
 def _parse_ai_correction_response(ai_raw_response: Any) -> tuple[str, list[dict], list[str]]:
@@ -4658,7 +5388,10 @@ def _build_ai_correction_input_context(calibration_report: dict, cumulative_repo
         cumulative_summary = {
             "date": cumulative_report.get("date"),
             "summary": cumulative_report.get("summary"),
-            "family_direction": cumulative_report.get("family_direction"),
+            "threshold_snapshot_by_window": cumulative_report.get("threshold_snapshot_by_window"),
+            "calibration_source_bundle_by_window": cumulative_report.get("calibration_source_bundle_by_window"),
+            "completed_by_source": cumulative_report.get("completed_by_source"),
+            "source_flags": cumulative_report.get("source_flags"),
             "warnings": cumulative_report.get("warnings"),
         }
     return {
@@ -5741,6 +6474,7 @@ def build_cumulative_threshold_cycle_report(
     start_date: str = CUMULATIVE_BASELINE_START_DATE,
     rolling_days: tuple[int, ...] = (5, 10, 20),
     pipeline_loader: Callable[[str], list[dict]] | None = None,
+    report_source_loader: Callable[[str], dict] | None = None,
     completed_rows_loader: Callable[[str, str], list[dict]] | None = None,
     skip_completed_rows: bool = False,
 ) -> dict:
@@ -5775,6 +6509,25 @@ def build_cumulative_threshold_cycle_report(
             except Exception as exc:
                 ctx.warnings.append(f"pipeline event 로드 실패({label}/{event_date}): {exc}")
         events_by_window[label] = rows
+
+    report_sources_by_window: dict[str, dict] = {}
+    if report_source_loader is not None:
+        for label, dates in window_dates.items():
+            contexts: list[dict] = []
+            for event_date in dates:
+                try:
+                    context = report_source_loader(event_date)
+                    if isinstance(context, dict):
+                        contexts.append(context)
+                    else:
+                        ctx.warnings.append(f"calibration source loader non-dict({label}/{event_date})")
+                except Exception as exc:
+                    ctx.warnings.append(f"calibration source 로드 실패({label}/{event_date}): {exc}")
+            report_sources_by_window[label] = _aggregate_calibration_source_contexts(
+                contexts,
+                target_date=target_date,
+                window_label=label,
+            )
 
     completed_rows: list[dict] = []
     if not skip_completed_rows:
@@ -5861,6 +6614,7 @@ def build_cumulative_threshold_cycle_report(
         "completed_by_source": completed_source_summary_by_window,
         "scalp_simulator": scalp_simulator_by_window,
         "threshold_snapshot_by_window": family_snapshots,
+        "calibration_source_bundle_by_window": report_sources_by_window,
         "apply_candidate_list_by_window": family_apply_candidates,
         "source_flags": source_flags,
         "operator_decision": "report_only_review",
@@ -5984,7 +6738,7 @@ def render_cumulative_threshold_cycle_markdown(report: dict) -> str:
             continue
         for family, payload in snapshot.items():
             sample = payload.get("sample") if isinstance(payload.get("sample"), dict) else {}
-            sample_value = sample.get("completed_valid") or sample.get("observed") or sample.get("exit_signal") or sample.get("budget_pass")
+            sample_value = _snapshot_relevant_sample_count(str(family), payload)
             lines.append(
                 "| "
                 + " | ".join(
@@ -6195,6 +6949,12 @@ def main(argv: list[str] | None = None) -> int:
         skip_completed_rows=args.skip_db,
         calibration_run_phase=args.calibration_run_phase,
     )
+    cumulative_report = build_cumulative_threshold_cycle_report(
+        args.target_date,
+        report_source_loader=_summarize_holding_exit_report_sources,
+        skip_completed_rows=args.skip_db,
+    )
+    apply_window_policy_registry_to_report(report, cumulative_report)
     calibration_path = save_threshold_calibration_report(report, run_phase=args.calibration_run_phase)
     ai_raw_response = None
     ai_provider_status = {"provider": "none", "status": "not_requested"}
@@ -6203,16 +6963,17 @@ def main(argv: list[str] | None = None) -> int:
         ai_provider_status = {"provider": "file", "status": "loaded", "path": args.ai_correction_response_json}
     elif args.ai_correction_provider == "gemini":
         ai_raw_response, ai_provider_status = _call_gemini_threshold_ai_correction(
-            _build_ai_correction_input_context(report)
+            _build_ai_correction_input_context(report, cumulative_report)
         )
     elif args.ai_correction_provider == "openai":
         ai_raw_response, ai_provider_status = _call_openai_threshold_ai_correction(
-            _build_ai_correction_input_context(report),
+            _build_ai_correction_input_context(report, cumulative_report),
             run_phase=args.calibration_run_phase,
         )
     ai_correction_report = build_threshold_cycle_ai_correction_report(
         report,
         ai_raw_response=ai_raw_response,
+        cumulative_report=cumulative_report,
         source_calibration_report_path=str(calibration_path),
         ai_provider_status=ai_provider_status,
     )
@@ -6224,7 +6985,6 @@ def main(argv: list[str] | None = None) -> int:
     save_threshold_cycle_report(report)
     save_statistical_action_weight_artifact(report)
     save_holding_exit_decision_matrix(report)
-    cumulative_report = build_cumulative_threshold_cycle_report(args.target_date, skip_completed_rows=args.skip_db)
     save_cumulative_threshold_cycle_report(cumulative_report)
     if args.print_stdout:
         print(json.dumps(report, ensure_ascii=False, indent=2))

@@ -1067,37 +1067,63 @@ def _log_swing_probe_discard(stock, code, origin_stage: str, reason: str, **fiel
     return True
 
 
-def _resolve_swing_probe_qty(stock: dict, curr_price: int, ratio: float) -> dict:
+def _sim_virtual_budget_krw() -> int:
+    return max(0, _rule_int("SIM_VIRTUAL_BUDGET_KRW", 10_000_000))
+
+
+def _describe_sim_virtual_buy_capacity(curr_price: int, ratio: float, *, max_budget: int = 0) -> dict:
+    virtual_budget = _sim_virtual_budget_krw()
+    effective_ratio = float(ratio or 0.0)
     if curr_price <= 0:
-        return {"qty": 1, "qty_source": "fallback_min_qty", "qty_reason": "missing_curr_price"}
-    try:
-        deposit = _safe_int(kiwoom_orders.get_deposit(KIWOOM_TOKEN), 0)
-    except Exception:
-        deposit = 0
-    if deposit <= 0 or ratio <= 0:
         return {
             "qty": 1,
-            "qty_source": "fallback_min_qty",
-            "qty_reason": "missing_deposit_or_ratio",
-            "deposit": deposit,
-            "ratio": f"{float(ratio or 0.0):.4f}",
+            "target_budget": 0,
+            "safe_budget": 0,
+            "safety_ratio": 0.0,
+            "virtual_budget_krw": virtual_budget,
+            "effective_ratio": effective_ratio,
         }
     target_budget, safe_budget, qty, safety_ratio = kiwoom_orders.describe_buy_capacity(
         curr_price,
-        deposit,
-        ratio,
-        max_budget=0,
+        virtual_budget,
+        effective_ratio,
+        max_budget=max_budget,
     )
-    qty = max(1, _safe_int(qty, 1))
     return {
-        "qty": qty,
-        "qty_source": "live_equivalent_buy_capacity",
-        "qty_reason": "probe_uses_live_budget_formula",
-        "deposit": deposit,
-        "ratio": f"{float(ratio or 0.0):.4f}",
+        "qty": max(1, _safe_int(qty, 0)),
         "target_budget": target_budget,
         "safe_budget": safe_budget,
-        "safety_ratio": f"{float(safety_ratio or 0.0):.4f}",
+        "safety_ratio": safety_ratio,
+        "virtual_budget_krw": virtual_budget,
+        "effective_ratio": effective_ratio,
+    }
+
+
+def _resolve_swing_probe_qty(stock: dict, curr_price: int, ratio: float) -> dict:
+    capacity = _describe_sim_virtual_buy_capacity(curr_price, ratio, max_budget=0)
+    qty = _safe_int(capacity.get("qty"), 1)
+    if curr_price <= 0:
+        return {
+            "qty": qty,
+            "qty_source": "sim_virtual_budget_dynamic_formula",
+            "qty_reason": "missing_curr_price_virtual_min_qty",
+            "virtual_budget_override": True,
+            "virtual_budget_krw": capacity.get("virtual_budget_krw"),
+            "budget_authority": "sim_virtual_not_real_orderable_amount",
+            "ratio": f"{float(ratio or 0.0):.4f}",
+        }
+    return {
+        "qty": qty,
+        "qty_source": "sim_virtual_budget_dynamic_formula",
+        "qty_reason": "probe_uses_sim_virtual_budget_with_live_qty_formula",
+        "virtual_budget_override": True,
+        "virtual_budget_krw": capacity.get("virtual_budget_krw"),
+        "target_budget": capacity.get("target_budget"),
+        "safe_budget": capacity.get("safe_budget"),
+        "safety_ratio": f"{float(capacity.get('safety_ratio') or 0.0):.4f}",
+        "virtual_notional_used_krw": int(curr_price * qty),
+        "budget_authority": "sim_virtual_not_real_orderable_amount",
+        "ratio": f"{float(capacity.get('effective_ratio') or 0.0):.4f}",
     }
 
 
@@ -1637,12 +1663,17 @@ def handle_scalp_simulator_pending_entry(stock: dict, code: str, ws_data: dict, 
 def _resolve_scalp_sim_entry_qty(stock: dict, ws_data: dict, runtime: dict) -> dict:
     configured_qty = _rule_int("SCALP_LIVE_SIMULATOR_QTY", 0)
     if configured_qty > 0:
+        virtual_budget = _sim_virtual_budget_krw()
         return {
             "qty": configured_qty,
             "qty_source": "fixed_config",
             "uncapped_qty": configured_qty,
             "cap_applied": False,
             "qty_reason": "fixed_config",
+            "virtual_budget_override": True,
+            "virtual_budget_krw": virtual_budget,
+            "virtual_notional_used_krw": 0,
+            "budget_authority": "sim_virtual_not_real_orderable_amount",
         }
 
     curr_price = _safe_int(
@@ -1652,46 +1683,41 @@ def _resolve_scalp_sim_entry_qty(stock: dict, ws_data: dict, runtime: dict) -> d
         0,
     )
     ratio = _safe_float((runtime or {}).get("ratio"), 0.0)
-    deposit = _safe_int((runtime or {}).get("deposit"), 0)
-    if deposit <= 0:
-        try:
-            deposit = _safe_int(kiwoom_orders.get_deposit(KIWOOM_TOKEN), 0)
-        except Exception:
-            deposit = 0
+    effective_ratio = ratio if ratio > 0 else 1.0
     budget_cap = int(_rule("SCALPING_MAX_BUY_BUDGET_KRW", 0) or 0)
-    if curr_price <= 0 or ratio <= 0 or deposit <= 0:
+    capacity = _describe_sim_virtual_buy_capacity(curr_price, effective_ratio, max_budget=budget_cap)
+    qty = _safe_int(capacity.get("qty"), 1)
+    if curr_price <= 0:
         return {
-            "qty": 1,
-            "qty_source": "uncapped_fallback_min_qty",
-            "uncapped_qty": 1,
+            "qty": qty,
+            "qty_source": "sim_virtual_budget_dynamic_formula",
+            "uncapped_qty": qty,
             "cap_applied": False,
-            "qty_reason": "missing_price_ratio_or_deposit",
+            "qty_reason": "missing_price",
             "curr_price": curr_price,
-            "ratio": f"{ratio:.4f}",
-            "deposit": deposit,
-            "budget_cap": budget_cap if budget_cap > 0 else "-",
+            "ratio": f"{effective_ratio:.4f}",
+            "virtual_budget_override": True,
+            "virtual_budget_krw": capacity.get("virtual_budget_krw"),
+            "virtual_notional_used_krw": 0,
+            "budget_authority": "sim_virtual_not_real_orderable_amount",
         }
 
-    target_budget, safe_budget, qty, safety_ratio = kiwoom_orders.describe_buy_capacity(
-        curr_price,
-        deposit,
-        ratio,
-        max_budget=budget_cap,
-    )
-    qty = max(1, _safe_int(qty, 0))
     return {
         "qty": qty,
-        "qty_source": "uncapped_buy_capacity",
+        "qty_source": "sim_virtual_budget_dynamic_formula",
         "uncapped_qty": qty,
         "cap_applied": False,
-        "qty_reason": "sim_unrestricted_by_1share_cap",
+        "qty_reason": "sim_uses_virtual_budget_with_live_qty_formula",
         "curr_price": curr_price,
-        "ratio": f"{ratio:.4f}",
-        "deposit": deposit,
-        "target_budget": target_budget,
-        "safe_budget": safe_budget,
-        "safety_ratio": f"{float(safety_ratio or 0.0):.4f}",
+        "ratio": f"{effective_ratio:.4f}",
+        "target_budget": capacity.get("target_budget"),
+        "safe_budget": capacity.get("safe_budget"),
+        "safety_ratio": f"{float(capacity.get('safety_ratio') or 0.0):.4f}",
         "budget_cap": budget_cap if budget_cap > 0 else "-",
+        "virtual_budget_override": True,
+        "virtual_budget_krw": capacity.get("virtual_budget_krw"),
+        "virtual_notional_used_krw": int(curr_price * qty),
+        "budget_authority": "sim_virtual_not_real_orderable_amount",
     }
 
 

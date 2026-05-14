@@ -1,7 +1,7 @@
 # 작업지시서: Shadow/Canary 런타임 경로와 Live Cohort 분류 기준
 
 작성일: `2026-04-25 KST`  
-마지막 갱신: `2026-05-12 KST`
+마지막 갱신: `2026-05-14 KST`
 대상: KORStockScan 메인 코드베이스 운영/튜닝 문서 소유자  
 ApplyTarget: `main` 문서/후속 코드정리 기준  
 
@@ -28,6 +28,21 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 8. `bad_entry_block`의 naive 차단은 금지한다. 다만 `2026-05-12` postclose 기준 `bad_entry_refined_canary`는 active live owner가 아니라 `post_sell` join readiness를 기다리는 `observe-only / report-only hold`다. entry 쪽 active canary는 `score65_74_recovery_probe`와 `dynamic_entry_ai_price_canary_p2`처럼 별도 cohort로 분리해 본다.
 9. `statistical_action_weight`는 가격대/거래량/시간대별 행동 선택 통계용 `decision-support` 축이다. live 판단에는 직접 쓰지 않고 장후 threshold weight 입력과 동적 수량화 설계 근거로만 둔다.
 10. 스윙은 `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True`가 기본이며, `swing_sim_*`/combined는 EV 후보와 승인 요청 생성에는 동급 입력으로 쓴다. 다만 broker execution 품질은 real-only라 `swing_one_share_real_canary`를 별도 approval-required real-canary 후보로 둔다.
+
+### 2026-05-14 POSTCLOSE Snapshot Addendum
+
+이 addendum은 `runtime_approval_summary_2026-05-14`, `threshold_cycle_ev_2026-05-14`, `pipeline_event_verbosity_2026-05-14`, `panic_sell_defense_2026-05-14` 기준의 당일 분류 보정이다. 기존 분류 체계는 바꾸지 않고, 5/14에 새 baseline 승격이나 remove 판정이 없었음을 잠근다.
+
+| 축 | 2026-05-14 판정 | 근거 | 다음 액션 |
+| --- | --- | --- | --- |
+| `soft_stop_whipsaw_confirmation` | active-canary / selected auto-bounded-live | 당일 runtime approval summary에서 유일한 selected_auto_bounded_live이며 runtime env에 반영됨 | 5/15 post-apply attribution에서 applied/not-applied cohort와 rollback guard 확인 |
+| `score65_74_recovery_probe` | observe/existing-family input, 당일 runtime selected 아님 | 5/14 runtime env selected family에 없고 runtime approval summary state는 hold 계열 | 다음 preopen apply와 rolling/cumulative sample 기준으로 재판정. 수동 env override 금지 |
+| `bad_entry_refined_canary` | observe-only / live OFF | runtime approval summary상 adjust_up이지만 current_application=`OFF/관찰 only` | source bundle과 post-sell join 품질이 닫힐 때까지 live 승격 금지 |
+| `pipeline_event_compaction_v2_shadow` | report-only diagnostic aggregation | 기본 mode는 `off`; shadow는 raw JSONL/DB upsert를 보존하고 producer summary/parity만 생성 | V1/V2 parity 2영업일 이상 확인 전 suppress 금지 |
+| `panic_entry_freeze_guard` | report-only candidate / inactive | `panic_sell_defense_2026-05-14` panic_state=`NORMAL`, candidate status=`inactive_no_panic`, allowed_runtime_apply=`false` | PANIC_SELL/confirmed risk-off 반복과 approval artifact/rollback guard가 닫힌 뒤 별도 implementation workorder로 검토 |
+| `swing_runtime_approval` | approval-required dry-run, real canary 아님 | 5/14 approval request 2건, approved 0건, runtime_change=false | approval artifact 없이는 env/live order 반영 금지 |
+
+5/14 결론은 `no_runtime_classification_change_with_snapshot_update`다. 신규 `remove`, `baseline-promote`, `active-canary` 전환은 없고, report-only/observe-only 축은 threshold/order/provider/bot restart 권한이 없다.
 
 ## 0.1 Runtime ON/OFF 스냅샷 (`2026-05-12` 기준)
 

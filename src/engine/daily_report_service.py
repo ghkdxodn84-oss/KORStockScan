@@ -18,6 +18,7 @@ REPORT_DIR = DATA_DIR / "report"
 REPORT_DIR.mkdir(parents=True, exist_ok=True)
 REPORT_SCHEMA_VERSION = 3
 DEFAULT_REALIZED_PNL_COST_RATE = 0.0023
+_ENGINE_CACHE: dict[str, Any] = {}
 
 _MODEL_XGB_FEATURES = [
     "daily_return",
@@ -124,7 +125,10 @@ def _import_sqlalchemy():
 
 def _get_engine():
     create_engine, _ = _import_sqlalchemy()
-    return create_engine(POSTGRES_URL, pool_pre_ping=True)
+    cache_key = str(POSTGRES_URL)
+    if cache_key not in _ENGINE_CACHE:
+        _ENGINE_CACHE[cache_key] = create_engine(POSTGRES_URL, pool_pre_ping=True)
+    return _ENGINE_CACHE[cache_key]
 
 
 def _fetch_recent_db_dates(limit: int = 30) -> list[str]:
@@ -256,6 +260,37 @@ def _build_market_snapshot(target_date: str, ctx: _ReportContext) -> dict:
             ctx.warnings.append("일봉 대상 종목이 없어 시장 진단을 생략했습니다.")
             return snapshot
 
+        target_codes = [
+            str(value).strip().zfill(6)
+            for value in targets.get("stock_code", pd.Series(dtype=object)).dropna().tolist()
+            if str(value).strip()
+        ]
+        history_by_code: dict[str, Any] = {}
+        if target_codes:
+            try:
+                history_rows = pd.read_sql(
+                    text(
+                        """
+                        SELECT *
+                        FROM daily_stock_quotes
+                        WHERE stock_code = ANY(:codes)
+                          AND quote_date <= :quote_date
+                        ORDER BY stock_code ASC, quote_date DESC
+                        """
+                    ),
+                    engine,
+                    params={"codes": target_codes, "quote_date": quote_date},
+                )
+                if not history_rows.empty:
+                    history_rows["stock_code"] = history_rows["stock_code"].astype(str).str.zfill(6)
+                    history_rows = history_rows.groupby("stock_code", sort=False).head(60)
+                    history_by_code = {
+                        str(code).zfill(6): group.sort_values("quote_date").reset_index(drop=True)
+                        for code, group in history_rows.groupby("stock_code", sort=False)
+                    }
+            except Exception as exc:
+                ctx.warnings.append(f"시장 진단 일봉 history bulk 조회 실패: {exc}")
+
         model_paths = {
             "m_xgb": DATA_DIR / "hybrid_xgb_model.pkl",
             "m_lgbm": DATA_DIR / "hybrid_lgbm_model.pkl",
@@ -318,24 +353,26 @@ def _build_market_snapshot(target_date: str, ctx: _ReportContext) -> dict:
             except Exception:
                 pass
 
-            history = pd.read_sql(
-                text(
-                    """
-                    SELECT *
-                    FROM daily_stock_quotes
-                    WHERE stock_code = :code
-                      AND quote_date <= :quote_date
-                    ORDER BY quote_date DESC
-                    LIMIT 60
-                    """
-                ),
-                engine,
-                params={"code": code, "quote_date": quote_date},
-            )
+            history = history_by_code.get(code, pd.DataFrame())
+            if history.empty and not history_by_code:
+                history = pd.read_sql(
+                    text(
+                        """
+                        SELECT *
+                        FROM daily_stock_quotes
+                        WHERE stock_code = :code
+                          AND quote_date <= :quote_date
+                        ORDER BY quote_date DESC
+                        LIMIT 60
+                        """
+                    ),
+                    engine,
+                    params={"code": code, "quote_date": quote_date},
+                )
+                if not history.empty:
+                    history = history.sort_values("quote_date").reset_index(drop=True)
             if history.empty or len(history) < 30:
                 continue
-
-            history = history.sort_values("quote_date").reset_index(drop=True)
 
             total_valid += 1
             is_above_20ma = curr_p > ma20 if ma20 > 0 else False

@@ -224,6 +224,35 @@ def test_backfill_threshold_cycle_events_pauses_on_system_metric_guard(tmp_path,
     assert summary["paused_reason"] == "iowait_pct>=20"
 
 
+def test_backfill_threshold_cycle_events_completed_checkpoint_skips_metric_guard(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
+    samples = iter(
+        [
+            {"cpu": {"iowait_pct": 0.0}, "io": {"disk_read_mb_delta": 0.0}, "memory": {"mem_available_mb": 2048.0}},
+            {"cpu": {"iowait_pct": 0.0}, "io": {"disk_read_mb_delta": 256.0}, "memory": {"mem_available_mb": 2048.0}},
+        ]
+    )
+    monkeypatch.setattr(mod, "_sample_metrics", lambda: next(samples))
+    raw_dir = tmp_path / "pipeline_events"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    raw_path = raw_dir / "pipeline_events_2026-04-30.jsonl"
+    raw_path.write_text(
+        json.dumps({"event_type": "pipeline_event", "stage": "budget_pass", "fields": {}}),
+        encoding="utf-8",
+    )
+
+    first = mod.backfill_threshold_cycle_events("2026-04-30", overwrite=True)
+    assert first["status"] == "paused_by_availability_guard"
+    assert first["byte_offset"] == first["source_size"]
+
+    summary = mod.backfill_threshold_cycle_events("2026-04-30")
+    assert summary["status"] == "completed"
+    assert summary["completed"] is True
+    assert summary["processed"] == 0
+    assert summary["paused_reason"] is None
+
+
 def test_backfill_threshold_cycle_events_accepts_dynamic_threshold_family(tmp_path, monkeypatch):
     monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
     monkeypatch.setattr(mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")

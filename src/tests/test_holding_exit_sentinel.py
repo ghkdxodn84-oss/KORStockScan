@@ -265,3 +265,44 @@ def test_probe_sibling_marks_sparse_exit_signal_as_non_real(monkeypatch, tmp_pat
     }
     assert report["current"]["session"]["stage_unique"]["exit_signal"] == 1
     assert report["current"]["session"]["stage_unique"]["non_real_exit_signal"] == 1
+
+
+def test_use_cache_reads_only_appended_holding_raw_bytes(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event("2026-05-06", "10:00:00", "exit_signal", record_id=1),
+            _event("2026-05-06", "10:01:00", "sell_order_sent", record_id=1),
+        ],
+    )
+
+    first = sentinel.build_holding_exit_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:05:00"),
+        use_cache=True,
+    )
+    assert first["event_load"]["cache_enabled"] is True
+    assert first["current"]["session"]["stage_unique"]["sell_order_sent"] == 1
+
+    event_path = tmp_path / "pipeline_events" / "pipeline_events_2026-05-06.jsonl"
+    with event_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                _event("2026-05-06", "10:06:00", "exit_signal", record_id=2),
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+
+    second = sentinel.build_holding_exit_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:10:00"),
+        use_cache=True,
+    )
+    assert second["current"]["session"]["stage_unique"]["exit_signal"] == 2
+    meta_path = tmp_path / "runtime" / "sentinel_event_cache" / "holding_exit_sentinel_events_2026-05-06.meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["cache_event_count"] == 3
+    assert meta["appended_raw_lines"] == 1

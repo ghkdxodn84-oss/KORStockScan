@@ -153,6 +153,8 @@ def test_build_missed_entry_counterfactual_report(monkeypatch, tmp_path):
         get_kiwoom_token=lambda: "dummy",
         get_minute_candles_ka10080=lambda _token, code, limit=700: candle_map.get(code, []),
     )
+    import src.utils as utils_pkg
+    monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)
     monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
 
     report = report_mod.build_missed_entry_counterfactual_report(target_date, token="dummy")
@@ -171,6 +173,9 @@ def test_build_missed_entry_counterfactual_report(monkeypatch, tmp_path):
     assert report["buy_signal_universe"]["metrics"]["entered_attempts"] == 1
     assert report["buy_signal_universe"]["metrics"]["missed_attempts"] == 2
     assert report["top_missed_winners"][0]["stock_code"] == "111111"
+    assert report["top_missed_winners"][0]["counterfactual_qty"] == 114
+    assert report["top_missed_winners"][0]["counterfactual_qty_source"] == "sim_virtual_budget_dynamic_formula"
+    assert report["top_missed_winners"][0]["virtual_budget_krw"] == 10_000_000
     assert report["top_avoided_losers"][0]["stock_code"] == "222222"
     stages = {row["stage"] for row in report["reason_breakdown"]}
     assert "latency_block" in stages
@@ -264,6 +269,8 @@ def test_collects_all_missed_attempts_not_only_latest_per_stock(monkeypatch, tmp
             _make_candle("09:40:00", 9990, 10010, 9960, 9980),
         ],
     )
+    import src.utils as utils_pkg
+    monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)
     monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
 
     report = report_mod.build_missed_entry_counterfactual_report(target_date, token="dummy")
