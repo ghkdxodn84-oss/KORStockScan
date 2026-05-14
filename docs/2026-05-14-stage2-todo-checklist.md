@@ -228,10 +228,13 @@
   - 다음 액션: 구현 착수 시 runtime 기본값은 OFF로 유지하고, `src/tests/test_threshold_cycle_preopen_apply.py`, `src/tests/test_daily_threshold_cycle_report.py`, `src/tests/test_runtime_approval_summary.py`와 entry hook 단위 테스트를 추가/수정한다. 실제 신규 BUY block은 별도 approval artifact와 preopen apply manifest 확인 전까지 열지 않는다.
 
 - [ ] `[BotCPUHotspotFollowup0514] 장후 bot CPU hotspot throttle/worker split 후속 범위 확인` (`Due: 2026-05-14`, `Slot: POSTCLOSE`, `TimeWindow: 18:20~18:40`, `Track: RuntimeStability`)
-  - Source: [2026-05-13-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-13-stage2-todo-checklist.md), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [bot_main.py](/home/ubuntu/KORStockScan/src/bot_main.py)
-  - 판정 기준: 5/13 장후 `scanner_loop_throttle_required` 판정의 재현 여부를 확인하고, 장외 스캘핑 scanner throttle, pipeline logging batching, 별도 worker/process split 중 구현 범위를 하나로 좁힌다.
+  - Source: [2026-05-13-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-05-13-stage2-todo-checklist.md), [run_bot.sh](/home/ubuntu/KORStockScan/src/run_bot.sh), [bot_main.py](/home/ubuntu/KORStockScan/src/bot_main.py), [pipeline_event_logger.py](/home/ubuntu/KORStockScan/src/utils/pipeline_event_logger.py), [compress_db_backfilled_files.py](/home/ubuntu/KORStockScan/src/engine/compress_db_backfilled_files.py), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
+  - 판정 기준: 5/13 장후 `scanner_loop_throttle_required` 판정의 재현 여부와 5/14 `pipeline_event_storage_pressure`를 분리 확인하고, 장외 스캘핑 scanner throttle, pipeline event verbosity/throttle, pipeline logging batching, 별도 worker/process split 중 구현 범위를 하나로 좁힌다.
   - 금지: 장중 hot patch, bot restart, threshold/provider/order guard 변경, profiler 패키지 설치를 수행하지 않는다.
-  - 다음 액션: `scanner_loop_throttle_workorder`, `worker_split_workorder`, `logging_batching_workorder`, `observe_only_no_action` 중 하나로 닫는다.
+  - 실행 메모(2026-05-14): `data/pipeline_events`와 `data/threshold_cycle/snapshots`가 log rotation 대상 밖에서 증가했으므로, 검증 완료 과거 raw/snapshot은 `compress_db_backfilled_files --days 7`로 압축하고 runbook/traceability에 `Pipeline Event Verbosity/Retention Policy`를 추가했다.
+  - P1 실행 메모(2026-05-14 13:50 KST): `buy_funnel_sentinel`/`holding_exit_sentinel`에 slim append cache(`data/runtime/sentinel_event_cache/*_events_YYYY-MM-DD.{jsonl,meta.json}`)를 추가하고 wrapper 기본값을 `*_USE_CACHE=1`로 전환했다. 캐시는 report-only 성능 최적화이며 sentinel classification, threshold/provider/order guard, bot restart 권한을 바꾸지 않는다.
+  - 검증 메모: `pytest -q src/tests/test_buy_funnel_sentinel.py src/tests/test_holding_exit_sentinel.py` 결과 `16 passed`. 실파일 검증에서 BUY cache는 schema=`3`, `rebuilt=false`, append raw `3924` lines / cache `2750` rows 후속 실행 `35.8s`; HOLD/EXIT cache는 schema=`3`, `rebuilt=false`, append raw `358` lines / cache `0` rows 후속 실행 `0.42s`다.
+  - 다음 액션: `scanner_loop_throttle_workorder`, `worker_split_workorder`, `logging_batching_workorder`, `pipeline_event_verbosity_compaction_workorder`, `observe_only_no_action` 중 하나로 닫는다.
 
 - [ ] `[ShadowCanaryCohortReview0514] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-14`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)

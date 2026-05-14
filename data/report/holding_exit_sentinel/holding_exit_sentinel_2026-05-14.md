@@ -2,31 +2,31 @@
 
 ## 판정
 
-- primary: `AI_HOLDING_OPS`
-- secondary: `-`
+- primary: `HOLD_DEFER_DANGER`
+- secondary: `AI_HOLDING_OPS, SOFT_STOP_WHIPSAW`
 - report_only: `true`
 - live_runtime_effect: `false`
 - operator_action_required: `false`
-- followup_route: `ai_holding_provenance_review`
-- followup_owner: `runtime_stability_review`
+- followup_route: `holding_flow_defer_cost_review`
+- followup_owner: `postclose_threshold_cycle`
 - runtime_effect: `report_only_no_mutation`
 
 ## 근거
 
-- as_of: `2026-05-14T11:45:10`
-- exit_signal unique: `12`
+- as_of: `2026-05-14T13:50:02`
+- exit_signal unique: `14`
 - sell_order_sent unique: `0`
 - sell_completed unique: `0`
 - real exit/sell_sent/sell_completed: `0` / `0` / `0`
-- non-real exit/sell_sent/sell_completed: `12` / `0` / `0`
+- non-real exit/sell_sent/sell_completed: `14` / `0` / `0`
 - sell_sent/exit_signal: `0.0%`
 - real sell_sent/exit_signal: `0.0%`
 - non-real sell_sent/exit_signal: `0.0%`
-- flow defer events: `0`
+- flow defer events: `59`
 - AI holding cache MISS: `100.0%`
-- soft_stop rebound above sell 10m: `0.0%`
-- trailing missed-upside: `0.0%`
-- top reasons: `AI보유감시:cache_miss=71, 청산신호:kosdaq_trailing_take_profit=6, 청산신호:kosdaq_stop_loss=5, soft_stop_grace=4, 청산신호:scalp_soft_stop_pct=1`
+- soft_stop rebound above sell 10m: `90.9%`
+- trailing missed-upside: `27.8%`
+- top reasons: `AI보유감시:cache_miss=230, flow유예:scalp_trailing_take_profit=59, 청산신호:kosdaq_trailing_take_profit=7, 청산신호:kosdaq_stop_loss=7, soft_stop_grace=4`
 
 ## 금지된 자동변경
 
@@ -38,4 +38,4 @@
 
 ## 권고 액션
 
-- Review AI cache/provenance/parse telemetry; do not mutate cache TTL automatically.
+- Review holding_flow_override defer examples and worsen floor evidence.

@@ -13,17 +13,17 @@
 
 ## 근거
 
-- as_of: `2026-05-14T11:45:15`
+- as_of: `2026-05-14T13:50:11`
 - baseline_date: `2026-05-13`
-- ai_confirmed unique: `71`
+- ai_confirmed unique: `86`
 - budget_pass unique: `0`
 - latency_pass unique: `0`
 - submitted unique: `0`
 - holding_started unique: `0`
 - budget/ai unique: `0.0%` (baseline `0.0`)
 - submitted/ai unique: `0.0%` (baseline `0.0`)
-- top blockers: `blocked_swing_score_vpw:-=101004, blocked_strength_momentum:below_strength_base=75385, blocked_strength_momentum:below_window_buy_value=55657, blocked_swing_gap:-=31229, blocked_overbought:-=30979`
-- upstream blockers: `blocked_ai_score:score_62.0=246, blocked_ai_score:ai_score_50_buy_hold_override=92, first_ai_wait:-=80, blocked_ai_score:score_60.0=28, blocked_ai_score:score_58.0=20`
+- top blockers: `blocked_swing_score_vpw:-=186632, blocked_strength_momentum:below_strength_base=120763, blocked_strength_momentum:below_window_buy_value=112288, blocked_overbought:-=70824, blocked_swing_gap:-=68613`
+- upstream blockers: `blocked_ai_score:score_62.0=366, blocked_ai_score:ai_score_50_buy_hold_override=173, first_ai_wait:-=105, blocked_ai_score:score_60.0=48, blocked_ai_score:score_58.0=35`
 - latency blockers: `-`
 - price guards: `-`
 
@@ -42,6 +42,6 @@
 
 ## Window Summary
 
-- `5m`: ai=6, budget=0, latency=0, submitted=0, top=`blocked_swing_score_vpw:-=3408, blocked_strength_momentum:below_strength_base=2637, blocked_strength_momentum:below_window_buy_value=1684`, upstream=`first_ai_wait:-=4, blocked_ai_score:score_62.0=3, blocked_ai_score:score_60.0=2`
-- `10m`: ai=11, budget=0, latency=0, submitted=0, top=`blocked_swing_score_vpw:-=7100, blocked_strength_momentum:below_strength_base=6293, blocked_overbought:-=3352`, upstream=`blocked_ai_score:score_62.0=10, first_ai_wait:-=7, blocked_ai_score:ai_score_50_buy_hold_override=4`
-- `30m`: ai=17, budget=0, latency=0, submitted=0, top=`blocked_swing_score_vpw:-=21799, blocked_strength_momentum:below_strength_base=18713, blocked_strength_momentum:below_window_buy_value=9809`, upstream=`blocked_ai_score:score_62.0=29, blocked_ai_score:ai_score_50_buy_hold_override=25, first_ai_wait:-=22`
+- `5m`: ai=9, budget=0, latency=0, submitted=0, top=`blocked_strength_momentum:below_strength_base=2958, blocked_swing_score_vpw:-=2853, blocked_swing_gap:-=1640`, upstream=`blocked_ai_score:score_62.0=6, blocked_ai_score:ai_score_50_buy_hold_override=4, blocked_ai_score:score_60.0=1`
+- `10m`: ai=12, budget=0, latency=0, submitted=0, top=`blocked_swing_score_vpw:-=5437, blocked_strength_momentum:below_strength_base=5300, blocked_swing_gap:-=3296`, upstream=`blocked_ai_score:score_62.0=9, blocked_ai_score:ai_score_50_buy_hold_override=7, blocked_ai_score:score_60.0=2`
+- `30m`: ai=21, budget=0, latency=0, submitted=0, top=`blocked_swing_score_vpw:-=17209, blocked_strength_momentum:below_window_buy_value=11841, blocked_strength_momentum:below_strength_base=11009`, upstream=`blocked_ai_score:score_62.0=25, blocked_ai_score:ai_score_50_buy_hold_override=18, blocked_ai_score:score_60.0=6`

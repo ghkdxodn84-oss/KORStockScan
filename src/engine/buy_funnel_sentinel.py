@@ -17,6 +17,7 @@ from typing import Any
 
 from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
+from src.engine.sentinel_event_cache import update_and_load_cached_event_rows
 
 
 MANUAL_EXCLUDED_STOCKS = {
@@ -56,6 +57,8 @@ DEFAULT_WINDOWS = (5, 10, 30)
 SESSION_START = time(9, 0)
 SENTINEL_END = time(15, 20)
 REPORT_DIRNAME = "buy_funnel_sentinel"
+EVENT_CACHE_SCHEMA_VERSION = 3
+EVENT_CACHE_NAME = "buy_funnel_sentinel_events"
 FORBIDDEN_AUTOMATIONS = [
     "score_threshold_relaxation",
     "spread_cap_relaxation",
@@ -78,6 +81,10 @@ class PipelineEvent:
 
 def _pipeline_events_path(target_date: str) -> Path:
     return DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+
+
+def _event_cache_dir() -> Path:
+    return DATA_DIR / "runtime" / "sentinel_event_cache"
 
 
 def _report_dir() -> Path:
@@ -133,10 +140,75 @@ def _is_ignored_event(payload: dict[str, Any]) -> bool:
     return False
 
 
-def load_pipeline_events(target_date: str) -> list[PipelineEvent]:
+def _payload_to_cache_row(payload: dict[str, Any]) -> dict[str, Any] | None:
+    if _safe_str(payload.get("event_type")) != "pipeline_event":
+        return None
+    if _is_ignored_event(payload):
+        return None
+    stage = _safe_str(payload.get("stage"))
+    raw_fields = payload.get("fields") or {}
+    fields_text = json.dumps(raw_fields, ensure_ascii=False) if isinstance(raw_fields, dict) else ""
+    if not (
+        stage in ENTRY_STAGES
+        or stage in HOLDING_STAGES
+        or stage in BLOCKER_STAGES
+        or stage in UPSTREAM_BLOCK_STAGES
+        or stage in PRICE_GUARD_STAGES
+        or stage.startswith(BLOCKER_STAGE_PREFIXES)
+        or "ai_score_50_buy_hold_override" in fields_text
+    ):
+        return None
+    emitted_at = _parse_iso_datetime(_safe_str(payload.get("emitted_at")))
+    if emitted_at is None:
+        return None
+    fields = {str(k): _safe_str(v) for k, v in raw_fields.items()}
+    record_id = payload.get("record_id")
+    if record_id in (None, "", 0):
+        record_id = fields.get("id") or ""
+    return {
+        "emitted_at": emitted_at.isoformat(),
+        "pipeline": _safe_str(payload.get("pipeline")),
+        "stage": stage,
+        "stock_name": _safe_str(payload.get("stock_name")),
+        "stock_code": _safe_str(payload.get("stock_code"))[:6],
+        "record_id": _safe_str(record_id),
+        "fields": fields,
+    }
+
+
+def _event_from_cache_row(row: dict[str, Any]) -> PipelineEvent | None:
+    emitted_at = _parse_iso_datetime(_safe_str(row.get("emitted_at")))
+    if emitted_at is None:
+        return None
+    raw_fields = row.get("fields") or {}
+    fields = {str(k): _safe_str(v) for k, v in raw_fields.items()} if isinstance(raw_fields, dict) else {}
+    return PipelineEvent(
+        emitted_at=emitted_at,
+        pipeline=_safe_str(row.get("pipeline")),
+        stage=_safe_str(row.get("stage")),
+        stock_name=_safe_str(row.get("stock_name")),
+        stock_code=_safe_str(row.get("stock_code"))[:6],
+        record_id=_safe_str(row.get("record_id")),
+        fields=fields,
+    )
+
+
+def load_pipeline_events(target_date: str, *, use_cache: bool = False) -> list[PipelineEvent]:
     path = _pipeline_events_path(target_date)
     if not path.exists():
         return []
+    if use_cache:
+        rows, _ = update_and_load_cached_event_rows(
+            raw_path=path,
+            cache_dir=_event_cache_dir(),
+            cache_name=EVENT_CACHE_NAME,
+            target_date=target_date,
+            schema_version=EVENT_CACHE_SCHEMA_VERSION,
+            parse_payload=_payload_to_cache_row,
+        )
+        events = [event for row in rows if (event := _event_from_cache_row(row)) is not None]
+        events.sort(key=lambda event: event.emitted_at)
+        return events
 
     events: list[PipelineEvent] = []
     with path.open("r", encoding="utf-8", errors="replace") as handle:
@@ -479,8 +551,9 @@ def build_buy_funnel_sentinel_report(
     as_of: datetime | None = None,
     windows_min: tuple[int, ...] = DEFAULT_WINDOWS,
     dry_run: bool = False,
+    use_cache: bool = False,
 ) -> dict[str, Any]:
-    events = load_pipeline_events(target_date)
+    events = load_pipeline_events(target_date, use_cache=use_cache)
     if as_of is None:
         if dry_run and events:
             as_of = events[-1].emitted_at
@@ -497,7 +570,7 @@ def build_buy_funnel_sentinel_report(
     baseline_date = previous_trading_day_with_events(target_date)
     baseline_summary = None
     if baseline_date:
-        baseline_events = load_pipeline_events(baseline_date)
+        baseline_events = load_pipeline_events(baseline_date, use_cache=use_cache)
         baseline_start = datetime.combine(_parse_target_date(baseline_date), SESSION_START)
         baseline_end = _same_time_on_date(baseline_date, as_of)
         baseline_summary = _summarize_events(
@@ -516,6 +589,11 @@ def build_buy_funnel_sentinel_report(
         "target_date": target_date,
         "as_of": as_of.isoformat(timespec="seconds"),
         "dry_run": bool(dry_run),
+        "event_load": {
+            "cache_enabled": bool(use_cache),
+            "cache_name": EVENT_CACHE_NAME if use_cache else None,
+            "cache_schema_version": EVENT_CACHE_SCHEMA_VERSION if use_cache else None,
+        },
         "policy": {
             "report_only": True,
             "live_runtime_effect": False,
@@ -634,6 +712,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Rolling window minutes. Repeatable. Defaults to 5/10/30.",
     )
     parser.add_argument("--dry-run", action="store_true", help="Use latest event as as_of if omitted.")
+    parser.add_argument("--use-cache", action="store_true", help="Use slim incremental sentinel event cache.")
     parser.add_argument("--print-json", action="store_true", help="Print final result JSON.")
     return parser
 
@@ -647,6 +726,7 @@ def main() -> int:
         as_of=as_of,
         windows_min=windows,
         dry_run=bool(args.dry_run),
+        use_cache=bool(args.use_cache),
     )
     artifacts = save_report_artifacts(report)
     result = {

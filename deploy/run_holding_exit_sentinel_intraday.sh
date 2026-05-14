@@ -15,6 +15,7 @@ COOLDOWN_STATE_FILE="${HOLDING_EXIT_SENTINEL_COOLDOWN_STATE_FILE:-$PROJECT_DIR/t
 COOLDOWN_SEC="${HOLDING_EXIT_SENTINEL_COOLDOWN_SEC:-240}"
 LOG_FILE="${HOLDING_EXIT_SENTINEL_LOG_FILE:-$PROJECT_DIR/logs/run_holding_exit_sentinel.log}"
 DRY_RUN="${HOLDING_EXIT_SENTINEL_DRY_RUN:-0}"
+USE_CACHE="${HOLDING_EXIT_SENTINEL_USE_CACHE:-1}"
 IONICE_CLASS="${HOLDING_EXIT_SENTINEL_IONICE_CLASS:-2}"
 IONICE_LEVEL="${HOLDING_EXIT_SENTINEL_IONICE_LEVEL:-7}"
 NICE_LEVEL="${HOLDING_EXIT_SENTINEL_NICE_LEVEL:-12}"
@@ -60,6 +61,9 @@ cmd=(env PYTHONPATH=. "$VENV_PY" -m src.engine.holding_exit_sentinel --date "$TA
 if [[ "$DRY_RUN" == "1" ]]; then
   cmd+=(--dry-run)
 fi
+if [[ "$USE_CACHE" == "1" ]]; then
+  cmd+=(--use-cache)
+fi
 
 if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]] && [[ "$(nproc 2>/dev/null || echo 1)" -gt 1 ]]; then
   cmd=(taskset -c "$CPU_AFFINITY" "${cmd[@]}")
@@ -74,7 +78,7 @@ if command -v "$NICE_COMMAND" >/dev/null 2>&1; then
 fi
 
 started_at="$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')"
-echo "[START] holding exit sentinel target_date=${TARGET_DATE} started_at=${started_at} dry_run=${DRY_RUN}" | tee -a "$LOG_FILE"
+echo "[START] holding exit sentinel target_date=${TARGET_DATE} started_at=${started_at} dry_run=${DRY_RUN} use_cache=${USE_CACHE}" | tee -a "$LOG_FILE"
 
 if "${cmd[@]}" 2>&1 | tee -a "$LOG_FILE"; then
   touch "$COOLDOWN_STATE_FILE"

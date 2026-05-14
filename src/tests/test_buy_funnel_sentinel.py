@@ -193,3 +193,44 @@ def test_followup_route_is_report_only_for_upstream_threshold(monkeypatch, tmp_p
     assert report["followup"]["route"] == "score65_74_counterfactual_review"
     assert report["followup"]["operator_action_required"] is False
     assert report["followup"]["runtime_effect"] == "report_only_no_mutation"
+
+
+def test_use_cache_reads_only_appended_raw_bytes(monkeypatch, tmp_path):
+    monkeypatch.setattr(sentinel, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-06",
+        [
+            _event("2026-05-06", "10:00:00", "ai_confirmed", record_id=1),
+            _event("2026-05-06", "10:01:00", "blocked_ai_score", record_id=2, fields={"score": "65"}),
+        ],
+    )
+
+    first = sentinel.build_buy_funnel_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:05:00"),
+        use_cache=True,
+    )
+    assert first["event_load"]["cache_enabled"] is True
+    assert first["current"]["session"]["stage_unique"]["ai_confirmed"] == 1
+
+    event_path = tmp_path / "pipeline_events" / "pipeline_events_2026-05-06.jsonl"
+    with event_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                _event("2026-05-06", "10:06:00", "ai_confirmed", record_id=3),
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+
+    second = sentinel.build_buy_funnel_sentinel_report(
+        "2026-05-06",
+        as_of=sentinel._parse_as_of("2026-05-06", "10:10:00"),
+        use_cache=True,
+    )
+    assert second["current"]["session"]["stage_unique"]["ai_confirmed"] == 2
+    meta_path = tmp_path / "runtime" / "sentinel_event_cache" / "buy_funnel_sentinel_events_2026-05-06.meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    assert meta["cache_event_count"] == 3
+    assert meta["appended_raw_lines"] == 1
