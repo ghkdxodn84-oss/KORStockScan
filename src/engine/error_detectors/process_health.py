@@ -63,17 +63,32 @@ class ProcessHealthDetector(BaseDetector):
     def thread_timeout_sec(self) -> int:
         return int(getattr(TRADING_RULES, "ERROR_DETECTOR_PROCESS_THREAD_TIMEOUT_SEC", 7200))
 
+    @property
+    def startup_grace_sec(self) -> int:
+        return int(getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_STARTUP_GRACE_SEC", 180))
+
     def check(self) -> DetectionResult:
         now_ts = time.time()
         details: dict = {}
         main_loop_timeout = self.main_loop_timeout_sec
         thread_timeout = self.thread_timeout_sec
+        startup_grace = self.startup_grace_sec
         expected_running = _is_bot_expected_running()
         details["bot_expected_running"] = expected_running
         details["bot_expected_window"] = {
             "start": getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_START_HHMM", "07:40"),
             "end": getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_END_HHMM", "22:55"),
         }
+        details["startup_grace_sec"] = startup_grace
+        seconds_since_start = _seconds_since_expected_start()
+        if seconds_since_start is not None:
+            details["seconds_since_expected_start"] = round(seconds_since_start, 1)
+        in_startup_grace = (
+            expected_running
+            and startup_grace > 0
+            and seconds_since_start is not None
+            and 0 <= seconds_since_start < startup_grace
+        )
 
         if not HEARTBEAT_PATH.exists():
             if not expected_running:
@@ -85,6 +100,17 @@ class ProcessHealthDetector(BaseDetector):
                     severity="pass",
                     summary="bot_main.py is outside expected runtime window.",
                     details=details,
+                )
+            if in_startup_grace:
+                details["main_loop_status"] = "startup_grace_waiting"
+                details["heartbeat_path"] = str(HEARTBEAT_PATH)
+                return DetectionResult(
+                    detector_id=self.id,
+                    category=self.category,
+                    severity="warning",
+                    summary="Heartbeat file not found during bot startup grace window.",
+                    details=details,
+                    recommended_action="Recheck after startup grace before restarting bot_main.py.",
                 )
             return DetectionResult(
                 detector_id=self.id,
@@ -134,6 +160,17 @@ class ProcessHealthDetector(BaseDetector):
                         summary="bot_main.py PID is dead outside expected runtime window.",
                         details=details,
                     )
+                if in_startup_grace:
+                    return DetectionResult(
+                        detector_id=self.id,
+                        category=self.category,
+                        severity="warning",
+                        summary=(
+                            f"bot_main.py heartbeat PID {pid} is stale during startup grace window."
+                        ),
+                        details=details,
+                        recommended_action="Recheck after startup grace before restarting bot_main.py.",
+                    )
                 return DetectionResult(
                     detector_id=self.id,
                     category=self.category,
@@ -151,6 +188,15 @@ class ProcessHealthDetector(BaseDetector):
                         severity="pass",
                         summary="Main loop heartbeat is stale outside expected runtime window.",
                         details=details,
+                    )
+                if in_startup_grace:
+                    return DetectionResult(
+                        detector_id=self.id,
+                        category=self.category,
+                        severity="warning",
+                        summary=f"Main loop heartbeat stale during startup grace window ({main_age:.0f}s).",
+                        details=details,
+                        recommended_action="Recheck after startup grace before restarting bot_main.py.",
                     )
                 return DetectionResult(
                     detector_id=self.id,
@@ -170,6 +216,16 @@ class ProcessHealthDetector(BaseDetector):
                     severity="pass",
                     summary="No main_loop heartbeat entry outside expected runtime window.",
                     details=details,
+                )
+            if in_startup_grace:
+                details["main_loop_status"] = "startup_grace_waiting"
+                return DetectionResult(
+                    detector_id=self.id,
+                    category=self.category,
+                    severity="warning",
+                    summary="No main_loop heartbeat entry found during startup grace window.",
+                    details=details,
+                    recommended_action="Recheck after startup grace before restarting bot_main.py.",
                 )
             return DetectionResult(
                 detector_id=self.id,
@@ -249,6 +305,18 @@ def _is_bot_expected_running(now: datetime | None = None) -> bool:
     if start <= end:
         return start <= current_minutes < end
     return current_minutes >= start or current_minutes < end
+
+
+def _seconds_since_expected_start(now: datetime | None = None) -> float | None:
+    enabled = bool(getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_RUNTIME_WINDOW_ENABLED", True))
+    if not enabled:
+        return None
+    current = now or datetime.now().astimezone()
+    start = _parse_hhmm(getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_START_HHMM", "07:40"))
+    if start is None:
+        return None
+    start_dt = current.replace(hour=start // 60, minute=start % 60, second=0, microsecond=0)
+    return (current - start_dt).total_seconds()
 
 
 def _parse_hhmm(value: str) -> int | None:

@@ -148,6 +148,30 @@ class TestLogScanner:
             severity, _ = scanner._classify(errors, counter)
             assert severity == "warning"
 
+    def test_scan_file_ignores_korean_openai_transport_fixture_noise(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_file = Path(tmpdir) / "ai_engine_openai_error.log"
+            log_file.write_text(
+                "\n".join([
+                    "[2026-05-15 07:54:35] 🚨 ERROR in ai_engine_openai: "
+                    "🚨 [테스트][SCALPING] OpenAI 실시간 분석 에러 (연속 실패 1회, API키 인덱스 0): ws timeout",
+                    "[2026-05-15 07:54:35] 🚨 ERROR in ai_engine_openai: "
+                    "⚠️ [OpenAI WS fallback] test: ws timeout",
+                    "[2026-05-15 07:54:35] 🚨 ERROR in ai_engine_openai: "
+                    "🚨 [OpenAI WS fail-closed] 테스트(SCALPING:scalping_entry): request_id mismatch",
+                    "[2026-05-15 07:54:36] 🚨 ERROR in ai_engine_openai: "
+                    "🚨 [삼성전자][SCALPING] OpenAI 실시간 분석 에러: request timeout",
+                ]),
+                encoding="utf-8",
+            )
+
+            scanner = LogScanner()
+            counter = __import__("collections").Counter()
+            errors, _, _ = scanner._scan_file(log_file, 0, counter)
+
+            assert errors == 1
+            assert counter == {"TIMEOUT_ERROR": 1}
+
     def test_scan_file_ignores_info_db_success_lines_in_error_log(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             log_file = Path(tmpdir) / "update_kospi_error.log"

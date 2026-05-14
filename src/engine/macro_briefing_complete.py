@@ -14,7 +14,7 @@ from google import genai
 from google.genai import types
 
 from src.utils.constants import CONFIG_PATH, DEV_PATH, TRADING_RULES
-from src.utils.logger import log_error
+from src.utils.logger import log_error, log_info
 
 
 DEFAULT_TIMEOUT = 10
@@ -645,14 +645,14 @@ class MacroBriefingBuilder:
     def _load_cached_bundle(self) -> Optional[Dict[str, Any]]:
         try:
             if not self.cache_path.exists():
-                log_error(f"[MACRO CACHE LOAD] no file: {self.cache_path}")
+                log_info(f"[MACRO CACHE LOAD] no file: {self.cache_path}")
                 return None
 
             with open(self.cache_path, "r", encoding="utf-8") as f:
                 payload = json.load(f)
 
             if isinstance(payload, dict):
-                log_error(
+                log_info(
                     f"[MACRO CACHE LOAD] loaded from {self.cache_path}, "
                     f"bundle_as_of={payload.get('bundle_as_of')}"
                 )
@@ -672,7 +672,7 @@ class MacroBriefingBuilder:
             with open(self.cache_path, "w", encoding="utf-8") as f:
                 json.dump(bundle, f, ensure_ascii=False, indent=2)
 
-            log_error(
+            log_info(
                 f"[MACRO CACHE SAVE] saved to {self.cache_path}, "
                 f"bundle_as_of={bundle.get('bundle_as_of') if isinstance(bundle, dict) else None}"
             )
@@ -843,11 +843,11 @@ class MacroBriefingBuilder:
         if self.api_keys:
             try:
                 live_bundle = self._fetch_live_bundle()
-                log_error(f"[MACRO] live_bundle fetched: type={type(live_bundle).__name__}")
+                log_info(f"[MACRO] live_bundle fetched: type={type(live_bundle).__name__}")
 
                 if isinstance(live_bundle, dict):
                     bundle_as_of = live_bundle.get('bundle_as_of')
-                    log_error(
+                    log_info(
                         f"[MACRO] LIVE bundle_as_of={bundle_as_of} "
                         f"path={self.cache_path}"
                     )
@@ -858,7 +858,7 @@ class MacroBriefingBuilder:
                         log_error(f"[MACRO] LIVE bundle rejected as stale: {bundle_as_of}")
                     else:
                         self._save_cached_bundle(live_bundle)
-                        log_error("[MACRO] applying LIVE bundle with source_label=GEMINI")
+                        log_info("[MACRO] applying LIVE bundle with source_label=GEMINI")
                         self._apply_gemini_bundle(snap, live_bundle, source_label="GEMINI")
                         self.consecutive_failures = 0
                 else:
@@ -871,13 +871,13 @@ class MacroBriefingBuilder:
                 log_error(f"Gemini 데이터 수집 실패: {e}")
 
                 cached_bundle = self._load_cached_bundle()
-                log_error(
+                log_info(
                     f"[MACRO] CACHE fallback path={self.cache_path}, "
                     f"exists={isinstance(cached_bundle, dict)}"
                 )
 
                 if isinstance(cached_bundle, dict) and not self._is_bundle_stale(cached_bundle):
-                    log_error(
+                    log_info(
                         f"[MACRO] applying CACHE bundle bundle_as_of={cached_bundle.get('bundle_as_of')} "
                         f"with source_label=GEMINI_CACHE"
                     )
@@ -895,7 +895,7 @@ class MacroBriefingBuilder:
         if scored_notes:
             snap.notes.extend(scored_notes)
 
-        log_error(
+        log_info(
             f"[MACRO] collect_snapshot done | regime={snap.regime_tag} | confidence={snap.confidence} | "
             f"missing_sources={snap.missing_sources}"
         )

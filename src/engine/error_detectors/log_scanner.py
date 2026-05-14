@@ -23,6 +23,8 @@ _EXCEPTION_PATTERNS: list[tuple[str, re.Pattern]] = []
 _IGNORED_LINE_PATTERNS: list[re.Pattern] = [
     re.compile(r"\[ERROR_DETECTION\]"),
     re.compile(r"\bTEST(?:\b|[:(])"),
+    re.compile(r"테스트"),
+    re.compile(r"\btest\s*:"),
     re.compile(r"\b123456\b"),
     re.compile(r"_DummySession"),
     re.compile(r"\bbus fail\b"),
