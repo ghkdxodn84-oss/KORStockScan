@@ -210,6 +210,83 @@ def test_threshold_cycle_report_marks_calibration_sample_and_live_risk_states():
     assert report["post_apply_attribution"]["soft_stop_balanced_policy"]["perfect_win_rate_required"] is False
 
 
+def test_threshold_cycle_report_counts_scalp_sim_entry_price_and_revalidation_scope():
+    events = [
+        {
+            "stage": "scalp_sim_entry_ai_price_applied",
+            "fields": {
+                "threshold_family": "pre_submit_price_guard",
+                "actual_order_submitted": "false",
+            },
+        },
+        {
+            "stage": "scalp_sim_entry_ai_price_skip_order",
+            "fields": {
+                "threshold_family": "pre_submit_price_guard",
+                "actual_order_submitted": "false",
+            },
+        },
+        {
+            "stage": "scalp_sim_entry_submit_revalidation_warning",
+            "fields": {
+                "threshold_family": "pre_submit_price_guard",
+                "entry_submit_revalidation_warning": "stale_quote",
+                "price_below_bid_bps": "15",
+                "actual_order_submitted": "false",
+            },
+        },
+        {
+            "stage": "scalp_sim_entry_submit_revalidation_block",
+            "fields": {
+                "threshold_family": "pre_submit_price_guard",
+                "block_reason": "stale_context_or_quote",
+                "actual_order_submitted": "false",
+            },
+        },
+        {
+            "stage": "scalp_sim_buy_order_virtual_pending",
+            "fields": {
+                "threshold_family": "pre_submit_price_guard",
+                "price_below_bid_bps": "12",
+                "actual_order_submitted": "false",
+            },
+        },
+        {
+            "stage": "scalp_sim_scale_in_order_assumed_filled",
+            "fields": {
+                "threshold_family": "scale_in_price_guard",
+                "virtual_budget_override": "true",
+                "actual_order_submitted": "false",
+            },
+        },
+    ]
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-15",
+        pipeline_loader=lambda target_date: events if target_date == "2026-05-15" else [],
+        report_source_loader=lambda target_date: {
+            "sources": {},
+            "source_metrics": {},
+            "new_observation_axis_created": False,
+        },
+        completed_rows_loader=lambda start_date, end_date: [],
+    )
+
+    pre_submit = report["threshold_snapshot"]["pre_submit_price_guard"]["sample"]
+    assert pre_submit["sim_entry_ai_price_applied"] == 1
+    assert pre_submit["sim_entry_ai_price_skip_order"] == 1
+    assert pre_submit["sim_submit_revalidation_warning"] == 1
+    assert pre_submit["sim_submit_revalidation_block"] == 1
+    assert pre_submit["sim_price_below_bid_bps"] == 1
+    assert pre_submit["price_below_bid_bps"] == 0
+
+    scalp_sim = report["scalp_simulator"]
+    assert scalp_sim["entry_ai_price_applied"] == 1
+    assert scalp_sim["entry_ai_price_skip_order"] == 1
+    assert scalp_sim["entry_submit_revalidation_warning"] == 1
+    assert scalp_sim["entry_submit_revalidation_block"] == 1
+    assert scalp_sim["scale_in_filled"] == 1
+
+
 def test_threshold_cycle_report_routes_entry_filter_ev_sources_to_calibration_families():
     report_sources = {
         "sources": {

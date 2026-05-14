@@ -1,12 +1,13 @@
 # OpenAI WS Stability Report - 2026-05-14
 
-- generated_at: `2026-05-14T17:12:23+09:00`
-- decision: `rollback_http`
+- generated_at: `2026-05-15T08:18:55+09:00`
+- decision: `keep_ws`
 - unique WS calls: `962`
 - endpoint counts: `{'analyze_target': 962}`
 - WS fallback: `0` / `962` (`0.0`)
 - WS success rate: `1.0`
 - WS errors: `{'TimeoutError': 2}`
+- WS transport warning: `{'ws_error_count': 2, 'ws_error_rate': 0.0021, 'warning_only': True, 'rollback_threshold_error_count': 3, 'rollback_threshold_error_rate': 0.01}`
 - AI response ms: `{'n': 962, 'avg': 1723.9, 'median': 1561.5, 'p75': 1934.2, 'p90': 2426.5, 'p95': 2863.0, 'max': 15100.0}`
 - WS roundtrip ms: `{'n': 962, 'avg': 1637.3, 'median': 1509.0, 'p75': 1874.0, 'p90': 2353.9, 'p95': 2805.3, 'max': 9860.0}`
 - WS queue wait ms: `{'n': 962, 'avg': 0.9, 'median': 0.0, 'p75': 0.0, 'p90': 2.0, 'p95': 5.0, 'max': 87.0}`

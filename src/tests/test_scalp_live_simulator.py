@@ -80,6 +80,7 @@ def test_scalp_simulator_arms_and_fills_without_real_buy_order(monkeypatch):
         "is_trigger": True,
         "now_ts": 1_000.0,
         "current_ai_score": 82.0,
+        "latency_state": "DANGER",
     }
     ws_data = {
         "curr": 9_990,
@@ -117,6 +118,155 @@ def test_scalp_simulator_arms_and_fills_without_real_buy_order(monkeypatch):
     fill_event = next(fields for stage, fields in logs if stage == "scalp_sim_buy_order_assumed_filled")
     assert fill_event["fill_source"] == "best_ask"
     assert fill_event["would_limit_fill"] is True
+
+
+def test_scalp_simulator_applies_entry_ai_price_canary_without_real_order(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [])
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: pytest.fail("real buy order must not be called"),
+    )
+
+    class FakeAiEngine:
+        def evaluate_scalping_entry_price(self, *args, **kwargs):
+            return {
+                "action": "IMPROVE_LIMIT",
+                "order_price": 10_000,
+                "confidence": 90,
+                "reason": "sim entry price test",
+                "max_wait_sec": 30,
+                "ai_parse_ok": True,
+                "openai_endpoint_name": "entry_price",
+                "openai_transport_mode": "responses_ws",
+                "openai_ws_used": True,
+                "openai_request_id": "sim-entry-price-1",
+            }
+
+    stock = {
+        "id": 101,
+        "name": "TEST",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "position_tag": "SCALP_BASE",
+        "target_buy_price": 10_020,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "is_trigger": True,
+        "now_ts": 1_000.0,
+        "current_ai_score": 82.0,
+        "latency_state": "DANGER",
+    }
+    ws_data = {
+        "curr": 10_020,
+        "orderbook": {
+            "asks": [{"price": 10_030}],
+            "bids": [{"price": 9_990}],
+        },
+    }
+
+    assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
+        stock,
+        "123456",
+        ws_data,
+        runtime,
+        ai_engine=FakeAiEngine(),
+    )
+
+    sim_target = state_handlers.ACTIVE_TARGETS[0]
+    assert sim_target["actual_order_submitted"] is False
+    assert sim_target["entry_ai_price_canary_applied"] is True
+    assert sim_target["scalp_sim_entry_limit_price"] == 10_000
+    assert sim_target["buy_price"] == 10_030
+    applied = next(fields for stage, fields in logs if stage == "entry_ai_price_canary_applied")
+    assert applied["openai_endpoint_name"] == "entry_price"
+    assert applied["openai_transport_mode"] == "responses_ws"
+    sim_applied = next(fields for stage, fields in logs if stage == "scalp_sim_entry_ai_price_applied")
+    assert sim_applied["runtime_effect"] == "simulated_entry_price_only"
+    pending = next(fields for stage, fields in logs if stage == "scalp_sim_buy_order_virtual_pending")
+    assert pending["limit_price"] == 10_000
+
+
+def test_scalp_simulator_blocks_stale_passive_probe_before_virtual_submit(monkeypatch):
+    logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_history_ka10003", lambda *args, **kwargs: [])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_minute_candles_ka10080", lambda *args, **kwargs: [])
+    monkeypatch.setattr(state_handlers.kiwoom_utils, "get_tick_size", lambda price: 10)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "send_buy_order",
+        lambda *args, **kwargs: pytest.fail("real buy order must not be called"),
+    )
+
+    class FakeAiEngine:
+        def evaluate_scalping_entry_price(self, *args, **kwargs):
+            return {
+                "action": "USE_DEFENSIVE",
+                "confidence": 90,
+                "reason": "passive probe test",
+                "max_wait_sec": 60,
+                "ai_parse_ok": True,
+                "openai_endpoint_name": "entry_price",
+                "openai_transport_mode": "responses_ws",
+                "openai_ws_used": True,
+                "openai_request_id": "sim-entry-price-stale",
+            }
+
+    stock = {
+        "id": 101,
+        "name": "TEST",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "position_tag": "SCALP_BASE",
+        "target_buy_price": 10_000,
+        "last_watching_ai_action": "WAIT",
+        "last_watching_ai_score": 80,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "is_trigger": True,
+        "now_ts": 1_000.0,
+        "current_ai_score": 82.0,
+        "latency_state": "DANGER",
+    }
+    ws_data = {
+        "curr": 10_020,
+        "last_ws_update_ts": 990.0,
+        "orderbook": {
+            "asks": [{"price": 10_030}],
+            "bids": [{"price": 10_010}],
+        },
+    }
+
+    assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
+        stock,
+        "123456",
+        ws_data,
+        runtime,
+        ai_engine=FakeAiEngine(),
+    )
+
+    assert state_handlers.ACTIVE_TARGETS == []
+    stages = [stage for stage, _ in logs]
+    assert "scalp_sim_entry_submit_revalidation_block" in stages
+    assert "scalp_sim_buy_order_virtual_pending" not in stages
+    block = next(fields for stage, fields in logs if stage == "scalp_sim_entry_submit_revalidation_block")
+    assert block["block_reason"] == "stale_context_or_quote"
+    assert block["entry_order_lifecycle"] == "passive_probe"
+    assert block["actual_order_submitted"] is False
 
 
 def test_scalp_simulator_entry_uses_virtual_budget_with_live_qty_formula(monkeypatch):
@@ -550,8 +700,137 @@ def test_scalp_simulator_scale_in_dynamic_qty_ignores_real_one_share_cap(monkeyp
     assert details["qty"] == 3
 
 
+def test_scalp_simulator_scale_in_uses_virtual_budget_not_real_deposit(monkeypatch):
+    holding_logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: holding_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "get_deposit",
+        lambda *args, **kwargs: pytest.fail("scalp sim scale-in must not read real deposit"),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "resolve_scale_in_order_price",
+        lambda **kwargs: {
+            "allowed": True,
+            "order_price": 9_990,
+            "reason": "test",
+            "price_source": "best_bid",
+            "best_bid": 9_990,
+            "best_ask": 10_000,
+            "spread_bps": 10.0,
+            "curr_vs_micro_vwap_bp": 0.0,
+            "max_spread_bps": 80.0,
+            "max_micro_vwap_bps": 60.0,
+        },
+    )
+
+    stock = {
+        "name": "TEST",
+        "code": "123456",
+        "strategy": "SCALPING",
+        "status": "HOLDING",
+        "buy_price": 10_000,
+        "buy_qty": 10,
+        "hard_stop_price": 9_000,
+        "simulation_book": "scalp_ai_buy_all",
+        "scalp_live_simulator": True,
+        "sim_record_id": "SIM-1",
+        "actual_order_submitted": False,
+    }
+
+    res = state_handlers.execute_scale_in_order(
+        stock=stock,
+        code="123456",
+        ws_data={
+            "curr": 9_990,
+            "orderbook": {
+                "asks": [{"price": 9_990}],
+                "bids": [{"price": 9_980}],
+            },
+        },
+        action={"add_type": "AVG_DOWN", "reason": "reversal_add_ok"},
+        admin_id=None,
+    )
+
+    assert res["simulated_order"] is True
+    assert stock["actual_order_submitted"] is False
+    filled = next(fields for stage, fields in holding_logs if stage == "scalp_sim_scale_in_order_assumed_filled")
+    assert filled["virtual_budget_override"] is True
+    assert filled["virtual_budget_krw"] == 10_000_000
+    assert filled["budget_authority"] == "sim_virtual_not_real_orderable_amount"
+
+
+def test_swing_probe_scale_in_uses_virtual_budget_not_real_deposit(monkeypatch):
+    holding_logs = []
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_holding_pipeline",
+        lambda stock, code, stage, **fields: holding_logs.append((stage, fields)),
+    )
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "get_deposit",
+        lambda *args, **kwargs: pytest.fail("swing probe scale-in must not read real deposit"),
+    )
+    monkeypatch.setattr(
+        state_handlers,
+        "resolve_scale_in_order_price",
+        lambda **kwargs: {
+            "allowed": True,
+            "order_price": 0,
+            "reason": "market_best",
+            "price_source": "market_best",
+            "best_bid": 9_990,
+            "best_ask": 10_000,
+            "spread_bps": 10.0,
+            "curr_vs_micro_vwap_bp": 0.0,
+            "max_spread_bps": 80.0,
+            "max_micro_vwap_bps": 60.0,
+        },
+    )
+
+    stock = {
+        "name": "SWING",
+        "code": "654321",
+        "strategy": "KOSPI_ML",
+        "status": "HOLDING",
+        "buy_price": 10_000,
+        "buy_qty": 10,
+        "simulation_book": "swing_intraday_live_equiv_probe",
+        "swing_live_order_dry_run": True,
+        "swing_intraday_probe": True,
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "probe_id": "PROBE1",
+    }
+
+    res = state_handlers.execute_scale_in_order(
+        stock=stock,
+        code="654321",
+        ws_data={"curr": 10_000, "orderbook": {"asks": [{"price": 10_010}], "bids": [{"price": 9_990}]}},
+        action={"add_type": "AVG_DOWN", "reason": "swing_avg_down_ok"},
+        admin_id=None,
+    )
+
+    assert res["simulated_order"] is True
+    assert stock["actual_order_submitted"] is False
+    filled = next(fields for stage, fields in holding_logs if stage == "swing_probe_scale_in_order_assumed_filled")
+    assert filled["virtual_budget_override"] is True
+    assert filled["virtual_budget_krw"] == 10_000_000
+    assert filled["budget_authority"] == "sim_virtual_not_real_orderable_amount"
+
+
 def test_scalp_simulator_threshold_stages_are_included():
     assert threshold_family_for_stage("scalp_sim_entry_armed") == "entry_mechanical_momentum"
+    assert threshold_family_for_stage("scalp_sim_entry_ai_price_applied") == "pre_submit_price_guard"
+    assert threshold_family_for_stage("scalp_sim_entry_ai_price_skip_order") == "pre_submit_price_guard"
+    assert threshold_family_for_stage("scalp_sim_entry_submit_revalidation_warning") == "pre_submit_price_guard"
+    assert threshold_family_for_stage("scalp_sim_entry_submit_revalidation_block") == "pre_submit_price_guard"
     assert threshold_family_for_stage("scalp_sim_buy_order_assumed_filled") == "pre_submit_price_guard"
     assert threshold_family_for_stage("scalp_sim_sell_order_assumed_filled") == "statistical_action_weight"
 

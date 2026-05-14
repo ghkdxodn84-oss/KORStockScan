@@ -410,6 +410,16 @@ tmux ls
 - swing approval: `swing_runtime_approval_2026-05-13.json`은 runtime_change=`false`, approval request `0`이며 one-share real canary와 scale-in real canary는 `approval_required`/runtime_apply_allowed=`false`다. 별도 approval artifact는 없다.
 - 다음 액션: 장중 runtime threshold mutation은 하지 않고 selected family provenance와 OpenAI `entry_price` 표본 부족을 장중/장후 attribution에서 분리 확인한다.
 
+### PreopenAutomationHealthCheck20260515 운영 확인 기록
+
+- checked_at: `2026-05-15 KST`
+- 판정: `warning`
+- 근거: `threshold_cycle_preopen_cron.log`에 `[DONE] threshold-cycle preopen target_date=2026-05-15` marker가 있고, apply plan은 status=`auto_bounded_live_ready`, apply_mode=`auto_bounded_live`, runtime_change=`true`다. runtime env는 `threshold_runtime_env_2026-05-15.env/json`으로 생성됐으며 selected family는 `soft_stop_whipsaw_confirmation`, env override는 `KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED=true`다. `bad_entry_refined_canary`는 same-stage owner conflict, `protect_trailing_smoothing`은 `window_policy_blocks_single_case_live_candidate:18/20`, `score65_74_recovery_probe`는 `hold/no_runtime_env_override`로 제외됐다. `tmux bot` 세션은 alive이고 `bot_main.py` PID `4779`가 실행 중이며, `bot_history.log`에는 runtime 시작 후 `메인 스캘핑 OpenAI 엔진 고정 완료`, `AI 라우팅 활성화: role=main route=openai`가 남아 있다.
+- OpenAI WS: `openai_ws_stability_2026-05-14.md`는 `analyze_target` unique WS calls=`962`, fallback=`0/962`, success rate=`1.0`, p95=`2863ms`로 유지 기준을 충족한다. 다만 `entry_price WS sample count=0`이라 entry_price transport provenance는 표본 부족으로 분리하고 5/15 intraday checklist에서 재확인한다.
+- swing approval: `swing_runtime_approval_2026-05-14.json`은 approval request `2`건(`swing_model_floor`, `swing_gatekeeper_reject_cooldown`)을 생성했지만 `swing_runtime_approvals_2026-05-14.json`과 `swing_scale_in_real_canary_2026-05-14.json` approval artifact가 없다. apply plan은 requested=`2`, approved=`0`, blocked=`approval_artifact_missing`, selected=`[]`, dry_run_forced=`false`로 정상 차단했다.
+- 재확인 메모 (`2026-05-15 08:14 KST`): 현재 apply/env/bot/swing approval 차단 상태는 위 기록과 일치한다. 실행 중인 `bot_main.py` env에도 `KORSTOCKSCAN_OPENAI_TRANSPORT_MODE=responses_ws`, `KORSTOCKSCAN_OPENAI_RESPONSES_WS_ENABLED=true`가 들어 있어 현재 통신 방식은 WS다. 기존 `openai_ws_stability_2026-05-14.json`의 top-level `decision=rollback_http`는 `TimeoutError` 2건을 fallback 0건/WS success 1.0/p95 2863ms와 분리하지 못한 report decision 과대 판정이었다. `openai_ws_stability_report`를 보정해 low-rate transport error는 `transport_warning.warning_only=true`로 분리했고, 5/14 artifact 재생성 결과 `decision=keep_ws`, `ws_error_count=2`, `ws_error_rate=0.0021`로 Markdown 판정과 일치한다. 이 warning만으로 provider route, threshold, 주문가/수량 guard, bot restart를 변경하지 않는다.
+- 다음 액션: `OpenAIWSIntradaySample0515`에서 entry_price 표본을 재확인한다. 스윙 approval request는 사용자 approval artifact 없이는 env apply, dry-run 해제, one-share/scale-in real canary 근거로 쓰지 않는다. Project/Calendar 동기화는 사용자가 표준 명령으로 수행한다.
+
 ## 장중 확인 절차
 
 `build_codex_daily_workorder --slot INTRADAY`는 이 절차를 `IntradayAutomationHealthCheckYYYYMMDD`로 자동 포함한다.
@@ -442,6 +452,15 @@ tmux ls
 - 조치: `panic_buying` 래퍼 기본 로그는 `logs/run_panic_buying.log`지만 `cron_completion`은 `logs/run_panic_buying_cron.log`를 기대하므로, 운영 확인에서는 `PANIC_BUYING_COOLDOWN_SEC=0 bash deploy/run_panic_buying_intraday.sh 2026-05-14 >> logs/run_panic_buying_cron.log 2>&1`로 동일 report-only 래퍼를 cron 로그 경로에 재실행했다. 이후 `bash deploy/run_error_detection.sh full` 결과 summary_severity=`pass`로 닫혔다.
 - 금지 확인: 이 확인은 report-only 산출물 및 detector/log contract 확인만 수행했고 runtime threshold, provider route, order guard, bot restart, broker 주문 상태는 변경하지 않았다.
 - 다음 액션: 장중 자동화체인은 현재 pass로 유지한다. due 전 항목은 각 window에서 재확인하고, score65_74 계열은 장후 EV/attribution에서 selected/applied/not-applied로 분리한다.
+
+### IntradayAutomationHealthCheck20260515 운영 확인 기록
+
+- checked_at: `2026-05-15 KST`
+- 판정: `warning_resolved_for_next_sample`
+- 근거: `pipeline_events_2026-05-14.jsonl` 전체 스캔에서 simulator BUY/SELL 실적(`scalp_sim_entry_armed=1`, `scalp_sim_buy_order_assumed_filled=1`, `scalp_sim_sell_order_assumed_filled=2`)은 있었지만 `openai_endpoint_name=entry_price`는 0건이었다. 원인은 실거래 제출 경로만 `_apply_entry_ai_price_canary`를 호출하고 `scalp_live_simulator` BUY 신호 경로는 가상 pending/fill을 직접 생성해 `entry_price` transport provenance를 남기지 않는 구조였다.
+- 조치: `maybe_arm_scalp_live_simulator_from_buy_signal`이 `ai_engine`을 받아 simulator 가상 주문에도 `_apply_entry_ai_price_canary`를 적용하도록 보정했다. `actual_order_submitted=false`/`simulated_order=true` 권한은 유지하고 실주문 함수는 호출하지 않는다.
+- 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_scalp_live_simulator.py` -> `18 passed`; `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_scale_in.py -k entry_ai_price_canary` -> `3 passed, 142 deselected`; `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_ai_engine_openai_transport.py` -> `17 passed`.
+- 다음 액션: 다음 openai_ws report에서 `entry_price_ws_sample_count`와 `entry_price_canary_summary.transport_observable_count`가 sim BUY 표본과 함께 증가하는지 확인한다. 장중 runtime threshold mutation은 하지 않는다.
 
 표준 확인 명령:
 

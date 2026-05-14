@@ -2540,6 +2540,14 @@ def _scalp_simulator_event_summary(events: list[dict], sim_completed_rows: list[
         "entry_expired": int(stage_counts.get("scalp_sim_entry_expired", 0)),
         "entry_unpriced": int(stage_counts.get("scalp_sim_entry_unpriced", 0)),
         "duplicate_buy_signal": int(stage_counts.get("scalp_sim_duplicate_buy_signal", 0)),
+        "entry_ai_price_applied": int(stage_counts.get("scalp_sim_entry_ai_price_applied", 0)),
+        "entry_ai_price_skip_order": int(stage_counts.get("scalp_sim_entry_ai_price_skip_order", 0)),
+        "entry_submit_revalidation_warning": int(
+            stage_counts.get("scalp_sim_entry_submit_revalidation_warning", 0)
+        ),
+        "entry_submit_revalidation_block": int(stage_counts.get("scalp_sim_entry_submit_revalidation_block", 0)),
+        "scale_in_filled": int(stage_counts.get("scalp_sim_scale_in_order_assumed_filled", 0)),
+        "scale_in_unfilled": int(stage_counts.get("scalp_sim_scale_in_order_unfilled", 0)),
         "completed_profit_summary": _completed_profit_summary(completed_rows or []),
     }
 
@@ -3049,6 +3057,7 @@ def _build_pre_submit_guard_family(events: list[dict]) -> dict:
     values = _extract_field_values(events, "order_bundle_submitted", "price_below_bid_bps")
     if not values:
         values = _extract_field_values(events, "latency_pass", "price_below_bid_bps")
+    sim_values = _extract_field_values(events, "scalp_sim_buy_order_virtual_pending", "price_below_bid_bps")
     passive_probe_events = [
         event
         for event in events
@@ -3057,6 +3066,11 @@ def _build_pre_submit_guard_family(events: list[dict]) -> dict:
     ]
     cancel_confirmed = _events_for_stage(events, "entry_order_cancel_confirmed")
     revalidation_warnings = _events_for_stage(events, "entry_submit_revalidation_warning")
+    revalidation_blocks = _events_for_stage(events, "entry_submit_revalidation_block")
+    sim_revalidation_warnings = _events_for_stage(events, "scalp_sim_entry_submit_revalidation_warning")
+    sim_revalidation_blocks = _events_for_stage(events, "scalp_sim_entry_submit_revalidation_block")
+    sim_ai_price_applied = _events_for_stage(events, "scalp_sim_entry_ai_price_applied")
+    sim_ai_price_skip = _events_for_stage(events, "scalp_sim_entry_ai_price_skip_order")
     sample_ready = len(values) >= 50
     recommended = {
         "max_below_bid_bps": int(round(_clamp(_percentile(values, 90, current["max_below_bid_bps"]), 60.0, 120.0))),
@@ -3066,10 +3080,16 @@ def _build_pre_submit_guard_family(events: list[dict]) -> dict:
         "stage": "entry",
         "sample": {
             "price_below_bid_bps": len(values),
+            "sim_price_below_bid_bps": len(sim_values),
             "guard_block": _stage_count(events, "pre_submit_price_guard_block"),
             "passive_probe": len(passive_probe_events),
             "entry_timeout_cancel_confirmed": len(cancel_confirmed),
             "submit_revalidation_warning": len(revalidation_warnings),
+            "submit_revalidation_block": len(revalidation_blocks),
+            "sim_entry_ai_price_applied": len(sim_ai_price_applied),
+            "sim_entry_ai_price_skip_order": len(sim_ai_price_skip),
+            "sim_submit_revalidation_warning": len(sim_revalidation_warnings),
+            "sim_submit_revalidation_block": len(sim_revalidation_blocks),
         },
         "apply_ready": sample_ready,
         "current": current,

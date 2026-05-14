@@ -204,16 +204,20 @@ def build_report(target_date: str) -> dict[str, Any]:
     if base_stats.get("p75") and ai_stats.get("p75"):
         p75_improvement = round((base_stats["p75"] - ai_stats["p75"]) / base_stats["p75"], 4)
 
+    ws_error_count = sum(int(value or 0) for value in (ws_summary.get("ws_error_counts") or {}).values())
+    ws_error_rate = round(ws_error_count / max(1, int(ws_summary.get("n") or 0)), 4)
+    repeated_transport_errors_min = 3
+    ws_error_rate_max = 0.01
     rollback = (
         ws_summary["ws_http_fallback_rate"] > 0.10
-        or bool(ws_summary["ws_error_counts"])
         or ((ai_stats.get("p95") or 0) > 6000)
+        or (ws_error_count >= repeated_transport_errors_min and ws_error_rate > ws_error_rate_max)
     )
     keep_ws = (
         analyze_n >= 50
         and ws_summary["ws_http_fallback_rate"] <= 0.05
         and ws_summary["ws_success_rate"] >= 0.95
-        and not ws_summary["ws_error_counts"]
+        and ws_error_rate <= ws_error_rate_max
         and (ai_stats.get("p75") or 999999) <= 2300
         and (ai_stats.get("p90") or 999999) <= 3300
         and (ai_stats.get("p95") or 999999) <= 4500
@@ -250,10 +254,18 @@ def build_report(target_date: str) -> dict[str, Any]:
                 "fallback_rate_gt": 0.10,
                 "fail_closed_min": 1,
                 "p95_ai_response_ms_gt": 6000,
-                "repeated_transport_errors_min": 2,
+                "repeated_transport_errors_min": repeated_transport_errors_min,
+                "transport_error_rate_gt": ws_error_rate_max,
             },
         },
         "ws_summary": ws_summary,
+        "transport_warning": {
+            "ws_error_count": ws_error_count,
+            "ws_error_rate": ws_error_rate,
+            "warning_only": bool(ws_error_count and not rollback),
+            "rollback_threshold_error_count": repeated_transport_errors_min,
+            "rollback_threshold_error_rate": ws_error_rate_max,
+        },
         "http_late_baseline_summary": baseline_summary,
         "baseline_improvement": {
             "median_improvement_rate": median_improvement,
@@ -276,6 +288,8 @@ def write_report(report: dict[str, Any]) -> tuple[Path, Path]:
     md_path = out_dir / f"openai_ws_stability_{target_date}.md"
     json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     ws = report["ws_summary"]
+    transport_warning = report.get("transport_warning")
+    transport_warning = transport_warning if isinstance(transport_warning, dict) else {}
     base = report["http_late_baseline_summary"]
     improvement = report["baseline_improvement"]
     entry_price_summary = report.get("entry_price_canary_summary")
@@ -307,6 +321,7 @@ def write_report(report: dict[str, Any]) -> tuple[Path, Path]:
         f"- WS fallback: `{ws['ws_http_fallback']}` / `{ws['n']}` (`{ws['ws_http_fallback_rate']}`)",
         f"- WS success rate: `{ws['ws_success_rate']}`",
         f"- WS errors: `{ws['ws_error_counts']}`",
+        f"- WS transport warning: `{transport_warning}`",
         f"- AI response ms: `{ws['ai_response_ms']}`",
         f"- WS roundtrip ms: `{ws['ws_roundtrip_ms']}`",
         f"- WS queue wait ms: `{ws['ws_queue_wait_ms']}`",

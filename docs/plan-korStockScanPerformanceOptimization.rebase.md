@@ -14,7 +14,7 @@
 2. 중심 루프는 `R0_collect -> R1_daily_report -> R2_cumulative_report -> R3_manifest_only -> R4_preopen_apply_candidate -> R5_bounded_calibrated_apply -> R6_post_apply_attribution`다. 상세 산출물/소비자 계약은 [report-based-automation-traceability](./report-based-automation-traceability.md)를 따른다.
 3. 기준선은 `main-only`, `normal_only`, `post_fallback_deprecation`이다. 원격/server 비교값은 기본 의사결정 입력에서 제외한다.
 4. 실전 변경은 동일 단계 내 단일 owner canary를 기본으로 한다. stage, 조작점, cohort tag, rollback guard가 분리된 경우에만 stage-disjoint concurrent canary를 허용한다.
-5. `2026-05-13` PREOPEN 기준 runtime env는 `auto_bounded_live` guard를 통과한 `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe`만 selected family로 인정한다. 장중 runtime threshold mutation은 금지한다.
+5. `2026-05-15` PREOPEN 기준 runtime env는 `auto_bounded_live` guard를 통과한 `soft_stop_whipsaw_confirmation`만 selected family로 인정한다. `score65_74_recovery_probe`는 `2026-05-13`에는 selected였고 `2026-05-14` 5/13 source 재검증에서도 open 가능성이 확인됐지만, `2026-05-15` 실제 preopen apply에서는 5/14 source의 rolling_5d primary 재평가 결과 `hold/no_runtime_env_override`로 미적용됐다. 장중 runtime threshold mutation은 금지한다.
 6. 스캘핑 live AI route는 OpenAI 고정이다. `KORSTOCKSCAN_SCALPING_AI_ROUTE=openai`, Responses WS transport, numeric compact JSON hot path를 기준으로 보고, Gemini/DeepSeek fallback은 명시 env 또는 OpenAI 초기화 실패/비운영 분석 경로로만 본다.
 7. 스윙은 dry-run self-improvement 체인이다. `selection -> db_load -> entry -> holding -> scale_in -> exit -> attribution` lifecycle을 매 장후 감사하고, approval request는 생성할 수 있지만 별도 approval artifact 없이는 runtime env/live order 전환으로 보지 않는다.
 8. sim/probe/counterfactual은 source bundle과 approval request 근거가 될 수 있지만 real execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
@@ -106,7 +106,7 @@
 
 | 영역 | 현재 상태 | 금지선 |
 | --- | --- | --- |
-| scalping entry | `score65_74_recovery_probe`는 2026-05-13 selected runtime family. score 50 fallback/neutral은 `blocked_ai_score`로 보류 | score threshold 완화, fallback 재개, 장중 env mutation 금지 |
+| scalping entry | `score65_74_recovery_probe`는 2026-05-13 selected였으나 2026-05-15 실제 preopen apply에서는 `hold/no_runtime_env_override`로 미적용된 open 후보다. score 50 fallback/neutral은 `blocked_ai_score`로 보류 | score threshold 완화, fallback 재개, 장중 env mutation 금지 |
 | entry price | `dynamic_entry_price_resolver_p1` + `dynamic_entry_ai_price_canary_p2`; passive probe submit revalidation이 stale이면 제출 전 block | `ws_data.curr` 직접 추격, stale quote submit 금지 |
 | holding/exit | `soft_stop_micro_grace`, `soft_stop_whipsaw_confirmation` selected family, `holding_flow_override` 운영 override | hard/protect/emergency/order safety 우회 금지 |
 | scale-in/position sizing | scale-in price resolver와 dynamic qty safety 유지. `position_sizing_dynamic_formula`는 score/strategy/volatility/liquidity/spread/price band/recent loss/portfolio exposure를 입력으로 보는 별도 owner이며, 신규/추가매수 1주 cap 해제는 `position_sizing_cap_release` approval request 이후만 검토 | sim/probe 단독 실주문 cap 해제, cap 해제 자동 apply 금지 |
@@ -135,8 +135,8 @@
 
 | 워크스트림 | 현재 owner/상태 | 다음 판정 경로 |
 | --- | --- | --- |
-| threshold auto apply | `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe` selected runtime family | 장후 `threshold_cycle_ev`, `runtime_approval_summary`, post-apply attribution |
-| entry funnel | `BUY Funnel Sentinel` + `wait6579_ev_cohort` + selected `score65_74_recovery_probe` | BUY/submitted drought는 daily/rolling/cumulative EV와 blocker attribution으로 판정 |
+| threshold auto apply | 2026-05-15 현재 selected runtime family는 `soft_stop_whipsaw_confirmation` 1개다. `score65_74_recovery_probe`는 open 후보이나 5/15 실제 env에는 포함되지 않았다 | 장후 `threshold_cycle_ev`, `runtime_approval_summary`, post-apply attribution |
+| entry funnel | `BUY Funnel Sentinel` + `wait6579_ev_cohort` + open 후보 `score65_74_recovery_probe` | BUY/submitted drought는 daily/rolling/cumulative EV와 blocker attribution으로 판정 |
 | sim-first lifecycle threshold scope | 신규 산출물 owner가 아니라 기존 `R0_collect -> R1_daily_report -> R2_cumulative_report -> R3_manifest_only -> R4_preopen_apply_candidate -> R5_bounded_calibrated_apply -> R6_post_apply_attribution` 체인의 범위 규칙이다. 스캘핑과 스윙의 BUY/selection 가능 후보 전체를 `selection -> entry -> holding -> scale_in -> exit` virtual lifecycle로 넓게 실행해 최적 threshold 후보와 기능개선 workorder를 찾는다 | 실주문/예수금/cap/selected runtime family는 sim exclusion 사유가 아니라 provenance tag로만 남긴다. 별도 standalone report가 threshold-cycle consumer나 apply authority가 되지 않는다 |
 | entry price quality | P1/P2 price resolver, passive probe lifecycle, submit revalidation block | `pre_submit_price_guard` family와 daily EV attribution |
 | holding/exit | `soft_stop_micro_grace`, selected `soft_stop_whipsaw_confirmation`, `holding_flow_override` | HOLD/EXIT Sentinel, post-sell feedback, threshold-cycle EV |

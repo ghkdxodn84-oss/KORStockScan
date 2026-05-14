@@ -1721,7 +1721,14 @@ def _resolve_scalp_sim_entry_qty(stock: dict, ws_data: dict, runtime: dict) -> d
     }
 
 
-def maybe_arm_scalp_live_simulator_from_buy_signal(stock: dict, code: str, ws_data: dict, runtime: dict) -> bool:
+def maybe_arm_scalp_live_simulator_from_buy_signal(
+    stock: dict,
+    code: str,
+    ws_data: dict,
+    runtime: dict,
+    *,
+    ai_engine=None,
+) -> bool:
     if not _is_scalp_live_simulator_enabled():
         return False
     strategy = normalize_strategy(runtime.get("strategy") or stock.get("strategy"))
@@ -1787,6 +1794,128 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(stock: dict, code: str, ws_da
             "msg_audience": "ADMIN_ONLY",
         }
     )
+    planned_orders = [{"price": limit_price, "qty": qty, "tif": "DAY"}]
+    curr_price = _safe_int((ws_data or {}).get("curr") or limit_price, 0)
+    best_ask, best_bid = _get_best_levels_from_ws(ws_data or {})
+    latency_gate = {
+        "orders": planned_orders,
+        "target_buy_price": limit_price,
+        "order_price": limit_price,
+        "latency_guarded_order_price": limit_price,
+        "normal_defensive_order_price": limit_price,
+        "price_resolution_reason": "scalp_sim_initial_limit",
+        "latency_state": str((runtime or {}).get("latency_state") or "SIMULATED"),
+        "decision": "SIMULATED_BUY_SIGNAL",
+        "reason": "scalp_live_simulator",
+        "ws_age_ms": 0,
+        "ws_jitter_ms": 0,
+        "spread_ratio": _spread_bps_from_ws(ws_data or {}, curr_price) or 0.0,
+        "quote_stale": False,
+    }
+    ai_price_canary_touched = False
+    if ai_engine is not None and hasattr(ai_engine, "evaluate_scalping_entry_price"):
+        planned_orders, ai_price_canary_touched = _apply_entry_ai_price_canary(
+            stock=sim_target,
+            code=code,
+            strategy="SCALPING",
+            ws_data=ws_data or {},
+            ai_engine=ai_engine,
+            latency_gate=latency_gate,
+            planned_orders=planned_orders,
+            curr_price=curr_price,
+            best_bid=best_bid,
+            best_ask=best_ask,
+        )
+    if ai_price_canary_touched:
+        if not planned_orders:
+            _log_entry_pipeline(
+                sim_target,
+                code,
+                "scalp_sim_entry_ai_price_skip_order",
+                **_scalp_sim_event_fields(
+                    threshold_family="pre_submit_price_guard",
+                    sim_record_id=sim_record_id,
+                    sim_parent_record_id=stock.get("id"),
+                    ai_entry_price_canary_action=latency_gate.get("ai_entry_price_canary_action"),
+                    ai_entry_price_canary_confidence=latency_gate.get("ai_entry_price_canary_confidence"),
+                    ai_entry_price_canary_reason=latency_gate.get("ai_entry_price_canary_reason"),
+                    runtime_effect="simulated_order_skipped",
+                ),
+            )
+            persist_scalp_simulator_state()
+            return True
+        adjusted_limit_price = _safe_int((planned_orders[0] or {}).get("price"), limit_price)
+        if adjusted_limit_price > 0:
+            limit_price = adjusted_limit_price
+            sim_target.update(
+                {
+                    "scalp_sim_entry_limit_price": limit_price,
+                    "order_price": limit_price,
+                    "entry_ai_price_canary_applied": True,
+                    "entry_ai_price_canary_action": latency_gate.get("ai_entry_price_canary_action"),
+                    "entry_ai_price_canary_confidence": latency_gate.get("ai_entry_price_canary_confidence"),
+                    "entry_ai_price_canary_reason": latency_gate.get("ai_entry_price_canary_reason"),
+                    "entry_price_resolution_reason": latency_gate.get("price_resolution_reason"),
+                }
+            )
+            _log_entry_pipeline(
+                sim_target,
+                code,
+                "scalp_sim_entry_ai_price_applied",
+                **_scalp_sim_event_fields(
+                    threshold_family="pre_submit_price_guard",
+                    sim_record_id=sim_record_id,
+                    sim_parent_record_id=stock.get("id"),
+                    original_limit_price=stock.get("target_buy_price") or stock.get("entry_armed_target_buy_price"),
+                    adjusted_limit_price=limit_price,
+                    ai_entry_price_canary_action=latency_gate.get("ai_entry_price_canary_action"),
+                    ai_entry_price_canary_confidence=latency_gate.get("ai_entry_price_canary_confidence"),
+                    ai_entry_price_canary_reason=latency_gate.get("ai_entry_price_canary_reason"),
+                    runtime_effect="simulated_entry_price_only",
+                ),
+            )
+    sim_submit_revalidation_fields = _build_entry_submit_revalidation_fields(
+        ws_data or {},
+        latency_gate,
+        now_ts=now_ts,
+    )
+    sim_price_snapshot = _build_entry_price_snapshot_fields(
+        latency_gate,
+        request_price=limit_price,
+        curr_price=curr_price,
+        best_bid=best_bid,
+        best_ask=best_ask,
+    )
+    if sim_submit_revalidation_fields.get("entry_submit_revalidation_warning"):
+        _log_entry_pipeline(
+            sim_target,
+            code,
+            "scalp_sim_entry_submit_revalidation_warning",
+            **_scalp_sim_event_fields(
+                threshold_family="pre_submit_price_guard",
+                sim_record_id=sim_record_id,
+                sim_parent_record_id=stock.get("id"),
+                **sim_submit_revalidation_fields,
+                **sim_price_snapshot,
+            ),
+        )
+    if _is_passive_probe_stale_submit_block(sim_submit_revalidation_fields):
+        _log_entry_pipeline(
+            sim_target,
+            code,
+            "scalp_sim_entry_submit_revalidation_block",
+            **_scalp_sim_event_fields(
+                threshold_family="pre_submit_price_guard",
+                sim_record_id=sim_record_id,
+                sim_parent_record_id=stock.get("id"),
+                block_reason="stale_context_or_quote",
+                runtime_effect="simulated_order_skipped",
+                **sim_submit_revalidation_fields,
+                **sim_price_snapshot,
+            ),
+        )
+        persist_scalp_simulator_state()
+        return True
     for key in ("pending_buy_msg", "pending_sell_msg", "pending_entry_orders", "odno", "sell_odno", "add_odno"):
         sim_target.pop(key, None)
     with ENTRY_LOCK:
@@ -1820,6 +1949,8 @@ def maybe_arm_scalp_live_simulator_from_buy_signal(stock: dict, code: str, ws_da
             limit_price=limit_price,
             qty=qty,
             **qty_log_fields,
+            **sim_submit_revalidation_fields,
+            **sim_price_snapshot,
             would_submit_stage="order_leg_sent",
             runtime_effect="pending_virtual_fill",
         ),
@@ -8373,7 +8504,7 @@ def handle_watching_state(stock, code, ws_data, admin_id, *, now_ts=None, now_dt
         return
 
     if runtime["is_trigger"]:
-        maybe_arm_scalp_live_simulator_from_buy_signal(stock, code, ws_data, runtime)
+        maybe_arm_scalp_live_simulator_from_buy_signal(stock, code, ws_data, runtime, ai_engine=ai_engine)
         _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime)
         return
 
@@ -10887,7 +11018,17 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         )
         return None
 
-    deposit = kiwoom_orders.get_deposit(KIWOOM_TOKEN)
+    simulated_position = _is_any_simulated_position(stock, strategy)
+    deposit = _sim_virtual_budget_krw() if simulated_position else kiwoom_orders.get_deposit(KIWOOM_TOKEN)
+    sim_budget_fields = (
+        {
+            "virtual_budget_override": True,
+            "virtual_budget_krw": deposit,
+            "budget_authority": "sim_virtual_not_real_orderable_amount",
+        }
+        if simulated_position
+        else {}
+    )
     qty_price = resolved_price if strategy == "SCALPING" else curr_price
     qty_details = describe_dynamic_scale_in_qty(
         stock=stock,
@@ -10920,6 +11061,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             effective_qty=effective_qty,
             cap_qty=cap_qty,
             floor_applied=floor_applied,
+            **sim_budget_fields,
             **swing_scale_micro_fields,
         )
         log_info(
@@ -10962,6 +11104,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
         would_qty=would_qty,
         effective_qty=effective_qty,
         qty_reason=qty_reason,
+        **sim_budget_fields,
         **swing_scale_micro_fields,
     )
     _log_holding_pipeline(
@@ -11061,6 +11204,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                     cap_qty=cap_qty,
                     floor_applied=floor_applied,
                     qty_reason=qty_reason,
+                    **sim_budget_fields,
                 ),
             )
             persist_scalp_simulator_state()
@@ -11117,6 +11261,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                 cap_qty=cap_qty,
                 floor_applied=floor_applied,
                 qty_reason=qty_reason,
+                **sim_budget_fields,
                 runtime_effect="simulated_holding_only",
             ),
         )
@@ -11191,6 +11336,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             cap_qty=cap_qty,
             floor_applied=floor_applied,
             qty_reason=qty_reason,
+            **sim_budget_fields,
             **swing_scale_micro_fields,
         )
         if _is_swing_intraday_probe_target(stock):
@@ -11223,6 +11369,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
                     cap_qty=cap_qty,
                     floor_applied=floor_applied,
                     qty_reason=qty_reason,
+                    **sim_budget_fields,
                     **swing_scale_micro_fields,
                 ),
             )
