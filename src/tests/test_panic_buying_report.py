@@ -176,3 +176,50 @@ def test_tp_counterfactual_does_not_create_order_decision(monkeypatch, tmp_path)
     assert tp["policy"]["runtime_effect"] == "counterfactual_only_no_order_change"
     assert report["canary_candidates"][0]["family"] == "panic_buy_runner_tp_canary"
     assert report["canary_candidates"][0]["allowed_runtime_apply"] is False
+
+
+def test_tp_counterfactual_propagates_non_real_sibling_to_sparse_exit(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        [
+            _event(
+                "10:00:00",
+                pipeline="HOLDING_PIPELINE",
+                stage="exit_signal",
+                record_id=0,
+                stock_code="042700",
+                fields={
+                    "exit_rule": "scalp_trailing_take_profit",
+                    "profit_rate": "1.2",
+                    "peak_profit": "1.8",
+                },
+            ),
+            _event(
+                "10:00:01",
+                pipeline="HOLDING_PIPELINE",
+                stage="scalp_sim_sell_order_assumed_filled",
+                record_id=0,
+                stock_code="042700",
+                fields={
+                    "exit_rule": "scalp_trailing_take_profit",
+                    "profit_rate": "1.2",
+                    "peak_profit": "1.8",
+                    "simulated_order": "true",
+                    "actual_order_submitted": "false",
+                    "simulation_book": "scalp_ai_buy_all",
+                },
+            ),
+        ],
+    )
+
+    report = report_mod.build_panic_buying_report(
+        TARGET_DATE,
+        as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:01:00"),
+    )
+
+    tp = report["tp_counterfactual_summary"]
+    assert tp["real_exit_count"] == 0
+    assert tp["non_real_exit_count"] == 2
+    assert tp["tp_like_exit_count"] == 0
+    assert tp["non_real_tp_like_exit_count"] == 2

@@ -43,6 +43,17 @@ def _write_json(path, payload: dict) -> None:
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
 
 
+def _write_market_regime(tmp_path, *, risk_state: str = "NEUTRAL") -> None:
+    _write_json(
+        tmp_path / "cache" / "market_regime_snapshot.json",
+        {
+            "risk_state": risk_state,
+            "allow_swing_entry": risk_state != "RISK_OFF",
+            "swing_score": 35 if risk_state == "RISK_OFF" else 60,
+        },
+    )
+
+
 def _panic_rows() -> list[dict]:
     return [
         _event(
@@ -110,6 +121,83 @@ def test_panic_sell_state_from_five_stop_losses_in_30_minutes(monkeypatch, tmp_p
     freeze = next(item for item in report["canary_candidates"] if item["family"] == "panic_entry_freeze_guard")
     assert freeze["status"] == "report_only_candidate"
     assert freeze["allowed_runtime_apply"] is False
+
+
+def test_probe_sibling_marks_sparse_exit_signal_as_non_real(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    rows = []
+    for idx in range(5):
+        rows.append(
+            _event(
+                f"10:{idx:02d}:00",
+                record_id=idx + 1,
+                fields={"exit_rule": "scalp_soft_stop_loss", "profit_rate": "-2.5"},
+            )
+        )
+        rows.append(
+            _event(
+                f"10:{idx:02d}:01",
+                stage="swing_probe_exit_signal",
+                record_id=idx + 1,
+                fields={
+                    "exit_rule": "scalp_soft_stop_loss",
+                    "profit_rate": "-2.5",
+                    "actual_order_submitted": "false",
+                    "broker_order_forbidden": "true",
+                    "probe_origin_stage": "swing_intraday_probe",
+                },
+            )
+        )
+    _write_events(tmp_path, rows)
+
+    report = report_mod.build_panic_sell_defense_report(
+        TARGET_DATE,
+        as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:29:00"),
+    )
+
+    assert report["panic_state"] == "NORMAL"
+    assert report["panic_metrics"]["real_exit_count"] == 0
+    assert report["panic_metrics"]["non_real_exit_count"] == 10
+    assert report["panic_metrics"]["stop_loss_exit_count"] == 0
+    assert report["panic_metrics"]["panic_by_stop_loss_count"] is False
+
+
+def test_non_real_assumed_fill_marks_sparse_exit_signal_as_non_real(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        [
+            _event(
+                "10:00:00",
+                record_id=0,
+                stock_code="042700",
+                fields={"exit_rule": "scalp_soft_stop_loss", "profit_rate": "-2.0"},
+            ),
+            _event(
+                "10:00:01",
+                stage="scalp_sim_sell_order_assumed_filled",
+                record_id=0,
+                stock_code="042700",
+                fields={
+                    "exit_rule": "scalp_soft_stop_loss",
+                    "profit_rate": "-2.0",
+                    "simulated_order": "true",
+                    "actual_order_submitted": "false",
+                    "simulation_book": "scalp_ai_buy_all",
+                },
+            ),
+        ],
+    )
+
+    report = report_mod.build_panic_sell_defense_report(
+        TARGET_DATE,
+        as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:29:00"),
+    )
+
+    assert report["panic_state"] == "NORMAL"
+    assert report["panic_metrics"]["real_exit_count"] == 0
+    assert report["panic_metrics"]["non_real_exit_count"] == 1
+    assert report["panic_metrics"]["stop_loss_exit_count"] == 0
 
 
 def test_recovery_watch_uses_active_sim_probe_average(monkeypatch, tmp_path):
@@ -245,6 +333,7 @@ def test_post_sell_feedback_is_separate_from_closed_pnl(monkeypatch, tmp_path):
 
 def test_microstructure_detector_adds_report_only_risk_off_without_order_action(monkeypatch, tmp_path):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    _write_market_regime(tmp_path, risk_state="RISK_OFF")
     _write_events(
         tmp_path,
         [
@@ -303,9 +392,74 @@ def test_microstructure_detector_adds_report_only_risk_off_without_order_action(
     assert report["policy"]["runtime_effect"] == "report_only_no_mutation"
     assert micro["risk_off_advisory_count"] == 1
     assert micro["allow_new_long_false_count"] == 1
+    assert report["microstructure_market_context"]["confirmed_risk_off_advisory"] is True
+    assert report["microstructure_market_context"]["market_confirms_risk_off"] is True
     assert micro["latest_signals"][0]["risk_off_advisory"] is True
     assert micro["policy"]["does_not_submit_orders"] is True
     assert micro["micro_cusum_observer"]["decision_authority"] == "source_quality_only"
     assert micro["micro_cusum_observer"]["consensus_pass_symbol_count"] == 1
     assert "order_submit" in micro["micro_cusum_observer"]["forbidden_uses"]
     assert all(item["allowed_runtime_apply"] is False for item in report["canary_candidates"])
+
+
+def test_microstructure_risk_off_needs_market_or_breadth_confirmation(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    _write_market_regime(tmp_path, risk_state="NEUTRAL")
+    _write_events(
+        tmp_path,
+        [
+            _micro_event("10:00:00", close=100.0),
+            _micro_event("10:01:00", close=100.0),
+            _micro_event(
+                "10:02:00",
+                close=97.5,
+                open=100.0,
+                high=100.1,
+                low=97.45,
+                volume=420,
+                buy=28,
+                sell=72,
+                best_bid=9700,
+                best_ask=9710,
+                bid_depth_l5=540,
+                ask_depth_l5=1400,
+                panic_spread_ratio=2.0,
+                orderbook_micro_ofi_z=-2.7,
+                orderbook_micro_state="bearish",
+                orderbook_micro_ready=True,
+                orderbook_micro_observer_healthy=True,
+            ),
+            _micro_event(
+                "10:03:00",
+                close=97.0,
+                open=97.6,
+                high=97.7,
+                low=96.9,
+                volume=430,
+                buy=27,
+                sell=73,
+                best_bid=9690,
+                best_ask=9710,
+                bid_depth_l5=500,
+                ask_depth_l5=1500,
+                panic_spread_ratio=2.1,
+                orderbook_micro_ofi_z=-2.8,
+                orderbook_micro_state="bearish",
+                orderbook_micro_ready=True,
+                orderbook_micro_observer_healthy=True,
+            ),
+        ],
+    )
+
+    report = report_mod.build_panic_sell_defense_report(
+        TARGET_DATE,
+        as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:04:00"),
+    )
+
+    assert report["microstructure_detector"]["risk_off_advisory_count"] == 1
+    market_context = report["microstructure_market_context"]
+    assert report["panic_state"] == "NORMAL"
+    assert market_context["confirmed_risk_off_advisory"] is False
+    assert market_context["portfolio_local_risk_off_only"] is True
+    assert "market_regime_not_risk_off" in market_context["reasons"]
+    assert "microstructure risk_off unconfirmed by market/breadth context" in report["panic_state_reasons"]

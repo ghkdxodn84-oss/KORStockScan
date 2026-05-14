@@ -187,3 +187,110 @@ def test_runtime_approval_summary_surfaces_panic_approval_requests(tmp_path, mon
     markdown = (out_dir / "runtime_approval_summary_2026-05-13.md").read_text(encoding="utf-8")
     assert "## Panic" in markdown
     assert "panic_buy_runner_tp_canary" in markdown
+
+
+def test_runtime_approval_summary_freezes_panic_request_on_source_quality_blocker(tmp_path, monkeypatch):
+    ev_dir = tmp_path / "threshold_cycle_ev"
+    calibration_dir = tmp_path / "threshold_cycle_calibration"
+    swing_dir = tmp_path / "swing_runtime_approval"
+    out_dir = tmp_path / "runtime_approval_summary"
+    ev_dir.mkdir(parents=True)
+    calibration_dir.mkdir(parents=True)
+    calibration_path = calibration_dir / "threshold_cycle_calibration_2026-05-14.json"
+    calibration_path.write_text(
+        json.dumps(
+            {
+                "calibration_source_bundle": {
+                    "source_metrics": {
+                        "panic_sell_defense": {
+                            "runtime_effect": "report_only_no_mutation",
+                            "panic_state": "NORMAL",
+                            "active_sim_probe_positions": 3,
+                            "microstructure_max_panic_score": 0.84,
+                            "candidate_status": {"panic_entry_freeze_guard": "report_only_candidate"},
+                            "source_quality_blockers": ["market_regime_not_risk_off"],
+                            "market_breadth_followup_candidate": True,
+                        }
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (ev_dir / "threshold_cycle_ev_2026-05-14.json").write_text(
+        json.dumps({"sources": {"calibration": str(calibration_path)}, "calibration_outcome": {"decisions": []}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mod,
+        "ev_report_paths",
+        lambda target_date: (
+            ev_dir / f"threshold_cycle_ev_{target_date}.json",
+            ev_dir / f"threshold_cycle_ev_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing_dir)
+    monkeypatch.setattr(mod, "SUMMARY_DIR", out_dir)
+
+    report = mod.build_runtime_approval_summary("2026-05-14")
+
+    row = report["panic"][0]
+    assert row["family"] == "panic_sell_defense"
+    assert row["state"] == "freeze"
+    assert "source_quality_blocker" in row["reasons"]
+    assert row["source_quality_blockers"] == ["market_regime_not_risk_off"]
+    assert row["market_breadth_followup_candidate"] is True
+
+
+def test_runtime_approval_summary_does_not_request_for_inactive_panic_candidate_status(tmp_path, monkeypatch):
+    ev_dir = tmp_path / "threshold_cycle_ev"
+    calibration_dir = tmp_path / "threshold_cycle_calibration"
+    swing_dir = tmp_path / "swing_runtime_approval"
+    out_dir = tmp_path / "runtime_approval_summary"
+    ev_dir.mkdir(parents=True)
+    calibration_dir.mkdir(parents=True)
+    calibration_path = calibration_dir / "threshold_cycle_calibration_2026-05-14.json"
+    calibration_path.write_text(
+        json.dumps(
+            {
+                "calibration_source_bundle": {
+                    "source_metrics": {
+                        "panic_sell_defense": {
+                            "runtime_effect": "report_only_no_mutation",
+                            "panic_state": "NORMAL",
+                            "active_sim_probe_positions": 10,
+                            "candidate_status": {
+                                "panic_entry_freeze_guard": "inactive_no_panic",
+                                "panic_attribution_pack": "active_report_only",
+                            },
+                            "market_breadth_followup_candidate": True,
+                        }
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    (ev_dir / "threshold_cycle_ev_2026-05-14.json").write_text(
+        json.dumps({"sources": {"calibration": str(calibration_path)}, "calibration_outcome": {"decisions": []}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        mod,
+        "ev_report_paths",
+        lambda target_date: (
+            ev_dir / f"threshold_cycle_ev_{target_date}.json",
+            ev_dir / f"threshold_cycle_ev_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing_dir)
+    monkeypatch.setattr(mod, "SUMMARY_DIR", out_dir)
+
+    report = mod.build_runtime_approval_summary("2026-05-14")
+
+    assert report["summary"]["panic_approval_requested"] == 0
+    row = report["panic"][0]
+    assert row["state"] == "hold"
+    assert row["reasons"] == ["hold"]

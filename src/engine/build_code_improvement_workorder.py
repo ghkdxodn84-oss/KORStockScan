@@ -427,11 +427,18 @@ def _panic_lifecycle_followup_orders(calibration_report: dict[str, Any]) -> list
 
     panic_sell = source_metrics.get("panic_sell_defense") if isinstance(source_metrics.get("panic_sell_defense"), dict) else {}
     panic_sell_candidates = panic_sell.get("candidate_status") if isinstance(panic_sell.get("candidate_status"), dict) else {}
+    panic_sell_source_quality_blockers = (
+        panic_sell.get("source_quality_blockers")
+        if isinstance(panic_sell.get("source_quality_blockers"), list)
+        else []
+    )
     panic_sell_triggered = bool(panic_sell_candidates) or str(panic_sell.get("panic_state") or "") in {
         "PANIC_SELL",
         "RECOVERY_WATCH",
     }
     panic_sell_triggered = panic_sell_triggered or (_safe_int(panic_sell.get("active_sim_probe_positions"), 0) > 0)
+    panic_sell_triggered = panic_sell_triggered or bool(panic_sell.get("market_breadth_followup_candidate"))
+    panic_sell_triggered = panic_sell_triggered or bool(panic_sell_source_quality_blockers)
     if panic_sell_triggered:
         orders.append(
             {
@@ -457,12 +464,17 @@ def _panic_lifecycle_followup_orders(calibration_report: dict[str, Any]) -> list
                     f"confirmation_eligible_exit_count={panic_sell.get('confirmation_eligible_exit_count')}",
                     f"active_sim_probe_positions={panic_sell.get('active_sim_probe_positions')}",
                     f"post_sell_rebound_above_sell_10_20m_pct={panic_sell.get('post_sell_rebound_above_sell_10_20m_pct')}",
+                    f"microstructure_market_risk_state={panic_sell.get('microstructure_market_risk_state')}",
+                    f"microstructure_confirmed_risk_off_advisory={panic_sell.get('microstructure_confirmed_risk_off_advisory')}",
+                    f"microstructure_portfolio_local_risk_off_only={panic_sell.get('microstructure_portfolio_local_risk_off_only')}",
+                    f"market_breadth_followup_candidate={panic_sell.get('market_breadth_followup_candidate')}",
+                    f"source_quality_blockers={panic_sell_source_quality_blockers}",
                     f"candidate_status={panic_sell_candidates}",
                     "allowed_runtime_apply=false",
                 ],
                 "next_postclose_metric": (
                     "panic_sell_defense should expose simulation EV, rollback guard, approval artifact status, "
-                    "and candidate-specific threshold recommendations before any runtime transition."
+                    "market/breadth confirmation, and candidate-specific threshold recommendations before any runtime transition."
                 ),
                 "files_likely_touched": [
                     "src/engine/panic_sell_defense_report.py",

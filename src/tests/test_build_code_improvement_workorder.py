@@ -188,6 +188,11 @@ def test_build_code_improvement_workorder_adds_panic_lifecycle_orders(tmp_path, 
                             "stop_loss_exit_count": 3,
                             "confirmation_eligible_exit_count": 2,
                             "active_sim_probe_positions": 1,
+                            "microstructure_market_risk_state": "NEUTRAL",
+                            "microstructure_confirmed_risk_off_advisory": False,
+                            "microstructure_portfolio_local_risk_off_only": True,
+                            "market_breadth_followup_candidate": True,
+                            "source_quality_blockers": ["market_regime_not_risk_off"],
                             "candidate_status": {"panic_stop_confirmation": "report_only_candidate"},
                         },
                         "panic_buying": {
@@ -223,6 +228,11 @@ def test_build_code_improvement_workorder_adds_panic_lifecycle_orders(tmp_path, 
     assert decisions["order_panic_buy_runner_tp_canary_lifecycle_pack"] == "design_family_candidate"
     assert report["summary"]["panic_lifecycle_source_order_count"] == 2
     assert report["source"]["threshold_cycle_calibration"] == str(calibration_path)
+    panic_order = next(
+        item for item in report["orders"] if item["order_id"] == "order_panic_sell_defense_lifecycle_transition_pack"
+    )
+    assert any("market_breadth_followup_candidate=True" in item for item in panic_order["evidence"])
+    assert any("source_quality_blockers=['market_regime_not_risk_off']" in item for item in panic_order["evidence"])
     markdown = (doc_dir / "code_improvement_workorder_2026-05-13.md").read_text(encoding="utf-8")
     assert "panic_buy_runner_tp_canary" in markdown
     assert "threshold_cycle_calibration" in markdown

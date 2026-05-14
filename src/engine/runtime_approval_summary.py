@@ -257,10 +257,20 @@ def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
     return rows
 
 
-def _panic_request_state(has_candidate: bool, sample_count: int, runtime_effect: Any) -> tuple[str, list[str]]:
+def _panic_request_state(
+    has_candidate: bool,
+    sample_count: int,
+    runtime_effect: Any,
+    source_quality_blockers: list[Any] | None = None,
+) -> tuple[str, list[str]]:
     reasons: list[str] = []
     if runtime_effect != "report_only_no_mutation":
         reasons.append("runtime_effect_not_report_only")
+        return "freeze", reasons
+    blockers = [str(item) for item in (source_quality_blockers or []) if str(item)]
+    if blockers:
+        reasons.append("source_quality_blocker")
+        reasons.extend(blockers)
         return "freeze", reasons
     if sample_count <= 0:
         reasons.append("sample_floor_not_met")
@@ -270,6 +280,10 @@ def _panic_request_state(has_candidate: bool, sample_count: int, runtime_effect:
         return "approval_required", reasons
     reasons.append("hold")
     return "hold", reasons
+
+
+def _has_report_only_candidate(candidate_status: dict[str, Any]) -> bool:
+    return any(str(value or "") == "report_only_candidate" for value in candidate_status.values())
 
 
 def _panic_rows(calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
@@ -289,7 +303,17 @@ def _panic_rows(calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
             _as_int(panic_sell.get("confirmation_eligible_exit_count")),
             _as_int(panic_sell.get("active_sim_probe_positions")),
         )
-        state, reasons = _panic_request_state(bool(candidate_status), sample_count, panic_sell.get("runtime_effect"))
+        source_quality_blockers = (
+            panic_sell.get("source_quality_blockers")
+            if isinstance(panic_sell.get("source_quality_blockers"), list)
+            else []
+        )
+        state, reasons = _panic_request_state(
+            _has_report_only_candidate(candidate_status),
+            sample_count,
+            panic_sell.get("runtime_effect"),
+            source_quality_blockers,
+        )
         rows.append(
             {
                 "domain": "panic_sell",
@@ -309,6 +333,8 @@ def _panic_rows(calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
                 "reason_label": _reason_text(reasons),
                 "selected_auto_bounded_live": False,
                 "candidate_status": candidate_status,
+                "source_quality_blockers": source_quality_blockers,
+                "market_breadth_followup_candidate": bool(panic_sell.get("market_breadth_followup_candidate")),
             }
         )
 
@@ -320,7 +346,11 @@ def _panic_rows(calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
             _as_int(panic_buy.get("tp_counterfactual_count")),
             _as_int(panic_buy.get("trailing_winner_count")),
         )
-        state, reasons = _panic_request_state(bool(candidate_status), sample_count, panic_buy.get("runtime_effect"))
+        state, reasons = _panic_request_state(
+            _has_report_only_candidate(candidate_status),
+            sample_count,
+            panic_buy.get("runtime_effect"),
+        )
         rows.append(
             {
                 "domain": "panic_buying",

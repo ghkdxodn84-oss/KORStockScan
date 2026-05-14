@@ -299,11 +299,12 @@ class DBManager:
         else:
             normalized_type = 'MAIN' # 기본값
 
-        # 💡 [핵심 교정 2] 정규화된 태그에 맞춰 실제 매매 로직(strategy)을 짝지어줍니다.
+        # final_ensemble_scanner의 generic RUNNER는 KOSPI universe에서 나온다.
+        # KOSDAQ_ML은 명시적으로 KOSDAQ pick_type이 들어온 경우에만 기본 매핑한다.
         if not strategy:
             if normalized_type == 'SCALP':
                 strategy = 'SCALPING'
-            elif normalized_type == 'RUNNER':
+            elif 'KOSDAQ' in pick_type_upper:
                 strategy = 'KOSDAQ_ML'
             else:
                 strategy = 'KOSPI_ML'

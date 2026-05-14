@@ -25,6 +25,8 @@ PANIC_WINDOW_MIN = 30
 PANIC_STOP_LOSS_COUNT_FLOOR = 5
 PANIC_STOP_LOSS_RATIO_FLOOR_PCT = 70.0
 PANIC_AVG_EXIT_PROFIT_CEILING_PCT = -2.0
+MICRO_MARKET_BREADTH_SYMBOL_FLOOR = 20
+MICRO_RISK_OFF_RATIO_FLOOR_PCT = 20.0
 RECOVERY_WATCH_ACTIVE_AVG_FLOOR_PCT = 0.5
 RECOVERY_WATCH_REBOUND_ABOVE_SELL_FLOOR_PCT = 50.0
 RECOVERY_CONFIRMED_ACTIVE_AVG_FLOOR_PCT = 0.8
@@ -194,6 +196,28 @@ def _is_non_real_observation(row: dict[str, Any]) -> bool:
     return "sim_" in stage or "_probe_" in stage or stage.startswith("swing_probe_")
 
 
+def _attempt_key(row: dict[str, Any]) -> str:
+    fields = _event_fields(row)
+    record_id = row.get("record_id")
+    if record_id in (None, "", 0):
+        record_id = fields.get("id")
+    if _safe_str(record_id):
+        return f"id:{_safe_str(record_id)}"
+    stock_code = _safe_str(row.get("stock_code"))[:6]
+    if stock_code:
+        return f"code:{stock_code}"
+    return f"name:{_safe_str(row.get('stock_name'))}"
+
+
+def _non_real_attempt_keys(events: list[dict[str, Any]]) -> set[str]:
+    """Propagate probe/sim provenance to sparse sibling exit_signal rows."""
+    return {
+        _attempt_key(row)
+        for row in events
+        if _attempt_key(row) and _is_non_real_observation(row)
+    }
+
+
 def _exit_rule_text(row: dict[str, Any]) -> str:
     fields = _event_fields(row)
     parts = [
@@ -258,8 +282,18 @@ def _max_rolling_stop_count(events: list[dict[str, Any]], *, window_min: int) ->
 
 def _summarize_exit_metrics(events: list[dict[str, Any]], *, as_of: datetime | None) -> dict[str, Any]:
     exit_events = [row for row in events if _is_holding_exit_signal(row)]
-    real_exits = [row for row in exit_events if not _is_non_real_observation(row)]
-    non_real_exits = [row for row in exit_events if _is_non_real_observation(row)]
+    holding_events = [row for row in events if _safe_str(row.get("pipeline")) == "HOLDING_PIPELINE"]
+    non_real_keys = _non_real_attempt_keys(holding_events)
+    real_exits = [
+        row
+        for row in exit_events
+        if _attempt_key(row) not in non_real_keys and not _is_non_real_observation(row)
+    ]
+    non_real_exits = [
+        row
+        for row in exit_events
+        if _attempt_key(row) in non_real_keys or _is_non_real_observation(row)
+    ]
     stop_loss_real = [row for row in real_exits if _is_stop_loss_exit(row)]
     profits = [value for row in real_exits for value in [_profit_rate(row)] if value is not None]
     stop_profits = [value for row in stop_loss_real for value in [_profit_rate(row)] if value is not None]
@@ -464,24 +498,87 @@ def _load_source_summary(target_date: str) -> dict[str, Any]:
     }
 
 
+def _microstructure_market_context(microstructure_detector: dict[str, Any], source_summary: dict[str, Any]) -> dict[str, Any]:
+    market = source_summary.get("market_regime") if isinstance(source_summary.get("market_regime"), dict) else {}
+    risk_state = _safe_str(market.get("risk_state") or "UNKNOWN").upper()
+    evaluated_count = _safe_int(microstructure_detector.get("evaluated_symbol_count"), 0)
+    risk_off_count = _safe_int(microstructure_detector.get("risk_off_advisory_count"), 0)
+    risk_off_ratio = _ratio(risk_off_count, evaluated_count)
+    market_confirms = risk_state == "RISK_OFF"
+    breadth_confirms = (
+        evaluated_count >= MICRO_MARKET_BREADTH_SYMBOL_FLOOR
+        and risk_off_ratio >= MICRO_RISK_OFF_RATIO_FLOOR_PCT
+    )
+    confirmed = risk_off_count > 0 and (market_confirms or breadth_confirms)
+    local_only = risk_off_count > 0 and not confirmed
+    reasons: list[str] = []
+    if market_confirms:
+        reasons.append("market_regime_risk_off")
+    if breadth_confirms:
+        reasons.append("micro_breadth_risk_off_ratio_confirmed")
+    if local_only:
+        reasons.append("micro_risk_off_unconfirmed_by_market_or_breadth")
+    if evaluated_count < MICRO_MARKET_BREADTH_SYMBOL_FLOOR:
+        reasons.append("micro_evaluated_symbol_count_below_breadth_floor")
+    if risk_state in {"RISK_ON", "NEUTRAL"} and risk_off_count > 0:
+        reasons.append("market_regime_not_risk_off")
+    if risk_state in {"", "UNKNOWN", "NONE"}:
+        reasons.append("market_regime_snapshot_missing_or_unknown")
+    return {
+        "metric_role": "source_quality_gate",
+        "decision_authority": "source_quality_only",
+        "window_policy": "intraday_observe_only",
+        "sample_floor": MICRO_MARKET_BREADTH_SYMBOL_FLOOR,
+        "primary_decision_metric": "confirmed_risk_off_advisory",
+        "source_quality_gate": "microstructure risk_off requires market RISK_OFF or broad evaluated-symbol confirmation",
+        "forbidden_uses": [
+            "runtime_threshold_apply",
+            "order_submit",
+            "auto_sell",
+            "bot_restart",
+            "provider_route_change",
+        ],
+        "market_risk_state": risk_state or "UNKNOWN",
+        "allow_swing_entry": market.get("allow_swing_entry"),
+        "swing_score": market.get("swing_score"),
+        "evaluated_symbol_count": evaluated_count,
+        "risk_off_advisory_count": risk_off_count,
+        "risk_off_advisory_ratio_pct": risk_off_ratio,
+        "breadth_symbol_floor": MICRO_MARKET_BREADTH_SYMBOL_FLOOR,
+        "breadth_risk_off_ratio_floor_pct": MICRO_RISK_OFF_RATIO_FLOOR_PCT,
+        "market_confirms_risk_off": market_confirms,
+        "breadth_confirms_risk_off": breadth_confirms,
+        "confirmed_risk_off_advisory": confirmed,
+        "portfolio_local_risk_off_only": local_only,
+        "reasons": reasons,
+    }
+
+
 def _resolve_panic_state(
     panic_metrics: dict[str, Any],
     active_recovery: dict[str, Any],
     post_sell_recovery: dict[str, Any],
     microstructure_detector: dict[str, Any] | None = None,
+    microstructure_market_context: dict[str, Any] | None = None,
 ) -> tuple[str, list[str]]:
     reasons: list[str] = []
     micro = microstructure_detector if isinstance(microstructure_detector, dict) else {}
-    micro_risk_off = _safe_int(micro.get("risk_off_advisory_count"), 0) > 0
+    micro_context = microstructure_market_context if isinstance(microstructure_market_context, dict) else {}
+    raw_micro_risk_off = _safe_int(micro.get("risk_off_advisory_count"), 0) > 0
+    micro_risk_off = bool(micro_context.get("confirmed_risk_off_advisory"))
     micro_recovery_watch = _safe_int(micro.get("recovery_candidate_count"), 0) > 0
     micro_recovery_confirmed = _safe_int(micro.get("recovery_confirmed_count"), 0) > 0
     if not panic_metrics.get("panic_detected") and not micro_risk_off and not micro_recovery_watch and not micro_recovery_confirmed:
         reasons.append("panic thresholds not breached")
+        if raw_micro_risk_off:
+            reasons.append("microstructure risk_off unconfirmed by market/breadth context")
         return "NORMAL", reasons
     if panic_metrics.get("panic_detected"):
         reasons.append("panic thresholds breached")
     if micro_risk_off:
-        reasons.append("microstructure risk_off advisory detected")
+        reasons.append("microstructure risk_off advisory confirmed by market/breadth context")
+    elif raw_micro_risk_off:
+        reasons.append("microstructure risk_off unconfirmed by market/breadth context")
     active_avg = active_recovery.get("avg_unrealized_profit_rate_pct")
     active_win_rate = active_recovery.get("win_rate_pct")
     post_sell_above_sell = _safe_float(post_sell_recovery.get("rebound_above_sell_10_20m_pct"), 0.0) or 0.0
@@ -600,11 +697,14 @@ def build_panic_sell_defense_report(
     active_recovery = _summarize_active_recovery()
     post_sell_recovery = _post_sell_recovery_metrics(target_date)
     microstructure_detector = summarize_microstructure_detector_from_events(events, as_of=as_of)
+    source_summary = _load_source_summary(target_date)
+    microstructure_market_context = _microstructure_market_context(microstructure_detector, source_summary)
     panic_state, reasons = _resolve_panic_state(
         panic_metrics,
         active_recovery,
         post_sell_recovery,
         microstructure_detector,
+        microstructure_market_context,
     )
     return {
         "schema_version": SCHEMA_VERSION,
@@ -628,9 +728,10 @@ def build_panic_sell_defense_report(
             "post_sell_feedback": post_sell_recovery,
         },
         "microstructure_detector": microstructure_detector,
+        "microstructure_market_context": microstructure_market_context,
         "defense_actions": _defense_actions(panic_state, panic_metrics),
         "canary_candidates": _canary_candidates(panic_state, panic_metrics, active_recovery),
-        "source_summary": _load_source_summary(target_date),
+        "source_summary": source_summary,
         "qna_policy": {
             "should_delay_stop_loss": "no for hard/protect/emergency; future candidate only for soft/trailing/flow",
             "new_buy_during_panic": "no threshold relaxation; route recovery evidence to separate probe/counterfactual",
@@ -653,6 +754,11 @@ def build_markdown(report: dict[str, Any]) -> str:
     active = report["recovery_metrics"]["active_sim_probe"]
     post_sell = report["recovery_metrics"]["post_sell_feedback"]
     micro = report.get("microstructure_detector") if isinstance(report.get("microstructure_detector"), dict) else {}
+    micro_market = (
+        report.get("microstructure_market_context")
+        if isinstance(report.get("microstructure_market_context"), dict)
+        else {}
+    )
     lines = [
         f"# Panic Sell Defense {report['target_date']}",
         "",
@@ -702,6 +808,16 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- micro_cusum_triggered_symbol_count: `{(micro.get('micro_cusum_observer') or {}).get('triggered_symbol_count', 0) if isinstance(micro.get('micro_cusum_observer'), dict) else 0}`",
         f"- micro_consensus_pass_symbol_count: `{(micro.get('micro_cusum_observer') or {}).get('consensus_pass_symbol_count', 0) if isinstance(micro.get('micro_cusum_observer'), dict) else 0}`",
         f"- micro_cusum_decision_authority: `{(micro.get('micro_cusum_observer') or {}).get('decision_authority', '-') if isinstance(micro.get('micro_cusum_observer'), dict) else '-'}`",
+        "",
+        "## Microstructure Market Context",
+        "",
+        f"- market_risk_state: `{micro_market.get('market_risk_state', '-')}`",
+        f"- evaluated_symbol_count: `{micro_market.get('evaluated_symbol_count', 0)}`",
+        f"- risk_off_advisory_ratio_pct: `{_fmt(micro_market.get('risk_off_advisory_ratio_pct'))}`",
+        f"- confirmed_risk_off_advisory: `{str(micro_market.get('confirmed_risk_off_advisory', False)).lower()}`",
+        f"- portfolio_local_risk_off_only: `{str(micro_market.get('portfolio_local_risk_off_only', False)).lower()}`",
+        f"- source_quality_gate: `{micro_market.get('source_quality_gate', '-')}`",
+        f"- reasons: `{'; '.join(micro_market.get('reasons') or [])}`",
         "",
         "## 방어 액션",
         "",

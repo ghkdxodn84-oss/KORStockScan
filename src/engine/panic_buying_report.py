@@ -150,6 +150,28 @@ def _is_non_real_observation(row: dict[str, Any]) -> bool:
     return "sim_" in stage or "_probe_" in stage or stage.startswith("swing_probe_")
 
 
+def _attempt_key(row: dict[str, Any]) -> str:
+    fields = _event_fields(row)
+    record_id = row.get("record_id")
+    if record_id in (None, "", 0):
+        record_id = fields.get("id")
+    if _safe_str(record_id):
+        return f"id:{_safe_str(record_id)}"
+    stock_code = _safe_str(row.get("stock_code"))[:6]
+    if stock_code:
+        return f"code:{stock_code}"
+    return f"name:{_safe_str(row.get('stock_name'))}"
+
+
+def _non_real_attempt_keys(events: list[dict[str, Any]]) -> set[str]:
+    """Propagate sim/probe provenance to sparse sibling exit/sell rows."""
+    return {
+        _attempt_key(row)
+        for row in events
+        if _attempt_key(row) and _is_non_real_observation(row)
+    }
+
+
 def _exit_rule_text(row: dict[str, Any]) -> str:
     fields = _event_fields(row)
     parts = [
@@ -188,8 +210,17 @@ def _profit_rate(row: dict[str, Any]) -> float | None:
 def _summarize_tp_counterfactual(events: list[dict[str, Any]]) -> dict[str, Any]:
     holding_rows = [row for row in events if _safe_str(row.get("pipeline")) == "HOLDING_PIPELINE"]
     exit_rows = [row for row in holding_rows if "exit" in _safe_str(row.get("stage")) or "sell" in _safe_str(row.get("stage"))]
-    real_exit_rows = [row for row in exit_rows if not _is_non_real_observation(row)]
-    non_real_exit_rows = [row for row in exit_rows if _is_non_real_observation(row)]
+    non_real_keys = _non_real_attempt_keys(holding_rows)
+    real_exit_rows = [
+        row
+        for row in exit_rows
+        if _attempt_key(row) not in non_real_keys and not _is_non_real_observation(row)
+    ]
+    non_real_exit_rows = [
+        row
+        for row in exit_rows
+        if _attempt_key(row) in non_real_keys or _is_non_real_observation(row)
+    ]
     tp_rows = [row for row in real_exit_rows if _is_tp_like_exit(row)]
     non_real_tp_rows = [row for row in non_real_exit_rows if _is_tp_like_exit(row)]
     profits = [value for row in tp_rows for value in [_profit_rate(row)] if value is not None]

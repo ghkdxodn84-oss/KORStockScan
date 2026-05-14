@@ -25,6 +25,65 @@
 - 금지 확인: 확인 과정에서 threshold/provider/order guard, 스윙 dry-run guard, bot restart, broker 주문 상태를 변경하지 않았다.
 - 다음 액션: 장중 runtime threshold mutation 없이 selected family provenance와 OpenAI `entry_price` 표본 부족을 기존 장중/장후 attribution에서 분리 확인한다. Project/Calendar 동기화는 표준 명령으로 사용자가 수행한다.
 
+### IntradayAutomationHealthCheck20260514 운영 확인 기록
+
+- checked_at: `2026-05-14 09:09 KST`
+- 판정: `warning`
+- 근거: 장중 window가 열린 뒤 `buy_funnel_sentinel_2026-05-14`와 `holding_exit_sentinel_2026-05-14`는 `09:05 KST`에 생성됐고 classification=`NORMAL`, `runtime_effect=report_only_no_mutation`이다. `panic_sell_defense_2026-05-14`는 `09:08 KST` 기준 panic_state=`NORMAL`, active sim/probe `10`, provenance_check passed=`true`다. 최초 `error_detection_2026-05-14`는 `panic_buying` log/report missing warning을 냈으나, `09:09 KST`에 `deploy/run_panic_buying_intraday.sh 2026-05-14`를 수동 실행해 `panic_buying_2026-05-14.{json,md}`를 생성했고 panic_buy_state=`NORMAL`, `runtime_effect=report_only_no_mutation`으로 닫았다. 재실행한 error detection은 `artifact_freshness=pass`, `process_health=pass`, `resource_usage=pass`, `stale_lock=pass`이나 `cron_completion`은 `panic_buying: log file not found` warning을 유지한다.
+- runtime provenance: `threshold_apply_2026-05-14.json`과 `threshold_runtime_env_2026-05-14.{env,json}` 기준 당일 selected family는 `soft_stop_whipsaw_confirmation` 1개이고 env override는 `KORSTOCKSCAN_SCALP_SOFT_STOP_WHIPSAW_CONFIRMATION_ENABLED=true`다. 전일 selected였던 `score65_74_recovery_probe`는 당일 runtime env override에 포함되지 않았고, `pipeline_events_2026-05-14.jsonl`/`threshold_events_2026-05-14.jsonl`에서 `score65_74_recovery_probe` provenance는 아직 0건이다.
+- rollback guard: `pipeline_events_2026-05-14.jsonl`/`threshold_events_2026-05-14.jsonl`에서 `rollback`, `safety_revert`, `runtime_mutation`, `threshold_runtime_mutation` 검색 결과는 0건이다. `order_bundle_submitted`/`buy_order_sent`도 0건이라 장중 관찰 중 신규 주문 제출 근거는 없다.
+- sim/probe split: `scalp_live_simulator_state.json`은 updated_at=`2026-05-14T09:00:40`, active_count=`0`; `swing_intraday_probe_state.json`은 updated_at=`2026-05-14T09:05:06`, active_count=`10`, active 전부 `actual_order_submitted=false`, `broker_order_forbidden=true`다.
+- 금지 확인: 확인/수동 실행은 report-only 산출물 생성과 detector 재확인에 한정했고 threshold/provider/order guard, bot restart, broker 주문 상태를 변경하지 않았다.
+- 다음 액션: `score65_74_recovery_probe` runtime event provenance는 장중 표본 미발생/당일 env 미선정으로 분리해 장후 `threshold_cycle_ev` attribution에서 다시 확인한다. `panic_buying` cron log missing은 운영 warning으로 남기고 다음 cron cycle에서 자동 생성 여부를 확인한다. Project/Calendar 동기화는 표준 명령으로 사용자가 수행한다.
+
+### ProjectIntradayRecheck20260514 확인 기록
+
+- checked_at: `2026-05-14 10:47 KST`
+- 판정: `pass`
+- 대상: `[RuntimeEnvIntradayObserve0514]`, `[SimProbeIntradayCoverage0514]`, `[Runbook 운영 확인] 장중 자동화체인 상태 확인`
+- 근거: `threshold_apply_2026-05-14.json`은 status=`auto_bounded_live_ready`, apply_mode=`auto_bounded_live`, runtime_change=`true`이고 실제 runtime env selected family는 `soft_stop_whipsaw_confirmation` 1개다. 전일 selected였던 `score65_74_recovery_probe`는 당일 runtime env override에 포함되지 않았으며 `pipeline_events_2026-05-14.jsonl`/`threshold_events_2026-05-14.jsonl`의 `rollback`, `safety_revert`, `runtime_mutation`, `threshold_runtime_mutation`, `buy_order_sent` 검색은 0건이다. `swing_intraday_probe_state.json`은 updated_at=`2026-05-14T10:46:39`, active_count=`10`, 전부 `actual_order_submitted=false`/`broker_order_forbidden=true`이고 `scalp_live_simulator_state.json`은 active_count=`0`이다.
+- runbook 근거: `panic_sell_defense_2026-05-14.json`은 panic_state=`NORMAL`, `real_exit_count=0`, `non_real_exit_count=21`, `stop_loss_exit_count=0`, market context=`NEUTRAL`, `confirmed_risk_off_advisory=false`다. `panic_buying_2026-05-14.json`은 panic_buy_state=`NORMAL`, TP counterfactual `real_exit_count=0`, `non_real_exit_count=36`, `tp_like_exit_count=0`, `non_real_tp_like_exit_count=18`이다. `PANIC_BUYING_COOLDOWN_SEC=0 bash deploy/run_panic_buying_intraday.sh 2026-05-14 >> logs/run_panic_buying_cron.log 2>&1`로 `cron_completion`이 기대하는 log contract를 채운 뒤 `bash deploy/run_error_detection.sh full` 결과 summary_severity=`pass`, cron/artifact/process/log/resource/stale-lock 모두 pass 또는 not_yet_due다.
+- 테스트/검증: `PYTHONPATH=. .venv/bin/python -m src.engine.panic_sell_defense_report --date 2026-05-14 --print-json`, `PYTHONPATH=. .venv/bin/python -m src.engine.panic_buying_report --date 2026-05-14 --print-json`, `bash deploy/run_error_detection.sh full`을 실행했다. `PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500` 결과 parser count=`7`이며 장중 대상 3건은 backlog에서 제외되고 장후 미완료 항목만 남는다.
+- 다음 액션: 오늘 장중 Project 항목은 완료로 닫는다. 남은 확인은 due 전인 `12:05~12:30` intraday calibration과 postclose 항목이며, score65_74 계열은 당일 env 미선정/표본 미발생으로 장후 attribution에서 다시 본다. Project/Calendar 동기화는 사용자가 표준 명령으로 수행한다.
+
+### PanicSellDetectionAggregationFix0514 확인 기록
+
+- checked_at: `2026-05-14 09:35 KST`
+- 판정: `pass`
+- 근거: `panic_sell_defense_report`가 sparse `exit_signal` row만 보고 real exit으로 분류하던 집계 결함을 수정했다. holding 전체 이벤트에서 sim/probe/assumed-fill provenance가 있는 attempt key를 먼저 수집한 뒤 동일 key의 `exit_signal`을 non-real로 전파한다. 당일 dry-run 기준 기존 `real_exit_count=9` stop-loss cluster는 `real_exit_count=0`, `non_real_exit_count=17`, `stop_loss_exit_count=0`, `panic_state=NORMAL`으로 정정됐다. `holding_exit_sentinel_2026-05-14`의 `real_exit_signal=0`, `non_real_exit_signal=9`와도 정합된다.
+- 테스트/검증: `.venv/bin/python -m pytest src/tests/test_panic_sell_defense_report.py` 결과 `9 passed`. `.venv/bin/python -m src.engine.panic_sell_defense_report --date 2026-05-14 --print-json`로 `panic_sell_defense_2026-05-14.{json,md}`를 재생성했고 runtime_effect=`report_only_no_mutation`을 유지했다.
+- 다음 액션: 오늘 stop-loss cluster는 실청산 근거가 아니라 source-quality aggregation bug로 닫는다. 이 수정은 report 집계 보정만 수행하며 threshold/provider/order guard, 자동매도, bot restart, 스윙 실주문 전환을 변경하지 않는다.
+
+### RealSimPerformanceAggregationAudit0514 확인 기록
+
+- checked_at: `2026-05-14 09:45 KST`
+- 판정: `pass_after_fix`
+- 근거: 실매매/시뮬레이션 수익 집계 경로를 전수 점검해 두 추가 오집계 지점을 닫았다. `panic_buying_report`는 `panic_sell_defense_report`와 동일하게 sparse `exit_signal` sibling 전파가 없어 sim/probe TP-like exit을 real runner/TP 근거로 셀 수 있었으므로 holding 전체 attempt key 기반 non-real 전파를 추가했다. `daily_threshold_cycle_report`는 `completed_by_source` split은 있었지만 family 후보 계산에 `real_completed_rows + sim_completed_rows`를 넘겨 `statistical_action_weight`, `position_sizing_cap_release` 같은 family sample이 combined 성과로 오염될 수 있었으므로 family 후보/primary completed summary는 real-only로 고정하고 sim/combined는 diagnostic split으로만 남겼다.
+- 당일 재생성 결과: `panic_buying_2026-05-14.json`의 TP counterfactual은 `real_exit_count=0`, `non_real_exit_count=30`, `tp_like_exit_count=0`, `non_real_tp_like_exit_count=15`다. `threshold_cycle_2026-05-14.json`은 `real_completed_valid_rolling_7d=4`, `sim_completed_valid_rolling_7d=11`, `combined.sample=15`를 분리 표시하되 `statistical_action_weight.sample.completed_valid=4`, `position_sizing_cap_release.sample.normal_completed_valid=4`로 family 입력은 real-only다. `threshold_cycle_cumulative_2026-05-14.json`도 cumulative `real.sample=177`, `sim.sample=11`, `combined.sample=188`를 분리하고 family 입력은 `177`로 고정됐다.
+- 테스트/검증: `.venv/bin/python -m pytest src/tests/test_panic_buying_report.py src/tests/test_panic_sell_defense_report.py src/tests/test_daily_threshold_cycle_report.py` 결과 `46 passed`. `.venv/bin/python -m src.engine.daily_threshold_cycle_report --date 2026-05-14 --ai-correction-provider none`와 `.venv/bin/python -m src.engine.panic_buying_report --date 2026-05-14 --print-json`로 관련 산출물을 재생성했다. runtime_effect/report-only 금지선은 유지됐고 threshold/provider/order guard, 자동매수/자동매도, bot restart는 변경하지 않았다.
+- 다음 액션: `combined` 성과는 diagnostic-only로만 보고, real execution 품질/threshold family 후보/position sizing 승인 판단은 `real_only` 필드를 기준으로 본다. sim/probe EV는 별도 source bundle 입력으로만 유지한다.
+
+### SwingStrategyMarketMappingFix0514 확인 기록
+
+- checked_at: `2026-05-14 09:56 KST`
+- 판정: `pass_after_fix`
+- 근거: `LG(003550)`, `에스엘(005850)`, `현대오토에버(307950)`, `두산로보틱스(454910)`는 `recommendation_history`에서 `trade_type=RUNNER`, `strategy=KOSDAQ_ML`로 저장되어 KOSDAQ 진입 갭/청산 stop 분기를 탔다. `final_ensemble_scanner`는 FDR `KOSPI` universe를 대상으로 generic `RUNNER`를 만들지만, `DBManager.save_recommendation`의 기본 매핑이 `RUNNER -> KOSDAQ_ML`이어서 KOSPI runner에도 KOSDAQ threshold가 적용됐다. generic `RUNNER`는 `KOSPI_ML`로 저장하고, 명시적 `KOSDAQ_*` pick_type만 `KOSDAQ_ML` 기본 매핑으로 남기도록 수정했다.
+- 영향 범위: 오늘 관측된 `kosdaq_stop_loss` 표본은 모두 `actual_order_submitted=false`인 swing probe/sim 표본이며 실주문/실청산 영향은 없다. 다만 해당 표본은 시장-전략 매핑 오류가 섞였으므로 KOSDAQ_ML threshold 효과나 KOSPI_ML runner 품질 근거로 직접 쓰지 않는다.
+- 테스트/검증: `.venv/bin/python -m pytest src/tests/test_trade_record_reuse_guards.py` 결과 `4 passed`. 기존 DB row와 active probe state는 장중 runtime mutation 금지선 때문에 자동 보정하지 않았고, 다음 scanner 저장부터 corrected mapping이 적용된다.
+- 다음 액션: 오늘 swing probe/threshold attribution에서 위 종목의 KOSDAQ_ML stop/gap 표본은 `strategy_market_mapping_fix_required` source-quality blocker로 분리한다. 장후 lifecycle/threshold report에서 해당 표본이 family candidate로 섞이면 real/sim split과 별도로 제외 여부를 확인한다.
+
+### PanicSellMarketContextGate0514 확인 기록
+
+- checked_at: `2026-05-14 10:05 KST`
+- 판정: `pass_after_fix`
+- 근거: 패닉셀 microstructure detector가 pipeline event에 등장한 종목군만 평가하므로, 전체 지수가 유지되는 상황에서 보유/관찰 종목 내부의 국소 risk-off가 `PANIC_SELL`로 전파될 수 있는 source-quality 리스크가 있었다. `panic_sell_defense_report`에 `microstructure_market_context` gate를 추가해 micro risk-off가 시장 snapshot `RISK_OFF` 또는 평가 종목수 `20`개 이상 및 risk-off 비율 `20%` 이상으로 확인될 때만 panic_state 승격 입력으로 쓰도록 보정했다. 확인되지 않은 micro risk-off는 `portfolio_local_risk_off_only=true`와 `source_quality_only`로 남기며 runtime/order/auto-sell 권한은 없다.
+- 당일 재생성 결과: `panic_sell_defense_2026-05-14.json`은 `panic_state=NORMAL`, `real_exit_count=0`, `non_real_exit_count=21`, `stop_loss_exit_count=0`, `panic_detected=false`다. microstructure는 `evaluated_symbol_count=16`, `risk_off_advisory_count=0`이고, 시장 context는 `market_risk_state=NEUTRAL`, `confirmed_risk_off_advisory=false`, `micro_evaluated_symbol_count_below_breadth_floor`로 기록됐다.
+- 테스트/검증: `.venv/bin/python -m pytest src/tests/test_panic_sell_defense_report.py` 결과 `10 passed`. `.venv/bin/python -m src.engine.panic_sell_defense_report --date 2026-05-14 --print-json`로 `panic_sell_defense_2026-05-14.{json,md}`를 재생성했다. threshold/provider/order guard, 자동매도, bot restart, 스윙 실주문 전환은 변경하지 않았다.
+- 다음 액션: 패닉셀 판단은 `closed real exit`, `microstructure detector`, `market context`, `active sim/probe recovery`를 분리해 읽는다. 시장 context 미확인 micro risk-off는 source-quality blocker로만 보고 장후 attribution에서 지수/breadth 보강 후보로 넘긴다.
+- 다음 액션 실행 (`2026-05-14 10:14 KST`): `daily_threshold_cycle_report`의 `calibration_source_bundle.source_metrics.panic_sell_defense`에 `microstructure_market_risk_state`, `microstructure_confirmed_risk_off_advisory`, `microstructure_portfolio_local_risk_off_only`, `source_quality_blockers`, `market_breadth_followup_candidate`, `market_breadth_next_action`을 추가했다. `runtime_approval_summary`는 panic source-quality blocker가 있으면 approval 요청 대신 `freeze`로 닫고, `build_code_improvement_workorder`는 market/breadth follow-up 후보와 blocker evidence를 order 근거에 포함한다. `report-based-automation-traceability`에도 `microstructure_market_context` 계약을 추가했다.
+- 후속 테스트/검증: `.venv/bin/python -m pytest src/tests/test_runtime_approval_summary.py src/tests/test_panic_sell_defense_report.py src/tests/test_daily_threshold_cycle_report.py src/tests/test_build_code_improvement_workorder.py` 결과 `57 passed`. `.venv/bin/python -m src.engine.daily_threshold_cycle_report --date 2026-05-14 --ai-correction-provider none`, `.venv/bin/python -m src.engine.threshold_cycle_ev_report --date 2026-05-14`, `.venv/bin/python -m src.engine.runtime_approval_summary --date 2026-05-14`, `.venv/bin/python -m src.engine.build_code_improvement_workorder --date 2026-05-14 --max-orders 12`를 순서대로 실행해 장후 attribution 입력을 갱신했다.
+- 재생성 결과: `threshold_cycle_calibration_2026-05-14_postclose.json`의 `panic_sell_defense` source metric은 `market_risk_state=NEUTRAL`, `confirmed_risk_off_advisory=false`, `risk_off_advisory_ratio_pct=0.0`, `source_quality_blockers=[]`, `market_breadth_followup_candidate=true`, `market_breadth_next_action=review_index_breadth_before_panic_runtime_candidate`다. `runtime_approval_summary_2026-05-14.json`은 `panic_approval_requested=0`, `panic_sell_defense.state=hold`로 닫았다. `code_improvement_workorder_2026-05-14.json/md`는 `order_panic_sell_defense_lifecycle_transition_pack` evidence에 market/breadth follow-up을 포함하되 `runtime_effect=false`를 유지한다.
+
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-05-13` postclose -> `2026-05-14`)
 
@@ -63,17 +122,23 @@
 
 ## 장중 체크리스트 (09:05~15:20)
 
-- [ ] `[RuntimeEnvIntradayObserve0514] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-05-14`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
+- [x] `[RuntimeEnvIntradayObserve0514] 전일 selected runtime family 장중 provenance 및 rollback guard 확인` (`Due: 2026-05-14`, `Slot: INTRADAY`, `TimeWindow: 09:05~09:20`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-13.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-13.json)
   - 판정 기준: selected_families=soft_stop_whipsaw_confirmation, score65_74_recovery_probe가 runtime event provenance에 찍히는지 확인한다.
   - 금지: 장중 관찰 결과로 runtime threshold mutation을 수행하지 않는다.
   - 다음 액션: provenance present/missing, rollback guard breach 여부를 분리 기록한다.
+  - 완료 판정: `warning_partial_provenance_no_rollback`.
+  - 완료 근거: `2026-05-13` daily EV의 runtime_apply selected family는 `soft_stop_whipsaw_confirmation`, `score65_74_recovery_probe`였지만, 당일 `threshold_apply_2026-05-14.json`/`threshold_runtime_env_2026-05-14.json`의 실제 runtime env selected family는 `soft_stop_whipsaw_confirmation` 1개다. `pipeline_events_2026-05-14.jsonl`에는 soft stop 계열 holding event가 발생했으나 `score65_74_recovery_probe` 문자열 provenance는 0건이며, 당일 BUY 제출 event도 0건이다. `rollback`/`safety_revert`/`runtime_mutation`/`threshold_runtime_mutation` 검색 결과는 `pipeline_events`와 `threshold_events` 모두 0건이다.
+  - 완료 다음 액션: score65_74 계열은 당일 env 미선정/표본 미발생으로 보고 장후 `threshold_cycle_ev`에서 selected/applied/not-applied attribution을 다시 확인한다. 장중 runtime threshold mutation은 수행하지 않는다.
 
-- [ ] `[SimProbeIntradayCoverage0514] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-05-14`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
+- [x] `[SimProbeIntradayCoverage0514] sim/probe 관찰축 actual_order_submitted=false 및 source-quality 확인` (`Due: 2026-05-14`, `Slot: INTRADAY`, `TimeWindow: 09:35~09:50`, `Track: ScalpingLogic`)
   - Source: [threshold_cycle_ev_2026-05-13.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-13.json)
   - 판정 기준: sim/probe 표본이 real execution과 분리되고 `actual_order_submitted=false` provenance가 유지되는지 확인한다.
   - 금지: sim/probe EV를 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
   - 다음 액션: source-quality split, active state 복원, open/closed count를 같이 기록한다.
+  - 완료 판정: `source_quality_split_pass`.
+  - 완료 근거: `panic_sell_defense_2026-05-14.json`의 active sim/probe는 `10`이고 provenance_check passed=`true`다. runtime state 기준 `swing_intraday_probe_state.json`은 updated_at=`2026-05-14T09:05:06`, active_count=`10`, active 전부 `actual_order_submitted=false`/`broker_order_forbidden=true`이며, `scalp_live_simulator_state.json`은 updated_at=`2026-05-14T09:00:40`, active_count=`0`이다. `panic_buying_2026-05-14.json`도 수동 생성 후 panic_buy_state=`NORMAL`, runtime_effect=`report_only_no_mutation`으로 닫혔다.
+  - 완료 다음 액션: sim/probe EV와 active_unrealized는 장후 source bundle 입력으로만 사용하고 broker execution 품질/실주문 전환 근거로 단독 사용하지 않는다. `panic_buying` cron log missing은 RunbookOps warning으로 분리한다.
 
 ## 장후 체크리스트 (16:30~18:55)
 

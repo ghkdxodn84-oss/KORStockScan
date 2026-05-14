@@ -910,6 +910,11 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         if isinstance(panic_sell_defense.get("microstructure_detector"), dict)
         else {}
     )
+    microstructure_market_context = (
+        panic_sell_defense.get("microstructure_market_context")
+        if isinstance(panic_sell_defense.get("microstructure_market_context"), dict)
+        else {}
+    )
     microstructure_metrics = (
         microstructure_detector.get("metrics")
         if isinstance(microstructure_detector.get("metrics"), dict)
@@ -925,6 +930,26 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         for item in panic_candidates
         if isinstance(item, dict) and item.get("family")
     }
+    micro_market_reasons = (
+        microstructure_market_context.get("reasons")
+        if isinstance(microstructure_market_context.get("reasons"), list)
+        else []
+    )
+    micro_market_source_quality_blockers = [
+        str(reason)
+        for reason in micro_market_reasons
+        if str(reason)
+        in {
+            "micro_risk_off_unconfirmed_by_market_or_breadth",
+            "market_regime_not_risk_off",
+            "market_regime_snapshot_missing_or_unknown",
+        }
+    ]
+    micro_market_followup_candidate = bool(
+        microstructure_market_context.get("portfolio_local_risk_off_only")
+        or "micro_evaluated_symbol_count_below_breadth_floor" in {str(reason) for reason in micro_market_reasons}
+        or "market_regime_snapshot_missing_or_unknown" in {str(reason) for reason in micro_market_reasons}
+    )
     panic_buy_metrics = panic_buying.get("panic_buy_metrics") if isinstance(panic_buying, dict) else {}
     panic_buy_metrics = panic_buy_metrics if isinstance(panic_buy_metrics, dict) else {}
     panic_buy_exhaustion = panic_buying.get("exhaustion_metrics") if isinstance(panic_buying, dict) else {}
@@ -1241,6 +1266,34 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             or 0,
             "microstructure_max_panic_score": _safe_float(microstructure_metrics.get("max_panic_score"), None),
             "microstructure_max_recovery_score": _safe_float(microstructure_metrics.get("max_recovery_score"), None),
+            "microstructure_market_risk_state": microstructure_market_context.get("market_risk_state"),
+            "microstructure_market_confirms_risk_off": bool(
+                microstructure_market_context.get("market_confirms_risk_off")
+            ),
+            "microstructure_breadth_confirms_risk_off": bool(
+                microstructure_market_context.get("breadth_confirms_risk_off")
+            ),
+            "microstructure_confirmed_risk_off_advisory": bool(
+                microstructure_market_context.get("confirmed_risk_off_advisory")
+            ),
+            "microstructure_portfolio_local_risk_off_only": bool(
+                microstructure_market_context.get("portfolio_local_risk_off_only")
+            ),
+            "microstructure_risk_off_advisory_ratio_pct": _safe_float(
+                microstructure_market_context.get("risk_off_advisory_ratio_pct"), None
+            ),
+            "microstructure_breadth_symbol_floor": _safe_int(
+                microstructure_market_context.get("breadth_symbol_floor"), 0
+            )
+            or 0,
+            "microstructure_source_quality_reasons": [str(reason) for reason in micro_market_reasons],
+            "source_quality_blockers": micro_market_source_quality_blockers,
+            "market_breadth_followup_candidate": micro_market_followup_candidate,
+            "market_breadth_next_action": (
+                "review_index_breadth_before_panic_runtime_candidate"
+                if micro_market_followup_candidate
+                else "none"
+            ),
             "candidate_status": panic_candidate_status,
             "allowed_runtime_apply": False,
         },
@@ -2255,7 +2308,9 @@ def _completed_by_source_summary(real_rows: list[dict], sim_rows: list[dict]) ->
         "real": _completed_profit_summary(real_rows or []),
         "sim": _completed_profit_summary(sim_rows or []),
         "combined": _completed_profit_summary(combined),
-        "calibration_authority": "sim_equal_weight",
+        "real_family_candidate_authority": "real_only",
+        "sim_calibration_authority": "sim_equal_weight",
+        "combined_authority": "diagnostic_only_not_family_candidate_input",
     }
 
 
@@ -5743,7 +5798,7 @@ def build_cumulative_threshold_cycle_report(
         sim_rows = _extract_scalp_sim_completed_rows(events_by_window.get(label, []))
         real_completed_by_window[label] = real_rows
         sim_completed_by_window[label] = sim_rows
-        completed_by_window[label] = real_rows + sim_rows
+        completed_by_window[label] = real_rows
 
     family_snapshots: dict[str, dict] = {}
     family_apply_candidates: dict[str, list[dict]] = {}
@@ -5751,7 +5806,7 @@ def build_cumulative_threshold_cycle_report(
         window_target_date = dates[-1] if dates else target_date
         families = _build_family_reports(
             events_by_window.get(label, []),
-            completed_by_window.get(label, []),
+            real_completed_by_window.get(label, []),
             target_date=window_target_date,
         )
         family_snapshots[label] = _threshold_snapshot_from_families(families, report_only=True)
@@ -5777,8 +5832,9 @@ def build_cumulative_threshold_cycle_report(
     }
     event_count_by_window = {label: len(rows) for label, rows in events_by_window.items()}
     source_flags = {
-        "profit_basis": "real COMPLETED + valid profit_rate plus scalp_sim completed signal-inclusive rows",
+        "profit_basis": "real COMPLETED + valid profit_rate; scalp_sim completed rows are split into completed_by_source/scalp_simulator only",
         "scalp_sim_calibration_authority": "equal_weight",
+        "combined_source_authority": "diagnostic_only_not_family_candidate_input",
         "runtime_change": False,
         "application_mode": "report_only_cumulative_threshold_input",
         "live_threshold_mutation": False,
@@ -6031,11 +6087,9 @@ def build_daily_threshold_cycle_report(
     real_completed_rows = list(completed_rows)
     sim_completed_rows = _extract_scalp_sim_completed_rows(event_windows["rolling_7d"])
     same_day_sim_completed_rows = _extract_scalp_sim_completed_rows(event_windows["same_day"])
-    combined_completed_rows = real_completed_rows + sim_completed_rows
-
-    families = _build_family_reports(event_windows["same_day"], combined_completed_rows, target_date=target_date)
+    families = _build_family_reports(event_windows["same_day"], real_completed_rows, target_date=target_date)
     families.extend(_build_report_source_families(report_source_context))
-    completed = _completed_summary(combined_completed_rows)
+    completed = _completed_summary(real_completed_rows)
     threshold_snapshot = {
         family["family"]: {
             "stage": family["stage"],
@@ -6085,6 +6139,14 @@ def build_daily_threshold_cycle_report(
         },
         "completed_by_source": _completed_by_source_summary(real_completed_rows, sim_completed_rows),
         "scalp_simulator": _scalp_simulator_event_summary(event_windows["same_day"], same_day_sim_completed_rows),
+        "source_flags": {
+            "profit_basis": "real COMPLETED + valid profit_rate; scalp_sim completed rows are split into completed_by_source/scalp_simulator only",
+            "real_family_candidate_authority": "real_only",
+            "sim_calibration_authority": "sim_equal_weight",
+            "combined_source_authority": "diagnostic_only_not_family_candidate_input",
+            "runtime_change": False,
+            "live_threshold_mutation": False,
+        },
         "threshold_snapshot": threshold_snapshot,
         "threshold_diff_report": threshold_diff_report,
         "trade_lifecycle_attribution": trade_lifecycle_attribution,

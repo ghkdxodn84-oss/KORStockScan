@@ -420,18 +420,32 @@ tmux ls
 - not_yet_due: `12:05` intraday threshold calibration과 장후/postclose 산출물은 아직 due 전이다.
 - 다음 액션: Sentinel/Detector는 계속 report-only로 본다. selected runtime family, OpenAI `entry_price`, scalp sim BUY 확정 표본은 장후 EV/report에서 재확인하고 장중 runtime threshold mutation은 하지 않는다.
 
+### IntradayAutomationHealthCheck20260514 운영 확인 기록
+
+- checked_at: `2026-05-14 10:47 KST`
+- 판정: `pass`
+- 근거: 장중 반복 확인 기준으로 `buy_funnel_sentinel`, `holding_exit_sentinel`, `panic_sell_defense`, `panic_buying`, `system_metric_sampler`, `error_detection_full`은 모두 최신 detector에서 pass다. `threshold_cycle_calibration_intraday`는 `12:05~12:30`, `swing_live_dry_run`은 `15:45~16:05`, postclose 계열은 각 window 전이라 not_yet_due다. `pipeline_events`와 `threshold_events` artifact freshness도 pass이며, threshold compact stream stale warning은 최신 full detector에서 해소됐다.
+- runtime provenance: 당일 runtime env selected family는 `soft_stop_whipsaw_confirmation` 1개이고, `score65_74_recovery_probe`는 당일 env override에 포함되지 않았다. `rollback`, `safety_revert`, `runtime_mutation`, `threshold_runtime_mutation`, `buy_order_sent` event는 모두 0건이다.
+- sim/probe split: `swing_intraday_probe_state.json`은 active_count=`10`, 전부 `actual_order_submitted=false`/`broker_order_forbidden=true`이며 `scalp_live_simulator_state.json` active_count=`0`이다. `panic_sell_defense`는 real exit `0`, non-real exit `21`; `panic_buying` TP counterfactual은 real exit `0`, non-real exit `36`으로 실매매와 관찰축이 분리된다.
+- 조치: `panic_buying` 래퍼 기본 로그는 `logs/run_panic_buying.log`지만 `cron_completion`은 `logs/run_panic_buying_cron.log`를 기대하므로, 운영 확인에서는 `PANIC_BUYING_COOLDOWN_SEC=0 bash deploy/run_panic_buying_intraday.sh 2026-05-14 >> logs/run_panic_buying_cron.log 2>&1`로 동일 report-only 래퍼를 cron 로그 경로에 재실행했다. 이후 `bash deploy/run_error_detection.sh full` 결과 summary_severity=`pass`로 닫혔다.
+- 금지 확인: 이 확인은 report-only 산출물 및 detector/log contract 확인만 수행했고 runtime threshold, provider route, order guard, bot restart, broker 주문 상태는 변경하지 않았다.
+- 다음 액션: 장중 자동화체인은 현재 pass로 유지한다. due 전 항목은 각 window에서 재확인하고, score65_74 계열은 장후 EV/attribution에서 selected/applied/not-applied로 분리한다.
+
 표준 확인 명령:
 
 ```bash
 tail -n 80 logs/run_buy_funnel_sentinel_cron.log
 tail -n 80 logs/run_holding_exit_sentinel_cron.log
 tail -n 80 logs/run_panic_sell_defense_cron.log
+tail -n 80 logs/run_panic_buying_cron.log
 tail -n 80 logs/threshold_cycle_calibration_intraday_cron.log
 grep -n "threshold-cycle calibration target_date=$(TZ=Asia/Seoul date +%F)" logs/threshold_cycle_calibration_intraday_cron.log || true
 ls -l data/pipeline_events/pipeline_events_$(TZ=Asia/Seoul date +%F).jsonl
 ls -l data/threshold_cycle/threshold_events_$(TZ=Asia/Seoul date +%F).jsonl
 ls -l data/report/threshold_cycle_ai_review/threshold_cycle_ai_review_$(TZ=Asia/Seoul date +%F)_intraday.md
 PYTHONPATH=. .venv/bin/python -m src.engine.panic_sell_defense_report --date $(TZ=Asia/Seoul date +%F) --print-json
+PYTHONPATH=. .venv/bin/python -m src.engine.panic_buying_report --date $(TZ=Asia/Seoul date +%F) --print-json
+bash deploy/run_error_detection.sh full
 ls -l data/report/panic_sell_defense/panic_sell_defense_$(TZ=Asia/Seoul date +%F).json
 ```
 

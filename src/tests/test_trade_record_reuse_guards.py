@@ -104,6 +104,44 @@ def test_save_recommendation_does_not_reuse_completed_trade_row():
     assert db.records[1].buy_price == 0
 
 
+def test_save_recommendation_maps_generic_runner_to_kospi_strategy():
+    db = _DummyDB()
+
+    db.save_recommendation(
+        date=date(2026, 5, 14),
+        code="003550",
+        name="LG",
+        price=108700,
+        pick_type="RUNNER",
+        position="BREAKOUT",
+        prob=0.54,
+    )
+
+    assert len(db.records) == 1
+    assert db.records[0].trade_type == "RUNNER"
+    assert db.records[0].strategy == "KOSPI_ML"
+    assert db.records[0].position_tag == "BREAKOUT"
+
+
+def test_save_recommendation_maps_explicit_kosdaq_pick_to_kosdaq_strategy():
+    db = _DummyDB()
+
+    db.save_recommendation(
+        date=date(2026, 5, 14),
+        code="123456",
+        name="코스닥샘플",
+        price=10000,
+        pick_type="KOSDAQ_RUNNER",
+        position="MIDDLE",
+        prob=0.54,
+    )
+
+    assert len(db.records) == 1
+    assert db.records[0].trade_type == "RUNNER"
+    assert db.records[0].strategy == "KOSDAQ_ML"
+    assert db.records[0].position_tag == "KOSDAQ_BASE"
+
+
 def test_register_manual_stock_reuses_only_empty_watching_row():
     db = _DummyDB()
     today = date.today()

@@ -369,6 +369,20 @@ def test_calibration_source_bundle_includes_panic_sell_defense(monkeypatch, tmp_
                         "max_recovery_score": 0.41,
                     },
                 },
+                "microstructure_market_context": {
+                    "market_risk_state": "NEUTRAL",
+                    "market_confirms_risk_off": False,
+                    "breadth_confirms_risk_off": False,
+                    "confirmed_risk_off_advisory": False,
+                    "portfolio_local_risk_off_only": True,
+                    "risk_off_advisory_ratio_pct": 33.3,
+                    "breadth_symbol_floor": 20,
+                    "reasons": [
+                        "micro_risk_off_unconfirmed_by_market_or_breadth",
+                        "micro_evaluated_symbol_count_below_breadth_floor",
+                        "market_regime_not_risk_off",
+                    ],
+                },
             },
             ensure_ascii=False,
         ),
@@ -388,6 +402,12 @@ def test_calibration_source_bundle_includes_panic_sell_defense(monkeypatch, tmp_
     assert metrics["microstructure_risk_off_advisory_count"] == 1
     assert metrics["microstructure_degraded_orderbook_count"] == 1
     assert metrics["microstructure_max_panic_score"] == 0.84
+    assert metrics["microstructure_market_risk_state"] == "NEUTRAL"
+    assert metrics["microstructure_confirmed_risk_off_advisory"] is False
+    assert metrics["microstructure_portfolio_local_risk_off_only"] is True
+    assert metrics["market_breadth_followup_candidate"] is True
+    assert metrics["market_breadth_next_action"] == "review_index_breadth_before_panic_runtime_candidate"
+    assert "market_regime_not_risk_off" in metrics["source_quality_blockers"]
     assert metrics["allowed_runtime_apply"] is False
 
 
@@ -1153,6 +1173,58 @@ def test_statistical_action_weight_report_buckets_completed_rows():
     assert "best_confidence_adjusted_score" in first_price_bucket
     assert "policy_hint" in first_price_bucket
     assert family["recommended"]["data_completeness"]["volume_known"] == 5
+
+
+def test_daily_threshold_cycle_keeps_sim_completed_out_of_family_candidate_input():
+    real_rows = [
+        {
+            "profit_rate": -0.4,
+            "strategy": "SCALPING",
+            "buy_price": 12_000,
+            "buy_time": "2026-05-14 09:10:00",
+            "daily_volume": 1_000_000,
+        }
+    ]
+    sim_event = {
+        "event_type": "pipeline_event",
+        "pipeline": "HOLDING_PIPELINE",
+        "stage": "scalp_sim_sell_order_assumed_filled",
+        "stock_name": "SIM",
+        "stock_code": "000001",
+        "emitted_date": "2026-05-14",
+        "emitted_at": "2026-05-14T10:00:00",
+        "fields": {
+            "simulation_book": "scalp_ai_buy_all",
+            "simulated_order": "True",
+            "actual_order_submitted": "False",
+            "sim_record_id": "SIM-1",
+            "profit_rate": "5.0",
+            "buy_price": "10000",
+            "assumed_fill_price": "10500",
+            "qty": "1",
+        },
+    }
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-14",
+        pipeline_loader=lambda target_date: [sim_event] if target_date == "2026-05-14" else [],
+        completed_rows_loader=lambda start_date, end_date: real_rows,
+    )
+
+    assert report["summary"]["completed_valid_rolling_7d"] == 1
+    assert report["summary"]["real_completed_valid_rolling_7d"] == 1
+    assert report["summary"]["sim_completed_valid_rolling_7d"] == 1
+    assert report["completed_by_source"]["real"]["sample"] == 1
+    assert report["completed_by_source"]["sim"]["sample"] == 1
+    assert report["completed_by_source"]["combined"]["sample"] == 2
+
+    action_weight = report["threshold_snapshot"]["statistical_action_weight"]
+    assert action_weight["sample"]["completed_valid"] == 1
+    assert action_weight["recommended"]["data_completeness"]["price_known"] == 1
+
+    sizing = report["threshold_snapshot"]["position_sizing_cap_release"]
+    assert sizing["sample"]["normal_completed_valid"] == 1
+    assert sizing["sample"]["normal_completed_summary"]["avg_profit_rate"] == -0.4
 
 
 def test_statistical_action_weight_reports_eligible_but_not_chosen(tmp_path, monkeypatch):
