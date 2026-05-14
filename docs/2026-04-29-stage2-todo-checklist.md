@@ -233,7 +233,7 @@
   - 다음 액션: 장후에는 `ORDER_NOTICE_BOUND -> WS 실제체결 -> active order binding` 경로를 매수/매도 양쪽으로 분리해 follow-up에 올리고, `bot_history` 보유감시 가시성 부족은 부차 이슈로 둔다. 재현되기 전까지는 `restart.flag` 재시작보다 order-binding 경로 보강을 우선한다.
 
 - [x] `[GeminiEngineCarry0429-1305] Gemini P1/P2 live 승인 전제와 schema 매트릭스 carry-over 판정` (`Due: 2026-04-29`, `Slot: INTRADAY`, `TimeWindow: 13:05~13:20`, `Track: ScalpingLogic`)
-  - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_gemini_engine_review.md), [2026-04-28-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-28-stage2-todo-checklist.md)
+  - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder_gemini_engine_review.md), [2026-04-28-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-28-stage2-todo-checklist.md)
   - Owner: `Codex`
   - 판정 기준: `GEMINI_SYSTEM_INSTRUCTION_JSON_ENABLED`, `GEMINI_JSON_DETERMINISTIC_CONFIG_ENABLED`의 `flag default OFF` 유지 여부, `baseline cohort / candidate live cohort / observe-only cohort / excluded cohort`, parse_fail/consecutive_failures/ai_disabled 관찰 메모, 그리고 `entry/holding_exit/overnight/condition_entry/condition_exit/eod_top5` schema/fallback 테스트 매트릭스 초안이 같은 문서에 잠겼는지 본다.
   - 실전 enable acceptance 정의:
@@ -254,7 +254,7 @@
   - 다음 액션: `2026-04-30`에는 live enable이 아니라 `flag-off schema ingress + contract matrix` 구현 범위만 고정한다.
 
 - [x] `[GeminiSchemaBuild0429-1320] Gemini 6 endpoint schema registry/fallback/test matrix 초안 작성` (`Due: 2026-04-29`, `Slot: INTRADAY`, `TimeWindow: 13:20~13:45`, `Track: ScalpingLogic`)
-  - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_gemini_engine_review.md)
+  - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder_gemini_engine_review.md)
   - Owner: `Codex`
   - 결과서: [2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md)
   - 판정 기준: `entry_v1`, `holding_exit_v1`, `overnight_v1`, `condition_entry_v1`, `condition_exit_v1`, `eod_top5_v1` 각각에 대해 `schema scope`, `fallback path`, `required tests`, `observe fields`, `rollback point`가 표 형태로 초안화된다.
@@ -271,7 +271,7 @@
   - 다음 액션: `2026-04-30`에는 구현 범위 확정이 아니라 `flag-off schema registry load/contract 관찰`만 확인한다.
 
 - [x] `[DeepSeekEngineCarry0429-1345] DeepSeek P1/P2/P3 acceptance/backlog carry-over 판정` (`Due: 2026-04-29`, `Slot: INTRADAY`, `TimeWindow: 13:45~14:00`, `Track: Plan`)
-  - Source: [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_deepseek_engine_review.md), [2026-04-28-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-28-stage2-todo-checklist.md)
+  - Source: [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder_deepseek_engine_review.md), [2026-04-28-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-28-stage2-todo-checklist.md)
   - Owner: `Codex`
   - 판정 기준: `DEEPSEEK_CONTEXT_AWARE_BACKOFF_ENABLED`의 `remote` live-sensitive acceptance(`api_call_lock`, rate-limit/log acceptance, observe-only/canary-only 경로), gatekeeper structured-output의 `flag-off + text fallback + contract test`, holding cache bucket 축소의 EV 근거, Tool Calling backlog 유지 여부를 한 묶음으로 확인한다.
   - 실전 enable acceptance 정의:
@@ -292,7 +292,7 @@
   - 다음 액션: `2026-04-30`에는 remote enable이 아니라 `lock_wait/retry acceptance` 관찰필드와 `gatekeeper option path` 설계만 구현 대상으로 둔다.
 
 - [x] `[DeepSeekAcceptanceBuild0429-1400] DeepSeek 실전 enable acceptance/spec 메모 작성` (`Due: 2026-04-29`, `Slot: INTRADAY`, `TimeWindow: 14:00~14:20`, `Track: Plan`)
-  - Source: [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_deepseek_engine_review.md)
+  - Source: [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder_deepseek_engine_review.md)
   - Owner: `Codex`
   - 결과서: [2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md)
   - 판정 기준: `context-aware backoff`, `gatekeeper structured-output`, `holding cache`, `Tool Calling` 각각에 대해 `enable acceptance`, `not now reason`, `required proof`, `next implementation slot`이 문서화된다.

@@ -9,7 +9,7 @@
 - [`2026-05-02-stage2-todo-checklist.md`](../2026-05-02-stage2-todo-checklist.md)
 - [`2026-05-04-stage2-todo-checklist.md`](../2026-05-04-stage2-todo-checklist.md)
 - [`2026-05-06-stage2-todo-checklist.md`](../2026-05-06-stage2-todo-checklist.md)
-- [`workorder_gemini_engine_review.md`](../workorder_gemini_engine_review.md)
+- [`workorder_gemini_engine_review.md`](../archive/workorders/workorder_gemini_engine_review.md)
 
 ---
 

@@ -242,7 +242,7 @@
   - 다음 액션: runtime cohort 문서명/항목명은 고정하고, 신규 live 축은 `2026-05-06` 이후 checklist에서 하루 1축 owner로만 올린다.
 
 - [x] `[GeminiSchemaIngress0430] Gemini flag-off schema registry 로드/contract 관찰` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 16:35~16:55`, `Track: ScalpingLogic`)
-  - Source: [2026-04-29-gemini-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-29-gemini-enable-acceptance-spec.md), [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_gemini_engine_review.md)
+  - Source: [2026-04-29-gemini-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-29-gemini-enable-acceptance-spec.md), [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder_gemini_engine_review.md)
   - 판정 기준: `GEMINI_RESPONSE_SCHEMA_REGISTRY_ENABLED=False` 기본값 유지, 6개 endpoint `schema_name` 연결 유지, `json.loads -> regex fallback` 회귀 없음, `test_ai_engine_api_config/test_ai_engine_cache` 통과 여부를 확인한다. `GEMINI_SYSTEM_INSTRUCTION_JSON_ENABLED`, `GEMINI_JSON_DETERMINISTIC_CONFIG_ENABLED`, `GEMINI_RESPONSE_SCHEMA_REGISTRY_ENABLED` live enable은 이 항목에서 켜지 않는다.
   - why: `main` Gemini는 실전 기준 엔진이라 오늘 반영한 묶음은 live enable이 아니라 flag-off load/contract 관찰 대상이다.
   - 실행 메모 (`2026-04-30 18:20 KST`): import/config 기준 `GEMINI_RESPONSE_SCHEMA_REGISTRY_ENABLED=False`를 확인했다.
@@ -253,7 +253,7 @@
   - 다음 액션: Gemini live enable 검토가 필요하면 `flag-off -> shadow -> canary` 순서의 별도 항목으로 등록한다.
 
 - [x] `[DeepSeekRemoteAcceptance0430] DeepSeek retry acceptance log field 관찰` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 16:55~17:15`, `Track: Plan`)
-  - Source: [2026-04-29-deepseek-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-29-deepseek-enable-acceptance-spec.md), [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_deepseek_engine_review.md)
+  - Source: [2026-04-29-deepseek-enable-acceptance-spec.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-29-deepseek-enable-acceptance-spec.md), [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder_deepseek_engine_review.md)
   - 판정 기준: `DEEPSEEK_CONTEXT_AWARE_BACKOFF_ENABLED=False` 기본값 유지, retry 발생 시 `retry_acceptance={context_aware_backoff_enabled, live_sensitive, max_sleep_sec, lock_scope}` 로그 필드가 남는지 확인한다. gatekeeper structured-output은 여전히 `flag-off + text fallback + contract test` 없이는 구현 승격하지 않는다.
   - why: DeepSeek는 `remote` 경로라 오늘 반영한 묶음은 enable이 아니라 retry acceptance 관찰성 보강이다.
   - 실행 메모 (`2026-04-30 18:20 KST`): import/config 기준 `DEEPSEEK_CONTEXT_AWARE_BACKOFF_ENABLED=False`를 확인했다.
@@ -275,7 +275,7 @@
   - 다음 액션: 동일 건 잔차는 Gemini live enable 항목이 생길 때만 별도 추적한다.
 
 - [x] `[DeepSeekAcceptanceCarry0430] DeepSeek retry acceptance 단일 스냅샷 경로 점검` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 17:35~17:55`, `Track: Plan`)
-  - Source: [2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md), [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_deepseek_engine_review.md)
+  - Source: [2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md), [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder_deepseek_engine_review.md)
   - 판정 기준: `_build_retry_acceptance_snapshot()`과 `_call_deepseek_safe()`에서 `live_sensitive` 계산이 중복 없이 일관되게 유지되는지 확인하고, retry 외 경로의 노이즈 증분이 없는지 코드/테스트로 입증한다.
   - why(권장): 현재는 저위험 정합성 개선이므로, `2026-04-30` 장후 창에서 코드 정리 여유를 두고 패치 대기 가능하다.
   - 실행 메모 (`2026-04-30 18:23 KST`): `_build_retry_acceptance_snapshot()`/`_call_deepseek_safe()` 경로를 import/config 및 테스트로 확인했다.
@@ -286,7 +286,7 @@
   - 다음 액션: retry 실표본이 생기면 `[DeepSeekRemoteAcceptance0430]`의 log field 기준으로만 잔차를 본다.
 
 - [x] `[DeepSeekInterfaceGap0430] DeepSeek 공통 인터페이스 일치 점검` (`Due: 2026-04-30`, `Slot: POSTCLOSE`, `TimeWindow: 17:55~18:10`, `Track: Plan`)
-  - Source: [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_deepseek_engine_review.md), [2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md)
+  - Source: [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder_deepseek_engine_review.md), [2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md](/home/ubuntu/KORStockScan/docs/ai-acceptance/2026-04-29-gemini-deepseek-acceptance-bundle-result-report.md)
   - 판정 기준: `GeminiSniperEngine`에만 존재하는 `analyze_condition_target`, `evaluate_condition_gatekeeper`를 호출부 관점에서 점검해 DeepSeek에서 동일 호출 패턴이 필요한지, 필요 시 wrapper/adapter 없이 진행 중인 caller를 분리하는지 확인한다.
   - why(권장): 인터페이스 차이는 즉시 장애보다 운영 관측 경로 혼재를 유발할 수 있으나, 현재는 증상성이 낮아 우선 순위 낮음.
   - 실행 메모 (`2026-04-30 18:24 KST`): `analyze_condition_target`, `evaluate_condition_gatekeeper` 호출부를 검색해 Gemini 전용 메서드가 DeepSeek 공통 caller의 필수 인터페이스로 요구되는지 확인했다.

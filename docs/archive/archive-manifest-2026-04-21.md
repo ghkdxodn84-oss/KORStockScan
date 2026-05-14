@@ -23,9 +23,23 @@
 - `docs/plan-korStockScanPerformanceOptimization.performance-report.md`
 - `docs/plan-korStockScanPerformanceOptimization.prompt.md`
 - `docs/plan-korStockScanPerformanceOptimization.qna.md`
-- `docs/workorder-0421-auditor-performance-report.md`
-- `docs/workorder-0421-tuning-plan-rebase.md`
-- `docs/workorder-0421-validate-0420-applies.md`
+
+## Additional Workorders Archived 2026-05-14
+
+- `docs/workorder-0421-auditor-performance-report.md` -> `docs/archive/workorders/workorder-0421-auditor-performance-report.md`
+- `docs/workorder-0421-tuning-plan-rebase.md` -> `docs/archive/workorders/workorder-0421-tuning-plan-rebase.md`
+- `docs/workorder-0421-validate-0420-applies.md` -> `docs/archive/workorders/workorder-0421-validate-0420-applies.md`
+- `docs/workorder-ai-engine-deepseek.md` -> `docs/archive/workorders/workorder-ai-engine-deepseek.md`
+- `docs/workorder-deepseek-performance-tuning-observation-coverage.md` -> `docs/archive/workorders/workorder-deepseek-performance-tuning-observation-coverage.md`
+- `docs/workorder-deepseek-performance-tuning-observation-coverage.result.md` -> `docs/archive/workorders/workorder-deepseek-performance-tuning-observation-coverage.result.md`
+- `docs/workorder-deepseek-swing-pattern-lab.md` -> `docs/archive/workorders/workorder-deepseek-swing-pattern-lab.md`
+- `docs/workorder-deepseek-swing-pattern-lab-phase2.md` -> `docs/archive/workorders/workorder-deepseek-swing-pattern-lab-phase2.md`
+- `docs/workorder-deepseek-swing-pattern-lab-phase3-remaining.md` -> `docs/archive/workorders/workorder-deepseek-swing-pattern-lab-phase3-remaining.md`
+- `docs/workorder-kiwoom-sniper-v2-loop-performance-improvement.md` -> `docs/archive/workorders/workorder-kiwoom-sniper-v2-loop-performance-improvement.md`
+- `docs/workorder-sniper-codebase-performance-audit-followup.md` -> `docs/archive/workorders/workorder-sniper-codebase-performance-audit-followup.md`
+- `docs/workorder_data_client_decompose.md` -> `docs/archive/workorders/workorder_data_client_decompose.md`
+- `docs/workorder_deepseek_engine_review.md` -> `docs/archive/workorders/workorder_deepseek_engine_review.md`
+- `docs/workorder_gemini_engine_review.md` -> `docs/archive/workorders/workorder_gemini_engine_review.md`
 
 ## Archived Candidates
 

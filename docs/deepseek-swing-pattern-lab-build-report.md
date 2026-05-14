@@ -2,7 +2,7 @@
 
 작성일: `2026-05-09T16:06 KST` (v4 — population alignment + code zfill + carryover downgrade)
 Owner: `SwingPatternLabDeepSeekBuild`
-기반 문서: `docs/workorder-deepseek-swing-pattern-lab.md`
+기반 문서: `docs/archive/workorders/workorder-deepseek-swing-pattern-lab.md`
 
 ---
 
@@ -125,7 +125,7 @@ git diff --check                                         OK
 
 ## 9. Phase2 연결 전제조건
 
-Phase2 (`docs/workorder-deepseek-swing-pattern-lab-phase2.md`) 자동화 연결 전:
+Phase2 (`docs/archive/workorders/workorder-deepseek-swing-pattern-lab-phase2.md`) 자동화 연결 전:
 
 - code zfill(6) 정규화 닫힘 ✓
 - selection/carryover population split 닫힘 ✓

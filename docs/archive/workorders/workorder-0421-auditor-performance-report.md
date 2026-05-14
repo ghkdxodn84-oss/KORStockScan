@@ -3,14 +3,14 @@
 작성일: `2026-04-20`  
 실행 시점: `2026-04-21 INTRADAY 13:00 이전(예비본)` + `POSTCLOSE 17:30~18:00 KST(확정본)`  
 대상: 운영 트레이더 / Codex  
-기준 문서: [2026-04-21-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-21-stage2-todo-checklist.md), [workorder-0421-validate-0420-applies.md](/home/ubuntu/KORStockScan/docs/workorder-0421-validate-0420-applies.md)
+기준 문서: [2026-04-21-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-21-stage2-todo-checklist.md), [workorder-0421-validate-0420-applies.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-0421-validate-0420-applies.md)
 Plan Rebase 감사보고서: [2026-04-21-plan-rebase-auditor-report.md](/home/ubuntu/KORStockScan/docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-21-plan-rebase-auditor-report.md)
 
 참조 우선순위:
 1. [plan-korStockScanPerformanceOptimization.performance-report.md](/home/ubuntu/KORStockScan/docs/plan-korStockScanPerformanceOptimization.performance-report.md)
 2. [2026-04-20-auditor-third-review.md](/home/ubuntu/KORStockScan/docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-20-auditor-third-review.md)
 3. [2026-04-20-operator-response.md](/home/ubuntu/KORStockScan/docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-20-operator-response.md)
-4. [workorder-0421-validate-0420-applies.md](/home/ubuntu/KORStockScan/docs/workorder-0421-validate-0420-applies.md)
+4. [workorder-0421-validate-0420-applies.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-0421-validate-0420-applies.md)
 
 ---
 
@@ -50,7 +50,7 @@ Plan Rebase 감사보고서: [2026-04-21-plan-rebase-auditor-report.md](/home/ub
    - 따라서 감사 보고에는 `fallback_scout/main`을 개선 후보가 아니라 폐기된 실패 설계로 명시한다.
 8. `Plan Rebase` 개편 사유
    - 기존 관찰축은 진입/보유/청산 로직이 분리되어 있지 않고, fallback 오염 표본이 섞여 감사 의견을 주기 어렵다.
-   - 감사 보고에는 [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/workorder-0421-tuning-plan-rebase.md)의 `전수점검 범위`, `코호트 재정렬`, `다음 튜닝포인트 후보`를 포함한다.
+   - 감사 보고에는 [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-0421-tuning-plan-rebase.md)의 `전수점검 범위`, `코호트 재정렬`, `다음 튜닝포인트 후보`를 포함한다.
    - 예비 감사보고서는 [2026-04-21-plan-rebase-auditor-report.md](/home/ubuntu/KORStockScan/docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-21-plan-rebase-auditor-report.md)를 기준으로 한다.
 9. `2026-04-21 10:55 KST` AI 라우팅 정렬 검증
    - live 스캘핑 라우팅은 Gemini로 고정한다.

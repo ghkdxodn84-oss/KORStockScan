@@ -1,7 +1,7 @@
 # 작업결과서: 성능튜닝 모니터 관찰축 커버리지 + 플로우 병목 표시
 
 **작업일자**: 2026-04-24  
-**작업지시서**: [`docs/workorder-deepseek-performance-tuning-observation-coverage.md`](docs/workorder-deepseek-performance-tuning-observation-coverage.md)  
+**작업지시서**: [`workorder-deepseek-performance-tuning-observation-coverage.md`](./workorder-deepseek-performance-tuning-observation-coverage.md)  
 **수행모드**: Code (DeepSeek Reasoner)  
 **완료기준**: 작업지시서 §8 기준 전항 충족  
 **감리 후속조치**: 2026-04-24 1차 감리 피드백 반영 완료 (결과서 코드 기준 전면 정정, required_keys 보강, UI/API 회귀 테스트 추가)
@@ -243,7 +243,7 @@ src/tests/test_performance_tuning_report.py::test_observation_axis_coverage_exte
 
 ### 6-7. [2차 감리] `stage_group` API 계약 4종 정규화
 
-- **지적** ([`src/engine/sniper_performance_tuning_report.py:517`](src/engine/sniper_performance_tuning_report.py:517) → [`docs/workorder-deepseek-performance-tuning-observation-coverage.md:120`](docs/workorder-deepseek-performance-tuning-observation-coverage.md:120)):
+- **지적** ([`src/engine/sniper_performance_tuning_report.py:517`](../../../src/engine/sniper_performance_tuning_report.py) → [`workorder-deepseek-performance-tuning-observation-coverage.md:120`](./workorder-deepseek-performance-tuning-observation-coverage.md)):
   - API 계약의 `stage_group` 값이 작업지시서 명세와 불일치. 명세는 `ENTRY`, `EXECUTION`, `HOLDING`, `EXIT` 4종을 요구하지만 구현은 `ENTRY upstream`, `ENTRY midstream`, `ENTRY downstream`, `HOLDING branch`, `EXIT completion` 등의 하위 타입 사용
   - 테스트가 이 이탈을 검증하지 못함 ([`test_performance_tuning_report.py:720`](src/tests/test_performance_tuning_report.py:720))
 - **조치**:
@@ -255,7 +255,7 @@ src/tests/test_performance_tuning_report.py::test_observation_axis_coverage_exte
 
 ### 6-8. [2차 감리] `scale_in_branch` zero_qty 병목 탐지
 
-- **지적** ([`src/engine/sniper_performance_tuning_report.py:541,646`](src/engine/sniper_performance_tuning_report.py:541) → [`docs/workorder-deepseek-performance-tuning-observation-coverage.md:112`](docs/workorder-deepseek-performance-tuning-observation-coverage.md:112)):
+- **지적** ([`src/engine/sniper_performance_tuning_report.py:541,646`](../../../src/engine/sniper_performance_tuning_report.py) → [`workorder-deepseek-performance-tuning-observation-coverage.md:112`](./workorder-deepseek-performance-tuning-observation-coverage.md)):
   - 작업지시서 요구사항 미구현: raw `ADD_BLOCKED`/`ADD_ORDER_SENT` evidence pointer, `reason=zero_qty` 반복 시 bottleneck 탐지
   - 현재는 `position_rebased_after_fill_events == 0`이면 항상 `waiting`으로 종료 → 실제 zero-qty 병목이 반복돼도 lane에서 절대 병목으로 드러나지 않음
 - **조치** ([`src/engine/sniper_performance_tuning_report.py:541`](src/engine/sniper_performance_tuning_report.py:541)):
@@ -294,7 +294,7 @@ src/tests/test_performance_tuning_report.py::test_observation_axis_coverage_exte
 
 ## 8. 참조
 
-- [작업지시서](docs/workorder-deepseek-performance-tuning-observation-coverage.md)
+- [작업지시서](./workorder-deepseek-performance-tuning-observation-coverage.md)
 - [성과측정보고서 (Plan Rebase)](docs/plan-korStockScanPerformanceOptimization.performance-report.md)
 - [성과측정보고서 문서 diff](docs/plan-korStockScanPerformanceOptimization.performance-report.md#L243-L283)
 - [Performance Tuning Report 엔진](src/engine/sniper_performance_tuning_report.py)

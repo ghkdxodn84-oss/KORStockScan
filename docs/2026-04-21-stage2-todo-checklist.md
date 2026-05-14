@@ -43,14 +43,14 @@
   - 조치: 당시 `src/trading/entry/fallback_strategy.py`는 빈 주문 리스트를 반환하는 deprecated null-object로 변경했고, 현재는 코드베이스에서 제거됐다. [sniper_entry_latency.py](/home/ubuntu/KORStockScan/src/engine/sniper_entry_latency.py)와 [entry_orchestrator.py](/home/ubuntu/KORStockScan/src/trading/entry/entry_orchestrator.py)는 빈 fallback 주문을 `latency_fallback_deprecated` reject로 처리한다.
   - 운영 규칙: `fallback_scout/main`, `fallback_single` 모두 영구 폐기. 재도입/승격/재평가 canary 대상이 아니며, 향후 유사 설계는 AI 생성 코드 체크게이트와 운영자 수동 승인을 통과해야 한다.
 - [x] `[PlanRebase0421] fallback 관련 축 영구 폐기 + 신규 축 canary 전환 선언` (`Due: 2026-04-21`, `Slot: INTRADAY`, `TimeWindow: 10:40~10:50`, `Track: Plan`) (`실행: 2026-04-21 11:44 KST`)
-  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/workorder-0421-tuning-plan-rebase.md)
+  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-0421-tuning-plan-rebase.md)
   - 판정 기준: fallback/split-entry/legacy shadow 승격 후보를 닫고, 다음 신규 1축은 `canary 즉시 적용 + 당일 rollback guard`로 전환한다.
   - 판정: 완료. `fallback_scout/main`, `fallback_single`, latency fallback split-entry는 영구 폐기 상태로 잠그고 재평가/승격/canary 대상에서 제외한다.
-  - 근거: [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py)의 `SCALP_LATENCY_FALLBACK_ENABLED=False`, `SCALP_SPLIT_ENTRY_ENABLED=False`, `SCALP_LATENCY_GUARD_CANARY_ENABLED=False`; 당시 `src/trading/entry/fallback_strategy.py` deprecated null-object; [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/workorder-0421-tuning-plan-rebase.md) §5/§7.
+  - 근거: [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py)의 `SCALP_LATENCY_FALLBACK_ENABLED=False`, `SCALP_SPLIT_ENTRY_ENABLED=False`, `SCALP_LATENCY_GUARD_CANARY_ENABLED=False`; 당시 `src/trading/entry/fallback_strategy.py` deprecated null-object; [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-0421-tuning-plan-rebase.md) §5/§7.
   - 검증: `2026-04-21 09:45 KST` 이후 live 로그 기준 `fallback_bundle_ready=0`, `ALLOW_FALLBACK=0`. `LATENCY_GUARD_CANARY=2`건은 `11:40 KST` pytest fixture 로그로 live 회귀가 아니다.
   - 다음 액션: 신규 정식 canary는 감사인 정의의 `entry_filter_quality` 1축만 유지한다. 오늘 실전 적용분은 별도 `buy_recovery_canary`로 추적한다.
 - [x] `[PlanRebase0421] AI 엔진 A/B 보류 + Gemini 라우팅 고정` (`Due: 2026-04-21`, `Slot: INTRADAY`, `TimeWindow: 10:55~11:05`, `Track: AIPrompt`) (`실행: 2026-04-21 11:44 KST`)
-  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/workorder-0421-tuning-plan-rebase.md)
+  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-0421-tuning-plan-rebase.md)
   - 판정 기준: live 스캘핑 AI 라우팅을 Gemini로 고정하고 `OpenAI/Gemini A/B` 및 dual-persona shadow는 `entry_filter_quality` canary 1차 판정 완료 후 재개 여부를 별도 판정한다. 최대 기한은 `2026-04-24 POSTCLOSE`다.
   - 판정: 완료. 기본 스캘핑 route는 Gemini로 고정하고, OpenAI/Gemini A/B와 dual-persona shadow는 `entry_filter_quality` canary 1차 판정 전까지 보류한다.
   - 근거: [runtime_ai_router.py](/home/ubuntu/KORStockScan/src/engine/runtime_ai_router.py)의 기본 route `gemini`, [constants.py](/home/ubuntu/KORStockScan/src/utils/constants.py)의 `OPENAI_DUAL_PERSONA_ENABLED=False`, [kiwoom_sniper_v2.py](/home/ubuntu/KORStockScan/src/engine/kiwoom_sniper_v2.py)의 Plan Rebase OpenAI 스캘핑 초기화 skip 경로.
@@ -58,7 +58,7 @@
   - 주의: `logs/runtime_ai_router_info.log`에는 pytest가 의도적으로 생성한 `scalping_route=openai` 케이스도 남는다. 이 로그는 A/B 재개 증거가 아니라 라우터 분기 테스트 증거로만 해석한다.
   - 운영 원칙: `songstock` 원격 비교, remote canary, 서버 간 차이 해석은 현재 의사결정 입력에서 제외한다.
 - [x] `[PlanRebase0421] 진입/보유/청산 로직표 확정` (`Due: 2026-04-21`, `Slot: INTRADAY`, `TimeWindow: 10:50~11:30`, `Track: ScalpingLogic`) (`실행: 2026-04-21 11:44 KST`)
-  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/workorder-0421-tuning-plan-rebase.md)
+  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-0421-tuning-plan-rebase.md)
   - 판정 기준: `진입`, `보유`, `청산` 로직의 현재 상태/전이/관찰필드/폐기경로를 한 표로 확정한다.
   - 판정: 확정. 현재 튜닝 해석 단위는 `진입 -> 보유 -> 청산` 상태 전이를 분리하고, fallback 폐기경로는 정상 표본과 합산하지 않는다.
   - 로직표:
@@ -69,7 +69,7 @@
     | 청산 | soft stop, hard stop, trailing/preset exit, AI early exit, EOD 판단 | NXT 가능/불가능 미분리 overnight 단일판정 | `exit_rule`, `profit_rate`, `hold_sec`, `sell_order_status`, `sell_fail_reason`, `is_nxt` |
   - 다음 액션: 장후에는 이 표를 기준으로 `entry_filter_quality` 설계축과 이미 적용된 `buy_recovery_canary` guard를 분리하고, `position_addition_policy`는 후순위로 유지한다.
 - [x] `[PlanRebase0421] fallback 오염 코호트 재집계` (`Due: 2026-04-21`, `Slot: INTRADAY`, `TimeWindow: 11:30~11:50`, `Track: Plan`) (`실행: 2026-04-21 11:44 KST`)
-  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/workorder-0421-tuning-plan-rebase.md)
+  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-0421-tuning-plan-rebase.md)
   - 판정 기준: `normal_only`, `fallback_scout_main_contaminated`, `fallback_single_contaminated`, `post_fallback_deprecation`, `scale_in_profit_expansion`, `avg_down_candidate` 코호트를 분리하고 `fallback_single`은 `symbol + timestamp`로 합산 오염을 교차검증한다.
   - 판정: 완료. `trade_review_2026-04-21.json`의 `COMPLETED + valid profit_rate`만 손익 코호트에 사용하고, fallback 오염 표본을 정상 표본에서 분리했다.
   - 근거 스냅샷: `trade_review=2026-04-21 11:35:07`, `performance_tuning=2026-04-21 11:35:35`, `missed_entry_counterfactual=2026-04-21 11:35:51`.
@@ -108,7 +108,7 @@
   - 근거: `실전 적용축=main-only buy_recovery_canary` 유지, `정식 다음축=entry_filter_quality` 유지, `보류축=holding_exit/position_addition_policy/EOD-NXT/AI 엔진 A/B` 유지. 추가확인 항목은 `latency p95 21,033ms`, `partial_fill low-N`, `fallback 회귀 0건`, `WAIT 65~79 BUY 회복 실측(현재 BUY 전환 0건)`으로 잠근다.
   - 다음 액션: `[Workorder0421]` 및 `[QuantVerify0421]`에서 장후 최종판정 시 유지/보류/롤백 후보를 분리 기록한다.
 - [x] `[AIPrompt0421] WAIT65_79 EV 코호트 고정수집 + paper-fill + full/partial N gate + 소량 실전 probe canary 반영` (`Due: 2026-04-21`, `Slot: INTRADAY`, `TimeWindow: 13:00~13:20`, `Track: AIPrompt`) (`실행: 2026-04-21 13:37 KST`)
-  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/workorder-0421-tuning-plan-rebase.md)
+  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-0421-tuning-plan-rebase.md)
   - 판정 기준: `wait65_79_ev_candidate`에 `buy_pressure/tick_accel/micro_vwap_bp/latency_state/parse_ok/ai_response_ms`를 고정 수집하고, terminal blocker를 결합한 `wait6579_ev_cohort` 스냅샷을 생성한다.
   - 판정: 완료. WAIT65_79 전용 행 기반 코호트 수집 + paper-fill 기대 체결/EV 산출 + full/partial 최소 N gate + 소량 실전 probe canary를 코드/리포트에 반영했다.
   - 근거: [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)의 `wait65_79_ev_candidate`/`wait6579_probe_canary_applied` stage, [wait6579_ev_cohort_report.py](/home/ubuntu/KORStockScan/src/engine/wait6579_ev_cohort_report.py), [log_archive_service.py](/home/ubuntu/KORStockScan/src/engine/log_archive_service.py)의 `wait6579_ev_cohort` 스냅샷 저장 경로.
@@ -130,26 +130,26 @@
 ## 장후 체크리스트 (15:20~)
 
 - [x] `[PlanRebase0421] 다음 튜닝포인트 1축 재선정` (`Due: 2026-04-21`, `Slot: POSTCLOSE`, `TimeWindow: 15:20~15:40`, `Track: Plan`) (`실행: 2026-04-21 12:18 KST`)
-  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/workorder-0421-tuning-plan-rebase.md)
+  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-0421-tuning-plan-rebase.md)
   - 판정 기준: 감사인 권고에 따라 정식 다음축은 `entry_filter_quality`로 고정한다. 오늘 실전 적용한 `buy_recovery_canary`는 별도 긴급축으로 분리 기록한다. `holding_exit`, `position_addition_policy`, `EOD/NXT`는 후순위로 기록한다. 코호트 데이터가 반대 근거를 보이면 사유를 명시한다.
 - [x] `[PlanRebase0421] buy_recovery_canary 설계 + rollback guard 고정` (`Due: 2026-04-21`, `Slot: POSTCLOSE`, `TimeWindow: 15:40~16:10`, `Track: ScalpingLogic`) (`실행: 2026-04-21 12:18 KST`)
-  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/workorder-0421-tuning-plan-rebase.md)
+  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-0421-tuning-plan-rebase.md)
   - 판정 기준: `main-only buy_recovery_canary` 규칙(`WAIT 65~79`, feature allowlist, `SCALPING_SYSTEM_PROMPT_75_CANARY` 재사용)과 `N_min`, `reject_rate`, `loss_cap`, `latency_p95`, `partial_fill_ratio`, `fallback_regression`, `buy_drought_persist` guard를 수치로 고정한다.
   - 정식 guard: `trade_count < 50`이고 `submitted_orders < 20`이면 방향성 판정; canary cohort 일간 합산 실현손익이 당일 스캘핑 배정 NAV 대비 `<= -0.35%`이면 OFF; `entry_reject_rate >= normal_only baseline + 15.0%p`이면 OFF; `gatekeeper_eval_ms_p95 > 15,900ms`이면 OFF; `partial_fill_ratio >= baseline + 10.0%p`는 경고이며 동시에 `loss_cap` 또는 `soft_stop_count/completed_trades >= 35.0%`이면 OFF; fallback 신규 1건 발생 즉시 OFF; canary 이후에도 `ai_confirmed_buy_count`가 main baseline 하위 3분위수보다 낮고 `blocked_ai_score_share`가 개선되지 않으면 OFF.
   - 판정: 완료. 코드 반영 + 테스트 + runtime 반영까지 종료.
   - 근거: `src/utils/constants.py`, `src/engine/sniper_state_handlers.py` 수정, `pytest 21 passed`, `src/bot_main.py` 재기동으로 실전 반영.
 - [x] `[MainOnly0421] songstock 비교축 종료 + main-only baseline 고정` (`Due: 2026-04-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:10~16:20`, `Track: Plan`) (`실행: 2026-04-21 15:24 KST, 사전 실행`)
-  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/workorder-0421-tuning-plan-rebase.md)
+  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-0421-tuning-plan-rebase.md)
   - 판정 기준: 서버 비교, 원격 canary, `remote_error` 해석을 현재 의사결정 입력에서 제거하고 `normal_only`, `post_fallback_deprecation`, `main-only missed_entry_counterfactual`만 기준으로 남긴다.
   - 판정: 완료. 오늘 rollback/source-of-truth 기준은 `main-only` 스냅샷(`trade_review`, `performance_tuning`, `post_sell_feedback`, `missed_entry_counterfactual`)으로 고정하고, `server_comparison/songstock/remote_error`는 현 의사결정 입력에서 제외한다.
   - 근거: `data/report/monitor_snapshots/server_comparison_2026-04-21.json`은 참고만 하며, 실제 판정표는 main snapshot에서 산출했다.
   - 운영 조치: `2026-04-21 21:52 KST` crontab에서 원격 서버 접속/수집 항목 `REMOTE_LATENCY_BASELINE_*`, `REMOTE_SCALPING_FETCH_1600`, `SHADOW_CANARY_*`를 제거했다. 재추가 방지를 위해 `deploy/install_stage2_ops_cron.sh`, `deploy/install_shadow_canary_check_cron.sh`도 원격 항목을 추가하지 않도록 정리했다.
 - [x] `[PlanRebase0421] 용어 분리 잠금(entry_filter_quality vs buy_recovery_canary)` (`Due: 2026-04-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:20~16:30`, `Track: Plan`) (`실행: 2026-04-21 15:24 KST, 사전 실행`)
-  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/workorder-0421-tuning-plan-rebase.md)
+  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-0421-tuning-plan-rebase.md)
   - 판정 기준: 감사인 문맥의 `entry_filter_quality=불량 진입 감소/진입 품질 개선`과 오늘 실전 적용한 `buy_recovery_canary=Gemini WAIT 65~79 BUY 회복`을 문서 세트 전체에서 혼용하지 않도록 고정한다.
   - 판정: 완료. `entry_filter_quality`는 정식 품질개선/불량 진입 감소축이고, `buy_recovery_canary`는 WAIT 65~79 BUY drought 회복축이다. 두 축은 승격/롤백 기준을 공유하지 않는다.
 - [x] `[AIPrompt0421] Gemini BUY drought main-only 계량` (`Due: 2026-04-21`, `Slot: POSTCLOSE`, `TimeWindow: 16:20~16:35`, `Track: AIPrompt`) (`실행: 2026-04-21 15:24 KST, 최종갱신: 2026-04-21 15:37 KST`)
-  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/workorder-0421-tuning-plan-rebase.md)
+  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-0421-tuning-plan-rebase.md)
   - 판정 기준: 메인 로그 기준 `ai_confirmed_buy_count/share`, `WAIT 65/70/75~79` 분포, `blocked_ai_score`, `buy_after_recheck_candidate`, `missed_winner_rate`를 같은 표로 잠근다.
   - 판정: BUY drought 지속. `ai_confirmed=744`, BUY `115`(`15.5%`), WAIT `474`(`63.7%`), DROP `155`(`20.8%`)다.
   - 근거: `ai_confirmed` WAIT 65~69 `222건`, 70~74 `5건`, 75~79 `4건`; raw `WAIT 65~79=231건`; `wait65_79_ev_candidate=54건`; `blocked_ai_score=612건`; `buy_after_recheck_candidate=0건`; `missed_entry_counterfactual.missed_winner_rate=74.8%`; `wait6579_ev_cohort.expected_fill_rate_pct=92.7037`, `avg_expected_ev_pct=0.9808`.
@@ -181,12 +181,12 @@
   - 판정: hard pass/fail 금지, 방향성은 미달. `partial_fill_events=7(<20)`, `position_rebased_after_fill_events/partial_fill_events=13/7=1.86(목표 1.15 초과)`, `partial_fill_completed_avg_profit_rate=-1.038%(목표 -0.15% 미달)`, `gatekeeper_fast_reuse_ratio=0.0%(목표 10.0% 미달)`, `gatekeeper_eval_ms_p95=17,594ms(목표 15,900ms 초과)`, `latency_block_events/budget_pass_events=4,848/4,858=99.8%`.
   - 근거: 표본 부족으로 승격 금지. 다만 기대값 관점에서는 latency guard miss와 partial fill 손실 증폭이 우선 해결 대상이다.
 - [x] `[Workorder0421] 오늘 적용사항 결과검증 워크오더 실행 및 판정 기록` (`Due: 2026-04-21`, `Slot: POSTCLOSE`, `TimeWindow: 17:20~17:40`, `Track: Plan`) (`실행: 2026-04-21 15:24 KST, 최종갱신: 2026-04-21 15:37 KST`)
-  - Source: [workorder-0421-validate-0420-applies.md](/home/ubuntu/KORStockScan/docs/workorder-0421-validate-0420-applies.md)
+  - Source: [workorder-0421-validate-0420-applies.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-0421-validate-0420-applies.md)
   - 판정 기준: 워크오더 지표를 전부 채우고 `canary 착수축 1개/보류축`을 분리해 `2026-04-22` 후속 액션을 같은 문서 세트에 기록한다.
   - 판정: 실행 완료. canary 착수축은 `main-only buy_recovery_canary`, 보류축은 `entry_filter_quality`, `AI engine A/B`, `프로파일별 특화 프롬프트 확대`다.
   - 근거: `docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-21-auditor-performance-result-report.md`에 8개 이상 지표와 D/E/F 상태, 04-22 후속 액션을 기록했다.
 - [x] `[AuditorDelivery0421] 감사인 전달용 성과측정결과 및 분석보고서 생성` (`Due: 2026-04-21`, `Slot: POSTCLOSE`, `TimeWindow: 17:40~18:10`, `Track: Plan`) (`실행: 2026-04-21 15:24 KST, 최종갱신: 2026-04-21 15:37 KST`)
-  - Source: [workorder-0421-auditor-performance-report.md](/home/ubuntu/KORStockScan/docs/workorder-0421-auditor-performance-report.md)
+  - Source: [workorder-0421-auditor-performance-report.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-0421-auditor-performance-report.md)
   - 판정 기준: 감사인 전달 문서 1건을 생성하고 지표 `8개 이상` + 미결 `D/E/F` 상태 + `2026-04-22` 후속 액션을 동일 보고에 명시한다.
   - 판정: 완료. 산출물: [2026-04-21-auditor-performance-result-report.md](/home/ubuntu/KORStockScan/docs/archive/plan-rebase-transition-2026-04-20-to-2026-04-22/2026-04-21-auditor-performance-result-report.md).
 - [x] `[OpsVerify0421] system metric sampler 장중 coverage 검증` (`Due: 2026-04-21`, `Slot: POSTCLOSE`, `TimeWindow: 18:10~18:20`, `Track: Plan`) (`실행: 2026-04-21 15:24 KST, 최종확인: 2026-04-21 15:37 KST`)
@@ -194,7 +194,7 @@
   - 판정: 최종 통과. `09:00:01~15:30:01 KST` 샘플 `391건`, 평균 간격 `60.0초`, 최대 간격 `61초`, 필수 필드 누락 `0건`.
   - 재확인: `2026-04-21 15:32 KST` 기준 15:30 샘플까지 수집 완료.
 - [x] `[PlanRebase0422] buy_recovery_canary 장전 적용` (`Due: 2026-04-22`, `Slot: PREOPEN`, `TimeWindow: 08:00~08:10`, `Track: ScalpingLogic`) (`실행: 2026-04-21 12:18 KST, 조기적용`)
-  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/workorder-0421-tuning-plan-rebase.md)
+  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-0421-tuning-plan-rebase.md)
   - 판정 기준: 04-21 장후 확정된 `main-only buy_recovery_canary`와 guard를 확인하고 canary ON 여부를 결정한다. 적용 시 같은 날 rollback 판정 시각을 문서에 남긴다.
   - 판정: 완료(조기적용). `WAIT 65~79` 2차 재평가 + `BUY promote>=75` 경로가 live 코드에 반영된 상태다.
 - [x] `[AIPrompt0424] AI 엔진 A/B 재개 여부 판정` (`Due: 2026-04-24`, `Slot: POSTCLOSE`, `TimeWindow: 16:00~16:20`, `Track: AIPrompt`) (`실행: 2026-04-21 15:24 KST, Project stale due 이관`)
@@ -215,9 +215,9 @@
 - [plan-korStockScanPerformanceOptimization.prompt.md](./plan-korStockScanPerformanceOptimization.prompt.md)
 - [plan-korStockScanPerformanceOptimization.execution-delta.md](./plan-korStockScanPerformanceOptimization.execution-delta.md)
 - [plan-korStockScanPerformanceOptimization.performance-report.md](./plan-korStockScanPerformanceOptimization.performance-report.md)
-- [workorder-0421-validate-0420-applies.md](./workorder-0421-validate-0420-applies.md)
-- [workorder-0421-auditor-performance-report.md](./workorder-0421-auditor-performance-report.md)
-- [workorder-0421-tuning-plan-rebase.md](./workorder-0421-tuning-plan-rebase.md)
+- [workorder-0421-validate-0420-applies.md](./archive/workorders/workorder-0421-validate-0420-applies.md)
+- [workorder-0421-auditor-performance-report.md](./archive/workorders/workorder-0421-auditor-performance-report.md)
+- [workorder-0421-tuning-plan-rebase.md](./archive/workorders/workorder-0421-tuning-plan-rebase.md)
 
 <!-- REMOTE_COMPARISON_DECOMMISSIONED_START -->
 ### 원격 비교축 종료 기록 (`2026-04-21 21:52 KST`)

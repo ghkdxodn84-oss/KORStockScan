@@ -3,7 +3,7 @@
 작성일: `2026-05-09 KST`  
 Owner: `SwingPatternLabDeepSeekPhase3Remaining`  
 Source:
-- `docs/workorder-deepseek-swing-pattern-lab-phase2.md`
+- `docs/archive/workorders/workorder-deepseek-swing-pattern-lab-phase2.md`
 - `docs/deepseek-swing-pattern-lab-phase2-build-report.md`
 - `data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_2026-05-09.json`
 - `docs/code-improvement-workorders/code_improvement_workorder_2026-05-09.md`

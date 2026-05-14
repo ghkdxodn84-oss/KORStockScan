@@ -4,7 +4,7 @@
 작성시각: `2026-04-21 10:40 KST`  
 대상: 감사인 / 운영 트레이더 / Codex  
 상태: `감사인 재검토 최종 반영본`  
-관련 작업지시서: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/workorder-0421-tuning-plan-rebase.md)
+관련 작업지시서: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-0421-tuning-plan-rebase.md)
 
 ---
 

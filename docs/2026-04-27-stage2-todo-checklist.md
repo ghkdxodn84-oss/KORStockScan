@@ -156,7 +156,7 @@
   - 다음 액션: 이 형상은 보조 진단/회귀 방지로만 남긴다. same-day next axis는 `latency_state_danger -> other_danger relief`로 전환하고, `gatekeeper_fast_reuse`는 `종료된 보조 진단축`으로 최종확정한다.
 
 - [x] `[LatencyReobserve0427] gatekeeper_fast_reuse buy_ratio deadband 반영 후 잔여장 재관찰` (`Due: 2026-04-27`, `Slot: INTRADAY`, `TimeWindow: 11:15~12:00`, `Track: ScalpingLogic`)
-  - Source: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md), [workorder-sniper-codebase-performance-audit-followup.md](/home/ubuntu/KORStockScan/docs/workorder-sniper-codebase-performance-audit-followup.md)
+  - Source: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md), [workorder-sniper-codebase-performance-audit-followup.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-sniper-codebase-performance-audit-followup.md)
   - 판정 기준: `restart.flag` 재기동 후 남은 장 raw 또는 bundle 재집계에서 `gatekeeper_fast_reuse_ratio > 0`, 또는 `sig_changed`/`window expired` blocker 구조 완화, 또는 `budget_pass_to_submitted_rate` 개선이 보이면 `재분해 유지`로 잠근다. `12:00`까지도 `fast_reuse_ratio=0.0%`와 blocker 구조 고정이 유지되면 same-day `종료`로 확정한다.
   - why: 초기 same-day 재분해는 `buy_ratio_ws` 과민도를 1필드만 줄이는 최소 수정이었다. 다만 `11:31 KST` raw 재집계에서 `latency_block=3196`, `latency_state_danger=3000`, 세부 조합 `other_danger=1218`, `ws_jitter-only=869`가 다시 확인돼, 남은 오전 관찰은 `gatekeeper_fast_reuse` 단독이 아니라 `latency_other_danger relief` same-day pivot 결과까지 함께 본다.
   - same-day pivot:
@@ -318,13 +318,13 @@
   - 다음 액션: wrapper 재실행에서 `shadow_diff_summary.json`의 `submitted/full_fill/partial_fill` mismatch가 새로 노출됐으므로, 익일 checklist에 재분해 작업을 추가한다.
 
 - [x] `[LoopMetrics0427] LOOP_METRICS 실로그 분포 확인` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:20~18:30`, `Track: ScalpingLogic`)
-  - Source: [workorder-kiwoom-sniper-v2-loop-performance-improvement.md](/home/ubuntu/KORStockScan/docs/workorder-kiwoom-sniper-v2-loop-performance-improvement.md)
+  - Source: [workorder-kiwoom-sniper-v2-loop-performance-improvement.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-kiwoom-sniper-v2-loop-performance-improvement.md)
   - 판정 기준: 장중/장후 생성된 `[LOOP_METRICS]` 실로그에서 `loop_elapsed_ms`, `db_active_targets_ms`, `account_sync_ms`, `target_count`, `watching`, `holding`이 최소 1회 이상 기록되고, 값 누락/파싱불가 없이 운영 해석 가능한지 확인한다.
   - why: 이번 P0/P1은 테스트 통과만으로 닫을 수 없고, 실제 장중 로그에서 루프 지연과 동기 I/O 시간이 기대한 형식으로 남는지 확인해야 후속 `sleep` canary와 주문/AI worker 판단 근거가 생긴다.
   - 다음 액션: `loop_elapsed_ms` 상위 구간, `db_active_targets_ms`/`account_sync_ms` 이상치, 샘플 수 부족 여부를 same-day 메모로 잠그고, 후속 P2 착수 전 기준선으로 재사용한다.
 
 - [x] `[GatekeeperAsync0427] sniper_gatekeeper_replay.py 비동기 writer + dedup 롤백 구현 완료` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:20~18:30`, `Track: ScalpingLogic`)
-  - Source: [workorder-sniper-codebase-performance-audit-followup.md](/home/ubuntu/KORStockScan/docs/workorder-sniper-codebase-performance-audit-followup.md)
+  - Source: [workorder-sniper-codebase-performance-audit-followup.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-sniper-codebase-performance-audit-followup.md)
   - 완료 내역:
     - 축 A: `_ensure_state_handler_deps()`를 6개 wrapper에서 제거하고 `run_sniper()` loop 상단(1224)으로 이동
     - 축 B: `_RECENT_SNAPSHOT_SIGNATURES` TTL prune (`_prune_stale_signatures`, 5분 간격)
@@ -341,7 +341,7 @@
   - 다음 액션: 실제 장중 `[GATEKEEPER_SNAPSHOT]` 로그와 replay jsonl 파일을 대조해 `enqueue accepted`와 `persist confirmed`가 어긋나는 사례가 있는지 운영 acceptance로 확인한다.
 
 - [x] `[GatekeeperAsyncOps0427] GATEKEEPER_SNAPSHOT async persist 운영 acceptance 확인` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:30~18:40`, `Track: ScalpingLogic`)
-  - Source: [workorder-sniper-codebase-performance-audit-followup.md](/home/ubuntu/KORStockScan/docs/workorder-sniper-codebase-performance-audit-followup.md)
+  - Source: [workorder-sniper-codebase-performance-audit-followup.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-sniper-codebase-performance-audit-followup.md)
   - 판정 기준: 장중/장후 `[GATEKEEPER_SNAPSHOT]` 성공 로그와 `data/gatekeeper/gatekeeper_snapshots_2026-04-27.jsonl` 실제 line 증가를 대조해, `enqueue accepted` 후 worker write 실패가 있었다면 callback `log_error`와 dedup rollback이 같은 구간에 남는지 확인한다.
   - why: 현재 구현은 동기 fallback 실패는 `None`으로 닫지만, async worker 실패는 best-effort 규약상 후행 rollback으로만 관측된다. 따라서 코드 테스트 통과와 별개로 실로그 기준 persist 정합성 확인이 필요하다.
   - 판정: 운영 acceptance 통과. `2026-04-27` 기준 `[GATEKEEPER_SNAPSHOT]` 성공 로그 17건과 jsonl 적재 17건이 일치했고, same-day async persist 실패/rollback 에러는 없었다.
@@ -372,7 +372,7 @@
     - cross-contamination check: `gatekeeper_fast_reuse` candidate cohort는 종료했고, `soft_stop qualifying cohort`는 여전히 `provisional-stage-disjoint` observe 후보로만 유지한다.
 
 - [x] `[LoggerPerf0427] logger.py caller 추적 비용 절감안 적용 판정` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:55~19:05`, `Track: ScalpingLogic`)
-  - Source: [workorder-sniper-codebase-performance-audit-followup.md](/home/ubuntu/KORStockScan/docs/workorder-sniper-codebase-performance-audit-followup.md)
+  - Source: [workorder-sniper-codebase-performance-audit-followup.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-sniper-codebase-performance-audit-followup.md)
   - 판정 기준: `src/utils/logger.py`의 `inspect.stack()[1]` 호출을 더 싼 caller 해석 방식으로 교체하거나, hot path 호출부에서 `caller_filename`을 명시 인자로 넘겨 stack 역추적을 건너뛰도록 바꾸되, 기존 모듈별 `info/error` 로그 파일 분리 규약은 유지되어야 한다.
   - why: 오늘 `sniper_state_handlers.py`의 반복 debug log/print는 줄였지만, `log_info()`/`log_error()` 자체는 아직 호출마다 `inspect.stack()[1]`를 수행한다. 이후 hot path 잔여 `log_info`와 `pipeline_event` text log의 고정비를 낮추려면 caller 추적 비용 축을 별도 정리해야 한다.
   - 판정: same-day 적용. `inspect.stack()[1]`는 제거하고 `inspect.currentframe().f_back` 기반 호출자 해석으로 바꿨으며, 필요 시 stack 역추적을 건너뛸 수 있게 `caller_filename` override 인자도 열어뒀다.
@@ -385,7 +385,7 @@
   - 다음 액션: hot path에서 caller가 고정된 호출부는 필요 시 `caller_filename=` 명시 인자로 한 번 더 최적화하고, 현재 change set은 공용 logger 비용 절감 기준선으로 잠근다.
 
 - [x] `[DeepSeekReview0427] ai_engine_deepseek 리뷰 후속 P0/P1/P2 적용축 판정` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 18:55~19:10`, `Track: ScalpingLogic`)
-  - Source: [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_deepseek_engine_review.md)
+  - Source: [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder_deepseek_engine_review.md)
   - 판정 기준: `P0`는 `_call_deepseek_safe()` JSON fast-path만 반영하는 무행동 변경으로 same-day 닫을 수 있어야 하고, `P1 retry`는 `live-sensitive 상한 + rollback guard`가 문서/코드에 함께 고정될 때만 승인한다. `P2 gatekeeper JSON`은 `flag default OFF`, `JSON 실패 시 text fallback`, `action_label/allow_entry/report` contract 유지 테스트가 준비되지 않으면 착수하지 않는다. `_compact_holding_ws_for_cache()` 버킷 축소는 holding cohort 근거 전까지 잠근다.
   - why: 현재 DeepSeek 리뷰 초안에는 유효한 지적과 과장된 지적이 섞여 있다. 실전 EV 기준으로는 `JSON fast-path`는 즉시 가능하지만, `retry/backoff`와 `gatekeeper JSON`은 live latency/호환성/rollback을 먼저 잠가야 한다.
   - 판정: P0 승인 및 반영 유지, P1은 guard 준비 완료 상태의 `flag default OFF` 승인, P2 `gatekeeper structured-output`과 `holding cache bucket reduction`은 same-day 실전 축에서 제외한다.
@@ -398,7 +398,7 @@
   - 다음 액션: 익일 `[DeepSeekP1Rollout0428]`, `[DeepSeekGatekeeper0428]`, `[DeepSeekHolding0428]`에서 enable 여부와 범위를 분리 판정한다.
 
 - [x] `[GeminiReview0427] ai_engine Gemini 호출 구조 리뷰 후속 P0/P1/P2 적용축 판정` (`Due: 2026-04-27`, `Slot: POSTCLOSE`, `TimeWindow: 19:10~19:25`, `Track: ScalpingLogic`)
-  - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_gemini_engine_review.md)
+  - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder_gemini_engine_review.md)
   - 판정 기준: `P0`는 `_call_gemini_safe()` JSON fast-path만 반영하는 무행동 보강으로 same-day 닫을 수 있어야 한다. `P1 system instruction`과 `P1 deterministic JSON config`는 `flag default OFF`, `rollback guard`, `live 영향 비교 기준`이 문서/코드에 함께 있을 때만 승인한다. `P2 response schema`는 `entry/holding_exit/overnight/condition_entry/condition_exit/eod_top5` endpoint별 schema registry와 fallback, 계약 테스트가 준비되지 않으면 착수하지 않는다.
   - why: Gemini 리뷰 초안의 방향은 일부 맞지만, 현재 live 기준 엔진을 바꾸는 항목과 단순 파싱 보강 항목이 섞여 있다. EV 기준으로는 `fast-path`는 저위험이지만, `system instruction/temperature/schema`는 실제 BUY/WAIT/DROP 분포와 parse_fail 축을 함께 바꿀 수 있어 canary/rollback 전제가 먼저다.
   - 판정: P0 승인 및 반영 유지, P1 system_instruction/deterministic config는 guard 준비 완료 상태의 `flag default OFF` 승인, P2 response schema registry는 endpoint 계약/테스트가 잠길 때까지 보류축으로 고정한다.

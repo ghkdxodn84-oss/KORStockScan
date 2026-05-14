@@ -1,7 +1,7 @@
 # DeepSeek Swing Pattern Lab Phase3 P1/P2 Result Report
 
 - 작성일: 2026-05-09 KST
-- 기준 작업지시서: [workorder-deepseek-swing-pattern-lab-phase3-remaining.md](/home/ubuntu/KORStockScan/docs/workorder-deepseek-swing-pattern-lab-phase3-remaining.md)
+- 기준 작업지시서: [workorder-deepseek-swing-pattern-lab-phase3-remaining.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-deepseek-swing-pattern-lab-phase3-remaining.md)
 - 완료 범위: P1 관찰축/DB 적재 gap 보강, P2 AI contract 및 AVG_DOWN/PYRAMID report-only family 보강
 - 미완료 범위: P3 fresh single-day DeepSeek re-entry 조건 확인
 

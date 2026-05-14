@@ -474,7 +474,7 @@
   - 다음 액션: `2026-04-29 PREOPEN`에 `2026-04-28 parquet/duckdb rebuild + shadow diff 재검증`을 남긴다. `QuoteFresh` hard baseline은 이 항목이 닫히기 전까지 재승격하지 않는다.
 
 - [x] `[GeminiP1Rollout0428] main Gemini JSON system_instruction/deterministic flag 실전 승인 판정` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 18:05~18:20`, `Track: ScalpingLogic`) (`실행: 2026-04-28 20:05 KST`)
-  - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_gemini_engine_review.md)
+  - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder_gemini_engine_review.md)
   - 판정 기준: `GEMINI_SYSTEM_INSTRUCTION_JSON_ENABLED`, `GEMINI_JSON_DETERMINISTIC_CONFIG_ENABLED`는 코드상 guard가 준비됐더라도 기본값 `OFF`를 유지한다. `main` 실전 엔진에서 이 flag를 켜려면 `BUY/WAIT/DROP`, `HOLD/TRIM/EXIT`, `condition/eod` JSON contract 유지, rollback owner, `baseline cohort / candidate live cohort / observe-only cohort / excluded cohort`, parse_fail/consecutive_failures/ai_disabled 관찰 필드가 같은 메모에 잠겨 있어야 한다.
   - why: Gemini는 현재 `main` 실전 기준 엔진이라 P1은 단순 코드 완료가 아니라 live 판정 분포를 바꾸는 canary 승인 작업이다.
   - 판정 결과: `보류 유지`
@@ -485,7 +485,7 @@
   - 다음 액션: `2026-04-29 POSTCLOSE` `[GeminiEngineCarry0429-Postclose]`에서 `main` live 승인 전제 문서화 여부와 observe-only/cohort 잠금부터 다시 본다.
 
 - [x] `[DeepSeekP1Rollout0428] remote DeepSeek context-aware backoff flag 실전 승인 판정` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 18:20~18:30`, `Track: ScalpingLogic`) (`실행: 2026-04-28 20:07 KST`)
-  - Source: [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_deepseek_engine_review.md)
+  - Source: [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder_deepseek_engine_review.md)
   - 판정 기준: `DEEPSEEK_CONTEXT_AWARE_BACKOFF_ENABLED`는 코드상 guard가 준비됐더라도 기본값 `OFF`를 유지한다. `remote` 운용에서 flag를 켜려면 `live-sensitive cap <= 0.8s`, `report/eod cap`, jitter 상한, `api_call_lock` 장기 점유 여부, retry 이후 rate-limit/log acceptance를 함께 잠가야 한다.
   - why: DeepSeek는 `remote` 운용 엔진이라 P1 잔여작업은 구현이 아니라 실제 enable 판정과 운영 acceptance다.
   - 판정 결과: `보류 유지`
@@ -496,7 +496,7 @@
   - 다음 액션: `2026-04-29 POSTCLOSE` `[DeepSeekEngineCarry0429-Postclose]`에서 `remote` live-sensitive acceptance와 lock 관찰 필드를 먼저 잠근다.
 
 - [x] `[GeminiSchema0428] Gemini JSON endpoint schema registry 적용 범위 잠금` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 18:05~18:25`, `Track: ScalpingLogic`) (`실행: 2026-04-28 20:10 KST`)
-  - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_gemini_engine_review.md)
+  - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder_gemini_engine_review.md)
   - 판정 기준: `entry_v1`, `holding_exit_v1`, `overnight_v1`, `condition_entry_v1`, `condition_exit_v1`, `eod_top5_v1` 6개 endpoint를 분리하고, `response_schema` 실패 시 기존 `json.loads/raw regex fallback` 경로로 즉시 복귀할 수 있어야 한다. `system_instruction`/deterministic JSON config flag와 schema registry를 한 change set에서 묶어 global live 전환하지 않는다.
   - why: Gemini는 `main` 실전 기준 엔진이라 범용 `_call_gemini_safe()` 한 줄 변경으로 전 경로를 동시에 바꾸면 BUY/WAIT/DROP 분포와 parse_fail 축이 함께 흔들린다.
   - 판정 결과: `보류`
@@ -507,7 +507,7 @@
   - 다음 액션: `2026-04-29 POSTCLOSE` `[GeminiEngineCarry0429-Postclose]`에서 registry 설계 범위와 fallback ownership만 먼저 문서화한다.
 
 - [x] `[GeminiSchema0428] Gemini schema/fallback 테스트 매트릭스 및 관찰 필드 잠금` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 18:25~18:40`, `Track: ScalpingLogic`) (`실행: 2026-04-28 20:12 KST`)
-  - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_gemini_engine_review.md)
+  - Source: [workorder_gemini_engine_review.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder_gemini_engine_review.md)
   - 판정 기준: 최소 `entry/holding_exit/overnight/condition_entry/condition_exit/eod_top5` 계약 테스트, `parse_fail`, `consecutive_failures`, `ai_disabled`, `gatekeeper action_label`, `submitted/full/partial` 영향 관찰 필드를 같이 고정한다. live canary를 검토하려면 `flag default OFF`, `rollback owner`, `baseline cohort / candidate live cohort / observe-only cohort / excluded cohort`가 문서에 잠겨 있어야 한다.
   - why: schema는 파싱만 바꾸는 게 아니라 장애 관측 축과 rollback 경계까지 같이 정하지 않으면 `main` live 엔진에서 원인귀속이 흐려진다.
   - 판정 결과: `보류`
@@ -518,7 +518,7 @@
   - 다음 액션: `2026-04-29 POSTCLOSE` `[GeminiEngineCarry0429-Postclose]`에서 테스트 매트릭스 초안과 관찰 필드 묶음을 문서화할지 먼저 판정한다.
 
 - [x] `[DeepSeekGatekeeper0428] DeepSeek gatekeeper structured-output option 축 판정` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: ScalpingLogic`) (`실행: 2026-04-28 20:14 KST`)
-  - Source: [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_deepseek_engine_review.md)
+  - Source: [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder_deepseek_engine_review.md)
   - 판정 기준: `generate_realtime_report()`의 사람용 text report는 유지하고, `evaluate_realtime_gatekeeper()`에만 JSON option 경로를 검토한다. `flag default OFF`, JSON 실패 시 text fallback, `action_label/allow_entry/report/selected_mode/timing` contract 유지 테스트가 없으면 착수하지 않는다.
   - why: DeepSeek는 `remote` 운용 엔진이지만, gatekeeper structured-output은 퍼블릭 contract와 캐시 테스트를 건드려 진입 판단 분포를 바꿀 수 있다.
   - 판정 결과: `미승인`
@@ -529,7 +529,7 @@
   - 다음 액션: `2026-04-29 POSTCLOSE` `[DeepSeekEngineCarry0429-Postclose]`에서 `flag-off + text fallback + contract test` 설계 메모 준비 여부만 다시 본다.
 
 - [x] `[DeepSeekHolding0428] DeepSeek holding cache bucket 조정 근거 점검` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 18:55~19:10`, `Track: Plan`) (`실행: 2026-04-28 20:16 KST`)
-  - Source: [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_deepseek_engine_review.md)
+  - Source: [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder_deepseek_engine_review.md)
   - 판정 기준: `holding cache miss 증가 -> completed_valid 품질 개선` 근거가 있는지, `partial/full`, `initial/pyramid`, `missed_upside`, `exit quality` 분리 기준에서 gain이 있는지 먼저 확인한다. 근거가 없으면 `_compact_holding_ws_for_cache()` 버킷 축소는 same-day 보류로 닫는다.
   - why: holding cache 세분화는 비용/호출량을 늘릴 수 있지만 기대값 개선이 아직 고정되지 않았다.
   - 판정 결과: `보류 유지`
@@ -540,7 +540,7 @@
   - 다음 액션: `2026-04-29 POSTCLOSE` `[DeepSeekEngineCarry0429-Postclose]`에서 hold/exit cohort 근거가 생기기 전까지 `보류 유지`를 재확인한다.
 
 - [x] `[DeepSeekTooling0428] DeepSeek Tool Calling 필요성/범위 판정` (`Due: 2026-04-28`, `Slot: POSTCLOSE`, `TimeWindow: 19:10~19:20`, `Track: Plan`) (`실행: 2026-04-28 20:18 KST`)
-  - Source: [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/workorder_deepseek_engine_review.md)
+  - Source: [workorder_deepseek_engine_review.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder_deepseek_engine_review.md)
   - 판정 기준: Tool Calling이 실제로 `JSON parse_fail`, contract drift, 운영 복잡도 감소에 기여하는지 판단하고, 아니면 설계 메모로만 남긴다. SDK/응답 schema/테스트/rollback 구조가 준비되지 않으면 구현 작업으로 승격하지 않는다.
   - why: 현재 Tool Calling은 기능 개선보다 code debt/설계 검토 성격이 강하다.
   - 판정 결과: `backlog 관찰 유지`

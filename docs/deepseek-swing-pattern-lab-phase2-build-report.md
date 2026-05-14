@@ -2,7 +2,7 @@
 
 작성일: `2026-05-09T16:33 KST`
 Owner: `SwingPatternLabDeepSeekPhase2`
-기반 문서: `docs/workorder-deepseek-swing-pattern-lab-phase2.md`
+기반 문서: `docs/archive/workorders/workorder-deepseek-swing-pattern-lab-phase2.md`
 
 ---
 

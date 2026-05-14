@@ -253,10 +253,10 @@
 - 근거: [2026-04-27-stage2-todo-checklist.md](/home/ubuntu/KORStockScan/docs/2026-04-27-stage2-todo-checklist.md)에 이미 `[LatencyOps0427] gatekeeper_fast_reuse signature/window 독립축 PREOPEN 승인 판정`이 고정돼 있고, 오늘 장후 승격 후보 최종선정과 재시각 확정이 그 항목과 일치한다.
 - 다음 액션: 없음.
 - [x] `[DashboardCoverage0424] 성능튜닝 관찰축 커버리지/진입-청산 병목 Flow DeepSeek 작업지시서 전달/착수 여부 기록` (`Due: 2026-04-24`, `Slot: POSTCLOSE`, `TimeWindow: 16:55~17:00`, `Track: Plan`) (`실행: 2026-04-24 17:42 KST`)
-  - Source: [workorder-deepseek-performance-tuning-observation-coverage.md](/home/ubuntu/KORStockScan/docs/workorder-deepseek-performance-tuning-observation-coverage.md)
+  - Source: [workorder-deepseek-performance-tuning-observation-coverage.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-deepseek-performance-tuning-observation-coverage.md)
   - 판정 기준: `performance-tuning` 탭의 `직접 표시/간접 표시/별도 리포트/수집됨-미표시/폐기-보관 후보` 축과 `진입 -> 보유 -> 청산` Flow Bottleneck Lane을 DeepSeek 구현 대상으로 전달했는지와, 실거래 로직 변경 없이 리포트/API/UI/문서만 수정하는 범위가 유지되는지 확인한다.
   - 판정: 완료. 전달/착수/결과 기록 모두 확보됐다.
-  - 근거: [workorder-deepseek-performance-tuning-observation-coverage.result.md](/home/ubuntu/KORStockScan/docs/workorder-deepseek-performance-tuning-observation-coverage.result.md)가 PASS로 닫혔고, `performance_tuning` 최신 snapshot의 `flow_bottleneck_lane`은 `pre_submit_latency=bottleneck`, 나머지 주요 노드는 `ok`로 정렬돼 있다. 작업 범위도 결과서 기준 `실거래 로직 변경 없음, 리포트/API/UI/문서만 수정`이다.
+  - 근거: [workorder-deepseek-performance-tuning-observation-coverage.result.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-deepseek-performance-tuning-observation-coverage.result.md)가 PASS로 닫혔고, `performance_tuning` 최신 snapshot의 `flow_bottleneck_lane`은 `pre_submit_latency=bottleneck`, 나머지 주요 노드는 `ok`로 정렬돼 있다. 작업 범위도 결과서 기준 `실거래 로직 변경 없음, 리포트/API/UI/문서만 수정`이다.
   - 다음 액션: 없음.
 - [x] `[OpsFollowup0424] 패턴랩 주간 cron 산출물/로그 정합성 점검` (`Due: 2026-04-24`, `Slot: POSTCLOSE`, `TimeWindow: 16:55~17:00`, `Track: Plan`) (`실행: 2026-04-24 17:42 KST`)
   - 판정 기준: `logs/claude_scalping_pattern_lab_cron.log`, `logs/gemini_scalping_pattern_lab_cron.log` 에러 없음 + 각 `outputs/` 최신 산출물 갱신 확인

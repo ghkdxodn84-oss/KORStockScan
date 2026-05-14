@@ -90,7 +90,7 @@
   - 선행 메모 (`2026-04-20 PREOPEN`): `D+2 이관 확정`. `rebase/즉시 재평가`와 독립 관찰 가능할 때만 착수
   - 폐기 사유: `fallback_scout/main`(탐색/본 주문 동시 fallback), `fallback_single`(단일 fallback), `latency fallback split-entry`(지연 상태 fallback 분할진입)는 영구 폐기되어 canary 착수/보류 판정 대상이 아니다.
 - [x] `[HoldingCtx0422] 보유 AI position_context 입력 1축 설계` (`Due: 2026-04-22`, `Slot: POSTCLOSE`, `TimeWindow: 15:40~15:50`, `Track: AIPrompt`) (`실행: 2026-04-22 16:12 KST`)
-  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/workorder-0421-tuning-plan-rebase.md)
+  - Source: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-0421-tuning-plan-rebase.md)
   - 판정 기준: 더 빠른 `holding_exit` 축에서 `profit_rate`, `peak_profit`, `drawdown_from_peak`, `held_sec`, `buy_price`, `position_size_ratio`, `position_tag`를 Gemini 보유 프롬프트 입력으로 직접 전달하는 `position_context` 스키마를 확정한다.
   - 실행 메모: 운영 비교표에는 `schema 변경 효과`, `경량 프롬프트 효과`, `position_context 입력 효과`를 별도 컬럼으로 남긴다. 04-22에는 live 완화/추가진입과 묶지 않고 설계/테스트/로그 필드 고정까지만 1축으로 처리한다.
   - 검증 원칙: shadow/counterfactual 검증은 금지한다. 실전 검증은 별도 `holding_exit position_context canary` 1축으로만 열고, 같은 날 다른 보유/청산 완화축과 병행하지 않는다.

@@ -42,7 +42,7 @@
    - 운영 규칙: `fallback_scout/main`, `fallback_single` 재개 금지. 재도입은 금지한다. 유사 패턴은 AI 생성 코드 체크게이트와 운영자 수동 승인을 통과하기 전 실전 적용할 수 없다.
 8. `2026-04-21 Plan Rebase`: 기존 튜닝 plan 개편
    - 정정 사유: 감사인이 의견을 주기에는 기존 관찰축이 `fallback` 오염과 분리되지 않았고, 진입/보유/청산 로직 간 연결이 불명확하다.
-   - 조치: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/workorder-0421-tuning-plan-rebase.md)에 따라 `진입/보유/청산 전수점검`, `fallback 오염 코호트 재집계`, `다음 튜닝포인트 1축 재선정`을 수행한다.
+   - 조치: [workorder-0421-tuning-plan-rebase.md](/home/ubuntu/KORStockScan/docs/archive/workorders/workorder-0421-tuning-plan-rebase.md)에 따라 `진입/보유/청산 전수점검`, `fallback 오염 코호트 재집계`, `다음 튜닝포인트 1축 재선정`을 수행한다.
    - 운영 규칙: 전수점검/코호트 분리 완료 전 신규 live canary 금지. 완료 후 다음 1축은 shadow 선행이 아니라 canary 즉시 적용 + 당일 rollback guard로 검증한다.
 9. `2026-04-21 10:55 KST` AI 라우팅 정렬
    - 조치: live 스캘핑 라우팅을 Gemini로 고정하고 OpenAI/Gemini A/B 및 dual-persona shadow를 보류한다.
