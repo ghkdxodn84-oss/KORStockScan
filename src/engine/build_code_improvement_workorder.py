@@ -705,6 +705,7 @@ def _panic_lifecycle_followup_orders(calibration_report: dict[str, Any]) -> list
                 ),
                 "evidence": [
                     f"panic_state={panic_sell.get('panic_state')}",
+                    f"panic_regime_mode={panic_sell.get('panic_regime_mode')}",
                     f"stop_loss_exit_count={panic_sell.get('stop_loss_exit_count')}",
                     f"confirmation_eligible_exit_count={panic_sell.get('confirmation_eligible_exit_count')}",
                     f"active_sim_probe_positions={panic_sell.get('active_sim_probe_positions')}",
@@ -760,6 +761,7 @@ def _panic_lifecycle_followup_orders(calibration_report: dict[str, Any]) -> list
                 ),
                 "evidence": [
                     f"panic_buy_state={panic_buy.get('panic_buy_state')}",
+                    f"panic_buy_regime_mode={panic_buy.get('panic_buy_regime_mode')}",
                     f"panic_buy_active_count={panic_buy.get('panic_buy_active_count')}",
                     f"exhaustion_confirmed_count={panic_buy.get('exhaustion_confirmed_count')}",
                     f"tp_counterfactual_count={panic_buy.get('tp_counterfactual_count')}",
@@ -769,13 +771,14 @@ def _panic_lifecycle_followup_orders(calibration_report: dict[str, Any]) -> list
                 ],
                 "next_postclose_metric": (
                     "panic_buying should expose runner-vs-full-TP EV, MAE/giveback/sell-failure rollback guards, "
-                    "approval artifact status, and no live TP mutation before approval."
+                    "approval artifact status, panic_buy_regime_mode owner split, and no live TP mutation before approval."
                 ),
                 "files_likely_touched": [
                     "src/engine/panic_buying_report.py",
                     "src/engine/daily_threshold_cycle_report.py",
                     "src/engine/runtime_approval_summary.py",
                     "docs/plan-korStockScanPerformanceOptimization.rebase.md",
+                    "docs/code-improvement-workorders/panic_buying_regime_mode_v2_2026-05-14.md",
                 ],
                 "acceptance_tests": [
                     "pytest src/tests/test_panic_buying_report.py",

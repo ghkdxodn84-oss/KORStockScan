@@ -3,10 +3,11 @@
 ## 판정
 
 - panic_buy_state: `NORMAL`
+- panic_buy_regime_mode: `NORMAL`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-05-14T17:12:06`
-- latest_event_at: `2026-05-14T17:12:05`
+- as_of: `2026-05-14T21:33:00`
+- latest_event_at: `2026-05-14T19:59:59`
 - reasons: `no panic buying threshold breached`
 
 ## 패닉바잉 지표

@@ -603,6 +603,65 @@ def _resolve_panic_state(
     return "PANIC_SELL", reasons
 
 
+def _panic_regime_mode(panic_state: str) -> str:
+    if panic_state == "RECOVERY_CONFIRMED":
+        return "RECOVERY_CONFIRMED"
+    if panic_state == "RECOVERY_WATCH":
+        return "STABILIZING"
+    if panic_state == "PANIC_SELL":
+        return "PANIC_DETECTED"
+    return "NORMAL"
+
+
+def _panic_regime_contract(mode: str) -> dict[str, Any]:
+    allowed_actions_by_mode = {
+        "NORMAL": ["use_existing_selected_runtime_family"],
+        "PANIC_DETECTED": [
+            "record_ai_buy_decision_only",
+            "candidate_entry_pre_submit_freeze",
+            "candidate_entry_order_cancel_design",
+            "scale_in_block_candidate",
+        ],
+        "STABILIZING": [
+            "observe_minimum_stabilization_window",
+            "observe_ofi_spread_low_retest_recovery",
+            "sim_probe_only_recovery_candidate",
+        ],
+        "RECOVERY_CONFIRMED": [
+            "postclose_partial_restore_candidate",
+            "bounded_next_preopen_review",
+        ],
+    }
+    return {
+        "metric_role": "risk_regime_state",
+        "decision_authority": "source_quality_only",
+        "window_policy": "same_day_intraday_light + postclose_attribution + next_preopen_apply",
+        "sample_floor": "panic report freshness <= 5m; microstructure breadth floor when used",
+        "primary_decision_metric": "source_quality_adjusted_avoided_loss_vs_missed_upside_ev_pct",
+        "source_quality_gate": "panic provenance + real/sim/probe split + market/breadth confirmation",
+        "runtime_effect": "report_only_no_mutation",
+        "allowed_runtime_apply": False,
+        "mode": mode,
+        "allowed_actions": allowed_actions_by_mode.get(mode, []),
+        "owner_split": {
+            "v2_0": "panic_entry_freeze_guard.entry_pre_submit_only",
+            "v2_1": "entry_order_cancel_guard.separate_workorder_required",
+            "v2_2": "holding_exit_panic_context.separate_workorder_required",
+            "v2_3": "forced_reduce_or_liquidation.separate_approval_required",
+        },
+        "forbidden_uses": [
+            "auto_sell",
+            "stop_loss_relaxation",
+            "threshold_relaxation",
+            "tp_trailing_mutation",
+            "provider_route_change",
+            "bot_restart",
+            "swing_real_order_enable",
+            "broker_order_submit_without_approval",
+        ],
+    }
+
+
 def _defense_actions(panic_state: str, panic_metrics: dict[str, Any]) -> list[dict[str, Any]]:
     actions = [
         {
@@ -706,6 +765,7 @@ def build_panic_sell_defense_report(
         microstructure_detector,
         microstructure_market_context,
     )
+    panic_regime_mode = _panic_regime_mode(panic_state)
     return {
         "schema_version": SCHEMA_VERSION,
         "report_type": "panic_sell_defense",
@@ -721,7 +781,9 @@ def build_panic_sell_defense_report(
             "forbidden_automations": FORBIDDEN_AUTOMATIONS,
         },
         "panic_state": panic_state,
+        "panic_regime_mode": panic_regime_mode,
         "panic_state_reasons": reasons,
+        "panic_regime_contract": _panic_regime_contract(panic_regime_mode),
         "panic_metrics": panic_metrics,
         "recovery_metrics": {
             "active_sim_probe": active_recovery,
@@ -765,6 +827,7 @@ def build_markdown(report: dict[str, Any]) -> str:
         "## 판정",
         "",
         f"- panic_state: `{report['panic_state']}`",
+        f"- panic_regime_mode: `{report.get('panic_regime_mode', '-')}`",
         f"- report_only: `{str(report['policy']['report_only']).lower()}`",
         f"- runtime_effect: `{report['policy']['runtime_effect']}`",
         f"- as_of: `{report['as_of']}`",

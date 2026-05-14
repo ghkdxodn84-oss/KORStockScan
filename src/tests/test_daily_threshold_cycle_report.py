@@ -386,6 +386,13 @@ def test_calibration_source_bundle_includes_panic_sell_defense(monkeypatch, tmp_
             {
                 "report_type": "panic_sell_defense",
                 "panic_state": "RECOVERY_WATCH",
+                "panic_regime_mode": "STABILIZING",
+                "panic_regime_contract": {
+                    "decision_authority": "source_quality_only",
+                    "runtime_effect": "report_only_no_mutation",
+                    "allowed_actions": ["sim_probe_only_recovery_candidate"],
+                    "forbidden_uses": ["auto_sell"],
+                },
                 "policy": {"runtime_effect": "report_only_no_mutation"},
                 "panic_metrics": {
                     "real_exit_count": 28,
@@ -449,6 +456,11 @@ def test_calibration_source_bundle_includes_panic_sell_defense(monkeypatch, tmp_
 
     assert bundle["sources"]["panic_sell_defense"]["exists"] is True
     assert metrics["panic_state"] == "RECOVERY_WATCH"
+    assert metrics["panic_regime_mode"] == "STABILIZING"
+    assert metrics["panic_regime_decision_authority"] == "source_quality_only"
+    assert metrics["panic_regime_runtime_effect"] == "report_only_no_mutation"
+    assert "sim_probe_only_recovery_candidate" in metrics["panic_regime_allowed_actions"]
+    assert "auto_sell" in metrics["panic_regime_forbidden_uses"]
     assert metrics["runtime_effect"] == "report_only_no_mutation"
     assert metrics["max_rolling_30m_stop_loss_exit_count"] == 17
     assert metrics["active_sim_probe_provenance_passed"] is True
@@ -475,6 +487,13 @@ def test_calibration_source_bundle_includes_panic_buying_read_only(monkeypatch, 
             {
                 "report_type": "panic_buying",
                 "panic_buy_state": "PANIC_BUY",
+                "panic_buy_regime_mode": "PANIC_BUY_CONTINUATION",
+                "panic_buy_regime_contract": {
+                    "decision_authority": "source_quality_only",
+                    "runtime_effect": "report_only_no_mutation",
+                    "allowed_actions": ["report_runner_hold_candidate"],
+                    "forbidden_uses": ["auto_buy", "full_market_sell"],
+                },
                 "policy": {"runtime_effect": "report_only_no_mutation"},
                 "panic_buy_metrics": {
                     "panic_buy_active_count": 2,
@@ -506,6 +525,11 @@ def test_calibration_source_bundle_includes_panic_buying_read_only(monkeypatch, 
 
     assert bundle["sources"]["panic_buying"]["exists"] is True
     assert metrics["panic_buy_state"] == "PANIC_BUY"
+    assert metrics["panic_buy_regime_mode"] == "PANIC_BUY_CONTINUATION"
+    assert metrics["panic_buy_regime_decision_authority"] == "source_quality_only"
+    assert metrics["panic_buy_regime_runtime_effect"] == "report_only_no_mutation"
+    assert "report_runner_hold_candidate" in metrics["panic_buy_regime_allowed_actions"]
+    assert "full_market_sell" in metrics["panic_buy_regime_forbidden_uses"]
     assert metrics["runtime_effect"] == "report_only_no_mutation"
     assert metrics["panic_buy_active_count"] == 2
     assert metrics["max_panic_buy_score"] == 0.88

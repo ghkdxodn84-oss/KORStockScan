@@ -3,10 +3,11 @@
 ## 판정
 
 - panic_state: `NORMAL`
+- panic_regime_mode: `NORMAL`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-05-14T17:11:49`
-- latest_event_at: `2026-05-14T17:11:49`
+- as_of: `2026-05-14T21:16:05`
+- latest_event_at: `2026-05-14T19:59:59`
 - reasons: `panic thresholds not breached`
 
 ## 패닉 지표

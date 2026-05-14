@@ -3,7 +3,7 @@
 ## 목적
 
 - `panic_sell_defense` V2 1차 runtime 전환 후보를 `panic_entry_freeze_guard`로 고정한다.
-- 목표는 패닉셀 구간에서 신규 long 진입을 방어적으로 줄여 손실을 최소화하는 것이다.
+- 목표는 패닉셀 구간에서 신규 위험 증가를 제한하고, avoided loss와 missed upside를 분리 attribution해 기대값/순이익을 개선하는 것이다.
 - 기존 보유 청산, hard/protect/emergency stop, stop-loss threshold, 자동매도, bot restart는 변경하지 않는다.
 
 ## 판정
@@ -15,6 +15,19 @@
 - `allowed_runtime_apply`: `false` until approval artifact and implementation tests exist
 - 우선 적용 대상: scalping 신규 BUY 및 recovery/probe 신규 진입 후보
 - 스윙 적용: V2.1 이후 별도 `swing_panic_entry_freeze_guard`로 분리 검토한다. 현재 스윙은 `panic_context`를 source/approval 입력으로만 읽고, 단독 gate 완화/차단/실주문 전환 권한은 없다.
+
+## Panic Lifecycle Mode Policy
+
+`panic_sell_defense`는 매매 로직을 즉시 대체하는 alpha signal이 아니라 risk-regime source다. mode 해석은 아래처럼 둔다.
+
+| mode | 입력 | 허용 행동 | 금지선 |
+| --- | --- | --- | --- |
+| `NORMAL` | `panic_state=NORMAL` | 기존 selected family 유지 | 없음 |
+| `PANIC_DETECTED` | `PANIC_SELL`, confirmed risk-off, stop-loss cluster | 신규 BUY pre-submit freeze 후보, 미체결 진입 주문 cancel 후보, scale-in 금지 후보 | 자동 전량 청산, stop-loss 완화, threshold 완화 |
+| `STABILIZING` | `RECOVERY_WATCH`, OFI/스프레드/저점 재이탈 실패 관찰 | sim/probe 기반 회복 관찰과 missed upside attribution | 정상 수량 즉시 복구, approval 없는 실주문 탐색 |
+| `RECOVERY_CONFIRMED` | `RECOVERY_CONFIRMED`, 2~3회 회복 evidence | 일부 복구 후보를 장후 attribution에 기록 | 다음 장전 bounded guard 전 broker order 제출 |
+
+V2 roadmap은 owner를 분리한다. V2.0은 이 문서의 `panic_entry_freeze_guard`로 scalping 신규 BUY pre-submit 차단만 다룬다. V2.1 미체결 진입 주문 cancel guard, V2.2 holding/exit `panic_context`, V2.3 강제 축소/청산 guard는 별도 workorder와 approval artifact가 필요하며 V2.0 승인으로 자동 적용하지 않는다.
 
 ## Approval Artifact
 

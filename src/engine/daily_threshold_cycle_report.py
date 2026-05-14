@@ -920,6 +920,11 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     classification = classification if isinstance(classification, dict) else {}
     panic_metrics = panic_sell_defense.get("panic_metrics") if isinstance(panic_sell_defense, dict) else {}
     panic_metrics = panic_metrics if isinstance(panic_metrics, dict) else {}
+    panic_regime_contract = (
+        panic_sell_defense.get("panic_regime_contract")
+        if isinstance(panic_sell_defense.get("panic_regime_contract"), dict)
+        else {}
+    )
     recovery_metrics = panic_sell_defense.get("recovery_metrics") if isinstance(panic_sell_defense, dict) else {}
     recovery_metrics = recovery_metrics if isinstance(recovery_metrics, dict) else {}
     active_recovery = (
@@ -1050,6 +1055,9 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             "submitted_to_budget_unique_pct": _safe_float(buy_ratios.get("submitted_to_budget_unique_pct"), None),
             "submitted_to_ai_unique_pct": _safe_float(buy_ratios.get("submitted_to_ai_unique_pct"), None),
             "panic_state": panic_sell_defense.get("panic_state") if isinstance(panic_sell_defense, dict) else None,
+            "panic_regime_mode": panic_sell_defense.get("panic_regime_mode")
+            if isinstance(panic_sell_defense, dict)
+            else None,
             "panic_detected": bool(panic_metrics.get("panic_detected")),
             "panic_by_stop_loss_count": bool(panic_metrics.get("panic_by_stop_loss_count")),
             "panic_stop_loss_exit_count": _safe_int(panic_metrics.get("stop_loss_exit_count"), 0) or 0,
@@ -1236,6 +1244,21 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         },
         "panic_sell_defense": {
             "panic_state": panic_sell_defense.get("panic_state") if isinstance(panic_sell_defense, dict) else None,
+            "panic_regime_mode": panic_sell_defense.get("panic_regime_mode")
+            if isinstance(panic_sell_defense, dict)
+            else None,
+            "panic_regime_decision_authority": panic_regime_contract.get("decision_authority"),
+            "panic_regime_runtime_effect": panic_regime_contract.get("runtime_effect"),
+            "panic_regime_allowed_actions": [
+                str(item) for item in panic_regime_contract.get("allowed_actions", []) if str(item)
+            ]
+            if isinstance(panic_regime_contract.get("allowed_actions"), list)
+            else [],
+            "panic_regime_forbidden_uses": [
+                str(item) for item in panic_regime_contract.get("forbidden_uses", []) if str(item)
+            ]
+            if isinstance(panic_regime_contract.get("forbidden_uses"), list)
+            else [],
             "runtime_effect": (
                 (panic_sell_defense.get("policy") or {}).get("runtime_effect")
                 if isinstance(panic_sell_defense.get("policy"), dict)
@@ -1326,6 +1349,29 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         },
         "panic_buying": {
             "panic_buy_state": panic_buying.get("panic_buy_state") if isinstance(panic_buying, dict) else None,
+            "panic_buy_regime_mode": (
+                panic_buying.get("panic_buy_regime_mode") if isinstance(panic_buying, dict) else None
+            ),
+            "panic_buy_regime_decision_authority": (
+                (panic_buying.get("panic_buy_regime_contract") or {}).get("decision_authority")
+                if isinstance(panic_buying.get("panic_buy_regime_contract"), dict)
+                else None
+            ),
+            "panic_buy_regime_runtime_effect": (
+                (panic_buying.get("panic_buy_regime_contract") or {}).get("runtime_effect")
+                if isinstance(panic_buying.get("panic_buy_regime_contract"), dict)
+                else None
+            ),
+            "panic_buy_regime_allowed_actions": (
+                (panic_buying.get("panic_buy_regime_contract") or {}).get("allowed_actions")
+                if isinstance(panic_buying.get("panic_buy_regime_contract"), dict)
+                else []
+            ),
+            "panic_buy_regime_forbidden_uses": (
+                (panic_buying.get("panic_buy_regime_contract") or {}).get("forbidden_uses")
+                if isinstance(panic_buying.get("panic_buy_regime_contract"), dict)
+                else []
+            ),
             "runtime_effect": (
                 (panic_buying.get("policy") or {}).get("runtime_effect")
                 if isinstance(panic_buying.get("policy"), dict)

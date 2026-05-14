@@ -396,6 +396,7 @@ def test_build_code_improvement_workorder_adds_panic_lifecycle_orders(tmp_path, 
                     "source_metrics": {
                         "panic_sell_defense": {
                             "panic_state": "PANIC_SELL",
+                            "panic_regime_mode": "PANIC_DETECTED",
                             "runtime_effect": "report_only_no_mutation",
                             "stop_loss_exit_count": 3,
                             "confirmation_eligible_exit_count": 2,
@@ -409,6 +410,7 @@ def test_build_code_improvement_workorder_adds_panic_lifecycle_orders(tmp_path, 
                         },
                         "panic_buying": {
                             "panic_buy_state": "PANIC_BUY",
+                            "panic_buy_regime_mode": "PANIC_BUY_CONTINUATION",
                             "runtime_effect": "report_only_no_mutation",
                             "panic_buy_active_count": 1,
                             "tp_counterfactual_count": 4,
@@ -445,6 +447,10 @@ def test_build_code_improvement_workorder_adds_panic_lifecycle_orders(tmp_path, 
     )
     assert any("market_breadth_followup_candidate=True" in item for item in panic_order["evidence"])
     assert any("source_quality_blockers=['market_regime_not_risk_off']" in item for item in panic_order["evidence"])
+    panic_buy_order = next(
+        item for item in report["orders"] if item["order_id"] == "order_panic_buy_runner_tp_canary_lifecycle_pack"
+    )
+    assert any("panic_buy_regime_mode=PANIC_BUY_CONTINUATION" in item for item in panic_buy_order["evidence"])
     markdown = (doc_dir / "code_improvement_workorder_2026-05-13.md").read_text(encoding="utf-8")
     assert "panic_buy_runner_tp_canary" in markdown
     assert "threshold_cycle_calibration" in markdown

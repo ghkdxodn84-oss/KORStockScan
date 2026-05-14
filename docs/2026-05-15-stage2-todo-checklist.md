@@ -13,6 +13,7 @@
 - provider transport/provenance 확인은 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경과 분리한다.
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality와 threshold 개선 입력이며, 실주문 전환·broker execution 품질 근거가 아니다.
 - 실계좌 주문가능금액, real order guard, approval artifact 부재는 sim/probe 후보 생성 제외 사유가 아니다. 단, provenance는 real/sim/combined를 분리한다.
+- `panic_regime_mode`와 `panic_buy_regime_mode`는 report/approval source이며, approval artifact와 rollback guard 없이 신규 BUY 차단, 미체결 주문 취소, holding/exit 강제 변경, 자동매도, TP/trailing 변경, 추격매수 차단, 시장가 전량청산에 직접 쓰지 않는다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
@@ -93,6 +94,12 @@
   - 판정 기준: 개입사항을 `승인 artifact 필요`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`으로 분류한다.
   - 금지: 자동화 산출물에 있는 요청을 답변에만 남기고 checklist/Project 대상에서 누락하지 않는다.
   - 다음 액션: 누락된 항목이 있으면 다음 영업일 checklist에 parser-friendly checkbox로 추가한다.
+
+- [ ] `[PanicLifecycleModePolicyReview0515] 패닉셀/패닉바잉 mode policy와 V2 owner 분리 확인` (`Due: 2026-05-15`, `Slot: POSTCLOSE`, `TimeWindow: 17:25~17:40`, `Track: RuntimeStability`)
+  - Source: [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md), [panic_entry_freeze_guard_v2_2026-05-13.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/panic_entry_freeze_guard_v2_2026-05-13.md), [panic_buying_regime_mode_v2_2026-05-14.md](/home/ubuntu/KORStockScan/docs/code-improvement-workorders/panic_buying_regime_mode_v2_2026-05-14.md), [panic_sell_defense_2026-05-14.json](/home/ubuntu/KORStockScan/data/report/panic_sell_defense/panic_sell_defense_2026-05-14.json), [panic_buying_2026-05-14.json](/home/ubuntu/KORStockScan/data/report/panic_buying/panic_buying_2026-05-14.json), [runtime_approval_summary_2026-05-14.json](/home/ubuntu/KORStockScan/data/report/runtime_approval_summary/runtime_approval_summary_2026-05-14.json)
+  - 판정 기준: `panic_regime_mode=NORMAL|PANIC_DETECTED|STABILIZING|RECOVERY_CONFIRMED`와 `panic_buy_regime_mode=NORMAL|PANIC_BUY_DETECTED|PANIC_BUY_CONTINUATION|PANIC_BUY_EXHAUSTION|COOLDOWN` 해석이 report-only/source-quality 계약으로 유지되는지 확인한다. 패닉셀 V2.0 `panic_entry_freeze_guard`, V2.1 미체결 진입 주문 cancel, V2.2 holding/exit context, V2.3 강제 축소/청산과 패닉바잉 V2.0 `panic_buy_runner_tp_canary`, V2.1 추격매수 차단, V2.2 continuation trailing, V2.3 exhaustion cleanup, V2.4 cooldown reentry guard owner를 섞지 않는다.
+  - 금지: approval artifact, env key, rollback guard, same-stage owner rule 없이 신규 BUY 차단, 주문 취소, 자동매도, 시장가 전량청산, stop/TP/trailing/threshold/provider/bot restart 변경을 수행하지 않는다.
+  - 다음 액션: `hold_report_only`, `open_panic_sell_v2_0_approval_contract`, `open_panic_buy_runner_tp_approval_contract`, `open_panic_buy_chase_freeze_design`, `defer_false_positive`, `source_quality_blocker` 중 하나 이상으로 닫는다.
 
 - [ ] `[ShadowCanaryCohortReview0515] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-15`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)

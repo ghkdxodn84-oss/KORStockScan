@@ -102,8 +102,11 @@ def test_normal_state_without_panic_threshold(monkeypatch, tmp_path):
     )
 
     assert report["panic_state"] == "NORMAL"
+    assert report["panic_regime_mode"] == "NORMAL"
     assert report["policy"]["runtime_effect"] == "report_only_no_mutation"
     assert report["panic_metrics"]["panic_detected"] is False
+    assert report["panic_regime_contract"]["decision_authority"] == "source_quality_only"
+    assert report["panic_regime_contract"]["allowed_runtime_apply"] is False
 
 
 def test_panic_sell_state_from_five_stop_losses_in_30_minutes(monkeypatch, tmp_path):
@@ -116,8 +119,11 @@ def test_panic_sell_state_from_five_stop_losses_in_30_minutes(monkeypatch, tmp_p
     )
 
     assert report["panic_state"] == "PANIC_SELL"
+    assert report["panic_regime_mode"] == "PANIC_DETECTED"
     assert report["panic_metrics"]["current_30m_stop_loss_exit_count"] == 5
     assert report["panic_metrics"]["panic_by_stop_loss_count"] is True
+    assert "candidate_entry_pre_submit_freeze" in report["panic_regime_contract"]["allowed_actions"]
+    assert "auto_sell" in report["panic_regime_contract"]["forbidden_uses"]
     freeze = next(item for item in report["canary_candidates"] if item["family"] == "panic_entry_freeze_guard")
     assert freeze["status"] == "report_only_candidate"
     assert freeze["allowed_runtime_apply"] is False
@@ -234,6 +240,7 @@ def test_recovery_watch_uses_active_sim_probe_average(monkeypatch, tmp_path):
     )
 
     assert report["panic_state"] == "RECOVERY_WATCH"
+    assert report["panic_regime_mode"] == "STABILIZING"
     active = report["recovery_metrics"]["active_sim_probe"]
     assert active["avg_unrealized_profit_rate_pct"] == 0.55
     assert active["win_rate_pct"] == 50.0
@@ -281,6 +288,7 @@ def test_recovery_confirmed_keeps_probe_report_only_and_broker_forbidden(monkeyp
     )
 
     assert report["panic_state"] == "RECOVERY_CONFIRMED"
+    assert report["panic_regime_mode"] == "RECOVERY_CONFIRMED"
     rebound = next(item for item in report["canary_candidates"] if item["family"] == "panic_rebound_probe")
     assert rebound["status"] == "report_only_candidate"
     assert rebound["allowed_runtime_apply"] is False

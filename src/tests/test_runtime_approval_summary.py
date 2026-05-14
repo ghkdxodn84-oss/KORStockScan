@@ -139,6 +139,9 @@ def test_runtime_approval_summary_surfaces_panic_approval_requests(tmp_path, mon
                         "panic_sell_defense": {
                             "runtime_effect": "report_only_no_mutation",
                             "panic_state": "PANIC_SELL",
+                            "panic_regime_mode": "PANIC_DETECTED",
+                            "panic_regime_decision_authority": "source_quality_only",
+                            "panic_regime_runtime_effect": "report_only_no_mutation",
                             "stop_loss_exit_count": 2,
                             "confirmation_eligible_exit_count": 1,
                             "microstructure_max_panic_score": 0.91,
@@ -147,6 +150,9 @@ def test_runtime_approval_summary_surfaces_panic_approval_requests(tmp_path, mon
                         "panic_buying": {
                             "runtime_effect": "report_only_no_mutation",
                             "panic_buy_state": "PANIC_BUY",
+                            "panic_buy_regime_mode": "PANIC_BUY_CONTINUATION",
+                            "panic_buy_regime_decision_authority": "source_quality_only",
+                            "panic_buy_regime_runtime_effect": "report_only_no_mutation",
                             "panic_buy_active_count": 1,
                             "tp_counterfactual_count": 3,
                             "trailing_winner_count": 1,
@@ -184,6 +190,12 @@ def test_runtime_approval_summary_surfaces_panic_approval_requests(tmp_path, mon
     }
     assert all(row["state"] == "approval_required" for row in report["panic"])
     assert all(row["selected_auto_bounded_live"] is False for row in report["panic"])
+    panic_sell = next(row for row in report["panic"] if row["family"] == "panic_sell_defense")
+    assert panic_sell["panic_regime_mode"] == "PANIC_DETECTED"
+    assert panic_sell["panic_regime_decision_authority"] == "source_quality_only"
+    panic_buy = next(row for row in report["panic"] if row["family"] == "panic_buy_runner_tp_canary")
+    assert panic_buy["panic_buy_regime_mode"] == "PANIC_BUY_CONTINUATION"
+    assert panic_buy["panic_buy_regime_decision_authority"] == "source_quality_only"
     markdown = (out_dir / "runtime_approval_summary_2026-05-13.md").read_text(encoding="utf-8")
     assert "## Panic" in markdown
     assert "panic_buy_runner_tp_canary" in markdown

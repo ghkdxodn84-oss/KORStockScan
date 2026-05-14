@@ -69,6 +69,9 @@ def test_normal_state_without_panic_buying_threshold(monkeypatch, tmp_path):
     )
 
     assert report["panic_buy_state"] == "NORMAL"
+    assert report["panic_buy_regime_mode"] == "NORMAL"
+    assert report["panic_buy_regime_contract"]["decision_authority"] == "source_quality_only"
+    assert report["panic_buy_regime_contract"]["runtime_effect"] == "report_only_no_mutation"
     assert report["policy"]["runtime_effect"] == "report_only_no_mutation"
     assert report["panic_buy_metrics"]["panic_buy_active_count"] == 0
 
@@ -134,7 +137,11 @@ def test_microstructure_detector_adds_report_only_runner_flags(monkeypatch, tmp_
 
     micro = report["microstructure_detector"]
     assert report["panic_buy_state"] == "PANIC_BUY"
+    assert report["panic_buy_regime_mode"] == "PANIC_BUY_CONTINUATION"
     assert report["policy"]["runtime_effect"] == "report_only_no_mutation"
+    assert "report_runner_hold_candidate" in report["panic_buy_regime_contract"]["allowed_actions"]
+    assert "auto_buy" in report["panic_buy_regime_contract"]["forbidden_uses"]
+    assert "full_market_sell" in report["panic_buy_regime_contract"]["forbidden_uses"]
     assert micro["panic_buy_active_count"] == 1
     assert micro["allow_tp_override_count"] == 1
     assert micro["allow_runner_count"] == 1
@@ -176,6 +183,29 @@ def test_tp_counterfactual_does_not_create_order_decision(monkeypatch, tmp_path)
     assert tp["policy"]["runtime_effect"] == "counterfactual_only_no_order_change"
     assert report["canary_candidates"][0]["family"] == "panic_buy_runner_tp_canary"
     assert report["canary_candidates"][0]["allowed_runtime_apply"] is False
+
+
+def test_panic_buy_regime_mode_maps_exhaustion_and_cooldown():
+    assert report_mod._panic_buy_regime_mode(
+        "EXHAUSTION_WATCH",
+        {"force_exit_runner_count": 0, "allow_runner_count": 0, "latest_signals": []},
+    ) == "PANIC_BUY_EXHAUSTION"
+    assert report_mod._panic_buy_regime_mode(
+        "BUYING_EXHAUSTED",
+        {
+            "force_exit_runner_count": 1,
+            "allow_runner_count": 0,
+            "latest_signals": [{"internal_state": "BUYING_EXHAUSTED"}],
+        },
+    ) == "PANIC_BUY_EXHAUSTION"
+    assert report_mod._panic_buy_regime_mode(
+        "BUYING_EXHAUSTED",
+        {
+            "force_exit_runner_count": 0,
+            "allow_runner_count": 0,
+            "latest_signals": [{"internal_state": "COOLDOWN"}],
+        },
+    ) == "COOLDOWN"
 
 
 def test_tp_counterfactual_propagates_non_real_sibling_to_sparse_exit(monkeypatch, tmp_path):

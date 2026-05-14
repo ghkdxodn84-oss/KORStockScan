@@ -288,6 +288,84 @@ def _resolve_panic_buy_state(micro: dict[str, Any]) -> tuple[str, list[str]]:
     return "NORMAL", ["no panic buying threshold breached"]
 
 
+def _latest_internal_states(micro: dict[str, Any]) -> set[str]:
+    signals = micro.get("latest_signals") if isinstance(micro.get("latest_signals"), list) else []
+    return {
+        _safe_str(item.get("internal_state"))
+        for item in signals
+        if isinstance(item, dict) and _safe_str(item.get("internal_state"))
+    }
+
+
+def _panic_buy_regime_mode(panic_buy_state: str, micro: dict[str, Any]) -> str:
+    internal_states = _latest_internal_states(micro)
+    force_exit_runner_count = _safe_int(micro.get("force_exit_runner_count"), 0)
+    allow_runner_count = _safe_int(micro.get("allow_runner_count"), 0)
+    if "COOLDOWN" in internal_states:
+        return "COOLDOWN"
+    if panic_buy_state in {"BUYING_EXHAUSTED", "EXHAUSTION_WATCH"} or force_exit_runner_count > 0:
+        return "PANIC_BUY_EXHAUSTION"
+    if panic_buy_state == "PANIC_BUY" and allow_runner_count > 0:
+        return "PANIC_BUY_CONTINUATION"
+    if panic_buy_state in {"PANIC_BUY", "PANIC_BUY_WATCH"}:
+        return "PANIC_BUY_DETECTED"
+    return "NORMAL"
+
+
+def _panic_buy_regime_contract(mode: str) -> dict[str, Any]:
+    actions_by_mode = {
+        "NORMAL": ["regular_entry_exit_at_existing_runtime_policy", "fixed_tp_allowed_by_existing_policy"],
+        "PANIC_BUY_DETECTED": [
+            "report_chase_entry_freeze_candidate",
+            "report_partial_tp_runner_candidate",
+            "block_only_after_future_approval_artifact",
+        ],
+        "PANIC_BUY_CONTINUATION": [
+            "report_runner_hold_candidate",
+            "report_volatility_adjusted_trailing_width_candidate",
+            "future_entry_only_pullback_or_rebreak_candidate",
+        ],
+        "PANIC_BUY_EXHAUSTION": [
+            "report_runner_cleanup_or_tight_trailing_candidate",
+            "report_new_entry_freeze_candidate",
+        ],
+        "COOLDOWN": [
+            "report_reentry_cooldown_candidate",
+            "watch_excessive_pullback_counterfactual",
+        ],
+    }
+    return {
+        "metric_role": "risk_regime_state",
+        "decision_authority": "source_quality_only",
+        "window_policy": "same_day_intraday_light + postclose_attribution + next_preopen_apply",
+        "sample_floor": "panic buying report freshness <= 2m intraday or postclose regenerated source bundle",
+        "primary_decision_metric": "source_quality_adjusted_runner_vs_fixed_tp_ev_pct",
+        "source_quality_gate": "panic buying detector confidence + real/sim/probe split + TP counterfactual provenance",
+        "runtime_effect": "report_only_no_mutation",
+        "allowed_runtime_apply": False,
+        "mode": mode,
+        "allowed_actions": actions_by_mode.get(mode, actions_by_mode["NORMAL"]),
+        "owner_split": {
+            "V2.0": "panic_buy_runner_tp_canary_existing_position_tp_only",
+            "V2.1": "panic_buy_chase_entry_freeze",
+            "V2.2": "panic_buy_continuation_trailing_width",
+            "V2.3": "panic_buy_exhaustion_runner_cleanup",
+            "V2.4": "panic_buy_cooldown_reentry_guard",
+        },
+        "forbidden_uses": [
+            "auto_buy",
+            "chase_entry_without_pullback_rebreak_guard",
+            "full_market_sell",
+            "take_profit_policy_change_without_approval",
+            "trailing_policy_change_without_approval",
+            "hard_protect_emergency_override",
+            "provider_route_change",
+            "bot_restart",
+            "broker_order_submit_without_approval",
+        ],
+    }
+
+
 def _panic_buy_metrics(micro: dict[str, Any]) -> dict[str, Any]:
     metrics = micro.get("metrics") if isinstance(micro.get("metrics"), dict) else {}
     return {
@@ -317,6 +395,7 @@ def _exhaustion_metrics(micro: dict[str, Any]) -> dict[str, Any]:
 
 def _canary_candidates(
     panic_buy_state: str,
+    panic_buy_regime_mode: str,
     panic_metrics: dict[str, Any],
     exhaustion_metrics: dict[str, Any],
     tp_counterfactual: dict[str, Any],
@@ -340,6 +419,7 @@ def _canary_candidates(
             ),
             "source_metrics": {
                 "panic_buy_state": panic_buy_state,
+                "panic_buy_regime_mode": panic_buy_regime_mode,
                 "panic_buy_active_count": active,
                 "exhaustion_confirmed_count": _safe_int(exhaustion_metrics.get("exhaustion_confirmed_count"), 0),
                 "tp_counterfactual_count": tp_context,
@@ -362,6 +442,7 @@ def build_panic_buying_report(
         as_of = datetime.now()
     micro = summarize_microstructure_detector_from_events(events, as_of=as_of)
     panic_buy_state, reasons = _resolve_panic_buy_state(micro)
+    panic_buy_regime_mode = _panic_buy_regime_mode(panic_buy_state, micro)
     panic_metrics = _panic_buy_metrics(micro)
     exhaustion = _exhaustion_metrics(micro)
     tp_counterfactual = _summarize_tp_counterfactual(events)
@@ -380,12 +461,20 @@ def build_panic_buying_report(
             "forbidden_automations": FORBIDDEN_AUTOMATIONS,
         },
         "panic_buy_state": panic_buy_state,
+        "panic_buy_regime_mode": panic_buy_regime_mode,
+        "panic_buy_regime_contract": _panic_buy_regime_contract(panic_buy_regime_mode),
         "panic_buy_state_reasons": reasons,
         "panic_buy_metrics": panic_metrics,
         "exhaustion_metrics": exhaustion,
         "microstructure_detector": micro,
         "tp_counterfactual_summary": tp_counterfactual,
-        "canary_candidates": _canary_candidates(panic_buy_state, panic_metrics, exhaustion, tp_counterfactual),
+        "canary_candidates": _canary_candidates(
+            panic_buy_state,
+            panic_buy_regime_mode,
+            panic_metrics,
+            exhaustion,
+            tp_counterfactual,
+        ),
         "source_summary": _load_source_summary(target_date),
         "qna_policy": {
             "should_change_take_profit_now": "no; report-only until separate approval artifact and rollback guard exist",
@@ -415,6 +504,7 @@ def build_markdown(report: dict[str, Any]) -> str:
         "## 판정",
         "",
         f"- panic_buy_state: `{report['panic_buy_state']}`",
+        f"- panic_buy_regime_mode: `{report.get('panic_buy_regime_mode', '-')}`",
         f"- report_only: `{str(report['policy']['report_only']).lower()}`",
         f"- runtime_effect: `{report['policy']['runtime_effect']}`",
         f"- as_of: `{report['as_of']}`",

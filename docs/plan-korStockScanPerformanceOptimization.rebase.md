@@ -46,6 +46,7 @@
 | `active_unrealized` | open sim/probe/position context | closed EV와 합산 금지 |
 | `execution_quality_real_only` | real broker execution/receipt 품질 | sim/probe로 대체 금지 |
 | `sim_probe_ev` | sim/probe equal-weight 기대값 관찰 | 실주문 전환 근거로 단독 사용 금지 |
+| `risk_regime_state` | 패닉/시장상태처럼 매매 가능 행동의 범위를 해석하는 상태값 | approval artifact와 rollback guard 없이 주문, 청산, threshold, provider, bot 상태를 직접 변경 금지 |
 
 ## 3. 튜닝 원칙
 
@@ -140,7 +141,7 @@
 | entry price quality | P1/P2 price resolver, passive probe lifecycle, submit revalidation block | `pre_submit_price_guard` family와 daily EV attribution |
 | holding/exit | `soft_stop_micro_grace`, selected `soft_stop_whipsaw_confirmation`, `holding_flow_override` | HOLD/EXIT Sentinel, post-sell feedback, threshold-cycle EV |
 | position sizing | scale-in resolver/dynamic qty safety, 1주 cap default ON. 동적수량 산식 튜닝 owner는 `position_sizing_dynamic_formula`, cap 해제 승인 owner는 `position_sizing_cap_release`로 분리 | 산식 변경은 `notional_weighted_ev_pct` 또는 `source_quality_adjusted_ev_pct` 기준으로 별도 검토하고, 실주문 수량 확대는 approval request 기준 충족 시 사용자 승인 요청 |
-| panic lifecycle | `panic_sell_defense`, `panic_buying` report-only source bundle | code-improvement workorder와 approval summary는 `runtime_effect=false` 또는 `approval_required`로만 생성 |
+| panic lifecycle | `panic_sell_defense`, `panic_buying` report-only source bundle. `panic_regime_mode`는 `NORMAL -> PANIC_DETECTED -> STABILIZING -> RECOVERY_CONFIRMED` risk-regime 해석 계층이며, V2.0 runtime 후보는 scalping `entry_pre_submit` 전용 `panic_entry_freeze_guard`다. `panic_buy_regime_mode`는 `NORMAL -> PANIC_BUY_DETECTED -> PANIC_BUY_CONTINUATION -> PANIC_BUY_EXHAUSTION -> COOLDOWN` risk-regime 해석 계층이며, V2.0 후보는 기존 보유분 TP/runner 전용 `panic_buy_runner_tp_canary`다 | code-improvement workorder와 approval summary는 `runtime_effect=false` 또는 `approval_required`로만 생성. 패닉셀 미체결 주문 cancel, holding/exit context, 강제 축소/청산과 패닉바잉 추격매수 차단, continuation trailing, exhaustion cleanup, cooldown reentry guard는 별도 owner/approval/rollback guard 없이는 열지 않는다 |
 | swing lifecycle | swing dry-run recommendation, audit, AI review, improvement automation, runtime approval | approval artifact 없으면 env apply/real order 금지 |
 | AI transport | OpenAI Responses WS provenance | transport incident와 strategy threshold 효과를 분리 |
 | system health | System Error Detector, postclose verification, wrapper `[START]/[DONE]/[FAIL]` marker | operational incident/playbook과 strategy tuning을 분리 |
