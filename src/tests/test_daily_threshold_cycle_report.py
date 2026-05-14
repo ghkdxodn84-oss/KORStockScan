@@ -1502,6 +1502,115 @@ def test_position_sizing_cap_release_generates_manual_approval_candidate():
     assert candidate["allowed_runtime_apply"] is False
 
 
+def test_position_sizing_dynamic_formula_enters_report_only_chain():
+    pipeline_rows = []
+    for record_id in range(1, 36):
+        pipeline_rows.append(
+            {
+                "stage": "budget_pass",
+                "record_id": record_id,
+                "fields": {
+                    "score": "82",
+                    "strategy": "SCALPING",
+                    "volatility_bucket": "mid",
+                    "liquidity_value": "850000000",
+                    "liquidity_bucket": "high",
+                    "spread_bps": "18.5",
+                    "price_band": "10000_30000",
+                    "recent_loss_bucket": "none",
+                    "portfolio_exposure_bucket": "low",
+                    "baseline_qty": "3",
+                    "candidate_qty": "2",
+                    "actual_order_submitted": "true",
+                },
+            }
+        )
+    pipeline_rows.append(
+        {
+            "stage": "scalp_sim_buy_order_assumed_filled",
+            "record_id": "SIM-1",
+            "fields": {
+                "qty_source": "sim_virtual_budget_dynamic_formula",
+                "actual_order_submitted": "false",
+                "budget_authority": "sim_virtual_not_real_orderable_amount",
+            },
+        }
+    )
+    completed_rows = [
+        {"profit_rate": 0.4, "strategy": "SCALPING", "buy_price": 10000, "buy_qty": 2}
+        for _ in range(20)
+    ] + [
+        {"profit_rate": -0.2, "strategy": "SCALPING", "buy_price": 20000, "buy_qty": 1}
+        for _ in range(15)
+    ]
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-14",
+        pipeline_loader=lambda target_date: pipeline_rows,
+        completed_rows_loader=lambda start_date, end_date: completed_rows,
+        skip_completed_rows=False,
+    )
+
+    family = report["threshold_snapshot"]["position_sizing_dynamic_formula"]
+    assert family["apply_mode"] == "report_only_design"
+    assert family["apply_ready"] is True
+    assert family["sample"]["real_completed_valid"] == 35
+    assert family["sample"]["source_quality_passed"] is True
+    assert family["sample"]["notional_weighted_ev_pct"] is not None
+    assert family["sample"]["qty_source_counts"]["sim_virtual_budget_dynamic_formula"] == 1
+
+    candidate = next(
+        item for item in report["calibration_candidates"] if item["family"] == "position_sizing_dynamic_formula"
+    )
+    assert candidate["calibration_state"] == "hold"
+    assert candidate["apply_mode"] == "report_only_calibration"
+    assert candidate["allowed_runtime_apply"] is False
+    assert candidate["human_approval_required"] is True
+    assert candidate["target_env_keys"] == []
+
+
+def test_position_sizing_dynamic_formula_does_not_use_sim_as_real_floor():
+    pipeline_rows = [
+        {
+            "stage": "scalp_sim_buy_order_assumed_filled",
+            "record_id": f"SIM-{idx}",
+            "fields": {
+                "score": "88",
+                "strategy": "SCALPING",
+                "volatility_bucket": "mid",
+                "liquidity_value": "850000000",
+                "spread_bps": "18.5",
+                "price_band": "10000_30000",
+                "recent_loss_bucket": "none",
+                "portfolio_exposure_bucket": "low",
+                "qty_source": "sim_virtual_budget_dynamic_formula",
+                "actual_order_submitted": "false",
+                "budget_authority": "sim_virtual_not_real_orderable_amount",
+            },
+        }
+        for idx in range(40)
+    ]
+
+    report = report_mod.build_daily_threshold_cycle_report(
+        "2026-05-14",
+        pipeline_loader=lambda target_date: pipeline_rows,
+        completed_rows_loader=lambda start_date, end_date: [],
+        skip_completed_rows=False,
+    )
+
+    family = report["threshold_snapshot"]["position_sizing_dynamic_formula"]
+    assert family["sample"]["real_completed_valid"] == 0
+    assert family["sample"]["sim_probe_sizing_event_count"] == 40
+    assert family["apply_ready"] is False
+
+    candidate = next(
+        item for item in report["calibration_candidates"] if item["family"] == "position_sizing_dynamic_formula"
+    )
+    assert candidate["calibration_state"] == "hold_sample"
+    assert candidate["sample_floor_status"] == "hold_sample"
+    assert candidate["allowed_runtime_apply"] is False
+
+
 def test_position_sizing_cap_release_uses_tradeoff_not_all_metric_gates():
     pipeline_rows = []
     for record_id in range(1, 16):

@@ -18,6 +18,7 @@
 | holding_exit_decision_matrix_advisory | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=hold_no_edge, effective_value=False, runtime_change=False | ai_unavailable |
 | scale_in_price_guard | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=hold_sample, effective_value=60, runtime_change=False | ai_unavailable |
 | position_sizing_cap_release | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=hold_sample, effective_value=True, runtime_change=False | ai_unavailable |
+| position_sizing_dynamic_formula | unavailable | - | state=-, value=-, window=- | accepted=False, effective_state=hold_sample, effective_value=baseline_describe_buy_capacity, runtime_change=False | ai_unavailable |
 
 ## Parse Warnings
 

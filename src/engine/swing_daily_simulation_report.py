@@ -300,6 +300,7 @@ def _runtime_entry_dry_run(row: pd.Series, entry_quote: pd.Series, *, simulation
         ratio,
         max_budget=0,
     )
+    qty = max(1, _safe_int(qty, 0)) if curr_price > 0 and simulation_cash_krw > 0 and ratio > 0 else _safe_int(qty, 0)
     result.update(
         {
             "entry_guard": "PASS_DRY_RUN",
@@ -310,6 +311,11 @@ def _runtime_entry_dry_run(row: pd.Series, entry_quote: pd.Series, *, simulation
             "safe_budget": safe_budget,
             "safety_ratio": safety_ratio,
             "buy_qty": qty,
+            "qty_source": "sim_virtual_budget_dynamic_formula",
+            "virtual_budget_override": True,
+            "virtual_budget_krw": int(simulation_cash_krw),
+            "counterfactual_notional_krw": int(curr_price * qty) if curr_price > 0 and qty > 0 else 0,
+            "budget_authority": "sim_virtual_not_real_orderable_amount",
         }
     )
     if qty <= 0:
@@ -345,6 +351,7 @@ def _arm_entry_decision(
         ratio,
         max_budget=0,
     )
+    qty = max(1, _safe_int(qty, 0)) if curr_price > 0 and simulation_cash_krw > 0 and ratio > 0 else _safe_int(qty, 0)
     base = {
         "sim_arm": sim_arm,
         "strategy": strategy,
@@ -368,6 +375,11 @@ def _arm_entry_decision(
         "safe_budget": safe_budget,
         "safety_ratio": safety_ratio,
         "buy_qty": qty,
+        "qty_source": "sim_virtual_budget_dynamic_formula",
+        "virtual_budget_override": True,
+        "virtual_budget_krw": int(simulation_cash_krw),
+        "counterfactual_notional_krw": int(curr_price * qty) if curr_price > 0 and qty > 0 else 0,
+        "budget_authority": "sim_virtual_not_real_orderable_amount",
     }
     if curr_price <= 0:
         return {
@@ -543,11 +555,16 @@ def simulate_swing_recommendations(
     quotes: pd.DataFrame,
     *,
     target_date: str | None = None,
-    simulation_cash_krw: int = 10_000_000,
+    simulation_cash_krw: int | None = None,
     roundtrip_fee_rate: float = 0.0023,
 ) -> list[dict]:
     if recommendations.empty:
         return []
+    simulation_cash_krw = int(
+        simulation_cash_krw
+        if simulation_cash_krw is not None
+        else getattr(TRADING_RULES, "SIM_VIRTUAL_BUDGET_KRW", 10_000_000)
+    )
     quote_df = quotes.copy()
     if not quote_df.empty:
         quote_df["quote_date"] = pd.to_datetime(quote_df["quote_date"], errors="coerce").dt.normalize()
@@ -615,11 +632,16 @@ def simulate_swing_observation_arms(
     quotes: pd.DataFrame,
     *,
     target_date: str | None = None,
-    simulation_cash_krw: int = 10_000_000,
+    simulation_cash_krw: int | None = None,
     roundtrip_fee_rate: float = 0.0023,
 ) -> list[dict]:
     if recommendations.empty:
         return []
+    simulation_cash_krw = int(
+        simulation_cash_krw
+        if simulation_cash_krw is not None
+        else getattr(TRADING_RULES, "SIM_VIRTUAL_BUDGET_KRW", 10_000_000)
+    )
     quote_df = quotes.copy()
     if not quote_df.empty:
         quote_df["quote_date"] = pd.to_datetime(quote_df["quote_date"], errors="coerce").dt.normalize()
@@ -817,12 +839,17 @@ def build_swing_daily_simulation_report(
     quote_rows: pd.DataFrame | None = None,
     db_url: str = POSTGRES_URL,
     backtest_path: str | Path | None = None,
-    simulation_cash_krw: int = 10_000_000,
+    simulation_cash_krw: int | None = None,
     include_runtime_funnel: bool = False,
     pipeline_events_path: str | Path | None = None,
     include_db_recommendations: bool = True,
 ) -> dict:
     date_key = _date_text(target_date)
+    simulation_cash_krw = int(
+        simulation_cash_krw
+        if simulation_cash_krw is not None
+        else getattr(TRADING_RULES, "SIM_VIRTUAL_BUDGET_KRW", 10_000_000)
+    )
     if recommendation_rows is not None:
         rec_df = recommendation_rows
         db_rec_df = pd.DataFrame()

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from src.engine import kiwoom_orders
 from src.utils.constants import DATA_DIR, TRADING_RULES
 from src.utils.logger import log_error
 
@@ -102,6 +103,48 @@ def _safe_float(value, default: float = 0.0) -> float:
         return float(value)
     except Exception:
         return default
+
+
+def _sim_virtual_budget_krw() -> int:
+    return max(0, int(getattr(TRADING_RULES, "SIM_VIRTUAL_BUDGET_KRW", 10_000_000) or 0))
+
+
+def _scalp_ratio_from_score(ai_score: float) -> float:
+    min_ratio = float(getattr(TRADING_RULES, "INVEST_RATIO_SCALPING_MIN", 0.07) or 0.07)
+    max_ratio = float(getattr(TRADING_RULES, "INVEST_RATIO_SCALPING_MAX", 0.22) or 0.22)
+    score = max(0.0, min(100.0, float(ai_score or 0.0)))
+    return min_ratio + (score / 100.0) * (max_ratio - min_ratio)
+
+
+def _sim_virtual_qty(entry_price: float, ai_score: float) -> dict:
+    virtual_budget = _sim_virtual_budget_krw()
+    ratio = _scalp_ratio_from_score(ai_score)
+    max_budget = int(getattr(TRADING_RULES, "SCALPING_MAX_BUY_BUDGET_KRW", 0) or 0)
+    if entry_price <= 0 or virtual_budget <= 0:
+        return {
+            "qty": 0,
+            "ratio": ratio,
+            "virtual_budget_krw": virtual_budget,
+            "target_budget": 0,
+            "safe_budget": 0,
+            "safety_ratio": 0.0,
+            "max_budget": max_budget,
+        }
+    target_budget, safe_budget, qty, safety_ratio = kiwoom_orders.describe_buy_capacity(
+        entry_price,
+        virtual_budget,
+        ratio,
+        max_budget=max_budget,
+    )
+    return {
+        "qty": max(1, _safe_int(qty, 0)),
+        "ratio": ratio,
+        "virtual_budget_krw": virtual_budget,
+        "target_budget": target_budget,
+        "safe_budget": safe_budget,
+        "safety_ratio": safety_ratio,
+        "max_budget": max_budget,
+    }
 
 
 def _avg(values: list[float]) -> float:
@@ -424,7 +467,11 @@ def _simulate_paper_fill(candidate: dict, metrics_10m: dict) -> dict:
     entry_price = _safe_float(metrics_10m.get("entry_price_used"), 0.0)
     low_price = _safe_float(metrics_10m.get("window_low_price"), 0.0)
     close_ret_pct = _safe_float(metrics_10m.get("close_ret_pct"), 0.0)
-    qty = _safe_int(candidate.get("target_qty"), 0)
+    target_qty = _safe_int(candidate.get("target_qty"), 0)
+    capacity = _sim_virtual_qty(entry_price, _safe_float(candidate.get("ai_score"), 0.0))
+    qty = _safe_int(capacity.get("qty"), 0)
+    qty_source = "sim_virtual_budget_dynamic_formula" if qty > 0 else "unpriced"
+    virtual_budget_override = True
 
     partial_tolerance_bp = float(
         getattr(TRADING_RULES, "AI_WAIT6579_PAPER_FILL_PARTIAL_TOLERANCE_BP", 15.0) or 15.0
@@ -444,6 +491,13 @@ def _simulate_paper_fill(candidate: dict, metrics_10m: dict) -> dict:
             "expected_fill_rate_pct": 0.0,
             "expected_ev_pct": 0.0,
             "expected_ev_krw": 0,
+            "counterfactual_qty": int(qty),
+            "counterfactual_qty_source": qty_source,
+            "virtual_budget_override": bool(virtual_budget_override),
+            "virtual_budget_krw": int(capacity.get("virtual_budget_krw") or 0),
+            "counterfactual_ratio": round(float(capacity.get("ratio") or 0.0), 4),
+            "real_target_qty_observed": int(target_qty),
+            "counterfactual_notional_krw": 0,
             "full_touch": False,
             "partial_touch": False,
             "partial_tolerance_bp": partial_tolerance_bp,
@@ -508,6 +562,17 @@ def _simulate_paper_fill(candidate: dict, metrics_10m: dict) -> dict:
         "expected_fill_rate_pct": round(expected_fill_prob * 100.0, 2),
         "expected_ev_pct": round(expected_ev_pct, 4),
         "expected_ev_krw": int(expected_ev_krw),
+        "counterfactual_qty": int(qty),
+        "counterfactual_qty_source": qty_source,
+        "virtual_budget_override": bool(virtual_budget_override),
+        "virtual_budget_krw": int(capacity.get("virtual_budget_krw") or 0),
+        "counterfactual_ratio": round(float(capacity.get("ratio") or 0.0), 4),
+        "counterfactual_target_budget": int(capacity.get("target_budget") or 0),
+        "counterfactual_safe_budget": int(capacity.get("safe_budget") or 0),
+        "counterfactual_safety_ratio": round(float(capacity.get("safety_ratio") or 0.0), 4),
+        "counterfactual_max_budget": int(capacity.get("max_budget") or 0),
+        "real_target_qty_observed": int(target_qty),
+        "counterfactual_notional_krw": int(round(entry_price * qty)) if qty > 0 else 0,
         "full_touch": bool(full_touch),
         "partial_touch": bool(partial_touch),
         "partial_tolerance_bp": round(partial_tolerance_bp, 2),

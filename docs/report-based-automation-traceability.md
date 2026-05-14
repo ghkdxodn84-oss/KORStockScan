@@ -128,8 +128,10 @@ window 해석은 아래처럼 분리한다.
 1. `win_rate`는 `diagnostic_win_rate`다. 기대값/순이익 목표의 primary 판정은 `primary_ev`가 맡는다.
 2. 단순 손익 합산은 EV가 아니다. 필드명은 `simple_sum_profit_pct`로 쓰고, EV 판정 필드는 `equal_weight_avg_profit_pct`, `notional_weighted_ev_pct`, `source_quality_adjusted_ev_pct` 중 하나를 사용한다.
 3. `sim_equal_weight`, `probe_observe_only`, `counterfactual_only`, `combined_diagnostic` 권한 지표는 source bundle, approval request, workorder evidence에는 들어갈 수 있지만 broker execution 품질이나 실주문 전환 근거로 단독 사용하지 않는다.
-4. `daily`, `rolling`, `cumulative`가 필요한 family에서 daily-only 악화/개선은 safety veto 또는 calibration trigger로만 쓰고, edge apply 승인은 rolling/cumulative와 source-quality gate가 닫힌 뒤에만 허용한다.
-5. 새 관찰지표가 위 필드를 갖지 않으면 자동화 체인은 `hold_sample`, `hold_no_edge`, `source_quality_blocker`, `instrumentation_gap` 중 하나로 닫고 threshold mutation을 만들지 않는다.
+4. `sim/probe/counterfactual` 예산은 실주문 주문가능금액과 분리한다. 실주문 경로는 `blocked_zero_qty`/broker budget guard를 유지하지만, `actual_order_submitted=false` 관찰축은 기본 `SIM_VIRTUAL_BUDGET_KRW=10,000,000`을 가상 주문가능금액으로 두고 실주문 동적수량 산식(`describe_buy_capacity`, strategy ratio, safety ratio, 해당 전략 cap)을 그대로 탄다. provenance는 `virtual_budget_override=true`, `budget_authority=sim_virtual_not_real_orderable_amount`, `qty_source=sim_virtual_budget_dynamic_formula`, `virtual_budget_krw`, `target_budget`, `safe_budget`, `counterfactual_notional_krw`를 남긴다. 이 값은 real buying power, broker execution 품질, 실주문 가능 여부로 해석하지 않는다.
+5. `position_sizing_dynamic_formula`는 동적수량 산식 튜닝 owner다. 입력은 `score`, `strategy`, `volatility`, `liquidity`, `spread`, `price_band`, `recent_loss`, `portfolio_exposure`로 선언하고, primary metric은 `notional_weighted_ev_pct` 또는 `source_quality_adjusted_ev_pct`만 허용한다. 상세 source bundle, sample floor, provenance fields, approval artifact schema는 [workorder-position-sizing-dynamic-formula](./workorder-position-sizing-dynamic-formula.md)가 소유한다. `position_sizing_cap_release`와 분리해 관리하며, sim/probe 단독으로 실주문 cap 해제나 수량 확대를 승인할 수 없다. 실주문 수량 확대는 별도 approval artifact와 rollback guard가 필요하다.
+6. `daily`, `rolling`, `cumulative`가 필요한 family에서 daily-only 악화/개선은 safety veto 또는 calibration trigger로만 쓰고, edge apply 승인은 rolling/cumulative와 source-quality gate가 닫힌 뒤에만 허용한다.
+7. 새 관찰지표가 위 필드를 갖지 않으면 자동화 체인은 `hold_sample`, `hold_no_edge`, `source_quality_blocker`, `instrumentation_gap` 중 하나로 닫고 threshold mutation을 만들지 않는다.
 
 새 관찰지표 onboarding은 아래 10개 항목이 모두 닫힌 뒤에만 자동화 source bundle에 편입한다.
 
@@ -218,7 +220,7 @@ Panic Telegram 안내는 report 결과의 상태 전환만 소비한다. `notify
 - `plan_rebase_daily_renewal`은 proposal-only 문서 갱신 제안이다. 생성만으로 Plan Rebase, prompt, AGENTS.md, checklist, runtime env를 수정하지 않는다.
 - 같은 날짜 workorder 재생성 여부를 `mtime`만으로 판정하지 않는다. `generation_id/source_hash/lineage` diff가 source of truth다.
 - `update_kospi_status.completed_with_warnings`는 DB 적재 실패와 동일하지 않다. `failed_steps`를 확인해 `recommend_daily_v2`, dashboard upload, swing daily reports 같은 후행 step 실패를 분리한다.
-- `_error.log` 파일명만 보고 모든 `DB` 문자열을 DB 장애로 분류하지 않는다. `log_scanner`는 ERROR/CRITICAL/traceback/exception/에러/오류/실패 후보 라인만 incident 후보로 본다.
+- `_error.log` 파일명만 보고 모든 `DB` 문자열을 DB 장애로 분류하지 않는다. `log_scanner`는 ERROR/CRITICAL/traceback/exception/에러/오류/실패 후보 라인만 incident 후보로 본다. `MEMORY_ERROR`는 실제 memory/OOM signature만 인정하고 `kiwoom_*` logger 이름 내부의 `oom` 같은 부분 문자열은 메모리 장애로 분류하지 않는다.
 - `win_rate`, `simple_sum_profit_pct`, `active_unrealized`, `combined_diagnostic`, `counterfactual_only` 지표는 단독으로 runtime apply, 실주문 전환, threshold 완화/강화 승인 근거가 될 수 없다.
 - `metric_role`, `decision_authority`, `window_policy`가 없는 새 관찰지표는 threshold candidate가 아니라 instrumentation/source-quality backlog로만 본다.
 

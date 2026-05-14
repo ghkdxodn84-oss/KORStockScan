@@ -169,6 +169,29 @@ class TestLogScanner:
             assert errors == 1
             assert counter == {"UNKNOWN": 1}
 
+    def test_scan_file_does_not_classify_kiwoom_as_oom(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            log_file = Path(tmpdir) / "kiwoom_orders_error.log"
+            log_file.write_text(
+                "\n".join([
+                    "[2026-05-14 11:05:37] 🚨 ERROR in kiwoom_orders: "
+                    "❌ [예수금조회 실패] attempt=1/2 사유: "
+                    "인증에 실패했습니다[8005:Token이 유효하지 않습니다]",
+                    "[2026-05-14 11:05:37] 🚨 ERROR in runtime: "
+                    "MemoryError: failed to allocate buffer",
+                    "[2026-05-14 11:05:38] 🚨 ERROR in runtime: "
+                    "out of memory while building report",
+                ]),
+                encoding="utf-8",
+            )
+
+            scanner = LogScanner()
+            counter = __import__("collections").Counter()
+            errors, _, _ = scanner._scan_file(log_file, 0, counter)
+
+            assert errors == 3
+            assert counter == {"UNKNOWN": 1, "MEMORY_ERROR": 2}
+
     def test_scan_file_no_change(self):
         with tempfile.TemporaryDirectory() as tmpdir:
             log_file = Path(tmpdir) / "test_error.log"

@@ -287,6 +287,7 @@ def _build_initial_qty_provenance(positions: dict[str, dict]) -> dict:
         "uncapped_qty_sum": 0,
         "cap_applied_count": 0,
         "uncapped_qty_source_count": 0,
+        "virtual_budget_qty_source_count": 0,
         "fixed_qty_source_count": 0,
     }
     for position in positions.values():
@@ -323,6 +324,7 @@ def _build_initial_qty_provenance(positions: dict[str, dict]) -> dict:
         summary["uncapped_qty_sum"] += uncapped_qty
         summary["cap_applied_count"] += int(cap_applied)
         summary["uncapped_qty_source_count"] += int(qty_source == "uncapped_buy_capacity")
+        summary["virtual_budget_qty_source_count"] += int(qty_source == "sim_virtual_budget_dynamic_formula")
         summary["fixed_qty_source_count"] += int(qty_source == "fixed_config")
 
     return {
@@ -535,6 +537,7 @@ def write_outputs(report: dict, output_dir: Path) -> tuple[Path, Path]:
             f"- uncapped_qty_sum: `{qty_summary.get('uncapped_qty_sum', 0)}`",
             f"- cap_applied_count: `{qty_summary.get('cap_applied_count', 0)}`",
             f"- uncapped_qty_source_count: `{qty_summary.get('uncapped_qty_source_count', 0)}`",
+            f"- virtual_budget_qty_source_count: `{qty_summary.get('virtual_budget_qty_source_count', 0)}`",
             f"- fixed_qty_source_count: `{qty_summary.get('fixed_qty_source_count', 0)}`",
             "",
             "| 종목 | sim_qty | uncapped_qty | qty_source | cap_applied | final exit |",

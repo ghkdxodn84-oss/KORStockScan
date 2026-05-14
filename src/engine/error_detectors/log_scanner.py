@@ -45,7 +45,10 @@ _register_pattern("TIMEOUT_ERROR", r"(?:timeout|timed? ?out|deadline)")
 _register_pattern("KEY_ERROR", r"(?:key.*error|key.*not.*found|missing.*key)")
 _register_pattern("OS_ERROR", r"(?:os.*error|file.*not.*found|permission.*denied|disk.*full|no.*space)")
 _register_pattern("IMPORT_ERROR", r"(?:import.*error|module.*not.*found|no.*module)")
-_register_pattern("MEMORY_ERROR", r"(?:memory|oom|out.*of.*memory)")
+_register_pattern(
+    "MEMORY_ERROR",
+    r"(?:\bmemory(?:error)?\b|\boom\b|out\s+of\s+memory|cannot\s+allocate\s+memory)",
+)
 _register_pattern("UNKNOWN", r"(?:error|exception|critical|fatal)",)
 
 

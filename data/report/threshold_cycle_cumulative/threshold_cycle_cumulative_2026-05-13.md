@@ -11,10 +11,10 @@
 
 | window | dates | events | completed | avg_profit | win_rate | loss_rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| cumulative | 23 | 82603 | 187 | -0.2541 | 0.4278 | 0.5561 |
-| rolling_5d | 5 | 5987 | 11 | 3.4445 | 0.6364 | 0.3636 |
-| rolling_10d | 10 | 40142 | 61 | 0.1774 | 0.4262 | 0.5738 |
-| rolling_20d | 20 | 82603 | 177 | -0.2438 | 0.4294 | 0.5593 |
+| cumulative | 23 | 82603 | 177 | -0.4913 | 0.4124 | 0.5706 |
+| rolling_5d | 5 | 5987 | 1 | -1.55 | 0 | 1 |
+| rolling_10d | 10 | 40142 | 51 | -0.5612 | 0.3725 | 0.6275 |
+| rolling_20d | 20 | 82603 | 167 | -0.4946 | 0.4132 | 0.5749 |
 
 ## Real / Sim Source Summary
 
@@ -37,24 +37,24 @@
 
 | window | cohort | sample | avg_profit | p10 | p90 | win_rate | loss_rate |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| cumulative | all_completed_valid | 187 | -0.2541 | -2.02 | 1.41 | 0.4278 | 0.5561 |
-| cumulative | normal_only | 187 | -0.2541 | -2.02 | 1.41 | 0.4278 | 0.5561 |
-| cumulative | initial_only | 166 | -0.3154 | -2.03 | 1.41 | 0.4036 | 0.5783 |
+| cumulative | all_completed_valid | 177 | -0.4913 | -2.02 | 1.29 | 0.4124 | 0.5706 |
+| cumulative | normal_only | 177 | -0.4913 | -2.02 | 1.29 | 0.4124 | 0.5706 |
+| cumulative | initial_only | 156 | -0.5885 | -2.03 | 1.29 | 0.3846 | 0.5962 |
 | cumulative | pyramid_activated | 20 | 0.2635 | -1.42 | 1.18 | 0.65 | 0.35 |
 | cumulative | reversal_add_activated | 1 | -0.43 | -0.43 | -0.43 | 0 | 1 |
-| rolling_5d | all_completed_valid | 11 | 3.4445 | -2.01 | 2.28 | 0.6364 | 0.3636 |
-| rolling_5d | normal_only | 11 | 3.4445 | -2.01 | 2.28 | 0.6364 | 0.3636 |
-| rolling_5d | initial_only | 11 | 3.4445 | -2.01 | 2.28 | 0.6364 | 0.3636 |
+| rolling_5d | all_completed_valid | 1 | -1.55 | -1.55 | -1.55 | 0 | 1 |
+| rolling_5d | normal_only | 1 | -1.55 | -1.55 | -1.55 | 0 | 1 |
+| rolling_5d | initial_only | 1 | -1.55 | -1.55 | -1.55 | 0 | 1 |
 | rolling_5d | pyramid_activated | 0 | - | - | - | - | - |
 | rolling_5d | reversal_add_activated | 0 | - | - | - | - | - |
-| rolling_10d | all_completed_valid | 61 | 0.1774 | -2.16 | 1.76 | 0.4262 | 0.5738 |
-| rolling_10d | normal_only | 61 | 0.1774 | -2.16 | 1.76 | 0.4262 | 0.5738 |
-| rolling_10d | initial_only | 54 | 0.2778 | -2.19 | 2.08 | 0.4444 | 0.5556 |
+| rolling_10d | all_completed_valid | 51 | -0.5612 | -2.16 | 1.3 | 0.3725 | 0.6275 |
+| rolling_10d | normal_only | 51 | -0.5612 | -2.16 | 1.3 | 0.3725 | 0.6275 |
+| rolling_10d | initial_only | 44 | -0.5555 | -2.19 | 1.69 | 0.3864 | 0.6136 |
 | rolling_10d | pyramid_activated | 6 | -0.625 | -1.2 | 0.6 | 0.3333 | 0.6667 |
 | rolling_10d | reversal_add_activated | 1 | -0.43 | -0.43 | -0.43 | 0 | 1 |
-| rolling_20d | all_completed_valid | 177 | -0.2438 | -2.03 | 1.44 | 0.4294 | 0.5593 |
-| rolling_20d | normal_only | 177 | -0.2438 | -2.03 | 1.44 | 0.4294 | 0.5593 |
-| rolling_20d | initial_only | 158 | -0.3091 | -2.03 | 1.44 | 0.4051 | 0.5823 |
+| rolling_20d | all_completed_valid | 167 | -0.4946 | -2.03 | 1.3 | 0.4132 | 0.5749 |
+| rolling_20d | normal_only | 167 | -0.4946 | -2.03 | 1.3 | 0.4132 | 0.5749 |
+| rolling_20d | initial_only | 148 | -0.5964 | -2.03 | 1.3 | 0.3851 | 0.6014 |
 | rolling_20d | pyramid_activated | 18 | 0.3389 | -1.2 | 1.59 | 0.6667 | 0.3333 |
 | rolling_20d | reversal_add_activated | 1 | -0.43 | -0.43 | -0.43 | 0 | 1 |
 
@@ -78,7 +78,7 @@
 | cumulative | holding_flow_ofi_smoothing | holding_exit | 2 | False | report_only_reference |
 | cumulative | scale_in_price_guard | holding_exit | - | True | report_only_reference |
 | cumulative | position_sizing_cap_release | position_sizing | - | False | report_only_reference |
-| cumulative | statistical_action_weight | decision_support | 187 | False | report_only_reference |
+| cumulative | statistical_action_weight | decision_support | 177 | False | report_only_reference |
 | rolling_5d | entry_mechanical_momentum | entry | 1370 | False | report_only_reference |
 | rolling_5d | score65_74_recovery_probe | entry | 1370 | False | report_only_reference |
 | rolling_5d | pre_submit_price_guard | entry | - | False | report_only_reference |
@@ -95,7 +95,7 @@
 | rolling_5d | holding_flow_ofi_smoothing | holding_exit | - | False | report_only_reference |
 | rolling_5d | scale_in_price_guard | holding_exit | - | True | report_only_reference |
 | rolling_5d | position_sizing_cap_release | position_sizing | - | False | report_only_reference |
-| rolling_5d | statistical_action_weight | decision_support | 11 | False | report_only_reference |
+| rolling_5d | statistical_action_weight | decision_support | 1 | False | report_only_reference |
 | rolling_10d | entry_mechanical_momentum | entry | 11794 | True | report_only_reference |
 | rolling_10d | score65_74_recovery_probe | entry | 11794 | False | report_only_reference |
 | rolling_10d | pre_submit_price_guard | entry | - | True | report_only_reference |
@@ -112,7 +112,7 @@
 | rolling_10d | holding_flow_ofi_smoothing | holding_exit | 2 | False | report_only_reference |
 | rolling_10d | scale_in_price_guard | holding_exit | - | True | report_only_reference |
 | rolling_10d | position_sizing_cap_release | position_sizing | - | False | report_only_reference |
-| rolling_10d | statistical_action_weight | decision_support | 61 | False | report_only_reference |
+| rolling_10d | statistical_action_weight | decision_support | 51 | False | report_only_reference |
 | rolling_20d | entry_mechanical_momentum | entry | 50836 | True | report_only_reference |
 | rolling_20d | score65_74_recovery_probe | entry | 50836 | False | report_only_reference |
 | rolling_20d | pre_submit_price_guard | entry | - | True | report_only_reference |
@@ -129,7 +129,7 @@
 | rolling_20d | holding_flow_ofi_smoothing | holding_exit | 2 | False | report_only_reference |
 | rolling_20d | scale_in_price_guard | holding_exit | - | True | report_only_reference |
 | rolling_20d | position_sizing_cap_release | position_sizing | - | False | report_only_reference |
-| rolling_20d | statistical_action_weight | decision_support | 177 | False | report_only_reference |
+| rolling_20d | statistical_action_weight | decision_support | 167 | False | report_only_reference |
 
 ## 사용 금지선
 

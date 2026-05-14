@@ -11,10 +11,10 @@
 
 | window | dates | events | completed | avg_profit | win_rate | loss_rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| cumulative | 24 | 82779 | 177 | -0.4913 | 0.4124 | 0.5706 |
-| rolling_5d | 5 | 5869 | 1 | -1.55 | 0 | 1 |
-| rolling_10d | 10 | 12907 | 16 | -0.7962 | 0.375 | 0.625 |
-| rolling_20d | 20 | 82779 | 158 | -0.5116 | 0.4051 | 0.5823 |
+| cumulative | 24 | 83137 | 177 | -0.4913 | 0.4124 | 0.5706 |
+| rolling_5d | 5 | 6227 | 1 | -1.55 | 0 | 1 |
+| rolling_10d | 10 | 13265 | 16 | -0.7962 | 0.375 | 0.625 |
+| rolling_20d | 20 | 83137 | 158 | -0.5116 | 0.4051 | 0.5823 |
 
 ## Real / Sim Source Summary
 
@@ -78,6 +78,7 @@
 | cumulative | holding_flow_ofi_smoothing | holding_exit | 2 | False | report_only_reference |
 | cumulative | scale_in_price_guard | holding_exit | - | True | report_only_reference |
 | cumulative | position_sizing_cap_release | position_sizing | - | False | report_only_reference |
+| cumulative | position_sizing_dynamic_formula | position_sizing | - | False | report_only_reference |
 | cumulative | statistical_action_weight | decision_support | 177 | False | report_only_reference |
 | rolling_5d | entry_mechanical_momentum | entry | 1359 | False | report_only_reference |
 | rolling_5d | score65_74_recovery_probe | entry | 1359 | False | report_only_reference |
@@ -95,6 +96,7 @@
 | rolling_5d | holding_flow_ofi_smoothing | holding_exit | - | False | report_only_reference |
 | rolling_5d | scale_in_price_guard | holding_exit | - | True | report_only_reference |
 | rolling_5d | position_sizing_cap_release | position_sizing | - | False | report_only_reference |
+| rolling_5d | position_sizing_dynamic_formula | position_sizing | - | False | report_only_reference |
 | rolling_5d | statistical_action_weight | decision_support | 1 | False | report_only_reference |
 | rolling_10d | entry_mechanical_momentum | entry | 4136 | True | report_only_reference |
 | rolling_10d | score65_74_recovery_probe | entry | 4136 | False | report_only_reference |
@@ -112,6 +114,7 @@
 | rolling_10d | holding_flow_ofi_smoothing | holding_exit | 2 | False | report_only_reference |
 | rolling_10d | scale_in_price_guard | holding_exit | - | True | report_only_reference |
 | rolling_10d | position_sizing_cap_release | position_sizing | - | False | report_only_reference |
+| rolling_10d | position_sizing_dynamic_formula | position_sizing | - | False | report_only_reference |
 | rolling_10d | statistical_action_weight | decision_support | 16 | False | report_only_reference |
 | rolling_20d | entry_mechanical_momentum | entry | 50836 | True | report_only_reference |
 | rolling_20d | score65_74_recovery_probe | entry | 50836 | False | report_only_reference |
@@ -129,6 +132,7 @@
 | rolling_20d | holding_flow_ofi_smoothing | holding_exit | 2 | False | report_only_reference |
 | rolling_20d | scale_in_price_guard | holding_exit | - | True | report_only_reference |
 | rolling_20d | position_sizing_cap_release | position_sizing | - | False | report_only_reference |
+| rolling_20d | position_sizing_dynamic_formula | position_sizing | - | False | report_only_reference |
 | rolling_20d | statistical_action_weight | decision_support | 158 | False | report_only_reference |
 
 ## 사용 금지선

@@ -239,6 +239,80 @@ def test_build_wait6579_ev_cohort_report_empty(monkeypatch, tmp_path):
     assert report["counterfactual_summary"]["book"] == "scalp_score65_74_probe_counterfactual"
 
 
+def test_wait6579_counterfactual_uses_virtual_qty_without_budget_pass(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    target_date = "2026-04-21"
+    _write_pipeline_events(
+        tmp_path,
+        target_date,
+        [
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "wait65_79_ev_candidate",
+                "stock_name": "예산없는후보",
+                "stock_code": "333333",
+                "record_id": 303,
+                "fields": {
+                    "action": "WAIT",
+                    "ai_score": "68",
+                    "buy_pressure": "80.0",
+                    "tick_accel": "1.50",
+                    "micro_vwap_bp": "5.0",
+                    "latency_state": "SAFE",
+                    "parse_ok": "True",
+                    "ai_response_ms": "300",
+                    "target_buy_price": "10000",
+                },
+                "emitted_at": "2026-04-21T10:00:01",
+                "emitted_date": target_date,
+            },
+            {
+                "pipeline": "ENTRY_PIPELINE",
+                "stage": "blocked_ai_score",
+                "stock_name": "예산없는후보",
+                "stock_code": "333333",
+                "record_id": 303,
+                "fields": {"threshold": "75"},
+                "emitted_at": "2026-04-21T10:00:02",
+                "emitted_date": target_date,
+            },
+        ],
+    )
+
+    candles = [
+        _make_candle("10:01:00", 10000, 10100, 9990, 10050),
+        _make_candle("10:02:00", 10050, 10200, 10020, 10150),
+        _make_candle("10:03:00", 10150, 10300, 10100, 10250),
+        _make_candle("10:04:00", 10250, 10320, 10200, 10300),
+        _make_candle("10:05:00", 10300, 10350, 10280, 10320),
+        _make_candle("10:06:00", 10320, 10370, 10300, 10340),
+        _make_candle("10:07:00", 10340, 10390, 10310, 10350),
+        _make_candle("10:08:00", 10350, 10400, 10320, 10360),
+        _make_candle("10:09:00", 10360, 10420, 10330, 10380),
+        _make_candle("10:10:00", 10380, 10450, 10350, 10400),
+    ]
+    fake_kiwoom = types.SimpleNamespace(
+        get_kiwoom_token=lambda: "dummy",
+        get_minute_candles_ka10080=lambda _token, code, limit=700: candles if code == "333333" else [],
+    )
+    import src.utils as utils_pkg
+    monkeypatch.setattr(utils_pkg, "kiwoom_utils", fake_kiwoom, raising=False)
+    monkeypatch.setitem(sys.modules, "src.utils.kiwoom_utils", fake_kiwoom)
+
+    report = report_mod.build_wait6579_ev_cohort_report(target_date, token="dummy")
+
+    row = report["rows"][0]
+    assert row["target_qty"] == 0
+    assert row["counterfactual_qty"] == 114
+    assert row["counterfactual_qty_source"] == "sim_virtual_budget_dynamic_formula"
+    assert row["virtual_budget_override"] is True
+    assert row["virtual_budget_krw"] == 10_000_000
+    assert row["counterfactual_safe_budget"] == 1_140_000
+    assert row["counterfactual_notional_krw"] == 1_140_000
+    assert row["expected_ev_krw"] > 0
+    assert report["metrics"]["expected_ev_krw_sum"] == row["expected_ev_krw"]
+
+
 def test_build_wait6579_preflight_report_uses_events_only(monkeypatch, tmp_path):
     monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
     target_date = "2026-04-21"

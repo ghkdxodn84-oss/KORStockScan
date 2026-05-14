@@ -46,6 +46,15 @@
 - 테스트/검증: `PYTHONPATH=. .venv/bin/python -m src.engine.panic_sell_defense_report --date 2026-05-14 --print-json`, `PYTHONPATH=. .venv/bin/python -m src.engine.panic_buying_report --date 2026-05-14 --print-json`, `bash deploy/run_error_detection.sh full`을 실행했다. `PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500` 결과 parser count=`7`이며 장중 대상 3건은 backlog에서 제외되고 장후 미완료 항목만 남는다.
 - 다음 액션: 오늘 장중 Project 항목은 완료로 닫는다. 남은 확인은 due 전인 `12:05~12:30` intraday calibration과 postclose 항목이며, score65_74 계열은 당일 env 미선정/표본 미발생으로 장후 attribution에서 다시 본다. Project/Calendar 동기화는 사용자가 표준 명령으로 수행한다.
 
+### ErrorDetectionMemoryFalsePositive0514 확인 기록
+
+- checked_at: `2026-05-14 11:44 KST`
+- 판정: `pass`
+- 근거: `log_scanner`의 `MEMORY_ERROR(6)` burst는 실제 OOM이 아니라 `kiwoom_orders_error.log`의 11:05:37~11:05:38 `8005 Token이 유효하지 않습니다` 6건을 메모리 오류로 오분류한 것이다. 기존 정규식의 `oom`이 `kiwoom_orders` logger 이름 안에서 매칭됐다. 최신 `error_detection_2026-05-14.json`은 `summary_severity=warning`, `log_scanner=pass`, `resource_usage=pass`이며 직전 resource sample도 memory/swap pressure를 보고하지 않았다.
+- 조치: `MEMORY_ERROR` 패턴을 word-boundary 기반 `memory`/`MemoryError`/`oom`/`out of memory`/`cannot allocate memory`로 좁혔고, `kiwoom_orders` 인증 실패가 `MEMORY_ERROR`로 분류되지 않는 회귀 테스트를 추가했다. 이 조치는 System Error Detector report-only 분류 보정이며 threshold/provider/order guard, bot restart, broker 주문 상태를 변경하지 않았다.
+- 테스트/검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_error_detector_log_scanner.py`, `PYTHONPATH=. .venv/bin/python -m src.engine.error_detector --mode log_only --dry-run`, `PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500`로 확인했다.
+- 다음 액션: 8005 토큰 실패 자체는 `kiwoom_auth_8005_restart` detector의 별도 auth incident 경로에서만 판단한다. `log_scanner`가 동일 signature를 다시 메모리 오류로 보고하면 classifier/source-quality blocker로 재오픈한다.
+
 ### PanicSellDetectionAggregationFix0514 확인 기록
 
 - checked_at: `2026-05-14 09:35 KST`
@@ -62,6 +71,31 @@
 - 당일 재생성 결과: `panic_buying_2026-05-14.json`의 TP counterfactual은 `real_exit_count=0`, `non_real_exit_count=30`, `tp_like_exit_count=0`, `non_real_tp_like_exit_count=15`다. `threshold_cycle_2026-05-14.json`은 `real_completed_valid_rolling_7d=4`, `sim_completed_valid_rolling_7d=11`, `combined.sample=15`를 분리 표시하되 `statistical_action_weight.sample.completed_valid=4`, `position_sizing_cap_release.sample.normal_completed_valid=4`로 family 입력은 real-only다. `threshold_cycle_cumulative_2026-05-14.json`도 cumulative `real.sample=177`, `sim.sample=11`, `combined.sample=188`를 분리하고 family 입력은 `177`로 고정됐다.
 - 테스트/검증: `.venv/bin/python -m pytest src/tests/test_panic_buying_report.py src/tests/test_panic_sell_defense_report.py src/tests/test_daily_threshold_cycle_report.py` 결과 `46 passed`. `.venv/bin/python -m src.engine.daily_threshold_cycle_report --date 2026-05-14 --ai-correction-provider none`와 `.venv/bin/python -m src.engine.panic_buying_report --date 2026-05-14 --print-json`로 관련 산출물을 재생성했다. runtime_effect/report-only 금지선은 유지됐고 threshold/provider/order guard, 자동매수/자동매도, bot restart는 변경하지 않았다.
 - 다음 액션: `combined` 성과는 diagnostic-only로만 보고, real execution 품질/threshold family 후보/position sizing 승인 판단은 `real_only` 필드를 기준으로 본다. sim/probe EV는 별도 source bundle 입력으로만 유지한다.
+
+### ScalpSimVirtualBudget0514 확인 기록
+
+- checked_at: `2026-05-14 11:06 KST`
+- 판정: `superseded_by_sim_virtual_budget_dynamic_qty`
+- 근거: 실매매 경로는 현재 주문가능금액 부족 시 `blocked_zero_qty`로 멈추는 것이 맞다. 반면 `scalp_ai_buy_all_live_simulator`와 wait65_79 counterfactual은 `actual_order_submitted=false` 관찰축이므로 live 예수금/주문가능금액에 묶이면 missed EV가 0으로 왜곡된다. `sniper_state_handlers._resolve_scalp_sim_entry_qty`는 실주문 budget guard와 분리해, 실계좌 예산으로 1주를 살 수 없어도 sim-only 최소 1주 virtual fill을 만들고 `virtual_budget_override=true`, `budget_authority=sim_virtual_not_real_orderable_amount`, `qty_reason=sim_ignores_real_orderable_amount` provenance를 남기도록 보정했다. `wait6579_ev_cohort_report._simulate_paper_fill`도 `target_qty=0`이어도 가격이 있으면 `counterfactual_qty=1`, `counterfactual_qty_source=virtual_min_qty_budget_override`로 missed EV를 계산한다.
+- 테스트/검증: `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_scalp_live_simulator.py src/tests/test_wait6579_ev_cohort_report.py` 결과 `21 passed`. 직접 함수 검증으로 `build_wait6579_ev_cohort_report('2026-05-14')`를 실행해 `total_candidates=11`, `virtual_budget_rows=11`, `expected_ev_krw_sum=38432`를 확인했다. `git diff --check`도 pass다.
+- 다음 액션: 이 수정은 sim/counterfactual budget provenance 보정이며 threshold/provider/order guard, 실주문 수량 guard, bot restart는 변경하지 않았다. runtime 반영은 다음 배포/재기동 이후 적용하고, virtual budget 표본은 계속 diagnostic/source bundle 전용으로만 해석한다.
+
+### SimVirtualBudgetDynamicQty0514 확인 기록
+
+- checked_at: `2026-05-14 11:22 KST`
+- 판정: `pass_after_fix`
+- 근거: 사용자 지시에 따라 스캘핑 sim, wait65_79/missed-entry counterfactual, 스윙 intraday probe, 스윙 daily dry-run을 모두 `SIM_VIRTUAL_BUDGET_KRW=10,000,000` 가상 주문가능금액 기준으로 분리했다. 수량은 `floor(10,000,000 / entry_price)`가 아니라 실주문 동적수량 산식(`describe_buy_capacity`, strategy ratio, safety ratio, 해당 전략 cap)을 그대로 탄다. 이 과정에서 실계좌 예수금/주문가능금액은 sim/probe 수량 산식에서 제외하고 provenance로 `qty_source=sim_virtual_budget_dynamic_formula`, `virtual_budget_override=true`, `budget_authority=sim_virtual_not_real_orderable_amount`, `virtual_budget_krw`, `target_budget`, `safe_budget`, `virtual_notional_used_krw` 또는 `counterfactual_notional_krw`를 남기도록 했다.
+- 테스트/검증: `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_scalp_live_simulator.py src/tests/test_wait6579_ev_cohort_report.py src/tests/test_swing_model_selection_funnel_repair.py -q` 결과 `62 passed`. `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_missed_entry_counterfactual.py -q` 결과 `2 passed`.
+- 다음 액션: 이 변경은 `actual_order_submitted=false` 관찰축 sizing 보정이며 실주문 수량 guard, threshold/provider/order guard, bot restart는 변경하지 않았다. runtime 반영은 다음 배포/재기동 이후 적용하고, 기존 active sim/probe state의 과거 수량은 새 기준으로 소급 수정하지 않는다.
+
+### Score6574ApplyGuardRecheck0514 확인 기록
+
+- checked_at: `2026-05-14 11:29 KST`
+- 판정: `logic_fix_ready_not_runtime_applied`
+- 근거: `threshold_apply_2026-05-14.json`에서 `score65_74_recovery_probe`는 `calibration_state=hold_sample`, `decision_reason=calibration_state_blocked:hold_sample`로 제외됐다. 원인은 actual score65~74 source cohort `source_sample_count=16`과 broader funnel `budget_pass=642`가 섞여 `sample_count=642`로 저장되면서 `panic_adjusted_floor` 조건의 `sample_count < sample_floor` 비교가 깨진 것이다. `daily_threshold_cycle_report`에서 `score65_74_recovery_probe` readiness/floor 판정은 broader funnel count가 아니라 source cohort count만 쓰도록 보정했다.
+- 재검증: 같은 2026-05-13 source를 기준으로 임시 manifest-only 검증을 수행하면 `score65_74_recovery_probe`는 `sample_count=16`, `source_sample_count=16`, `sample_floor=20`, `sample_floor_status=panic_adjusted_ready`, `calibration_state=adjust_up`, `decision_reason=ai_guard_accepted`, env override `KORSTOCKSCAN_SCORE65_74_RECOVERY_PROBE_ENABLED=true`로 selected 된다. 검증 중 만든 `2099-01-01`/`2099-01-02` 임시 apply manifest는 삭제했다.
+- 테스트/검증: `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_daily_threshold_cycle_report.py src/tests/test_threshold_cycle_preopen_apply.py -q` 결과 `43 passed`. `PYTHONPATH=. .venv/bin/python -m src.engine.daily_threshold_cycle_report --date 2026-05-13 --ai-correction-provider none`로 report를 재생성한 뒤 `build_preopen_apply_manifest('2099-01-02', source_date='2026-05-13', apply_mode='auto_bounded_live', auto_apply=False, require_ai=True)`로 비적용 검증했다.
+- 다음 액션: 장중 runtime env는 변경하지 않는다. 오늘 장후 `threshold_cycle_ev`/preopen apply source가 다시 생성되면 이 보정이 반영되어 score65~74 probe가 guard 통과 후보인지 재판정한다. 실제 runtime 반영은 다음 장전 bounded apply 경로만 사용한다.
 
 ### SwingStrategyMarketMappingFix0514 확인 기록
 
@@ -83,6 +117,31 @@
 - 다음 액션 실행 (`2026-05-14 10:14 KST`): `daily_threshold_cycle_report`의 `calibration_source_bundle.source_metrics.panic_sell_defense`에 `microstructure_market_risk_state`, `microstructure_confirmed_risk_off_advisory`, `microstructure_portfolio_local_risk_off_only`, `source_quality_blockers`, `market_breadth_followup_candidate`, `market_breadth_next_action`을 추가했다. `runtime_approval_summary`는 panic source-quality blocker가 있으면 approval 요청 대신 `freeze`로 닫고, `build_code_improvement_workorder`는 market/breadth follow-up 후보와 blocker evidence를 order 근거에 포함한다. `report-based-automation-traceability`에도 `microstructure_market_context` 계약을 추가했다.
 - 후속 테스트/검증: `.venv/bin/python -m pytest src/tests/test_runtime_approval_summary.py src/tests/test_panic_sell_defense_report.py src/tests/test_daily_threshold_cycle_report.py src/tests/test_build_code_improvement_workorder.py` 결과 `57 passed`. `.venv/bin/python -m src.engine.daily_threshold_cycle_report --date 2026-05-14 --ai-correction-provider none`, `.venv/bin/python -m src.engine.threshold_cycle_ev_report --date 2026-05-14`, `.venv/bin/python -m src.engine.runtime_approval_summary --date 2026-05-14`, `.venv/bin/python -m src.engine.build_code_improvement_workorder --date 2026-05-14 --max-orders 12`를 순서대로 실행해 장후 attribution 입력을 갱신했다.
 - 재생성 결과: `threshold_cycle_calibration_2026-05-14_postclose.json`의 `panic_sell_defense` source metric은 `market_risk_state=NEUTRAL`, `confirmed_risk_off_advisory=false`, `risk_off_advisory_ratio_pct=0.0`, `source_quality_blockers=[]`, `market_breadth_followup_candidate=true`, `market_breadth_next_action=review_index_breadth_before_panic_runtime_candidate`다. `runtime_approval_summary_2026-05-14.json`은 `panic_approval_requested=0`, `panic_sell_defense.state=hold`로 닫았다. `code_improvement_workorder_2026-05-14.json/md`는 `order_panic_sell_defense_lifecycle_transition_pack` evidence에 market/breadth follow-up을 포함하되 `runtime_effect=false`를 유지한다.
+
+### SimVirtualBudgetRuntimeRestartAndQtyOwner0514 확인 기록
+
+- checked_at: `2026-05-14 11:32 KST`
+- 판정: `pass_restart_applied_owner_confirmed`
+- 근거: `가상 주문가능금액 + 실주문 동적수량 산식` 변경은 `src/engine/sniper_state_handlers.py`의 sim/probe state handler와 `src/utils/constants.py`의 `SIM_VIRTUAL_BUDGET_KRW=10,000,000` 기본값을 상주 봇 프로세스가 import하는 구조다. 기존 `bot_main.py` PID `44879`는 `2026-05-14 11:17:06 KST` 기동으로 동적수량 보정 이후 코드 전체를 로드하지 않았으므로, 사용자 조건부 승인에 따라 `restart.flag` 기반 graceful restart를 수행했다. `restart.flag`는 소모됐고 새 PID는 `48192`, 시작시각은 `2026-05-14 11:31:34 KST`다. 재기동 후 `bot_history.log`에서 OpenAI main route, 조건식 로드, WS 종목 등록/첫 실시간 수신이 재개됐다.
+- owner 확인: 동적수량 자체의 튜닝 owner는 `Plan Rebase` §7의 `position sizing` 워크스트림이다. 현재 상태는 `scale-in resolver/dynamic qty safety, 1주 cap default ON`이며, `position_sizing_cap_release` approval request 기준 충족 및 사용자 승인 전까지 cap 해제나 실주문 수량 guard 변경은 자동 apply 대상이 아니다. 이번 변경은 sim/probe/counterfactual sizing 입력을 `SIM_VIRTUAL_BUDGET_KRW`로 분리한 것이며, 실주문 동적수량 산식/ratio/cap 자체를 튜닝하거나 완화하지 않았다.
+- 테스트/검증: PID 교체 `44879 -> 48192`, `restart.flag` 소모, WS first realtime 수신 로그를 확인했다. 코드 검증은 `SimVirtualBudgetDynamicQty0514`의 `pytest` 64건과 `Score6574ApplyGuardRecheck0514`의 threshold apply 테스트 43건을 기준으로 재사용한다. 이 재기동은 threshold/provider/order guard 변경이 아니며, 장중 runtime threshold mutation을 수행하지 않았다.
+- 다음 액션: sim/probe 신규 진입 표본부터 `qty_source=sim_virtual_budget_dynamic_formula`, `virtual_budget_krw=10000000`, `budget_authority=sim_virtual_not_real_orderable_amount` provenance가 찍히는지 장후 source bundle에서 확인한다. 동적수량 자체 튜닝은 `position_sizing_cap_release` 또는 별도 날짜별 checklist workorder로 분리하고, 사용자 승인 없이는 실주문 cap/ratio를 변경하지 않는다.
+
+### PositionSizingDynamicFormulaOwner0514 확인 기록
+
+- checked_at: `2026-05-14 11:45 KST`
+- 판정: `owner_contract_added`
+- 근거: 확인 전 문서에는 `position_sizing_cap_release`가 1주 cap 해제 approval owner로 잡혀 있었지만, 사용자가 제시한 `position_sizing_dynamic_formula` 이름과 입력/metric/금지선/승인 조건은 독립 owner로 고정되어 있지 않았다. `Plan Rebase`, `report-based-automation-traceability`, `data/threshold_cycle/README`에 `position_sizing_dynamic_formula`를 동적수량 산식 튜닝 owner로 추가하고, `position_sizing_cap_release`와 분리했다.
+- owner 계약: 입력은 `score`, `strategy`, `volatility`, `liquidity`, `spread`, `price_band`, `recent_loss`, `portfolio_exposure`로 둔다. primary metric은 `notional_weighted_ev_pct` 또는 `source_quality_adjusted_ev_pct`다. sim/probe 단독으로 실주문 cap 해제나 수량 확대를 승인하지 않으며, 실주문 수량 확대는 별도 approval artifact, same-stage owner guard, rollback guard가 필요하다.
+- 테스트/검증: 문서 계약 변경만 수행했다. parser 검증과 `git diff --check`로 확인한다.
+- 다음 액션: 구현/리포트 산출이 필요하면 별도 workorder에서 `position_sizing_dynamic_formula` source bundle, sample floor, provenance fields, approval artifact schema를 열고, 장중 runtime threshold/order mutation은 수행하지 않는다.
+- 다음 액션 실행 (`2026-05-14 11:55 KST`): [workorder-position-sizing-dynamic-formula.md](/home/ubuntu/KORStockScan/docs/workorder-position-sizing-dynamic-formula.md)를 생성했다. workorder는 source bundle, sample floor, provenance fields, approval artifact schema, implementation phases, forbidden uses, 테스트 기준을 고정한다. `report-based-automation-traceability`와 `data/threshold_cycle/README`에는 해당 workorder 링크를 추가했다.
+- 실행 판정: `workorder_opened_runtime_effect_false`.
+- 실행 다음 액션: 구현은 `P1_report_source_bundle`부터 별도 지시가 있을 때만 착수한다. 그 전까지 runtime env, 주문 수량 guard, cap, provider, bot restart는 변경하지 않는다.
+- P1 실행 (`2026-05-14 12:05 KST`): `daily_threshold_cycle_report`에 `position_sizing_dynamic_formula` metadata와 report-only source bundle builder를 추가했다. 자동화체인은 `threshold_snapshot.position_sizing_dynamic_formula`와 `calibration_candidates[]`에 후보를 생성하지만 `allowed_runtime_apply=false`, `runtime_change=false`, `apply_mode=report_only_calibration`로 고정한다. sample denominator는 real `COMPLETED + valid profit_rate` normal-only row만 사용하고, sim/probe/counterfactual sizing event는 `sim_probe_sizing_event_count`/`qty_source_counts`로만 노출한다.
+- P1 재생성 결과: `PYTHONPATH=. .venv/bin/python -m src.engine.daily_threshold_cycle_report --date 2026-05-14 --ai-correction-provider none` 후 `data/report/threshold_cycle_2026-05-14.json`에서 `position_sizing_dynamic_formula`가 생성됐다. 당일 상태는 `real_completed_valid=4`, `sample_floor=30`, `sizing_event_count=3`, `source_quality_passed=false`, `calibration_state=hold_sample`, `allowed_runtime_apply=false`다. `threshold_cycle_ev_report --date 2026-05-14`에서도 calibration outcome에 같은 후보가 전파됐다.
+- P1 테스트/검증: `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_daily_threshold_cycle_report.py -q` 결과 `35 passed`. `PYTHONPATH=. .venv/bin/python -m pytest src/tests/test_daily_threshold_cycle_report.py src/tests/test_threshold_cycle_ev_report.py src/tests/test_threshold_cycle_preopen_apply.py src/tests/test_runtime_approval_summary.py src/tests/test_metric_decision_contract_docs.py -q` 결과 `56 passed`. `py_compile`도 통과했다.
+- P1 다음 액션: `P2_runtime_approval_summary`는 미착수다. approval request 생성, preopen apply guard, live canary는 별도 사용자 지시와 approval artifact schema 구현 전까지 열지 않는다.
 
 <!-- AUTO_NEXT_STAGE2_CHECKLIST_START -->
 ## 자동 생성 체크리스트 (`2026-05-13` postclose -> `2026-05-14`)

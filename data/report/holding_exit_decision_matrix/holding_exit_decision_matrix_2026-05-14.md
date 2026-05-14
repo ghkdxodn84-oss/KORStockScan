@@ -22,11 +22,11 @@
 - ready_rate: `0`
 - per_action_edge_buckets: `{'prefer_exit': 0, 'prefer_avg_down_wait': 0, 'prefer_pyramid_wait': 0}`
 - per_action_samples: `{'exit_only': 12, 'avg_down_wait': 0, 'pyramid_wait': 0}`
-- proxy_sample_snapshots: `46`
+- proxy_sample_snapshots: `122`
 - proxy_joined_candidates: `0`
 - proxy_actions_present: `['hold_defer', 'exit_only', 'avg_down_wait']`
 - proxy_missing_actions: `['pyramid_wait']`
-- proxy_per_action_samples: `{'hold_defer': 45, 'exit_only': 1, 'avg_down_wait': 46, 'pyramid_wait': 0}`
+- proxy_per_action_samples: `{'hold_defer': 121, 'exit_only': 1, 'avg_down_wait': 122, 'pyramid_wait': 0}`
 
 
 ## Matrix Entries

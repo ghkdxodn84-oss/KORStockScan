@@ -119,11 +119,15 @@ def test_scalp_simulator_arms_and_fills_without_real_buy_order(monkeypatch):
     assert fill_event["would_limit_fill"] is True
 
 
-def test_scalp_simulator_entry_uses_uncapped_dynamic_qty(monkeypatch):
+def test_scalp_simulator_entry_uses_virtual_budget_with_live_qty_formula(monkeypatch):
     logs = []
     rules = replace(CONFIG, SCALP_LIVE_SIMULATOR_QTY=0, SCALPING_MAX_BUY_BUDGET_KRW=1_200_000)
     monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
-    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 10_000_000)
+    monkeypatch.setattr(
+        state_handlers.kiwoom_orders,
+        "get_deposit",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("scalp sim must not read real deposit")),
+    )
     monkeypatch.setattr(
         state_handlers,
         "_log_entry_pipeline",
@@ -154,10 +158,61 @@ def test_scalp_simulator_entry_uses_uncapped_dynamic_qty(monkeypatch):
 
     sim_target = state_handlers.ACTIVE_TARGETS[0]
     assert sim_target["buy_qty"] == 114
-    assert sim_target["scalp_sim_entry_qty_source"] == "uncapped_buy_capacity"
+    assert sim_target["scalp_sim_entry_qty_source"] == "sim_virtual_budget_dynamic_formula"
     armed = next(fields for stage, fields in logs if stage == "scalp_sim_entry_armed")
     assert armed["qty"] == 114
-    assert armed["qty_reason"] == "sim_unrestricted_by_1share_cap"
+    assert armed["qty_reason"] == "sim_uses_virtual_budget_with_live_qty_formula"
+    assert armed["virtual_budget_override"] is True
+    assert armed["virtual_budget_krw"] == 10_000_000
+    assert armed["target_budget"] == 1_200_000
+    assert armed["safe_budget"] == 1_140_000
+    assert armed["virtual_notional_used_krw"] == 1_140_000
+    assert armed["budget_authority"] == "sim_virtual_not_real_orderable_amount"
+
+
+def test_scalp_simulator_entry_ignores_real_orderable_amount_when_unaffordable(monkeypatch):
+    logs = []
+    rules = replace(CONFIG, SCALP_LIVE_SIMULATOR_QTY=0, SCALPING_MAX_BUY_BUDGET_KRW=0)
+    monkeypatch.setattr(state_handlers, "TRADING_RULES", rules)
+    monkeypatch.setattr(state_handlers.kiwoom_orders, "get_deposit", lambda *args, **kwargs: 296_988)
+    monkeypatch.setattr(
+        state_handlers,
+        "_log_entry_pipeline",
+        lambda stock, code, stage, **fields: logs.append((stage, fields)),
+    )
+
+    stock = {
+        "id": 101,
+        "name": "HIGHPRICE",
+        "code": "196170",
+        "strategy": "SCALPING",
+        "target_buy_price": 382_500,
+    }
+    runtime = {
+        "strategy": "SCALPING",
+        "is_trigger": True,
+        "now_ts": 1_000.0,
+        "current_ai_score": 82.0,
+        "ratio": 1.0,
+    }
+
+    assert state_handlers.maybe_arm_scalp_live_simulator_from_buy_signal(
+        stock,
+        "196170",
+        {"curr": 382_500, "orderbook": {"asks": [{"price": 382_500}], "bids": [{"price": 382_000}]}},
+        runtime,
+    )
+
+    sim_target = state_handlers.ACTIVE_TARGETS[0]
+    assert sim_target["buy_qty"] == 24
+    assert sim_target["scalp_sim_entry_qty_source"] == "sim_virtual_budget_dynamic_formula"
+    armed = next(fields for stage, fields in logs if stage == "scalp_sim_entry_armed")
+    assert armed["qty"] == 24
+    assert armed["virtual_budget_override"] is True
+    assert armed["virtual_budget_krw"] == 10_000_000
+    assert armed["safe_budget"] == 9_500_000
+    assert armed["virtual_notional_used_krw"] == 9_180_000
+    assert armed["budget_authority"] == "sim_virtual_not_real_orderable_amount"
 
 
 def test_scalp_simulator_signal_inclusive_fill_does_not_wait_for_limit_touch(monkeypatch):
@@ -582,7 +637,7 @@ def test_runtime_heartbeat_classifies_scalp_sim_as_non_real_holding():
     )
 
 
-def test_daily_threshold_cycle_report_uses_scalp_sim_completed_rows_as_combined_authority():
+def test_daily_threshold_cycle_report_keeps_scalp_sim_completed_rows_diagnostic_only():
     target_date = "2026-05-11"
 
     def pipeline_loader(day):
@@ -633,9 +688,10 @@ def test_daily_threshold_cycle_report_uses_scalp_sim_completed_rows_as_combined_
 
     assert report["summary"]["real_completed_valid_rolling_7d"] == 1
     assert report["summary"]["sim_completed_valid_rolling_7d"] == 1
-    assert report["summary"]["completed_valid_rolling_7d"] == 2
+    assert report["summary"]["completed_valid_rolling_7d"] == 1
     assert report["completed_by_source"]["combined"]["sample"] == 2
     assert report["completed_by_source"]["sim"]["sample"] == 1
+    assert report["completed_by_source"]["combined_authority"] == "diagnostic_only_not_family_candidate_input"
     assert report["scalp_simulator"]["sell_completed"] == 1
 
 

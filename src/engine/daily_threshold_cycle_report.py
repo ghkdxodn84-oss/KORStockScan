@@ -336,6 +336,23 @@ CALIBRATION_FAMILY_METADATA = {
         "allowed_runtime_apply": False,
         "human_approval_required": True,
     },
+    "position_sizing_dynamic_formula": {
+        "priority": 42,
+        "source_family": "position_sizing_dynamic_formula",
+        "target_env_keys": [],
+        "primary_key": "formula_version",
+        "bounds": {},
+        "sample_floor": 30,
+        "sample_window": "rolling_10d_with_real_denominator",
+        "window_policy": {
+            "primary": "rolling_10d",
+            "secondary": ["daily", "cumulative_since_2026-04-21", "sim_probe_counterfactual_diagnostic"],
+            "use": "동적수량 산식은 score/strategy/volatility/liquidity/spread/price band/recent loss/portfolio exposure 입력 품질과 real-only EV를 먼저 report-only로 검증한다.",
+            "daily_only_allowed": False,
+        },
+        "allowed_runtime_apply": False,
+        "human_approval_required": True,
+    },
 }
 
 
@@ -2531,6 +2548,198 @@ def _build_position_sizing_cap_release_family(events: list[dict], completed_rows
     }
 
 
+def _notional_weighted_ev_pct(rows: list[dict]) -> float | None:
+    weighted_sum = 0.0
+    total_notional = 0.0
+    for row in _valid_profit_rows(rows):
+        profit_rate = _safe_float(row.get("profit_rate"), None)
+        if profit_rate is None:
+            continue
+        buy_price = _safe_float(row.get("buy_price"), None)
+        buy_qty = _safe_float(row.get("buy_qty"), None)
+        notional = None
+        if buy_price is not None and buy_qty is not None and buy_price > 0 and buy_qty > 0:
+            notional = buy_price * buy_qty
+        if notional is None:
+            notional = _safe_float(row.get("notional_krw"), None)
+        if notional is None or notional <= 0:
+            continue
+        weighted_sum += float(profit_rate) * float(notional)
+        total_notional += float(notional)
+    if total_notional <= 0:
+        return None
+    return round(weighted_sum / total_notional, 4)
+
+
+def _bucket_counter(events: list[dict], *field_names: str) -> dict:
+    values: list[str] = []
+    for event in events:
+        fields = _event_fields(event)
+        for field_name in field_names:
+            value = fields.get(field_name)
+            if value not in (None, "", "-"):
+                values.append(str(value))
+                break
+    return dict(Counter(values).most_common(10))
+
+
+def _numeric_event_values(events: list[dict], *field_names: str) -> list[float]:
+    values: list[float] = []
+    for event in events:
+        fields = _event_fields(event)
+        for field_name in field_names:
+            value = _safe_float(fields.get(field_name), None)
+            if value is not None:
+                values.append(float(value))
+                break
+    return values
+
+
+def _build_position_sizing_dynamic_formula_family(events: list[dict], completed_rows: list[dict]) -> dict:
+    sizing_stages = {
+        "budget_pass",
+        "blocked_zero_qty",
+        "auth_zero_qty",
+        "initial_entry_qty_cap_applied",
+        "wait6579_probe_canary_applied",
+        "scale_in_price_resolved",
+        "scalp_sim_entry_armed",
+        "scalp_sim_buy_order_assumed_filled",
+        "swing_probe_entry_assumed_filled",
+        "swing_sim_entry_assumed_filled",
+    }
+    sizing_events = [event for event in events if str(event.get("stage") or "") in sizing_stages]
+    real_rows = [row for row in _valid_profit_rows(completed_rows) if _is_normal_only_row(row)]
+    real_summary = _completed_profit_summary(real_rows)
+    real_sample = int(real_summary.get("sample") or 0)
+    notional_ev = _notional_weighted_ev_pct(real_rows)
+
+    qty_source_counts = _bucket_counter(
+        sizing_events,
+        "qty_source",
+        "scalp_sim_entry_qty_source",
+        "counterfactual_qty_source",
+    )
+    sim_probe_rows = [
+        event
+        for event in sizing_events
+        if str(_event_fields(event).get("actual_order_submitted") or "").strip().lower() == "false"
+        or str(_event_fields(event).get("budget_authority") or "").strip()
+        == "sim_virtual_not_real_orderable_amount"
+        or str(_event_fields(event).get("qty_source") or "").strip() == "sim_virtual_budget_dynamic_formula"
+        or str(_event_fields(event).get("scalp_sim_entry_qty_source") or "").strip()
+        == "sim_virtual_budget_dynamic_formula"
+    ]
+    real_order_rows = [
+        event
+        for event in sizing_events
+        if str(_event_fields(event).get("actual_order_submitted") or "").strip().lower() == "true"
+    ]
+
+    baseline_qty_values = _numeric_event_values(sizing_events, "baseline_qty", "original_qty", "would_qty")
+    candidate_qty_values = _numeric_event_values(
+        sizing_events,
+        "candidate_qty",
+        "effective_qty",
+        "qty",
+        "real_buy_qty",
+        "requested_buy_qty",
+    )
+    spread_values = _numeric_event_values(sizing_events, "spread_bps")
+    liquidity_values = _numeric_event_values(sizing_events, "liquidity_value")
+    score_values = _numeric_event_values(sizing_events, "score", "ai_score", "current_ai_score")
+
+    required_inputs = {
+        "score": bool(score_values),
+        "strategy": bool(_bucket_counter(sizing_events, "strategy", "trade_type")),
+        "volatility": bool(_bucket_counter(sizing_events, "volatility_bucket", "volatility_mode")),
+        "liquidity": bool(liquidity_values or _bucket_counter(sizing_events, "liquidity_bucket")),
+        "spread": bool(spread_values),
+        "price_band": bool(_bucket_counter(sizing_events, "price_band", "price_bucket")),
+        "recent_loss": bool(_bucket_counter(sizing_events, "recent_loss_bucket", "loss_bucket")),
+        "portfolio_exposure": bool(_bucket_counter(sizing_events, "portfolio_exposure_bucket", "exposure_bucket")),
+    }
+    source_quality_blockers = [
+        f"missing_input_{key}" for key, present in required_inputs.items() if not bool(present)
+    ]
+    source_quality_passed = not source_quality_blockers
+    source_quality_adjusted_ev = (
+        round(float(notional_ev) * 0.5, 4) if notional_ev is not None and source_quality_blockers else notional_ev
+    )
+    sample_ready = real_sample >= 30 and source_quality_passed
+
+    current = {
+        "formula_version": "baseline_describe_buy_capacity",
+        "formula_mode": "current_runtime_formula",
+        "runtime_apply_allowed": False,
+    }
+    recommended = {
+        "formula_version": "position_sizing_dynamic_formula:v1_report_only",
+        "formula_mode": "report_only",
+        "runtime_apply_allowed": False,
+        "approval_artifact_path": "data/threshold_cycle/approvals/position_sizing_dynamic_formula_YYYY-MM-DD.json",
+    }
+    return {
+        "family": "position_sizing_dynamic_formula",
+        "stage": "position_sizing",
+        "sample": {
+            "real_completed_valid": real_sample,
+            "sizing_event_count": len(sizing_events),
+            "sim_probe_sizing_event_count": len(sim_probe_rows),
+            "real_order_sizing_event_count": len(real_order_rows),
+            "qty_source_counts": qty_source_counts,
+            "input_coverage": required_inputs,
+            "source_quality_passed": source_quality_passed,
+            "source_quality_blockers": source_quality_blockers,
+            "primary_metric": "notional_weighted_ev_pct"
+            if notional_ev is not None
+            else "source_quality_adjusted_ev_pct",
+            "notional_weighted_ev_pct": notional_ev,
+            "source_quality_adjusted_ev_pct": source_quality_adjusted_ev,
+            "real_completed_summary": real_summary,
+            "baseline_qty_avg": round(_avg(baseline_qty_values) or 0.0, 4) if baseline_qty_values else None,
+            "candidate_qty_avg": round(_avg(candidate_qty_values) or 0.0, 4) if candidate_qty_values else None,
+            "score_avg": round(_avg(score_values) or 0.0, 4) if score_values else None,
+            "spread_bps_p90": round(_percentile(spread_values, 90, 0.0), 4) if spread_values else None,
+            "liquidity_value_p50": round(_percentile(liquidity_values, 50, 0.0), 4)
+            if liquidity_values
+            else None,
+            "strategy_counts": _bucket_counter(sizing_events, "strategy", "trade_type"),
+            "price_band_counts": _bucket_counter(sizing_events, "price_band", "price_bucket"),
+            "volatility_bucket_counts": _bucket_counter(sizing_events, "volatility_bucket", "volatility_mode"),
+            "recent_loss_bucket_counts": _bucket_counter(sizing_events, "recent_loss_bucket", "loss_bucket"),
+            "portfolio_exposure_bucket_counts": _bucket_counter(
+                sizing_events,
+                "portfolio_exposure_bucket",
+                "exposure_bucket",
+            ),
+        },
+        "apply_ready": sample_ready,
+        "current": current,
+        "recommended": recommended,
+        "apply_mode": "report_only_design",
+        "metric_contract": {
+            "metric_role": "primary_ev",
+            "decision_authority": "report_only_until_approval_artifact",
+            "window_policy": "rolling_10d_with_real_denominator",
+            "sample_floor": 30,
+            "primary_decision_metric": ["notional_weighted_ev_pct", "source_quality_adjusted_ev_pct"],
+            "source_quality_gate": "all_required_inputs_present_and_real_sim_probe_split",
+            "forbidden_uses": [
+                "sim_probe_single_source_live_cap_release",
+                "runtime_order_qty_change_without_approval",
+                "reuse_position_sizing_cap_release_approval",
+            ],
+        },
+        "notes": [
+            "동적수량 산식 튜닝 owner를 자동화체인 report-only source bundle에 편입한다.",
+            "position_sizing_cap_release와 분리하며 cap 해제 approval을 재사용하지 않는다.",
+            "sim/probe/counterfactual은 diagnostic 가속 입력이며 real denominator를 대체하지 않는다.",
+            "실주문 수량 확대는 별도 approval artifact, same-stage owner guard, rollback guard가 필요하다.",
+        ],
+    }
+
+
 def _build_mechanical_entry_family(events: list[dict]) -> dict:
     current = {
         "max_signal_score": float(getattr(TRADING_RULES, "SCALP_LATENCY_MECHANICAL_MOMENTUM_RELIEF_MAX_SIGNAL_SCORE", 75.0) or 75.0),
@@ -3734,6 +3943,7 @@ def _build_family_reports(
         _build_holding_flow_ofi_smoothing_family(events),
         _build_scale_in_price_guard_family(events),
         _build_position_sizing_cap_release_family(events, completed_rows),
+        _build_position_sizing_dynamic_formula_family(events, completed_rows),
         _build_statistical_action_weight_family(events, completed_rows, target_date=target_date),
     ]
 
@@ -4122,6 +4332,23 @@ def _calibration_state_for_family(
             "approval_required",
             f"1주 cap 해제 efficient trade-off 기준 충족(score={tradeoff_score:.2f}/{required_score:.2f}): 자동 적용하지 않고 사용자 승인 요청 artifact로만 승격한다.",
         )
+    if output_family == "position_sizing_dynamic_formula":
+        sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+        blockers = sample.get("source_quality_blockers") if isinstance(sample.get("source_quality_blockers"), list) else []
+        if sample_count < sample_floor:
+            return (
+                "hold_sample",
+                f"동적수량 산식 real denominator sample floor 미달({sample_count}/{sample_floor}); report-only source bundle만 유지",
+            )
+        if blockers:
+            return (
+                "hold_sample",
+                "동적수량 산식 입력 coverage 미충족: " + ",".join(str(item) for item in blockers[:8]),
+            )
+        return (
+            "hold",
+            "동적수량 산식 source bundle은 준비됐지만 runtime 수량 변경은 별도 approval artifact 전까지 금지한다.",
+        )
     if output_family == "soft_stop_whipsaw_confirmation":
         source_count = _source_sample_count_for_family(output_family, source_metrics)
         if 0 < source_count < sample_floor:
@@ -4201,7 +4428,15 @@ def _build_calibration_candidates(families: list[dict], report_source_context: d
                     source_sample_count,
                     _safe_int(lifecycle.get("post_sell_joined_records"), 0) or 0,
                 )
-        sample_count = max(_family_sample_count(family), source_sample_count)
+        if output_family == "score65_74_recovery_probe":
+            # The family sample includes broad funnel events such as budget_pass.
+            # Runtime readiness must use the score65~74 source cohort only.
+            sample_count = source_sample_count
+        elif output_family == "position_sizing_dynamic_formula":
+            family_sample = family.get("sample") if isinstance(family.get("sample"), dict) else {}
+            sample_count = _safe_int(family_sample.get("real_completed_valid"), 0) or 0
+        else:
+            sample_count = max(_family_sample_count(family), source_sample_count)
         sample_floor = int(metadata.get("sample_floor") or 0)
         source_ready = source_sample_count >= sample_floor
         if output_family == "score65_74_recovery_probe":

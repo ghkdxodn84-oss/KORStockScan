@@ -108,7 +108,7 @@
 | scalping entry | `score65_74_recovery_probe`는 2026-05-13 selected runtime family. score 50 fallback/neutral은 `blocked_ai_score`로 보류 | score threshold 완화, fallback 재개, 장중 env mutation 금지 |
 | entry price | `dynamic_entry_price_resolver_p1` + `dynamic_entry_ai_price_canary_p2`; passive probe submit revalidation이 stale이면 제출 전 block | `ws_data.curr` 직접 추격, stale quote submit 금지 |
 | holding/exit | `soft_stop_micro_grace`, `soft_stop_whipsaw_confirmation` selected family, `holding_flow_override` 운영 override | hard/protect/emergency/order safety 우회 금지 |
-| scale-in/position sizing | scale-in price resolver와 dynamic qty safety 유지. 신규/추가매수 1주 cap 해제는 approval request 이후만 검토 | cap 해제 자동 apply 금지 |
+| scale-in/position sizing | scale-in price resolver와 dynamic qty safety 유지. `position_sizing_dynamic_formula`는 score/strategy/volatility/liquidity/spread/price band/recent loss/portfolio exposure를 입력으로 보는 별도 owner이며, 신규/추가매수 1주 cap 해제는 `position_sizing_cap_release` approval request 이후만 검토 | sim/probe 단독 실주문 cap 해제, cap 해제 자동 apply 금지 |
 | scalp sim | AI/Gatekeeper BUY 확정 지점 sim은 `actual_order_submitted=false`, equal-weight authority | real order나 real-like execution 품질로 해석 금지 |
 | swing dry-run | lifecycle audit, threshold AI review, improvement automation, runtime approval summary가 장후 생성 | approval artifact 없는 env/live order 전환 금지 |
 | swing real canary | one-share real canary와 scale-in real canary는 별도 approval-required 축 | 스윙 전체 실주문 전환으로 해석 금지 |
@@ -138,7 +138,7 @@
 | entry funnel | `BUY Funnel Sentinel` + `wait6579_ev_cohort` + selected `score65_74_recovery_probe` | BUY/submitted drought는 daily/rolling/cumulative EV와 blocker attribution으로 판정 |
 | entry price quality | P1/P2 price resolver, passive probe lifecycle, submit revalidation block | `pre_submit_price_guard` family와 daily EV attribution |
 | holding/exit | `soft_stop_micro_grace`, selected `soft_stop_whipsaw_confirmation`, `holding_flow_override` | HOLD/EXIT Sentinel, post-sell feedback, threshold-cycle EV |
-| position sizing | scale-in resolver/dynamic qty safety, 1주 cap default ON | `position_sizing_cap_release` approval request 기준 충족 시 사용자 승인 요청 |
+| position sizing | scale-in resolver/dynamic qty safety, 1주 cap default ON. 동적수량 산식 튜닝 owner는 `position_sizing_dynamic_formula`, cap 해제 승인 owner는 `position_sizing_cap_release`로 분리 | 산식 변경은 `notional_weighted_ev_pct` 또는 `source_quality_adjusted_ev_pct` 기준으로 별도 검토하고, 실주문 수량 확대는 approval request 기준 충족 시 사용자 승인 요청 |
 | panic lifecycle | `panic_sell_defense`, `panic_buying` report-only source bundle | code-improvement workorder와 approval summary는 `runtime_effect=false` 또는 `approval_required`로만 생성 |
 | swing lifecycle | swing dry-run recommendation, audit, AI review, improvement automation, runtime approval | approval artifact 없으면 env apply/real order 금지 |
 | AI transport | OpenAI Responses WS provenance | transport incident와 strategy threshold 효과를 분리 |
