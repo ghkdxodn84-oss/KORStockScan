@@ -18,9 +18,9 @@
 - full/partial fill: `0` / `0`
 
 ## Holding Exit
-- holding_reviews: `74`
-- exit_signals: `12`
-- holding_review_ms_p95: `3716.0`
+- holding_reviews: `131`
+- exit_signals: `14`
+- holding_review_ms_p95: `2731.0`
 
 ## Scalp Simulator
 - authority: `equal_weight` / fill_policy: `signal_inclusive_best_ask_v1`
@@ -30,8 +30,8 @@
 
 ## Missed Probe Counterfactual
 - book: `scalp_score65_74_probe_counterfactual` / role: `missed_buy_probe_counterfactual`
-- total/score65_74: `11` / `0`
-- avg_expected_ev: `6.7576`% / score65_74_avg_expected_ev: `0.0`%
+- total/score65_74: `13` / `0`
+- avg_expected_ev: `5.0251`% / score65_74_avg_expected_ev: `0.0`%
 - actual_order_submitted: `False` / broker_order_forbidden: `True`
 - authority: `missed_probe_ev_only_not_broker_execution`
 
@@ -54,6 +54,15 @@
 - carryover_warnings: `0`
 - population_split_available: `False`
 
+## Pipeline Event Verbosity
+- artifact: `/home/ubuntu/KORStockScan/data/report/pipeline_event_verbosity/pipeline_event_verbosity_2026-05-14.json`
+- state: `v2_shadow_missing`
+- recommended_workorder_state: `open_shadow_order`
+- high_volume_line_count: `1019240`
+- high_volume_byte_share_pct: `95.3`
+- parity_ok: `False`
+- suppress_eligibility: `False`
+
 ## Swing Runtime Approval
 - request_report: `/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-13.json`
 - approval_artifact: `-`
@@ -70,8 +79,8 @@
 ## Code Improvement Workorder
 - artifact: `/home/ubuntu/KORStockScan/data/report/code_improvement_workorder/code_improvement_workorder_2026-05-14.json`
 - markdown: `/home/ubuntu/KORStockScan/docs/code-improvement-workorders/code_improvement_workorder_2026-05-14.md`
-- selected_order_count: `2`
-- decision_counts: `{'design_family_candidate': 2}`
+- selected_order_count: `3`
+- decision_counts: `{'implement_now': 1, 'design_family_candidate': 2}`
 
 ## Approval Requests
 - none
@@ -81,6 +90,7 @@
 
 ## Calibration Decisions
 ## Code Improvement Top Orders
+- `order_pipeline_event_compaction_v2_shadow` decision=`implement_now` subsystem=`runtime_instrumentation`
 - `order_panic_sell_defense_lifecycle_transition_pack` decision=`design_family_candidate` subsystem=`panic_sell_defense`
 - `order_panic_buy_runner_tp_canary_lifecycle_pack` decision=`design_family_candidate` subsystem=`panic_buying`
 

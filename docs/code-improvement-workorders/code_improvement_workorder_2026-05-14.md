@@ -14,9 +14,9 @@
 - swing_pattern_lab_automation: `-`
 - threshold_cycle_ev: `/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-14.json`
 - threshold_cycle_calibration: `/home/ubuntu/KORStockScan/data/report/threshold_cycle_calibration/threshold_cycle_calibration_2026-05-14_postclose.json`
-- generated_at: `2026-05-14T10:11:13+09:00`
-- generation_id: `2026-05-14-80aaa3ea5857`
-- source_hash: `80aaa3ea5857f83e8e43f51e93d843c03919164697bbe020ca446548da82c9c5`
+- generated_at: `2026-05-14T14:45:54+09:00`
+- generation_id: `2026-05-14-f79c17c74481`
+- source_hash: `f79c17c74481826be1c72f3cf31a4ac9e0584c62682227f01c1d2cee2d4b0fe1`
 
 ## 운영 원칙
 
@@ -40,20 +40,21 @@
 - previous_exists: `True`
 - previous_generation_id: `2026-05-14-80aaa3ea5857`
 - previous_source_hash: `80aaa3ea5857f83e8e43f51e93d843c03919164697bbe020ca446548da82c9c5`
-- new_order_ids: `[]`
+- new_order_ids: `['order_pipeline_event_compaction_v2_shadow']`
 - removed_order_ids: `[]`
 - decision_changed_order_ids: `[]`
 
 ## Summary
 
-- source_order_count: `2`
+- source_order_count: `3`
 - scalping_source_order_count: `0`
 - swing_source_order_count: `0`
 - swing_lab_source_order_count: `0`
-- threshold_ev_source_order_count: `2`
+- threshold_ev_source_order_count: `3`
+- pipeline_event_verbosity_source_order_count: `1`
 - panic_lifecycle_source_order_count: `2`
-- selected_order_count: `2`
-- decision_counts: `{'design_family_candidate': 2}`
+- selected_order_count: `3`
+- decision_counts: `{'implement_now': 1, 'design_family_candidate': 2}`
 - gemini_fresh: `None`
 - claude_fresh: `None`
 - swing_lifecycle_audit_available: `False`
@@ -83,7 +84,35 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 
 ## Implementation Orders
 
-### 1. `order_panic_sell_defense_lifecycle_transition_pack`
+### 1. `order_pipeline_event_compaction_v2_shadow`
+
+- title: Pipeline event compaction V2 shadow producer summary
+- decision: `implement_now`
+- decision_reason: pipeline event compaction V2 is report-only instrumentation; shadow means producer-summary observe mode, not trading shadow
+- source_report_type: `pipeline_event_verbosity`
+- lifecycle_stage: `ops_volume_diagnostic`
+- target_subsystem: `runtime_instrumentation`
+- route: `instrumentation_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `-`
+- confidence: `consensus`
+- priority: `1`
+- runtime_effect: `False`
+- expected_ev_effect: none_direct_ops_cpu_io_reduction_only
+- evidence: `state=v2_shadow_missing`, `recommended_workorder_state=open_shadow_order`, `raw_size_bytes=1061355004`, `high_volume_line_count=1019240`, `high_volume_byte_share_pct=95.3`, `producer_summary_exists=False`, `parity_ok=False`, `raw_derived_event_count=1018712`, `producer_event_count=0`
+- next_postclose_metric: pipeline_event_verbosity.parity.ok
+- files_likely_touched: `src/utils/pipeline_event_logger.py`, `src/engine/pipeline_event_summary.py`, `src/engine/pipeline_event_verbosity_report.py`
+- acceptance_tests: `pytest src/tests/test_pipeline_event_logger.py src/tests/test_pipeline_event_verbosity_report.py`
+- automation_reentry: Next postclose pipeline_event_verbosity report must show producer summary freshness and parity status.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 2. `order_panic_sell_defense_lifecycle_transition_pack`
 
 - title: panic sell defense lifecycle transition pack
 - decision: `design_family_candidate`
@@ -99,7 +128,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - priority: `6`
 - runtime_effect: `False`
 - expected_ev_effect: Use panic-sell simulation and post-sell rebound evidence to propose threshold/guard changes, then request explicit live-runtime approval without mutating exits automatically.
-- evidence: `panic_state=NORMAL`, `stop_loss_exit_count=0`, `confirmation_eligible_exit_count=0`, `active_sim_probe_positions=10`, `post_sell_rebound_above_sell_10_20m_pct=0.0`, `microstructure_market_risk_state=NEUTRAL`, `microstructure_confirmed_risk_off_advisory=False`, `microstructure_portfolio_local_risk_off_only=False`, `market_breadth_followup_candidate=True`, `source_quality_blockers=[]`, `candidate_status={'panic_entry_freeze_guard': 'inactive_no_panic', 'panic_stop_confirmation': 'hold_no_eligible_exit', 'panic_rebound_probe': 'hold_until_recovery_confirmed', 'panic_attribution_pack': 'active_report_only'}`, `allowed_runtime_apply=false`
+- evidence: `panic_state=NORMAL`, `stop_loss_exit_count=0`, `confirmation_eligible_exit_count=0`, `active_sim_probe_positions=11`, `post_sell_rebound_above_sell_10_20m_pct=0.0`, `microstructure_market_risk_state=NEUTRAL`, `microstructure_confirmed_risk_off_advisory=False`, `microstructure_portfolio_local_risk_off_only=False`, `market_breadth_followup_candidate=True`, `source_quality_blockers=[]`, `candidate_status={'panic_entry_freeze_guard': 'inactive_no_panic', 'panic_stop_confirmation': 'hold_no_eligible_exit', 'panic_rebound_probe': 'hold_until_recovery_confirmed', 'panic_attribution_pack': 'active_report_only'}`, `allowed_runtime_apply=false`
 - next_postclose_metric: panic_sell_defense should expose simulation EV, rollback guard, approval artifact status, market/breadth confirmation, and candidate-specific threshold recommendations before any runtime transition.
 - files_likely_touched: `src/engine/panic_sell_defense_report.py`, `src/engine/daily_threshold_cycle_report.py`, `src/engine/runtime_approval_summary.py`, `docs/plan-korStockScanPerformanceOptimization.rebase.md`
 - acceptance_tests: `pytest panic sell defense/report lifecycle tests`, `pytest src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py`
@@ -111,7 +140,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - `allowed_runtime_apply=false`를 유지한다.
 - sample floor, safety guard, target env key, tests가 닫히기 전 runtime 적용 금지.
 
-### 2. `order_panic_buy_runner_tp_canary_lifecycle_pack`
+### 3. `order_panic_buy_runner_tp_canary_lifecycle_pack`
 
 - title: panic buy runner TP canary lifecycle pack
 - decision: `design_family_candidate`

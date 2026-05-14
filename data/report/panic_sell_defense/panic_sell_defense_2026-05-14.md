@@ -5,8 +5,8 @@
 - panic_state: `NORMAL`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-05-14T13:48:26`
-- latest_event_at: `2026-05-14T13:48:23`
+- as_of: `2026-05-14T14:46:15`
+- latest_event_at: `2026-05-14T14:46:13`
 - reasons: `panic thresholds not breached`
 
 ## 패닉 지표

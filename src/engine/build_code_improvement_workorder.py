@@ -18,6 +18,7 @@ PATTERN_LAB_AUTOMATION_DIR = REPORT_DIR / "scalping_pattern_lab_automation"
 SWING_IMPROVEMENT_AUTOMATION_DIR = REPORT_DIR / "swing_improvement_automation"
 SWING_PATTERN_LAB_AUTOMATION_DIR = REPORT_DIR / "swing_pattern_lab_automation"
 THRESHOLD_CYCLE_EV_DIR = REPORT_DIR / "threshold_cycle_ev"
+PIPELINE_EVENT_VERBOSITY_DIR = REPORT_DIR / "pipeline_event_verbosity"
 CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-workorders"
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
 WORKORDER_SCHEMA_VERSION = 1
@@ -231,6 +232,17 @@ def _classify_order(
             automation_reentry="Reject artifact and regenerate the source automation report before implementation.",
         )
 
+    if order.get("source_report_type") == "pipeline_event_verbosity":
+        return ClassifiedOrder(
+            order=order,
+            decision="implement_now",
+            reason="pipeline event compaction V2 is report-only instrumentation; shadow means producer-summary observe mode, not trading shadow",
+            mapped_family=mapped_family,
+            route=route or "instrumentation_order",
+            confidence=confidence,
+            automation_reentry="Next postclose pipeline_event_verbosity report must show producer summary freshness and parity status.",
+        )
+
     if _contains_any(text, ("fallback", "shadow")):
         return ClassifiedOrder(
             order=order,
@@ -382,6 +394,80 @@ def _threshold_ev_followup_orders(ev_report: dict[str, Any]) -> list[dict[str, A
             }
         )
     return orders
+
+
+def _pipeline_event_verbosity_report_path(target_date: str) -> Path:
+    return PIPELINE_EVENT_VERBOSITY_DIR / f"pipeline_event_verbosity_{target_date}.json"
+
+
+def _pipeline_event_verbosity_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+    if not report:
+        return []
+    state = str(report.get("state") or "").strip()
+    recommended = str(report.get("recommended_workorder_state") or "").strip()
+    raw_stream = report.get("raw_stream") if isinstance(report.get("raw_stream"), dict) else {}
+    parity = report.get("parity") if isinstance(report.get("parity"), dict) else {}
+    producer = report.get("producer_summary") if isinstance(report.get("producer_summary"), dict) else {}
+    evidence = [
+        f"state={state}",
+        f"recommended_workorder_state={recommended}",
+        f"raw_size_bytes={raw_stream.get('raw_size_bytes')}",
+        f"high_volume_line_count={raw_stream.get('high_volume_line_count')}",
+        f"high_volume_byte_share_pct={raw_stream.get('high_volume_byte_share_pct')}",
+        f"producer_summary_exists={producer.get('exists')}",
+        f"parity_ok={parity.get('ok')}",
+        f"raw_derived_event_count={parity.get('raw_derived_event_count')}",
+        f"producer_event_count={parity.get('producer_event_count')}",
+    ]
+    base = {
+        "source_report_type": "pipeline_event_verbosity",
+        "lifecycle_stage": "ops_volume_diagnostic",
+        "target_subsystem": "runtime_instrumentation",
+        "runtime_effect": False,
+        "route": "instrumentation_order",
+        "confidence": "consensus",
+        "expected_ev_effect": "none_direct_ops_cpu_io_reduction_only",
+        "next_postclose_metric": "pipeline_event_verbosity.parity.ok",
+    }
+    if recommended in {"open_shadow_order", "block_suppress_and_fix_shadow"}:
+        return [
+            {
+                **base,
+                "order_id": "order_pipeline_event_compaction_v2_shadow",
+                "title": "Pipeline event compaction V2 shadow producer summary",
+                "priority": 1,
+                "intent": "Keep or repair producer-side high-volume diagnostic summary in shadow mode without raw suppression.",
+                "evidence": evidence,
+                "files_likely_touched": [
+                    "src/utils/pipeline_event_logger.py",
+                    "src/engine/pipeline_event_summary.py",
+                    "src/engine/pipeline_event_verbosity_report.py",
+                ],
+                "acceptance_tests": [
+                    "pytest src/tests/test_pipeline_event_logger.py src/tests/test_pipeline_event_verbosity_report.py",
+                ],
+            }
+        ]
+    if recommended == "open_suppress_guard_order":
+        return [
+            {
+                **base,
+                "order_id": "order_pipeline_event_compaction_v2_suppress_guard",
+                "title": "Pipeline event compaction V2 suppress guard",
+                "priority": 2,
+                "intent": "Design default-off suppress guard after repeated shadow parity pass; do not enable suppression automatically.",
+                "evidence": evidence,
+                "files_likely_touched": [
+                    "src/utils/pipeline_event_logger.py",
+                    "src/engine/pipeline_event_verbosity_report.py",
+                    "docs/time-based-operations-runbook.md",
+                ],
+                "acceptance_tests": [
+                    "pytest src/tests/test_pipeline_event_logger.py src/tests/test_pipeline_event_verbosity_report.py",
+                ],
+            }
+        ]
+    return []
 
 
 def _closed_instrumentation_order_families(ev_report: dict[str, Any]) -> dict[str, str]:
@@ -554,6 +640,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     swing_lab_automation = _load_json(swing_lab_source_path)
     ev_path = threshold_ev_report_path(target_date)
     ev_report = _load_json(ev_path)
+    pipeline_event_verbosity_path = _pipeline_event_verbosity_report_path(target_date)
+    pipeline_event_verbosity = _load_json(pipeline_event_verbosity_path)
     calibration_source_path = _calibration_report_path_from_ev(ev_report)
     calibration_report = _calibration_report_from_ev(ev_report)
     source_paths = {
@@ -561,6 +649,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "swing_improvement_automation": swing_source_path,
             "swing_pattern_lab_automation": swing_lab_source_path,
             "threshold_cycle_ev": ev_path,
+            "pipeline_event_verbosity": pipeline_event_verbosity_path,
     }
     if calibration_source_path is not None:
         source_paths["threshold_cycle_calibration"] = calibration_source_path
@@ -591,6 +680,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     threshold_ev_orders = [
         *_threshold_ev_followup_orders(ev_report),
         *_panic_lifecycle_followup_orders(calibration_report),
+        *_pipeline_event_verbosity_followup_orders(pipeline_event_verbosity),
     ]
     closed_instrumentation_order_families = _closed_instrumentation_order_families(ev_report)
     orders = [*scalping_orders, *swing_orders, *swing_lab_orders, *threshold_ev_orders]
@@ -633,6 +723,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "swing_improvement_automation": str(swing_source_path) if swing_source_path.exists() else None,
             "swing_pattern_lab_automation": str(swing_lab_source_path) if swing_lab_source_path.exists() else None,
             "threshold_cycle_ev": str(ev_path) if ev_path.exists() else None,
+            "pipeline_event_verbosity": str(pipeline_event_verbosity_path)
+            if pipeline_event_verbosity_path.exists()
+            else None,
             "threshold_cycle_calibration": str(calibration_source_path)
             if calibration_source_path and calibration_source_path.exists()
             else None,
@@ -654,6 +747,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "swing_source_order_count": len(swing_orders),
             "swing_lab_source_order_count": len(swing_lab_orders),
             "threshold_ev_source_order_count": len(threshold_ev_orders),
+            "pipeline_event_verbosity_source_order_count": len(
+                _pipeline_event_verbosity_followup_orders(pipeline_event_verbosity)
+            ),
             "panic_lifecycle_source_order_count": len(_panic_lifecycle_followup_orders(calibration_report)),
             "selected_order_count": len(selected),
             "decision_counts": counts,
@@ -775,6 +871,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- swing_source_order_count: `{summary.get('swing_source_order_count')}`",
         f"- swing_lab_source_order_count: `{summary.get('swing_lab_source_order_count')}`",
         f"- threshold_ev_source_order_count: `{summary.get('threshold_ev_source_order_count')}`",
+        f"- pipeline_event_verbosity_source_order_count: `{summary.get('pipeline_event_verbosity_source_order_count')}`",
         f"- panic_lifecycle_source_order_count: `{summary.get('panic_lifecycle_source_order_count')}`",
         f"- selected_order_count: `{summary.get('selected_order_count')}`",
         f"- decision_counts: `{summary.get('decision_counts')}`",

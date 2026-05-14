@@ -17,6 +17,12 @@ from typing import Any
 
 from src.utils.constants import DATA_DIR
 from src.utils.market_day import is_krx_trading_day
+from src.engine.pipeline_event_summary import (
+    SUMMARY_SCHEMA_VERSION,
+    SUMMARY_STAGES,
+    default_reason_label,
+    update_and_load_pipeline_event_summaries,
+)
 from src.engine.sentinel_event_cache import update_and_load_cached_event_rows
 
 
@@ -58,6 +64,7 @@ SESSION_START = time(9, 0)
 SENTINEL_END = time(15, 20)
 REPORT_DIRNAME = "buy_funnel_sentinel"
 EVENT_CACHE_SCHEMA_VERSION = 3
+LOSSLESS_EVENT_CACHE_SCHEMA_VERSION = 5
 EVENT_CACHE_NAME = "buy_funnel_sentinel_events"
 FORBIDDEN_AUTOMATIONS = [
     "score_threshold_relaxation",
@@ -85,6 +92,10 @@ def _pipeline_events_path(target_date: str) -> Path:
 
 def _event_cache_dir() -> Path:
     return DATA_DIR / "runtime" / "sentinel_event_cache"
+
+
+def _event_summary_dir() -> Path:
+    return DATA_DIR / "pipeline_event_summaries"
 
 
 def _report_dir() -> Path:
@@ -140,13 +151,35 @@ def _is_ignored_event(payload: dict[str, Any]) -> bool:
     return False
 
 
-def _payload_to_cache_row(payload: dict[str, Any]) -> dict[str, Any] | None:
+def _is_truthy_text(value: Any) -> bool:
+    return _safe_str(value).lower() in {"1", "true", "t", "yes", "y"}
+
+
+def _payload_requires_lossless_cache(payload: dict[str, Any], fields: dict[str, Any]) -> bool:
+    for key in ("actual_order_submitted", "broker_order_submitted", "order_submitted"):
+        if _is_truthy_text(payload.get(key)) or _is_truthy_text(fields.get(key)):
+            return True
+    for key in fields:
+        lowered = str(key).lower()
+        if "source_quality" in lowered or "provenance" in lowered:
+            return True
+    return False
+
+
+def _payload_to_cache_row(
+    payload: dict[str, Any],
+    *,
+    exclude_summary_stages: bool = False,
+) -> dict[str, Any] | None:
     if _safe_str(payload.get("event_type")) != "pipeline_event":
         return None
     if _is_ignored_event(payload):
         return None
     stage = _safe_str(payload.get("stage"))
     raw_fields = payload.get("fields") or {}
+    raw_field_dict = raw_fields if isinstance(raw_fields, dict) else {}
+    if exclude_summary_stages and stage in SUMMARY_STAGES and not _payload_requires_lossless_cache(payload, raw_field_dict):
+        return None
     fields_text = json.dumps(raw_fields, ensure_ascii=False) if isinstance(raw_fields, dict) else ""
     if not (
         stage in ENTRY_STAGES
@@ -176,6 +209,10 @@ def _payload_to_cache_row(payload: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+def _blocker_label_from_stage_fields(stage: str, fields: dict[str, str]) -> str:
+    return default_reason_label(stage, fields)
+
+
 def _event_from_cache_row(row: dict[str, Any]) -> PipelineEvent | None:
     emitted_at = _parse_iso_datetime(_safe_str(row.get("emitted_at")))
     if emitted_at is None:
@@ -193,18 +230,29 @@ def _event_from_cache_row(row: dict[str, Any]) -> PipelineEvent | None:
     )
 
 
-def load_pipeline_events(target_date: str, *, use_cache: bool = False) -> list[PipelineEvent]:
+def load_pipeline_events(
+    target_date: str,
+    *,
+    use_cache: bool = False,
+    exclude_summary_stages: bool = False,
+) -> list[PipelineEvent]:
     path = _pipeline_events_path(target_date)
     if not path.exists():
         return []
     if use_cache:
+        cache_schema_version = (
+            LOSSLESS_EVENT_CACHE_SCHEMA_VERSION if exclude_summary_stages else EVENT_CACHE_SCHEMA_VERSION
+        )
         rows, _ = update_and_load_cached_event_rows(
             raw_path=path,
             cache_dir=_event_cache_dir(),
             cache_name=EVENT_CACHE_NAME,
             target_date=target_date,
-            schema_version=EVENT_CACHE_SCHEMA_VERSION,
-            parse_payload=_payload_to_cache_row,
+            schema_version=cache_schema_version,
+            parse_payload=lambda payload: _payload_to_cache_row(
+                payload,
+                exclude_summary_stages=exclude_summary_stages,
+            ),
         )
         events = [event for row in rows if (event := _event_from_cache_row(row)) is not None]
         events.sort(key=lambda event: event.emitted_at)
@@ -228,6 +276,13 @@ def load_pipeline_events(target_date: str, *, use_cache: bool = False) -> list[P
             if emitted_at is None:
                 continue
             raw_fields = payload.get("fields") or {}
+            raw_field_dict = raw_fields if isinstance(raw_fields, dict) else {}
+            if (
+                exclude_summary_stages
+                and _safe_str(payload.get("stage")) in SUMMARY_STAGES
+                and not _payload_requires_lossless_cache(payload, raw_field_dict)
+            ):
+                continue
             fields = {str(k): _safe_str(v) for k, v in raw_fields.items()}
             record_id = payload.get("record_id")
             if record_id in (None, "", 0):
@@ -245,6 +300,67 @@ def load_pipeline_events(target_date: str, *, use_cache: bool = False) -> list[P
             )
     events.sort(key=lambda event: event.emitted_at)
     return events
+
+
+def load_pipeline_event_summaries(target_date: str) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    return update_and_load_pipeline_event_summaries(
+        raw_path=_pipeline_events_path(target_date),
+        summary_dir=_event_summary_dir(),
+        target_date=target_date,
+        reason_labeler=_blocker_label_from_stage_fields,
+        ignore_payload=_is_ignored_event,
+        include_samples=False,
+    )
+
+
+def _load_event_sources(
+    target_date: str,
+    *,
+    use_cache: bool,
+    use_summary: bool,
+) -> tuple[list[PipelineEvent], list[dict[str, Any]], dict[str, Any]]:
+    summary_rows: list[dict[str, Any]] = []
+    summary_meta: dict[str, Any] = {
+        "enabled": bool(use_summary),
+        "status": "disabled",
+        "raw_suppression_enabled": False,
+    }
+    exclude_summary_stages = False
+    if use_summary:
+        loaded_summary_rows, loaded_summary_meta = load_pipeline_event_summaries(target_date)
+        summary_meta = loaded_summary_meta
+        if loaded_summary_meta.get("status") == "ok":
+            summary_rows = loaded_summary_rows
+            exclude_summary_stages = True
+
+    events = load_pipeline_events(
+        target_date,
+        use_cache=use_cache,
+        exclude_summary_stages=exclude_summary_stages,
+    )
+    return events, summary_rows, {
+        "cache_enabled": bool(use_cache),
+        "cache_name": EVENT_CACHE_NAME if use_cache else None,
+        "cache_schema_version": (
+            LOSSLESS_EVENT_CACHE_SCHEMA_VERSION if exclude_summary_stages and use_cache else EVENT_CACHE_SCHEMA_VERSION
+        )
+        if use_cache
+        else None,
+        "summary_enabled": bool(use_summary),
+        "summary_status": summary_meta.get("status"),
+        "summary_schema_version": SUMMARY_SCHEMA_VERSION if use_summary else None,
+        "summary_target_stages": sorted(SUMMARY_STAGES) if use_summary else [],
+        "summary_row_count": summary_meta.get("summary_row_count"),
+        "summary_appended_source_events": summary_meta.get("appended_source_events"),
+        "summary_appended_rows": summary_meta.get("appended_summary_rows"),
+        "summary_rebuilt": summary_meta.get("rebuilt"),
+        "summary_path": summary_meta.get("summary_path"),
+        "summary_manifest_raw_offset": summary_meta.get("raw_offset"),
+        "summary_manifest_raw_size": summary_meta.get("raw_size"),
+        "summary_raw_suppression_enabled": bool(summary_meta.get("raw_suppression_enabled", False)),
+        "summary_lossless_cache_excludes_summary_stages": bool(exclude_summary_stages),
+        "fallback_to_raw_cache": bool(use_summary and not exclude_summary_stages),
+    }
 
 
 def previous_trading_day_with_events(target_date: str, *, max_lookback_days: int = 10) -> str | None:
@@ -309,24 +425,80 @@ def _count_unique(events: list[PipelineEvent], stage: str) -> int:
     return len({_attempt_key(event) for event in events if event.stage == stage})
 
 
-def _summarize_events(events: list[PipelineEvent], *, start_at: datetime, end_at: datetime) -> dict[str, Any]:
+def _summary_row_count_in_range(row: dict[str, Any], *, start_at: datetime, end_at: datetime) -> tuple[int, datetime | None]:
+    second_counts = row.get("second_counts")
+    count = 0
+    latest: datetime | None = None
+    if isinstance(second_counts, dict) and second_counts:
+        for second_text, raw_count in second_counts.items():
+            parsed = _parse_iso_datetime(_safe_str(second_text))
+            if parsed is None or parsed < start_at or parsed > end_at:
+                continue
+            if end_at.microsecond == 0 and parsed == end_at.replace(microsecond=0):
+                continue
+            try:
+                second_count = int(raw_count)
+            except (TypeError, ValueError):
+                continue
+            count += second_count
+            if latest is None or parsed > latest:
+                latest = parsed
+        return count, latest
+
+    first_seen = _parse_iso_datetime(_safe_str(row.get("first_seen")))
+    last_seen = _parse_iso_datetime(_safe_str(row.get("last_seen")))
+    if first_seen is None or last_seen is None or last_seen < start_at or first_seen > end_at:
+        return 0, None
+    try:
+        return int(row.get("event_count") or 0), min(last_seen, end_at)
+    except (TypeError, ValueError):
+        return 0, None
+
+
+def _summarize_events(
+    events: list[PipelineEvent],
+    *,
+    start_at: datetime,
+    end_at: datetime,
+    summary_rows: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     scoped = [event for event in events if start_at <= event.emitted_at <= end_at]
-    stage_event_counts = Counter(event.stage for event in scoped)
+    has_summary_rows = bool(summary_rows)
+    lossless_scoped = [
+        event for event in scoped if not (has_summary_rows and event.stage in SUMMARY_STAGES)
+    ]
+    stage_event_counts = Counter(event.stage for event in lossless_scoped)
+    summary_event_count = 0
+    summary_latest_candidates: list[datetime] = []
+    summary_blocker_counter: Counter[str] = Counter()
+    for row in summary_rows or []:
+        count, latest = _summary_row_count_in_range(row, start_at=start_at, end_at=end_at)
+        if count <= 0:
+            continue
+        stage = _safe_str(row.get("stage"))
+        label = _safe_str(row.get("reason_label")) or f"{stage}:-"
+        stage_event_counts[stage] += count
+        summary_event_count += count
+        if latest is not None:
+            summary_latest_candidates.append(latest)
+        if _is_blocker_stage(stage):
+            summary_blocker_counter[label] += count
     stage_unique_counts = {
-        stage: len({_attempt_key(event) for event in scoped if event.stage == stage})
+        stage: len({_attempt_key(event) for event in lossless_scoped if event.stage == stage})
         for stage in sorted(set(stage_event_counts) | ENTRY_STAGES | HOLDING_STAGES)
     }
-    blocker_counter = Counter(_blocker_label(event) for event in scoped if _is_blocker_stage(event.stage))
+    blocker_counter = Counter(_blocker_label(event) for event in lossless_scoped if _is_blocker_stage(event.stage))
+    blocker_counter.update(summary_blocker_counter)
     upstream_events = [
         event
-        for event in scoped
+        for event in lossless_scoped
         if event.stage in UPSTREAM_BLOCK_STAGES
         or "ai_score_50_buy_hold_override" in json.dumps(event.fields, ensure_ascii=False)
     ]
-    price_guard_events = [event for event in scoped if event.stage in PRICE_GUARD_STAGES]
+    price_guard_events = [event for event in lossless_scoped if event.stage in PRICE_GUARD_STAGES]
     latency_blocks = [
         event
-        for event in scoped
+        for event in lossless_scoped
         if event.stage == "latency_block"
         and (
             _field_first(event.fields, ("reason", "latency_danger_reasons", "decision"))
@@ -341,12 +513,16 @@ def _summarize_events(events: list[PipelineEvent], *, start_at: datetime, end_at
     budget_unique = stage_unique_counts.get("budget_pass", 0)
     latency_unique = stage_unique_counts.get("latency_pass", 0)
     submitted_unique = stage_unique_counts.get("order_bundle_submitted", 0)
-    latest_event_at = scoped[-1].emitted_at.isoformat(timespec="seconds") if scoped else None
+    latest_candidates = [lossless_scoped[-1].emitted_at] if lossless_scoped else []
+    latest_candidates.extend(summary_latest_candidates)
+    latest_event_at = max(latest_candidates).isoformat(timespec="seconds") if latest_candidates else None
 
     return {
         "start_at": start_at.isoformat(timespec="seconds"),
         "end_at": end_at.isoformat(timespec="seconds"),
-        "event_count": len(scoped),
+        "event_count": len(lossless_scoped) + summary_event_count,
+        "lossless_event_count": len(lossless_scoped),
+        "summary_event_count": summary_event_count,
         "latest_event_at": latest_event_at,
         "stage_events": dict(sorted(stage_event_counts.items())),
         "stage_unique": stage_unique_counts,
@@ -376,12 +552,12 @@ def _summarize_events(events: list[PipelineEvent], *, start_at: datetime, end_at
             "submitted_to_ai_unique_pct": _ratio(submitted_unique, ai_unique),
         },
         "unique_symbols": {
-            "ai_confirmed": _count_unique(scoped, "ai_confirmed"),
-            "entry_armed": _count_unique(scoped, "entry_armed"),
-            "budget_pass": _count_unique(scoped, "budget_pass"),
-            "latency_pass": _count_unique(scoped, "latency_pass"),
-            "order_bundle_submitted": _count_unique(scoped, "order_bundle_submitted"),
-            "holding_started": _count_unique(scoped, "holding_started"),
+            "ai_confirmed": _count_unique(lossless_scoped, "ai_confirmed"),
+            "entry_armed": _count_unique(lossless_scoped, "entry_armed"),
+            "budget_pass": _count_unique(lossless_scoped, "budget_pass"),
+            "latency_pass": _count_unique(lossless_scoped, "latency_pass"),
+            "order_bundle_submitted": _count_unique(lossless_scoped, "order_bundle_submitted"),
+            "holding_started": _count_unique(lossless_scoped, "holding_started"),
         },
     }
 
@@ -552,8 +728,13 @@ def build_buy_funnel_sentinel_report(
     windows_min: tuple[int, ...] = DEFAULT_WINDOWS,
     dry_run: bool = False,
     use_cache: bool = False,
+    use_summary: bool = False,
 ) -> dict[str, Any]:
-    events = load_pipeline_events(target_date, use_cache=use_cache)
+    events, summary_rows, event_load = _load_event_sources(
+        target_date,
+        use_cache=use_cache,
+        use_summary=use_summary,
+    )
     if as_of is None:
         if dry_run and events:
             as_of = events[-1].emitted_at
@@ -561,22 +742,38 @@ def build_buy_funnel_sentinel_report(
             as_of = datetime.now()
 
     session_start = datetime.combine(_parse_target_date(target_date), SESSION_START)
-    session_summary = _summarize_events(events, start_at=session_start, end_at=as_of)
+    session_summary = _summarize_events(
+        events,
+        start_at=session_start,
+        end_at=as_of,
+        summary_rows=summary_rows,
+    )
     windows: dict[str, dict[str, Any]] = {}
     for minutes in sorted(set(windows_min)):
         start_at = max(session_start, as_of - timedelta(minutes=minutes))
-        windows[f"{minutes}m"] = _summarize_events(events, start_at=start_at, end_at=as_of)
+        windows[f"{minutes}m"] = _summarize_events(
+            events,
+            start_at=start_at,
+            end_at=as_of,
+            summary_rows=summary_rows,
+        )
 
     baseline_date = previous_trading_day_with_events(target_date)
     baseline_summary = None
+    baseline_event_load = None
     if baseline_date:
-        baseline_events = load_pipeline_events(baseline_date, use_cache=use_cache)
+        baseline_events, baseline_summary_rows, baseline_event_load = _load_event_sources(
+            baseline_date,
+            use_cache=use_cache,
+            use_summary=use_summary,
+        )
         baseline_start = datetime.combine(_parse_target_date(baseline_date), SESSION_START)
         baseline_end = _same_time_on_date(baseline_date, as_of)
         baseline_summary = _summarize_events(
             baseline_events,
             start_at=baseline_start,
             end_at=baseline_end,
+            summary_rows=baseline_summary_rows,
         )
 
     classification = _classify(session_summary, baseline_summary, as_of=as_of)
@@ -590,9 +787,8 @@ def build_buy_funnel_sentinel_report(
         "as_of": as_of.isoformat(timespec="seconds"),
         "dry_run": bool(dry_run),
         "event_load": {
-            "cache_enabled": bool(use_cache),
-            "cache_name": EVENT_CACHE_NAME if use_cache else None,
-            "cache_schema_version": EVENT_CACHE_SCHEMA_VERSION if use_cache else None,
+            **event_load,
+            "baseline": baseline_event_load,
         },
         "policy": {
             "report_only": True,
@@ -713,6 +909,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--dry-run", action="store_true", help="Use latest event as as_of if omitted.")
     parser.add_argument("--use-cache", action="store_true", help="Use slim incremental sentinel event cache.")
+    parser.add_argument(
+        "--use-summary",
+        action="store_true",
+        help="Use high-volume blocked_* summary sidecar for BUY diagnostic blockers.",
+    )
     parser.add_argument("--print-json", action="store_true", help="Print final result JSON.")
     return parser
 
@@ -727,6 +928,7 @@ def main() -> int:
         windows_min=windows,
         dry_run=bool(args.dry_run),
         use_cache=bool(args.use_cache),
+        use_summary=bool(args.use_summary),
     )
     artifacts = save_report_artifacts(report)
     result = {
