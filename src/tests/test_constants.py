@@ -119,6 +119,7 @@ def test_trading_rules_ai_cadence_env_override(monkeypatch):
 def test_trading_rules_error_detector_env_override(monkeypatch):
     monkeypatch.setenv("KORSTOCKSCAN_ERROR_DETECTOR_ENABLED", "false")
     monkeypatch.setenv("KORSTOCKSCAN_ERROR_DETECTOR_DAEMON_INTERVAL_SEC", "120")
+    monkeypatch.setenv("KORSTOCKSCAN_ERROR_DETECTOR_PROCESS_RESTART_GRACE_SEC", "45")
     monkeypatch.setenv("KORSTOCKSCAN_ERROR_DETECTOR_BOT_EXPECTED_RUNTIME_WINDOW_ENABLED", "true")
     monkeypatch.setenv("KORSTOCKSCAN_ERROR_DETECTOR_BOT_EXPECTED_START_HHMM", "07:45")
     monkeypatch.setenv("KORSTOCKSCAN_ERROR_DETECTOR_BOT_EXPECTED_END_HHMM", "22:50")
@@ -130,6 +131,7 @@ def test_trading_rules_error_detector_env_override(monkeypatch):
 
     assert reloaded.TRADING_RULES.ERROR_DETECTOR_ENABLED is False
     assert reloaded.TRADING_RULES.ERROR_DETECTOR_DAEMON_INTERVAL_SEC == 120
+    assert reloaded.TRADING_RULES.ERROR_DETECTOR_PROCESS_RESTART_GRACE_SEC == 45
     assert reloaded.TRADING_RULES.ERROR_DETECTOR_BOT_EXPECTED_RUNTIME_WINDOW_ENABLED is True
     assert reloaded.TRADING_RULES.ERROR_DETECTOR_BOT_EXPECTED_START_HHMM == "07:45"
     assert reloaded.TRADING_RULES.ERROR_DETECTOR_BOT_EXPECTED_END_HHMM == "22:50"

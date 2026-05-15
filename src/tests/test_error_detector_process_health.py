@@ -129,7 +129,7 @@ class TestProcessHealthDetector:
         monkeypatch.setattr(process_health_module, "_seconds_since_expected_start", lambda: 600.0)
         data = {
             "main_loop": {
-                "last_beat": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "last_beat": "2000-01-01T00:00:00+00:00",
                 "pid": 99999999,
             }
         }
@@ -139,6 +139,23 @@ class TestProcessHealthDetector:
 
         assert result.severity == "fail"
         assert "no longer alive" in result.summary
+
+    def test_detector_warns_for_dead_pid_during_restart_grace(self, monkeypatch):
+        monkeypatch.setattr(process_health_module, "_is_bot_expected_running", lambda: True)
+        monkeypatch.setattr(process_health_module, "_seconds_since_expected_start", lambda: 600.0)
+        data = {
+            "main_loop": {
+                "last_beat": datetime.now().astimezone().isoformat(timespec="seconds"),
+                "pid": 99999999,
+            }
+        }
+        HEARTBEAT_PATH.write_text(json.dumps(data), encoding="utf-8")
+
+        result = ProcessHealthDetector().check()
+
+        assert result.severity == "warning"
+        assert result.details["main_loop_status"] == "restart_grace_pid_handoff"
+        assert "restart grace" in result.summary
 
     def test_detector_warns_for_dead_startup_pid_during_grace(self, monkeypatch):
         monkeypatch.setattr(process_health_module, "_is_bot_expected_running", lambda: True)

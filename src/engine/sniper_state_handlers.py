@@ -4941,6 +4941,25 @@ def _extract_ai_overlap_snapshot(
             pass
 
     curr_price = _safe_int(ws_data.get("curr"), 0)
+    high_price = _safe_float(
+        ws_data.get("high")
+        or ws_data.get("high_price")
+        or ws_data.get("day_high")
+        or ws_data.get("today_high"),
+        0.0,
+    )
+    low_price = _safe_float(
+        ws_data.get("low")
+        or ws_data.get("low_price")
+        or ws_data.get("day_low")
+        or ws_data.get("today_low"),
+        0.0,
+    )
+    if curr_price > 0 and high_price and high_price > 0:
+        snapshot["distance_from_day_high_pct"] = ((curr_price - high_price) / high_price) * 100.0
+    if curr_price > 0 and high_price and low_price and low_price > 0 and high_price >= low_price:
+        snapshot["intraday_range_pct"] = ((high_price - low_price) / low_price) * 100.0
+
     if candles and curr_price > 0:
         highs = []
         lows = []
@@ -4950,12 +4969,12 @@ def _extract_ai_overlap_snapshot(
                 lows.append(float(candle.get("저가", 0) or 0))
             except Exception:
                 continue
-        high_price = max([value for value in highs if value > 0], default=0.0)
-        low_price = min([value for value in lows if value > 0], default=0.0)
-        if high_price > 0:
-            snapshot["distance_from_day_high_pct"] = ((curr_price - high_price) / high_price) * 100.0
-        if low_price > 0 and high_price >= low_price:
-            snapshot["intraday_range_pct"] = ((high_price - low_price) / low_price) * 100.0
+        candle_high_price = max([value for value in highs if value > 0], default=0.0)
+        candle_low_price = min([value for value in lows if value > 0], default=0.0)
+        if candle_high_price > 0:
+            snapshot["distance_from_day_high_pct"] = ((curr_price - candle_high_price) / candle_high_price) * 100.0
+        if candle_low_price > 0 and candle_high_price >= candle_low_price:
+            snapshot["intraday_range_pct"] = ((candle_high_price - candle_low_price) / candle_low_price) * 100.0
 
     if ai_engine and hasattr(ai_engine, "_extract_scalping_features"):
         try:
@@ -5977,6 +5996,16 @@ def _block_ai_score_50_buy_hold_override_if_needed(
     cooldown_time = config["AI_WAIT_DROP_COOLDOWN"]
     with ENTRY_LOCK:
         cooldowns[code] = now_ts + cooldown_time
+    ai_ops_fields = _build_ai_ops_log_fields(
+        ai_decision,
+        ai_score_raw=current_ai_score,
+        ai_score_after_bonus=current_ai_score,
+        entry_score_threshold=75,
+        big_bite_bonus_applied=False,
+        ai_cooldown_blocked=False,
+    )
+    if "tick_source_quality_fields_sent" not in ai_ops_fields:
+        ai_ops_fields.update(dict(stock.get("last_watching_ai_source_quality_fields") or {}))
     _log_entry_pipeline(
         stock,
         code,
@@ -5993,14 +6022,7 @@ def _block_ai_score_50_buy_hold_override_if_needed(
             overbought_blocked=False,
             blocked_stage="blocked_ai_score",
         ),
-        **_build_ai_ops_log_fields(
-            ai_decision,
-            ai_score_raw=current_ai_score,
-            ai_score_after_bonus=current_ai_score,
-            entry_score_threshold=75,
-            big_bite_bonus_applied=False,
-            ai_cooldown_blocked=False,
-        ),
+        **ai_ops_fields,
     )
     return True
 
@@ -6370,6 +6392,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                             action = ai_decision.get('action', 'WAIT')
                             ai_score = ai_decision.get('score', 50)
                             reason = ai_decision.get('reason', '사유 없음')
+                            ai_source_quality_fields = _build_tick_source_quality_log_fields(ai_decision)
                             _mutate_stock_state(
                                 stock,
                                 set_fields={
@@ -6377,6 +6400,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                     'last_watching_ai_score': float(ai_score or 0.0),
                                     'last_watching_ai_reason': str(reason or '')[:240],
                                     'last_watching_ai_confirmed_at': now_ts,
+                                    'last_watching_ai_source_quality_fields': ai_source_quality_fields,
                                 },
                             )
                             feature_probe = _extract_buy_recovery_probe_features(
@@ -6695,6 +6719,16 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     cooldown_time = config["AI_WAIT_DROP_COOLDOWN"]
                     with ENTRY_LOCK:
                         cooldowns[code] = now_ts + cooldown_time
+                    ai_ops_fields = _build_ai_ops_log_fields(
+                        ai_decision,
+                        ai_score_raw=current_ai_score,
+                        ai_score_after_bonus=current_ai_score,
+                        entry_score_threshold=75,
+                        big_bite_bonus_applied=bool(boost_applied_value),
+                        ai_cooldown_blocked=False,
+                    )
+                    if "tick_source_quality_fields_sent" not in ai_ops_fields:
+                        ai_ops_fields.update(dict(stock.get("last_watching_ai_source_quality_fields") or {}))
                     _log_entry_pipeline(
                         stock,
                         code,
@@ -6709,14 +6743,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                             overbought_blocked=False,
                             blocked_stage="blocked_ai_score",
                         ),
-                        **_build_ai_ops_log_fields(
-                            ai_decision,
-                            ai_score_raw=current_ai_score,
-                            ai_score_after_bonus=current_ai_score,
-                            entry_score_threshold=75,
-                            big_bite_bonus_applied=bool(boost_applied_value),
-                            ai_cooldown_blocked=False,
-                        ),
+                        **ai_ops_fields,
                     )
                     return False
 

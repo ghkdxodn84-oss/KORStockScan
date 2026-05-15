@@ -592,6 +592,7 @@ class TradingConfig:
     ERROR_DETECTOR_DAEMON_INTERVAL_SEC: int = 60
     ERROR_DETECTOR_PROCESS_MAIN_LOOP_TIMEOUT_SEC: int = 15
     ERROR_DETECTOR_PROCESS_THREAD_TIMEOUT_SEC: int = 7200
+    ERROR_DETECTOR_PROCESS_RESTART_GRACE_SEC: int = 30
     ERROR_DETECTOR_BOT_EXPECTED_RUNTIME_WINDOW_ENABLED: bool = True
     ERROR_DETECTOR_BOT_EXPECTED_START_HHMM: str = "07:40"
     ERROR_DETECTOR_BOT_EXPECTED_END_HHMM: str = "22:55"
@@ -1700,6 +1701,7 @@ def _build_trading_rules() -> TradingConfig:
 
     env_ed_enabled = _env_bool("KORSTOCKSCAN_ERROR_DETECTOR_ENABLED")
     env_ed_daemon_interval = _env_int("KORSTOCKSCAN_ERROR_DETECTOR_DAEMON_INTERVAL_SEC")
+    env_ed_process_restart_grace = _env_int("KORSTOCKSCAN_ERROR_DETECTOR_PROCESS_RESTART_GRACE_SEC")
     env_ed_bot_window_enabled = _env_bool("KORSTOCKSCAN_ERROR_DETECTOR_BOT_EXPECTED_RUNTIME_WINDOW_ENABLED")
     env_ed_bot_window_start = _env_str("KORSTOCKSCAN_ERROR_DETECTOR_BOT_EXPECTED_START_HHMM")
     env_ed_bot_window_end = _env_str("KORSTOCKSCAN_ERROR_DETECTOR_BOT_EXPECTED_END_HHMM")
@@ -1712,6 +1714,7 @@ def _build_trading_rules() -> TradingConfig:
     if (
         env_ed_enabled is not None
         or env_ed_daemon_interval is not None
+        or env_ed_process_restart_grace is not None
         or env_ed_bot_window_enabled is not None
         or env_ed_bot_window_start is not None
         or env_ed_bot_window_end is not None
@@ -1730,6 +1733,9 @@ def _build_trading_rules() -> TradingConfig:
             ERROR_DETECTOR_DAEMON_INTERVAL_SEC=env_ed_daemon_interval
             if env_ed_daemon_interval is not None
             else config.ERROR_DETECTOR_DAEMON_INTERVAL_SEC,
+            ERROR_DETECTOR_PROCESS_RESTART_GRACE_SEC=env_ed_process_restart_grace
+            if env_ed_process_restart_grace is not None
+            else config.ERROR_DETECTOR_PROCESS_RESTART_GRACE_SEC,
             ERROR_DETECTOR_BOT_EXPECTED_RUNTIME_WINDOW_ENABLED=env_ed_bot_window_enabled
             if env_ed_bot_window_enabled is not None
             else config.ERROR_DETECTOR_BOT_EXPECTED_RUNTIME_WINDOW_ENABLED,

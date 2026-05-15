@@ -222,7 +222,7 @@ class KiwoomWSManager:
             history_maxlen = int(getattr(TRADING_RULES, 'SCALP_VPW_HISTORY_MAXLEN', 120) or 120)
             self.realtime_data[item_code] = {
                 'curr': 0, 'v_pw': 0, 'ask_tot': 0, 'bid_tot': 0,
-                'volume': 0, 'time': '', 'fluctuation': 0.0, 'open': 0,
+                'volume': 0, 'time': '', 'fluctuation': 0.0, 'open': 0, 'high': 0, 'low': 0,
                 'orderbook': {'asks': [], 'bids': []},
                 'expected_open': {'price': 0, 'qty': 0, 'source': ''},
                 'prog_net_qty': 0, 'prog_delta_qty': 0,
@@ -780,6 +780,8 @@ class KiwoomWSManager:
                             # 데이터 추출 및 할당
                             if '10' in values: target['curr'] = safe_int(values['10'], target['curr'])
                             if '16' in values: target['open'] = safe_int(values['16'], target.get('open', 0))
+                            if '17' in values: target['high'] = safe_int(values['17'], target.get('high', 0))
+                            if '18' in values: target['low'] = safe_int(values['18'], target.get('low', 0))
                             if '13' in values: target['volume'] = safe_int(values['13'], target.get('volume', 0))
                                 
                             if '12' in values:

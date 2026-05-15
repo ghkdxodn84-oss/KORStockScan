@@ -54,6 +54,29 @@ def _write_market_regime(tmp_path, *, risk_state: str = "NEUTRAL") -> None:
     )
 
 
+def _write_market_panic_breadth(tmp_path, *, risk_off: bool = True) -> None:
+    _write_json(
+        tmp_path / "report" / "market_panic_breadth" / f"market_panic_breadth_{TARGET_DATE}.json",
+        {
+            "as_of": f"{TARGET_DATE}T10:29:00",
+            "source_quality": {"status": "ok"},
+            "panic_breadth": {
+                "risk_off_advisory": risk_off,
+                "industry_breadth": {
+                    "sample_count": 10,
+                    "down_count": 8,
+                    "down_ratio_pct": 80.0,
+                },
+                "market_indices": {
+                    "KOSPI": {"code": "001", "name": "종합(KOSPI)", "change_pct": -1.6},
+                    "KOSDAQ": {"code": "101", "name": "코스닥", "change_pct": -2.1},
+                },
+                "reasons": ["market_index_intraday_drop", "industry_breadth_down_ratio_high"],
+            },
+        },
+    )
+
+
 def _panic_rows() -> list[dict]:
     return [
         _event(
@@ -107,6 +130,30 @@ def test_normal_state_without_panic_threshold(monkeypatch, tmp_path):
     assert report["panic_metrics"]["panic_detected"] is False
     assert report["panic_regime_contract"]["decision_authority"] == "source_quality_only"
     assert report["panic_regime_contract"]["allowed_runtime_apply"] is False
+
+
+def test_live_market_panic_breadth_can_mark_report_only_panic(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        [
+            _micro_event("10:00:00", close=100.0),
+            _micro_event("10:01:00", close=99.8),
+            _micro_event("10:02:00", close=99.7),
+        ],
+    )
+    _write_market_regime(tmp_path, risk_state="NEUTRAL")
+    _write_market_panic_breadth(tmp_path, risk_off=True)
+
+    report = report_mod.build_panic_sell_defense_report(
+        TARGET_DATE,
+        as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:30:00"),
+    )
+
+    assert report["panic_state"] == "PANIC_SELL"
+    assert report["policy"]["runtime_effect"] == "report_only_no_mutation"
+    assert report["microstructure_market_context"]["market_panic_breadth_risk_off_advisory"] is True
+    assert "live market panic breadth risk_off advisory" in report["panic_state_reasons"]
 
 
 def test_panic_sell_state_from_five_stop_losses_in_30_minutes(monkeypatch, tmp_path):

@@ -83,6 +83,10 @@ def _market_regime_path() -> Path:
     return DATA_DIR / "cache" / "market_regime_snapshot.json"
 
 
+def _market_panic_breadth_path(target_date: str) -> Path:
+    return DATA_DIR / "report" / "market_panic_breadth" / f"market_panic_breadth_{target_date}.json"
+
+
 def _post_sell_feedback_path(target_date: str) -> Path:
     return DATA_DIR / "report" / "monitor_snapshots" / f"post_sell_feedback_{target_date}.json"
 
@@ -474,6 +478,12 @@ def _load_source_summary(target_date: str) -> dict[str, Any]:
     buy = _load_json(_json_report_path("buy_funnel_sentinel", target_date))
     hold = _load_json(_json_report_path("holding_exit_sentinel", target_date))
     market = _load_json(_market_regime_path())
+    market_breadth = _load_json(_market_panic_breadth_path(target_date))
+    panic_breadth = (
+        (market_breadth or {}).get("panic_breadth")
+        if isinstance(market_breadth, dict)
+        else {}
+    )
     return {
         "buy_funnel_sentinel": {
             "path": str(_json_report_path("buy_funnel_sentinel", target_date)),
@@ -495,25 +505,45 @@ def _load_source_summary(target_date: str) -> dict[str, Any]:
             "allow_swing_entry": market.get("allow_swing_entry") if isinstance(market, dict) else None,
             "swing_score": market.get("swing_score") if isinstance(market, dict) else None,
         },
+        "market_panic_breadth": {
+            "path": str(_market_panic_breadth_path(target_date)),
+            "exists": _market_panic_breadth_path(target_date).exists(),
+            "as_of": market_breadth.get("as_of") if isinstance(market_breadth, dict) else None,
+            "source_quality_status": ((market_breadth or {}).get("source_quality") or {}).get("status")
+            if isinstance(market_breadth, dict)
+            else None,
+            "risk_off_advisory": panic_breadth.get("risk_off_advisory") if isinstance(panic_breadth, dict) else False,
+            "industry_breadth": panic_breadth.get("industry_breadth") if isinstance(panic_breadth, dict) else {},
+            "market_indices": panic_breadth.get("market_indices") if isinstance(panic_breadth, dict) else {},
+            "reasons": panic_breadth.get("reasons") if isinstance(panic_breadth, dict) else [],
+        },
     }
 
 
 def _microstructure_market_context(microstructure_detector: dict[str, Any], source_summary: dict[str, Any]) -> dict[str, Any]:
     market = source_summary.get("market_regime") if isinstance(source_summary.get("market_regime"), dict) else {}
+    market_breadth = (
+        source_summary.get("market_panic_breadth")
+        if isinstance(source_summary.get("market_panic_breadth"), dict)
+        else {}
+    )
     risk_state = _safe_str(market.get("risk_state") or "UNKNOWN").upper()
     evaluated_count = _safe_int(microstructure_detector.get("evaluated_symbol_count"), 0)
     risk_off_count = _safe_int(microstructure_detector.get("risk_off_advisory_count"), 0)
     risk_off_ratio = _ratio(risk_off_count, evaluated_count)
+    live_breadth_risk_off = bool(market_breadth.get("risk_off_advisory"))
     market_confirms = risk_state == "RISK_OFF"
     breadth_confirms = (
         evaluated_count >= MICRO_MARKET_BREADTH_SYMBOL_FLOOR
         and risk_off_ratio >= MICRO_RISK_OFF_RATIO_FLOOR_PCT
     )
-    confirmed = risk_off_count > 0 and (market_confirms or breadth_confirms)
+    confirmed = (risk_off_count > 0 and (market_confirms or breadth_confirms)) or live_breadth_risk_off
     local_only = risk_off_count > 0 and not confirmed
     reasons: list[str] = []
     if market_confirms:
         reasons.append("market_regime_risk_off")
+    if live_breadth_risk_off:
+        reasons.append("market_panic_breadth_risk_off")
     if breadth_confirms:
         reasons.append("micro_breadth_risk_off_ratio_confirmed")
     if local_only:
@@ -541,6 +571,12 @@ def _microstructure_market_context(microstructure_detector: dict[str, Any], sour
         "market_risk_state": risk_state or "UNKNOWN",
         "allow_swing_entry": market.get("allow_swing_entry"),
         "swing_score": market.get("swing_score"),
+        "market_panic_breadth_source": market_breadth.get("path"),
+        "market_panic_breadth_as_of": market_breadth.get("as_of"),
+        "market_panic_breadth_source_quality_status": market_breadth.get("source_quality_status"),
+        "market_panic_breadth_risk_off_advisory": live_breadth_risk_off,
+        "market_panic_breadth_industry_breadth": market_breadth.get("industry_breadth") or {},
+        "market_panic_breadth_indices": market_breadth.get("market_indices") or {},
         "evaluated_symbol_count": evaluated_count,
         "risk_off_advisory_count": risk_off_count,
         "risk_off_advisory_ratio_pct": risk_off_ratio,
@@ -566,6 +602,7 @@ def _resolve_panic_state(
     micro_context = microstructure_market_context if isinstance(microstructure_market_context, dict) else {}
     raw_micro_risk_off = _safe_int(micro.get("risk_off_advisory_count"), 0) > 0
     micro_risk_off = bool(micro_context.get("confirmed_risk_off_advisory"))
+    market_breadth_risk_off = bool(micro_context.get("market_panic_breadth_risk_off_advisory"))
     micro_recovery_watch = _safe_int(micro.get("recovery_candidate_count"), 0) > 0
     micro_recovery_confirmed = _safe_int(micro.get("recovery_confirmed_count"), 0) > 0
     if not panic_metrics.get("panic_detected") and not micro_risk_off and not micro_recovery_watch and not micro_recovery_confirmed:
@@ -577,6 +614,8 @@ def _resolve_panic_state(
         reasons.append("panic thresholds breached")
     if micro_risk_off:
         reasons.append("microstructure risk_off advisory confirmed by market/breadth context")
+    if market_breadth_risk_off:
+        reasons.append("live market panic breadth risk_off advisory")
     elif raw_micro_risk_off:
         reasons.append("microstructure risk_off unconfirmed by market/breadth context")
     active_avg = active_recovery.get("avg_unrealized_profit_rate_pct")
@@ -875,6 +914,9 @@ def build_markdown(report: dict[str, Any]) -> str:
         "## Microstructure Market Context",
         "",
         f"- market_risk_state: `{micro_market.get('market_risk_state', '-')}`",
+        f"- market_panic_breadth_as_of: `{micro_market.get('market_panic_breadth_as_of') or '-'}`",
+        f"- market_panic_breadth_source_quality_status: `{micro_market.get('market_panic_breadth_source_quality_status') or '-'}`",
+        f"- market_panic_breadth_risk_off_advisory: `{str(micro_market.get('market_panic_breadth_risk_off_advisory', False)).lower()}`",
         f"- evaluated_symbol_count: `{micro_market.get('evaluated_symbol_count', 0)}`",
         f"- risk_off_advisory_ratio_pct: `{_fmt(micro_market.get('risk_off_advisory_ratio_pct'))}`",
         f"- confirmed_risk_off_advisory: `{str(micro_market.get('confirmed_risk_off_advisory', False)).lower()}`",

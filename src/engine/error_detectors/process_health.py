@@ -64,6 +64,10 @@ class ProcessHealthDetector(BaseDetector):
         return int(getattr(TRADING_RULES, "ERROR_DETECTOR_PROCESS_THREAD_TIMEOUT_SEC", 7200))
 
     @property
+    def restart_grace_sec(self) -> int:
+        return int(getattr(TRADING_RULES, "ERROR_DETECTOR_PROCESS_RESTART_GRACE_SEC", 30))
+
+    @property
     def startup_grace_sec(self) -> int:
         return int(getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_STARTUP_GRACE_SEC", 180))
 
@@ -72,6 +76,7 @@ class ProcessHealthDetector(BaseDetector):
         details: dict = {}
         main_loop_timeout = self.main_loop_timeout_sec
         thread_timeout = self.thread_timeout_sec
+        restart_grace = self.restart_grace_sec
         startup_grace = self.startup_grace_sec
         expected_running = _is_bot_expected_running()
         details["bot_expected_running"] = expected_running
@@ -79,6 +84,7 @@ class ProcessHealthDetector(BaseDetector):
             "start": getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_START_HHMM", "07:40"),
             "end": getattr(TRADING_RULES, "ERROR_DETECTOR_BOT_EXPECTED_END_HHMM", "22:55"),
         }
+        details["restart_grace_sec"] = restart_grace
         details["startup_grace_sec"] = startup_grace
         seconds_since_start = _seconds_since_expected_start()
         if seconds_since_start is not None:
@@ -170,6 +176,19 @@ class ProcessHealthDetector(BaseDetector):
                         ),
                         details=details,
                         recommended_action="Recheck after startup grace before restarting bot_main.py.",
+                    )
+                if restart_grace > 0 and main_age <= restart_grace:
+                    details["main_loop_status"] = "restart_grace_pid_handoff"
+                    return DetectionResult(
+                        detector_id=self.id,
+                        category=self.category,
+                        severity="warning",
+                        summary=(
+                            f"bot_main.py heartbeat PID {pid} is dead, but heartbeat age "
+                            f"{main_age:.0f}s is within restart grace."
+                        ),
+                        details=details,
+                        recommended_action="Recheck shortly; do not restart again unless grace expires.",
                     )
                 return DetectionResult(
                     detector_id=self.id,

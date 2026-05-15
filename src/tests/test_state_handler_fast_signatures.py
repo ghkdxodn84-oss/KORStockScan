@@ -8,6 +8,7 @@ from src.engine.sniper_state_handlers import (
     _build_ai_ops_log_fields,
     _build_gatekeeper_fast_signature,
     _build_holding_ai_fast_signature,
+    _extract_ai_overlap_snapshot,
     _should_apply_ai_score_50_buy_hold_override,
     _should_run_score65_74_recovery_probe,
     _should_run_main_buy_recovery_canary,
@@ -307,6 +308,23 @@ def test_build_ai_overlap_log_fields_includes_momentum_and_profile():
     assert fields["threshold_profile"] == "STRICT"
     assert fields["blocked_stage"] == "blocked_strength_momentum"
     assert fields["ai_score"] == "78.0"
+
+
+def test_extract_ai_overlap_snapshot_uses_ws_day_high_low_without_candles():
+    snapshot = _extract_ai_overlap_snapshot(
+        ws_data={
+            "curr": 9800,
+            "high": 10000,
+            "low": 9500,
+            "v_pw": 123.4,
+            "buy_ratio": 61.2,
+        }
+    )
+
+    assert round(snapshot["distance_from_day_high_pct"], 3) == -2.0
+    assert round(snapshot["intraday_range_pct"], 3) == 5.263
+    assert snapshot["latest_strength"] == 123.4
+    assert snapshot["buy_pressure_10t"] == 61.2
 
 
 def test_should_run_main_buy_recovery_canary_with_feature_allowlist(monkeypatch):

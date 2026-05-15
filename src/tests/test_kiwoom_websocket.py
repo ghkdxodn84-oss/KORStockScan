@@ -66,3 +66,12 @@ def test_await_login_ack_raises_on_login_failure():
 )
 def test_is_auth_token_failure(code, message, expected):
     assert KiwoomWSManager._is_auth_token_failure(code, message) is expected
+
+
+def test_target_defaults_include_intraday_high_low():
+    manager = KiwoomWSManager("test-token")
+
+    target = manager._ensure_target_defaults("005930")
+
+    assert target["high"] == 0
+    assert target["low"] == 0
