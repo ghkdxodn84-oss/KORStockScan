@@ -19,6 +19,7 @@ SWING_IMPROVEMENT_AUTOMATION_DIR = REPORT_DIR / "swing_improvement_automation"
 SWING_PATTERN_LAB_AUTOMATION_DIR = REPORT_DIR / "swing_pattern_lab_automation"
 THRESHOLD_CYCLE_EV_DIR = REPORT_DIR / "threshold_cycle_ev"
 PIPELINE_EVENT_VERBOSITY_DIR = REPORT_DIR / "pipeline_event_verbosity"
+OBSERVATION_SOURCE_QUALITY_AUDIT_DIR = REPORT_DIR / "observation_source_quality_audit"
 CODEBASE_PERFORMANCE_WORKORDER_DIR = REPORT_DIR / "codebase_performance_workorder"
 CODE_IMPROVEMENT_WORKORDER_DIR = PROJECT_ROOT / "docs" / "code-improvement-workorders"
 CODE_IMPROVEMENT_WORKORDER_REPORT_DIR = REPORT_DIR / "code_improvement_workorder"
@@ -433,6 +434,10 @@ def _pipeline_event_verbosity_report_path(target_date: str) -> Path:
     return PIPELINE_EVENT_VERBOSITY_DIR / f"pipeline_event_verbosity_{target_date}.json"
 
 
+def _observation_source_quality_audit_path(target_date: str) -> Path:
+    return OBSERVATION_SOURCE_QUALITY_AUDIT_DIR / f"observation_source_quality_audit_{target_date}.json"
+
+
 def _codebase_performance_report_path(target_date: str) -> Path:
     return CODEBASE_PERFORMANCE_WORKORDER_DIR / f"codebase_performance_workorder_{target_date}.json"
 
@@ -505,6 +510,94 @@ def _pipeline_event_verbosity_followup_orders(report: dict[str, Any]) -> list[di
             }
         ]
     return []
+
+
+def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
+    if not report:
+        return []
+    if str(report.get("status") or "").strip() not in {"warning", "fail"}:
+        return []
+    summary = report.get("summary") if isinstance(report.get("summary"), dict) else {}
+    stage_contracts = report.get("stage_contracts") if isinstance(report.get("stage_contracts"), dict) else {}
+    high_volume_gaps = (
+        report.get("high_volume_no_source_fields")
+        if isinstance(report.get("high_volume_no_source_fields"), list)
+        else []
+    )
+    warning_stages = [
+        stage
+        for stage, result in stage_contracts.items()
+        if isinstance(result, dict) and result.get("status") == "warning"
+    ]
+    evidence = [
+        f"status={report.get('status')}",
+        f"event_count={summary.get('event_count')}",
+        f"warning_stage_count={summary.get('warning_stage_count')}",
+        f"warning_stages={','.join(warning_stages[:12])}",
+        f"high_volume_no_source_field_stage_count={summary.get('high_volume_no_source_field_stage_count')}",
+        "decision_authority=source_quality_only",
+        "runtime_effect=false",
+    ]
+    base = {
+        "source_report_type": "observation_source_quality_audit",
+        "lifecycle_stage": "source_quality_gate",
+        "target_subsystem": "runtime_instrumentation",
+        "runtime_effect": False,
+        "route": "instrumentation_order",
+        "confidence": "audit",
+        "expected_ev_effect": "none_direct_source_quality_attribution_only",
+        "next_postclose_metric": "observation_source_quality_audit.warning_stage_count and high_volume_no_source_field_stage_count",
+    }
+    orders: list[dict[str, Any]] = []
+    if any(stage in warning_stages for stage in ("ai_confirmed", "blocked_ai_score", "wait65_79_ev_candidate")):
+        orders.append(
+            {
+                **base,
+                "order_id": "order_ai_source_quality_not_evaluated_provenance",
+                "title": "AI source-quality not-evaluated provenance for cooldown and score50 paths",
+                "priority": 1,
+                "intent": (
+                    "Mark cooldown/score50 AI events as not_evaluated with reason and inherit available "
+                    "source-quality snapshots where appropriate, without changing score thresholds or provider route."
+                ),
+                "evidence": evidence,
+                "files_likely_touched": [
+                    "src/engine/sniper_state_handlers.py",
+                    "src/engine/observation_source_quality_audit.py",
+                ],
+                "acceptance_tests": [
+                    "pytest src/tests/test_observation_source_quality_audit.py src/tests/test_state_handler_fast_signatures.py",
+                ],
+            }
+        )
+    if high_volume_gaps:
+        gap_stages = [
+            str(item.get("stage"))
+            for item in high_volume_gaps
+            if isinstance(item, dict) and item.get("stage")
+        ][:12]
+        orders.append(
+            {
+                **base,
+                "order_id": "order_high_volume_diagnostic_stage_contract_labels",
+                "title": "High-volume diagnostic stage metric contract labels",
+                "priority": 2,
+                "intent": (
+                    "Label high-volume funnel diagnostics as ops_volume_diagnostic or funnel_count with explicit "
+                    "decision_authority, so they cannot be mistaken for threshold/order inputs."
+                ),
+                "evidence": [*evidence, f"gap_stages={','.join(gap_stages)}"],
+                "files_likely_touched": [
+                    "src/engine/sniper_state_handlers.py",
+                    "src/engine/observation_source_quality_audit.py",
+                    "docs/report-based-automation-traceability.md",
+                ],
+                "acceptance_tests": [
+                    "pytest src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py",
+                ],
+            }
+        )
+    return orders
 
 
 def _codebase_performance_followup_orders(report: dict[str, Any]) -> list[dict[str, Any]]:
@@ -804,6 +897,8 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
     ev_report = _load_json(ev_path)
     pipeline_event_verbosity_path = _pipeline_event_verbosity_report_path(target_date)
     pipeline_event_verbosity = _load_json(pipeline_event_verbosity_path)
+    observation_source_quality_path = _observation_source_quality_audit_path(target_date)
+    observation_source_quality = _load_json(observation_source_quality_path)
     codebase_performance_path = _codebase_performance_report_path(target_date)
     codebase_performance = _load_json(codebase_performance_path)
     calibration_source_path = _calibration_report_path_from_ev(ev_report)
@@ -814,6 +909,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "swing_pattern_lab_automation": swing_lab_source_path,
             "threshold_cycle_ev": ev_path,
             "pipeline_event_verbosity": pipeline_event_verbosity_path,
+            "observation_source_quality_audit": observation_source_quality_path,
             "codebase_performance_workorder": codebase_performance_path,
     }
     if calibration_source_path is not None:
@@ -847,6 +943,7 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
         *_window_policy_audit_followup_orders(calibration_report),
         *_panic_lifecycle_followup_orders(calibration_report),
         *_pipeline_event_verbosity_followup_orders(pipeline_event_verbosity),
+        *_observation_source_quality_followup_orders(observation_source_quality),
         *_codebase_performance_followup_orders(codebase_performance),
     ]
     closed_instrumentation_order_families = _closed_instrumentation_order_families(ev_report)
@@ -893,6 +990,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "pipeline_event_verbosity": str(pipeline_event_verbosity_path)
             if pipeline_event_verbosity_path.exists()
             else None,
+            "observation_source_quality_audit": str(observation_source_quality_path)
+            if observation_source_quality_path.exists()
+            else None,
             "codebase_performance_workorder": str(codebase_performance_path)
             if codebase_performance_path.exists()
             else None,
@@ -919,6 +1019,9 @@ def build_code_improvement_workorder(target_date: str, *, max_orders: int = 12) 
             "threshold_ev_source_order_count": len(threshold_ev_orders),
             "pipeline_event_verbosity_source_order_count": len(
                 _pipeline_event_verbosity_followup_orders(pipeline_event_verbosity)
+            ),
+            "observation_source_quality_source_order_count": len(
+                _observation_source_quality_followup_orders(observation_source_quality)
             ),
             "codebase_performance_source_order_count": len(
                 _codebase_performance_followup_orders(codebase_performance)
@@ -1012,6 +1115,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- threshold_cycle_ev: `{source.get('threshold_cycle_ev') or '-'}`",
         f"- threshold_cycle_calibration: `{source.get('threshold_cycle_calibration') or '-'}`",
         f"- pipeline_event_verbosity: `{source.get('pipeline_event_verbosity') or '-'}`",
+        f"- observation_source_quality_audit: `{source.get('observation_source_quality_audit') or '-'}`",
         f"- codebase_performance_workorder: `{source.get('codebase_performance_workorder') or '-'}`",
         f"- generated_at: `{report.get('generated_at')}`",
         f"- generation_id: `{report.get('generation_id')}`",
@@ -1051,6 +1155,7 @@ def render_code_improvement_workorder_markdown(report: dict[str, Any]) -> str:
         f"- swing_lab_source_order_count: `{summary.get('swing_lab_source_order_count')}`",
         f"- threshold_ev_source_order_count: `{summary.get('threshold_ev_source_order_count')}`",
         f"- pipeline_event_verbosity_source_order_count: `{summary.get('pipeline_event_verbosity_source_order_count')}`",
+        f"- observation_source_quality_source_order_count: `{summary.get('observation_source_quality_source_order_count')}`",
         f"- codebase_performance_source_order_count: `{summary.get('codebase_performance_source_order_count')}`",
         f"- panic_lifecycle_source_order_count: `{summary.get('panic_lifecycle_source_order_count')}`",
         f"- selected_order_count: `{summary.get('selected_order_count')}`",

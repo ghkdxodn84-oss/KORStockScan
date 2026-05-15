@@ -25,6 +25,7 @@ def test_new_operational_feature_must_declare_detector_coverage():
     assert "system_metric_sampler" in REQUIRED_CRON_JOB_IDS
     assert "panic_sell_defense" in REQUIRED_CRON_JOB_IDS
     assert "panic_sell_defense_report" in REQUIRED_ARTIFACT_IDS
+    assert "market_panic_breadth_report" in REQUIRED_ARTIFACT_IDS
     assert "openai_ws_stability_report" in REQUIRED_ARTIFACT_IDS
     assert "swing_lifecycle_audit_report" in REQUIRED_ARTIFACT_IDS
     assert "swing_improvement_automation_report" in REQUIRED_ARTIFACT_IDS
@@ -34,6 +35,8 @@ def test_new_operational_feature_must_declare_detector_coverage():
     assert "swing_pattern_lab_automation_report" in REQUIRED_ARTIFACT_IDS
     assert "scalping_pattern_lab_automation_report" in REQUIRED_ARTIFACT_IDS
     assert "pipeline_event_verbosity_report" in REQUIRED_ARTIFACT_IDS
+    assert "observation_source_quality_audit_report" in REQUIRED_ARTIFACT_IDS
+    assert "codebase_performance_workorder_report" in REQUIRED_ARTIFACT_IDS
     assert "swing_model_registry_current" in REQUIRED_ARTIFACT_IDS
     assert "update_kospi_status" in REQUIRED_ARTIFACT_IDS
     assert "main_loop" in REQUIRED_HEARTBEAT_COMPONENTS

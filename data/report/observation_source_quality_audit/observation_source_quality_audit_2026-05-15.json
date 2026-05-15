@@ -1,0 +1,1046 @@
+{
+  "report_type": "observation_source_quality_audit",
+  "target_date": "2026-05-15",
+  "generated_at": "2026-05-15T12:02:42+09:00",
+  "status": "warning",
+  "policy": {
+    "metric_role": "source_quality_gate",
+    "decision_authority": "source_quality_only",
+    "runtime_effect": false,
+    "window_policy": "daily_intraday_or_postclose_diagnostic",
+    "primary_decision_metric": "contract_field_presence_and_zero_rate",
+    "forbidden_uses": [
+      "runtime_threshold_apply",
+      "order_submit",
+      "provider_route_change",
+      "bot_restart",
+      "real_execution_quality_approval"
+    ]
+  },
+  "source": {
+    "pipeline_events": "/home/ubuntu/KORStockScan/data/pipeline_events/pipeline_events_2026-05-15.jsonl",
+    "exists": true
+  },
+  "summary": {
+    "event_count": 497404,
+    "stage_count": 32,
+    "top_stages": {
+      "strength_momentum_observed": 157777,
+      "blocked_strength_momentum": 157777,
+      "blocked_swing_score_vpw": 138553,
+      "blocked_overbought": 14562,
+      "blocked_swing_gap": 10305,
+      "strength_momentum_pass": 5909,
+      "blocked_liquidity": 5097,
+      "swing_probe_discarded": 3628,
+      "dynamic_vpw_override_pass": 1407,
+      "blocked_ai_score": 650,
+      "ai_confirmed": 551,
+      "swing_reentry_counterfactual_after_loss": 444,
+      "first_ai_wait": 160,
+      "ai_cooldown_blocked": 144,
+      "swing_probe_state_persisted": 76,
+      "gatekeeper_fast_reuse_bypass": 43,
+      "blocked_gatekeeper_reject": 43,
+      "exit_signal": 26,
+      "swing_probe_exit_signal": 26,
+      "swing_probe_sell_order_assumed_filled": 26
+    },
+    "warning_stage_count": 5,
+    "high_volume_no_source_field_stage_count": 1
+  },
+  "stage_contracts": {
+    "ai_confirmed": {
+      "sample_count": 551,
+      "status": "warning",
+      "required_fields": [
+        "tick_source_quality_fields_sent",
+        "tick_accel_source",
+        "tick_context_quality",
+        "quote_age_source",
+        "latest_strength",
+        "buy_pressure_10t",
+        "distance_from_day_high_pct",
+        "intraday_range_pct"
+      ],
+      "missing_counts": {
+        "tick_source_quality_fields_sent": 370,
+        "tick_accel_source": 370,
+        "tick_context_quality": 370,
+        "quote_age_source": 370,
+        "latest_strength": 0,
+        "buy_pressure_10t": 0,
+        "distance_from_day_high_pct": 0,
+        "intraday_range_pct": 0
+      },
+      "missing_rates": {
+        "tick_source_quality_fields_sent": 0.6715,
+        "tick_accel_source": 0.6715,
+        "tick_context_quality": 0.6715,
+        "quote_age_source": 0.6715,
+        "latest_strength": 0.0,
+        "buy_pressure_10t": 0.0,
+        "distance_from_day_high_pct": 0.0,
+        "intraday_range_pct": 0.0
+      },
+      "zero_sensitive_fields": [
+        "distance_from_day_high_pct",
+        "intraday_range_pct"
+      ],
+      "zero_counts": {
+        "distance_from_day_high_pct": 28,
+        "intraday_range_pct": 0
+      },
+      "zero_rates": {
+        "distance_from_day_high_pct": 0.0508,
+        "intraday_range_pct": 0.0
+      },
+      "missing_violations": {
+        "tick_source_quality_fields_sent": 0.6715,
+        "tick_accel_source": 0.6715,
+        "tick_context_quality": 0.6715,
+        "quote_age_source": 0.6715
+      },
+      "zero_violations": {},
+      "decision_authority": "source_quality_only",
+      "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart"
+    },
+    "blocked_ai_score": {
+      "sample_count": 650,
+      "status": "warning",
+      "required_fields": [
+        "tick_source_quality_fields_sent",
+        "tick_accel_source",
+        "tick_context_quality",
+        "quote_age_source",
+        "latest_strength",
+        "buy_pressure_10t",
+        "distance_from_day_high_pct",
+        "intraday_range_pct"
+      ],
+      "missing_counts": {
+        "tick_source_quality_fields_sent": 511,
+        "tick_accel_source": 516,
+        "tick_context_quality": 516,
+        "quote_age_source": 516,
+        "latest_strength": 0,
+        "buy_pressure_10t": 0,
+        "distance_from_day_high_pct": 0,
+        "intraday_range_pct": 0
+      },
+      "missing_rates": {
+        "tick_source_quality_fields_sent": 0.7862,
+        "tick_accel_source": 0.7938,
+        "tick_context_quality": 0.7938,
+        "quote_age_source": 0.7938,
+        "latest_strength": 0.0,
+        "buy_pressure_10t": 0.0,
+        "distance_from_day_high_pct": 0.0,
+        "intraday_range_pct": 0.0
+      },
+      "zero_sensitive_fields": [
+        "distance_from_day_high_pct",
+        "intraday_range_pct"
+      ],
+      "zero_counts": {
+        "distance_from_day_high_pct": 145,
+        "intraday_range_pct": 122
+      },
+      "zero_rates": {
+        "distance_from_day_high_pct": 0.2231,
+        "intraday_range_pct": 0.1877
+      },
+      "missing_violations": {
+        "tick_source_quality_fields_sent": 0.7862,
+        "tick_accel_source": 0.7938,
+        "tick_context_quality": 0.7938,
+        "quote_age_source": 0.7938
+      },
+      "zero_violations": {
+        "distance_from_day_high_pct": 0.2231,
+        "intraday_range_pct": 0.1877
+      },
+      "decision_authority": "source_quality_only",
+      "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart"
+    },
+    "wait65_79_ev_candidate": {
+      "sample_count": 12,
+      "status": "warning",
+      "required_fields": [
+        "tick_source_quality_fields_sent",
+        "tick_accel_source",
+        "tick_context_quality",
+        "quote_age_source"
+      ],
+      "missing_counts": {
+        "tick_source_quality_fields_sent": 8,
+        "tick_accel_source": 8,
+        "tick_context_quality": 8,
+        "quote_age_source": 8
+      },
+      "missing_rates": {
+        "tick_source_quality_fields_sent": 0.6667,
+        "tick_accel_source": 0.6667,
+        "tick_context_quality": 0.6667,
+        "quote_age_source": 0.6667
+      },
+      "zero_sensitive_fields": [],
+      "zero_counts": {},
+      "zero_rates": {},
+      "missing_violations": {
+        "tick_source_quality_fields_sent": 0.6667,
+        "tick_accel_source": 0.6667,
+        "tick_context_quality": 0.6667,
+        "quote_age_source": 0.6667
+      },
+      "zero_violations": {},
+      "decision_authority": "source_quality_only",
+      "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart"
+    },
+    "blocked_strength_momentum": {
+      "sample_count": 157777,
+      "status": "warning",
+      "required_fields": [
+        "latest_strength",
+        "buy_pressure_10t",
+        "distance_from_day_high_pct",
+        "intraday_range_pct"
+      ],
+      "missing_counts": {
+        "latest_strength": 0,
+        "buy_pressure_10t": 0,
+        "distance_from_day_high_pct": 0,
+        "intraday_range_pct": 0
+      },
+      "missing_rates": {
+        "latest_strength": 0.0,
+        "buy_pressure_10t": 0.0,
+        "distance_from_day_high_pct": 0.0,
+        "intraday_range_pct": 0.0
+      },
+      "zero_sensitive_fields": [
+        "distance_from_day_high_pct",
+        "intraday_range_pct"
+      ],
+      "zero_counts": {
+        "distance_from_day_high_pct": 125103,
+        "intraday_range_pct": 124926
+      },
+      "zero_rates": {
+        "distance_from_day_high_pct": 0.7929,
+        "intraday_range_pct": 0.7918
+      },
+      "missing_violations": {},
+      "zero_violations": {
+        "distance_from_day_high_pct": 0.7929,
+        "intraday_range_pct": 0.7918
+      },
+      "decision_authority": "source_quality_only",
+      "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart"
+    },
+    "blocked_overbought": {
+      "sample_count": 14562,
+      "status": "warning",
+      "required_fields": [
+        "latest_strength",
+        "buy_pressure_10t",
+        "distance_from_day_high_pct",
+        "intraday_range_pct"
+      ],
+      "missing_counts": {
+        "latest_strength": 0,
+        "buy_pressure_10t": 0,
+        "distance_from_day_high_pct": 0,
+        "intraday_range_pct": 0
+      },
+      "missing_rates": {
+        "latest_strength": 0.0,
+        "buy_pressure_10t": 0.0,
+        "distance_from_day_high_pct": 0.0,
+        "intraday_range_pct": 0.0
+      },
+      "zero_sensitive_fields": [
+        "distance_from_day_high_pct",
+        "intraday_range_pct"
+      ],
+      "zero_counts": {
+        "distance_from_day_high_pct": 11223,
+        "intraday_range_pct": 9027
+      },
+      "zero_rates": {
+        "distance_from_day_high_pct": 0.7707,
+        "intraday_range_pct": 0.6199
+      },
+      "missing_violations": {},
+      "zero_violations": {
+        "distance_from_day_high_pct": 0.7707,
+        "intraday_range_pct": 0.6199
+      },
+      "decision_authority": "source_quality_only",
+      "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart"
+    },
+    "swing_probe_entry_candidate": {
+      "sample_count": 23,
+      "status": "pass",
+      "required_fields": [
+        "actual_order_submitted",
+        "broker_order_forbidden",
+        "runtime_effect",
+        "simulated_order",
+        "evidence_quality",
+        "source_record_id",
+        "virtual_budget_override",
+        "budget_authority"
+      ],
+      "missing_counts": {
+        "actual_order_submitted": 0,
+        "broker_order_forbidden": 0,
+        "runtime_effect": 0,
+        "simulated_order": 0,
+        "evidence_quality": 0,
+        "source_record_id": 0,
+        "virtual_budget_override": 0,
+        "budget_authority": 0
+      },
+      "missing_rates": {
+        "actual_order_submitted": 0.0,
+        "broker_order_forbidden": 0.0,
+        "runtime_effect": 0.0,
+        "simulated_order": 0.0,
+        "evidence_quality": 0.0,
+        "source_record_id": 0.0,
+        "virtual_budget_override": 0.0,
+        "budget_authority": 0.0
+      },
+      "zero_sensitive_fields": [],
+      "zero_counts": {},
+      "zero_rates": {},
+      "missing_violations": {},
+      "zero_violations": {},
+      "decision_authority": "source_quality_only",
+      "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart"
+    },
+    "swing_probe_holding_started": {
+      "sample_count": 23,
+      "status": "pass",
+      "required_fields": [
+        "actual_order_submitted",
+        "broker_order_forbidden",
+        "runtime_effect",
+        "simulated_order",
+        "evidence_quality",
+        "source_record_id",
+        "virtual_budget_override",
+        "budget_authority"
+      ],
+      "missing_counts": {
+        "actual_order_submitted": 0,
+        "broker_order_forbidden": 0,
+        "runtime_effect": 0,
+        "simulated_order": 0,
+        "evidence_quality": 0,
+        "source_record_id": 0,
+        "virtual_budget_override": 0,
+        "budget_authority": 0
+      },
+      "missing_rates": {
+        "actual_order_submitted": 0.0,
+        "broker_order_forbidden": 0.0,
+        "runtime_effect": 0.0,
+        "simulated_order": 0.0,
+        "evidence_quality": 0.0,
+        "source_record_id": 0.0,
+        "virtual_budget_override": 0.0,
+        "budget_authority": 0.0
+      },
+      "zero_sensitive_fields": [],
+      "zero_counts": {},
+      "zero_rates": {},
+      "missing_violations": {},
+      "zero_violations": {},
+      "decision_authority": "source_quality_only",
+      "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart"
+    },
+    "swing_probe_exit_signal": {
+      "sample_count": 26,
+      "status": "pass",
+      "required_fields": [
+        "actual_order_submitted",
+        "broker_order_forbidden",
+        "runtime_effect",
+        "simulated_order",
+        "evidence_quality",
+        "source_record_id"
+      ],
+      "missing_counts": {
+        "actual_order_submitted": 0,
+        "broker_order_forbidden": 0,
+        "runtime_effect": 0,
+        "simulated_order": 0,
+        "evidence_quality": 0,
+        "source_record_id": 0
+      },
+      "missing_rates": {
+        "actual_order_submitted": 0.0,
+        "broker_order_forbidden": 0.0,
+        "runtime_effect": 0.0,
+        "simulated_order": 0.0,
+        "evidence_quality": 0.0,
+        "source_record_id": 0.0
+      },
+      "zero_sensitive_fields": [],
+      "zero_counts": {},
+      "zero_rates": {},
+      "missing_violations": {},
+      "zero_violations": {},
+      "decision_authority": "source_quality_only",
+      "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart"
+    },
+    "swing_probe_sell_order_assumed_filled": {
+      "sample_count": 26,
+      "status": "pass",
+      "required_fields": [
+        "actual_order_submitted",
+        "broker_order_forbidden",
+        "runtime_effect",
+        "simulated_order",
+        "evidence_quality",
+        "source_record_id",
+        "orderbook_micro_ready",
+        "orderbook_micro_state",
+        "orderbook_micro_reason",
+        "orderbook_micro_snapshot_age_ms",
+        "orderbook_micro_observer_healthy"
+      ],
+      "missing_counts": {
+        "actual_order_submitted": 0,
+        "broker_order_forbidden": 0,
+        "runtime_effect": 0,
+        "simulated_order": 0,
+        "evidence_quality": 0,
+        "source_record_id": 0,
+        "orderbook_micro_ready": 0,
+        "orderbook_micro_state": 0,
+        "orderbook_micro_reason": 0,
+        "orderbook_micro_snapshot_age_ms": 0,
+        "orderbook_micro_observer_healthy": 0
+      },
+      "missing_rates": {
+        "actual_order_submitted": 0.0,
+        "broker_order_forbidden": 0.0,
+        "runtime_effect": 0.0,
+        "simulated_order": 0.0,
+        "evidence_quality": 0.0,
+        "source_record_id": 0.0,
+        "orderbook_micro_ready": 0.0,
+        "orderbook_micro_state": 0.0,
+        "orderbook_micro_reason": 0.0,
+        "orderbook_micro_snapshot_age_ms": 0.0,
+        "orderbook_micro_observer_healthy": 0.0
+      },
+      "zero_sensitive_fields": [],
+      "zero_counts": {},
+      "zero_rates": {},
+      "missing_violations": {},
+      "zero_violations": {},
+      "decision_authority": "source_quality_only",
+      "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart"
+    },
+    "swing_probe_scale_in_order_assumed_filled": {
+      "sample_count": 21,
+      "status": "pass",
+      "required_fields": [
+        "actual_order_submitted",
+        "broker_order_forbidden",
+        "runtime_effect",
+        "simulated_order",
+        "evidence_quality",
+        "source_record_id",
+        "orderbook_micro_ready",
+        "orderbook_micro_state",
+        "orderbook_micro_reason",
+        "orderbook_micro_snapshot_age_ms",
+        "orderbook_micro_observer_healthy"
+      ],
+      "missing_counts": {
+        "actual_order_submitted": 0,
+        "broker_order_forbidden": 0,
+        "runtime_effect": 0,
+        "simulated_order": 0,
+        "evidence_quality": 0,
+        "source_record_id": 0,
+        "orderbook_micro_ready": 0,
+        "orderbook_micro_state": 0,
+        "orderbook_micro_reason": 0,
+        "orderbook_micro_snapshot_age_ms": 0,
+        "orderbook_micro_observer_healthy": 0
+      },
+      "missing_rates": {
+        "actual_order_submitted": 0.0,
+        "broker_order_forbidden": 0.0,
+        "runtime_effect": 0.0,
+        "simulated_order": 0.0,
+        "evidence_quality": 0.0,
+        "source_record_id": 0.0,
+        "orderbook_micro_ready": 0.0,
+        "orderbook_micro_state": 0.0,
+        "orderbook_micro_reason": 0.0,
+        "orderbook_micro_snapshot_age_ms": 0.0,
+        "orderbook_micro_observer_healthy": 0.0
+      },
+      "zero_sensitive_fields": [],
+      "zero_counts": {},
+      "zero_rates": {},
+      "missing_violations": {},
+      "zero_violations": {},
+      "decision_authority": "source_quality_only",
+      "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart"
+    },
+    "swing_reentry_counterfactual_after_loss": {
+      "sample_count": 444,
+      "status": "pass",
+      "required_fields": [
+        "simulated_order",
+        "actual_order_submitted",
+        "broker_order_forbidden",
+        "runtime_effect"
+      ],
+      "missing_counts": {
+        "simulated_order": 0,
+        "actual_order_submitted": 0,
+        "broker_order_forbidden": 0,
+        "runtime_effect": 0
+      },
+      "missing_rates": {
+        "simulated_order": 0.0,
+        "actual_order_submitted": 0.0,
+        "broker_order_forbidden": 0.0,
+        "runtime_effect": 0.0
+      },
+      "zero_sensitive_fields": [],
+      "zero_counts": {},
+      "zero_rates": {},
+      "missing_violations": {},
+      "zero_violations": {},
+      "decision_authority": "source_quality_only",
+      "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart"
+    },
+    "swing_same_symbol_loss_reentry_cooldown": {
+      "sample_count": 13,
+      "status": "pass",
+      "required_fields": [
+        "actual_order_submitted",
+        "broker_order_forbidden",
+        "source_book",
+        "source_probe_id"
+      ],
+      "missing_counts": {
+        "actual_order_submitted": 0,
+        "broker_order_forbidden": 0,
+        "source_book": 0,
+        "source_probe_id": 0
+      },
+      "missing_rates": {
+        "actual_order_submitted": 0.0,
+        "broker_order_forbidden": 0.0,
+        "source_book": 0.0,
+        "source_probe_id": 0.0
+      },
+      "zero_sensitive_fields": [],
+      "zero_counts": {},
+      "zero_rates": {},
+      "missing_violations": {},
+      "zero_violations": {},
+      "decision_authority": "source_quality_only",
+      "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart"
+    },
+    "swing_scale_in_micro_context_observed": {
+      "sample_count": 21,
+      "status": "pass",
+      "required_fields": [
+        "orderbook_micro_ready",
+        "orderbook_micro_state",
+        "orderbook_micro_reason",
+        "orderbook_micro_snapshot_age_ms",
+        "orderbook_micro_observer_healthy"
+      ],
+      "missing_counts": {
+        "orderbook_micro_ready": 0,
+        "orderbook_micro_state": 0,
+        "orderbook_micro_reason": 0,
+        "orderbook_micro_snapshot_age_ms": 0,
+        "orderbook_micro_observer_healthy": 0
+      },
+      "missing_rates": {
+        "orderbook_micro_ready": 0.0,
+        "orderbook_micro_state": 0.0,
+        "orderbook_micro_reason": 0.0,
+        "orderbook_micro_snapshot_age_ms": 0.0,
+        "orderbook_micro_observer_healthy": 0.0
+      },
+      "zero_sensitive_fields": [],
+      "zero_counts": {},
+      "zero_rates": {},
+      "missing_violations": {},
+      "zero_violations": {},
+      "decision_authority": "source_quality_only",
+      "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart"
+    },
+    "scale_in_price_resolved": {
+      "sample_count": 21,
+      "status": "pass",
+      "required_fields": [
+        "price_source",
+        "virtual_budget_override",
+        "budget_authority",
+        "orderbook_micro_ready",
+        "orderbook_micro_state",
+        "orderbook_micro_reason",
+        "orderbook_micro_snapshot_age_ms",
+        "orderbook_micro_observer_healthy"
+      ],
+      "missing_counts": {
+        "price_source": 0,
+        "virtual_budget_override": 0,
+        "budget_authority": 0,
+        "orderbook_micro_ready": 0,
+        "orderbook_micro_state": 0,
+        "orderbook_micro_reason": 0,
+        "orderbook_micro_snapshot_age_ms": 0,
+        "orderbook_micro_observer_healthy": 0
+      },
+      "missing_rates": {
+        "price_source": 0.0,
+        "virtual_budget_override": 0.0,
+        "budget_authority": 0.0,
+        "orderbook_micro_ready": 0.0,
+        "orderbook_micro_state": 0.0,
+        "orderbook_micro_reason": 0.0,
+        "orderbook_micro_snapshot_age_ms": 0.0,
+        "orderbook_micro_observer_healthy": 0.0
+      },
+      "zero_sensitive_fields": [],
+      "zero_counts": {},
+      "zero_rates": {},
+      "missing_violations": {},
+      "zero_violations": {},
+      "decision_authority": "source_quality_only",
+      "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart"
+    },
+    "scale_in_price_p2_observe": {
+      "sample_count": 21,
+      "status": "pass",
+      "required_fields": [
+        "price_source",
+        "orderbook_micro_ready",
+        "orderbook_micro_state",
+        "orderbook_micro_reason",
+        "orderbook_micro_snapshot_age_ms",
+        "orderbook_micro_observer_healthy"
+      ],
+      "missing_counts": {
+        "price_source": 0,
+        "orderbook_micro_ready": 0,
+        "orderbook_micro_state": 0,
+        "orderbook_micro_reason": 0,
+        "orderbook_micro_snapshot_age_ms": 0,
+        "orderbook_micro_observer_healthy": 0
+      },
+      "missing_rates": {
+        "price_source": 0.0,
+        "orderbook_micro_ready": 0.0,
+        "orderbook_micro_state": 0.0,
+        "orderbook_micro_reason": 0.0,
+        "orderbook_micro_snapshot_age_ms": 0.0,
+        "orderbook_micro_observer_healthy": 0.0
+      },
+      "zero_sensitive_fields": [],
+      "zero_counts": {},
+      "zero_rates": {},
+      "missing_violations": {},
+      "zero_violations": {},
+      "decision_authority": "source_quality_only",
+      "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart"
+    },
+    "swing_sim_scale_in_order_assumed_filled": {
+      "sample_count": 21,
+      "status": "pass",
+      "required_fields": [
+        "actual_order_submitted",
+        "broker_order_forbidden",
+        "virtual_budget_override",
+        "budget_authority",
+        "orderbook_micro_ready",
+        "orderbook_micro_state",
+        "orderbook_micro_reason",
+        "orderbook_micro_snapshot_age_ms",
+        "orderbook_micro_observer_healthy"
+      ],
+      "missing_counts": {
+        "actual_order_submitted": 0,
+        "broker_order_forbidden": 0,
+        "virtual_budget_override": 0,
+        "budget_authority": 0,
+        "orderbook_micro_ready": 0,
+        "orderbook_micro_state": 0,
+        "orderbook_micro_reason": 0,
+        "orderbook_micro_snapshot_age_ms": 0,
+        "orderbook_micro_observer_healthy": 0
+      },
+      "missing_rates": {
+        "actual_order_submitted": 0.0,
+        "broker_order_forbidden": 0.0,
+        "virtual_budget_override": 0.0,
+        "budget_authority": 0.0,
+        "orderbook_micro_ready": 0.0,
+        "orderbook_micro_state": 0.0,
+        "orderbook_micro_reason": 0.0,
+        "orderbook_micro_snapshot_age_ms": 0.0,
+        "orderbook_micro_observer_healthy": 0.0
+      },
+      "zero_sensitive_fields": [],
+      "zero_counts": {},
+      "zero_rates": {},
+      "missing_violations": {},
+      "zero_violations": {},
+      "decision_authority": "source_quality_only",
+      "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart"
+    }
+  },
+  "warning_stages": [
+    "ai_confirmed",
+    "blocked_ai_score",
+    "wait65_79_ev_candidate",
+    "blocked_strength_momentum",
+    "blocked_overbought"
+  ],
+  "high_volume_no_source_fields": [
+    {
+      "stage": "swing_probe_state_persisted",
+      "event_count": 76,
+      "example_fields": [
+        "simulation_book",
+        "simulation_owner",
+        "reason",
+        "active_count",
+        "allow_empty_overwrite"
+      ],
+      "routing": "instrumentation_gap_or_diagnostic_contract_needed"
+    }
+  ],
+  "field_presence_top": {
+    "blocked_strength_momentum": {
+      "latest_strength": 157777,
+      "buy_pressure_10t": 157777,
+      "distance_from_day_high_pct": 157777,
+      "intraday_range_pct": 157777
+    },
+    "strength_momentum_observed": {
+      "metric_role": 1407,
+      "decision_authority": 1407,
+      "runtime_effect": 1407,
+      "forbidden_uses": 1407,
+      "source_quality_route": 1407
+    },
+    "blocked_swing_score_vpw": {
+      "metric_role": 961,
+      "decision_authority": 961,
+      "runtime_effect": 961,
+      "forbidden_uses": 961,
+      "source_quality_route": 961
+    },
+    "blocked_overbought": {
+      "latest_strength": 14562,
+      "buy_pressure_10t": 14562,
+      "distance_from_day_high_pct": 14562,
+      "intraday_range_pct": 14562
+    },
+    "blocked_swing_gap": {
+      "metric_role": 48,
+      "decision_authority": 48,
+      "runtime_effect": 48,
+      "forbidden_uses": 48,
+      "source_quality_route": 48
+    },
+    "strength_momentum_pass": {
+      "metric_role": 42,
+      "decision_authority": 42,
+      "runtime_effect": 42,
+      "forbidden_uses": 42,
+      "source_quality_route": 42
+    },
+    "blocked_liquidity": {
+      "metric_role": 28,
+      "decision_authority": 28,
+      "runtime_effect": 28,
+      "forbidden_uses": 28,
+      "source_quality_route": 28
+    },
+    "swing_probe_discarded": {
+      "simulated_order": 3628,
+      "actual_order_submitted": 3628,
+      "broker_order_forbidden": 3628,
+      "runtime_effect": 3628
+    },
+    "dynamic_vpw_override_pass": {
+      "metric_role": 6,
+      "decision_authority": 6,
+      "runtime_effect": 6,
+      "forbidden_uses": 6,
+      "source_quality_route": 6
+    },
+    "blocked_ai_score": {
+      "latest_strength": 650,
+      "buy_pressure_10t": 650,
+      "distance_from_day_high_pct": 650,
+      "intraday_range_pct": 650,
+      "ai_result_source": 413,
+      "openai_transport_mode": 355,
+      "openai_request_id": 355,
+      "openai_endpoint_name": 355,
+      "openai_schema_name": 355,
+      "openai_input_tokens": 355,
+      "openai_output_tokens": 355,
+      "openai_total_tokens": 355,
+      "openai_cached_input_tokens": 355,
+      "openai_reasoning_tokens": 355,
+      "openai_ws_queue_wait_ms": 355,
+      "openai_ws_roundtrip_ms": 355,
+      "openai_ws_used": 355,
+      "openai_ws_http_fallback": 355,
+      "tick_source_quality_fields_sent": 139,
+      "tick_accel_source": 134
+    },
+    "ai_confirmed": {
+      "buy_pressure": 551,
+      "micro_vwap_bp": 551,
+      "latest_strength": 551,
+      "buy_pressure_10t": 551,
+      "distance_from_day_high_pct": 551,
+      "intraday_range_pct": 551,
+      "ai_result_source": 551,
+      "openai_transport_mode": 493,
+      "openai_request_id": 493,
+      "openai_endpoint_name": 493,
+      "openai_schema_name": 493,
+      "openai_input_tokens": 493,
+      "openai_output_tokens": 493,
+      "openai_total_tokens": 493,
+      "openai_cached_input_tokens": 493,
+      "openai_reasoning_tokens": 493,
+      "openai_ws_queue_wait_ms": 493,
+      "openai_ws_roundtrip_ms": 493,
+      "openai_ws_used": 493,
+      "openai_ws_http_fallback": 493
+    },
+    "swing_reentry_counterfactual_after_loss": {
+      "simulated_order": 444,
+      "actual_order_submitted": 444,
+      "broker_order_forbidden": 444,
+      "runtime_effect": 444,
+      "evidence_quality": 444,
+      "evidence_quality_weight": 170
+    },
+    "first_ai_wait": {
+      "metric_role": 5,
+      "decision_authority": 5,
+      "runtime_effect": 5,
+      "forbidden_uses": 5,
+      "source_quality_route": 5
+    },
+    "ai_cooldown_blocked": {
+      "ai_result_source": 144,
+      "ai_input_source_quality_status": 4,
+      "ai_input_source_quality_reason": 4,
+      "tick_source_quality_fields_sent": 4
+    },
+    "gatekeeper_fast_reuse_bypass": {
+      "ws_age_sec": 43
+    },
+    "exit_signal": {
+      "exit_decision_source": 26
+    },
+    "swing_probe_exit_signal": {
+      "simulated_order": 26,
+      "actual_order_submitted": 26,
+      "broker_order_forbidden": 26,
+      "runtime_effect": 26,
+      "evidence_quality": 26,
+      "evidence_quality_weight": 26,
+      "source_record_id": 26,
+      "exit_decision_source": 26
+    },
+    "swing_probe_sell_order_assumed_filled": {
+      "simulated_order": 26,
+      "actual_order_submitted": 26,
+      "broker_order_forbidden": 26,
+      "runtime_effect": 26,
+      "evidence_quality": 26,
+      "evidence_quality_weight": 26,
+      "source_record_id": 26,
+      "exit_decision_source": 26,
+      "orderbook_micro_ready": 26,
+      "orderbook_micro_reason": 26,
+      "orderbook_micro_state": 26,
+      "orderbook_micro_sample_quote_count": 26,
+      "orderbook_micro_qi": 26,
+      "orderbook_micro_qi_ewma": 26,
+      "orderbook_micro_ofi_norm": 26,
+      "orderbook_micro_depth_ewma": 26,
+      "orderbook_micro_spread_ticks": 26,
+      "orderbook_micro_captured_at_ms": 26,
+      "orderbook_micro_snapshot_age_ms": 26,
+      "orderbook_micro_observer_healthy": 26
+    },
+    "swing_probe_entry_candidate": {
+      "simulated_order": 23,
+      "actual_order_submitted": 23,
+      "broker_order_forbidden": 23,
+      "runtime_effect": 23,
+      "evidence_quality": 23,
+      "evidence_quality_weight": 23,
+      "source_record_id": 23,
+      "qty_source": 23,
+      "source_signal_date": 23,
+      "budget_authority": 23
+    },
+    "swing_probe_holding_started": {
+      "simulated_order": 23,
+      "actual_order_submitted": 23,
+      "broker_order_forbidden": 23,
+      "runtime_effect": 23,
+      "evidence_quality": 23,
+      "evidence_quality_weight": 23,
+      "source_record_id": 23,
+      "qty_source": 23,
+      "source_signal_date": 23,
+      "budget_authority": 23
+    },
+    "scale_in_price_p2_observe": {
+      "live_runtime_effect": 21,
+      "price_source": 21,
+      "orderbook_micro_ready": 21,
+      "orderbook_micro_reason": 21,
+      "orderbook_micro_state": 21,
+      "orderbook_micro_sample_quote_count": 21,
+      "orderbook_micro_qi": 21,
+      "orderbook_micro_qi_ewma": 21,
+      "orderbook_micro_ofi_norm": 21,
+      "orderbook_micro_depth_ewma": 21,
+      "orderbook_micro_spread_ticks": 21,
+      "orderbook_micro_captured_at_ms": 21,
+      "orderbook_micro_snapshot_age_ms": 21,
+      "orderbook_micro_observer_healthy": 21,
+      "orderbook_micro_observer_missing_reason": 21,
+      "orderbook_micro_observer_last_quote_age_ms": 21,
+      "orderbook_micro_observer_last_trade_age_ms": 21,
+      "orderbook_micro_micro_window_sec": 21,
+      "orderbook_micro_micro_z_min_samples": 21,
+      "orderbook_micro_micro_lambda": 21
+    },
+    "scale_in_price_resolved": {
+      "price_source": 21,
+      "curr_vs_micro_vwap_bp": 21,
+      "budget_authority": 21,
+      "orderbook_micro_ready": 21,
+      "orderbook_micro_reason": 21,
+      "orderbook_micro_state": 21,
+      "orderbook_micro_sample_quote_count": 21,
+      "orderbook_micro_qi": 21,
+      "orderbook_micro_qi_ewma": 21,
+      "orderbook_micro_ofi_norm": 21,
+      "orderbook_micro_depth_ewma": 21,
+      "orderbook_micro_spread_ticks": 21,
+      "orderbook_micro_captured_at_ms": 21,
+      "orderbook_micro_snapshot_age_ms": 21,
+      "orderbook_micro_observer_healthy": 21,
+      "orderbook_micro_observer_missing_reason": 21,
+      "orderbook_micro_observer_last_quote_age_ms": 21,
+      "orderbook_micro_observer_last_trade_age_ms": 21,
+      "orderbook_micro_micro_window_sec": 21,
+      "orderbook_micro_micro_z_min_samples": 21
+    },
+    "swing_probe_scale_in_order_assumed_filled": {
+      "simulated_order": 21,
+      "actual_order_submitted": 21,
+      "broker_order_forbidden": 21,
+      "runtime_effect": 21,
+      "evidence_quality": 21,
+      "evidence_quality_weight": 21,
+      "source_record_id": 21,
+      "budget_authority": 21,
+      "orderbook_micro_ready": 21,
+      "orderbook_micro_reason": 21,
+      "orderbook_micro_state": 21,
+      "orderbook_micro_sample_quote_count": 21,
+      "orderbook_micro_qi": 21,
+      "orderbook_micro_qi_ewma": 21,
+      "orderbook_micro_ofi_norm": 21,
+      "orderbook_micro_depth_ewma": 21,
+      "orderbook_micro_spread_ticks": 21,
+      "orderbook_micro_captured_at_ms": 21,
+      "orderbook_micro_snapshot_age_ms": 21,
+      "orderbook_micro_observer_healthy": 21
+    },
+    "swing_scale_in_micro_context_observed": {
+      "orderbook_micro_ready": 21,
+      "orderbook_micro_reason": 21,
+      "orderbook_micro_state": 21,
+      "orderbook_micro_sample_quote_count": 21,
+      "orderbook_micro_qi": 21,
+      "orderbook_micro_qi_ewma": 21,
+      "orderbook_micro_ofi_norm": 21,
+      "orderbook_micro_depth_ewma": 21,
+      "orderbook_micro_spread_ticks": 21,
+      "orderbook_micro_captured_at_ms": 21,
+      "orderbook_micro_snapshot_age_ms": 21,
+      "orderbook_micro_observer_healthy": 21,
+      "orderbook_micro_observer_missing_reason": 21,
+      "orderbook_micro_observer_last_quote_age_ms": 21,
+      "orderbook_micro_observer_last_trade_age_ms": 21,
+      "orderbook_micro_micro_window_sec": 21,
+      "orderbook_micro_micro_z_min_samples": 21,
+      "orderbook_micro_micro_lambda": 21,
+      "orderbook_micro_ofi_bull_threshold": 21,
+      "orderbook_micro_ofi_bear_threshold": 21
+    },
+    "swing_sim_scale_in_order_assumed_filled": {
+      "actual_order_submitted": 21,
+      "broker_order_forbidden": 21,
+      "budget_authority": 21,
+      "orderbook_micro_ready": 21,
+      "orderbook_micro_reason": 21,
+      "orderbook_micro_state": 21,
+      "orderbook_micro_sample_quote_count": 21,
+      "orderbook_micro_qi": 21,
+      "orderbook_micro_qi_ewma": 21,
+      "orderbook_micro_ofi_norm": 21,
+      "orderbook_micro_depth_ewma": 21,
+      "orderbook_micro_spread_ticks": 21,
+      "orderbook_micro_captured_at_ms": 21,
+      "orderbook_micro_snapshot_age_ms": 21,
+      "orderbook_micro_observer_healthy": 21,
+      "orderbook_micro_observer_missing_reason": 21,
+      "orderbook_micro_observer_last_quote_age_ms": 21,
+      "orderbook_micro_observer_last_trade_age_ms": 21,
+      "orderbook_micro_micro_window_sec": 21,
+      "orderbook_micro_micro_z_min_samples": 21
+    },
+    "swing_same_symbol_loss_reentry_cooldown": {
+      "source_book": 13,
+      "source_probe_id": 13,
+      "actual_order_submitted": 13,
+      "broker_order_forbidden": 13
+    },
+    "wait65_79_ev_candidate": {
+      "buy_pressure": 12,
+      "micro_vwap_bp": 12,
+      "tick_accel_source": 4,
+      "tick_context_quality": 4,
+      "quote_age_source": 4,
+      "tick_context_stale": 4,
+      "quote_stale": 4,
+      "tick_source_quality_fields_sent": 4
+    }
+  }
+}

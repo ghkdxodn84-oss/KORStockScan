@@ -218,6 +218,60 @@ def test_build_code_improvement_workorder_adds_pipeline_event_verbosity_order(tm
     )
 
 
+def test_build_code_improvement_workorder_adds_observation_source_quality_orders(tmp_path, monkeypatch):
+    automation_dir = tmp_path / "automation"
+    ev_dir = tmp_path / "ev"
+    audit_dir = tmp_path / "observation-audit"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    for directory in (automation_dir, ev_dir, audit_dir):
+        directory.mkdir()
+    (automation_dir / "scalping_pattern_lab_automation_2026-05-15.json").write_text(
+        json.dumps({"date": "2026-05-15", "code_improvement_orders": []}),
+        encoding="utf-8",
+    )
+    (ev_dir / "threshold_cycle_ev_2026-05-15.json").write_text("{}", encoding="utf-8")
+    (audit_dir / "observation_source_quality_audit_2026-05-15.json").write_text(
+        json.dumps(
+            {
+                "status": "warning",
+                "summary": {
+                    "event_count": 100,
+                    "warning_stage_count": 1,
+                    "high_volume_no_source_field_stage_count": 1,
+                },
+                "stage_contracts": {
+                    "blocked_ai_score": {"status": "warning"},
+                },
+                "high_volume_no_source_fields": [
+                    {"stage": "strength_momentum_observed", "event_count": 60},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
+    monkeypatch.setattr(mod, "PIPELINE_EVENT_VERBOSITY_DIR", tmp_path / "missing-verbosity")
+    monkeypatch.setattr(mod, "OBSERVATION_SOURCE_QUALITY_AUDIT_DIR", audit_dir)
+    monkeypatch.setattr(mod, "CODEBASE_PERFORMANCE_WORKORDER_DIR", tmp_path / "missing-performance")
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-15", max_orders=5)
+
+    order_ids = {item["order_id"]: item for item in report["orders"]}
+    assert order_ids["order_ai_source_quality_not_evaluated_provenance"]["decision"] == "implement_now"
+    assert order_ids["order_high_volume_diagnostic_stage_contract_labels"]["runtime_effect"] is False
+    assert report["summary"]["observation_source_quality_source_order_count"] == 2
+    assert report["source"]["observation_source_quality_audit"] == str(
+        audit_dir / "observation_source_quality_audit_2026-05-15.json"
+    )
+
+
 def test_build_code_improvement_workorder_adds_window_policy_audit_order(tmp_path, monkeypatch):
     automation_dir = tmp_path / "automation"
     ev_dir = tmp_path / "ev"

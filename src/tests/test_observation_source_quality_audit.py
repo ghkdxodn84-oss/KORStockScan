@@ -1,0 +1,131 @@
+import json
+
+from src.engine import observation_source_quality_audit as audit
+
+
+def _event(stage: str, fields: dict, *, record_id: int = 1) -> dict:
+    return {
+        "event_type": "pipeline_event",
+        "pipeline": "ENTRY_PIPELINE",
+        "stage": stage,
+        "stock_name": "TEST",
+        "stock_code": "123456",
+        "record_id": record_id,
+        "fields": fields,
+        "emitted_at": "2026-05-15T10:00:00",
+        "emitted_date": "2026-05-15",
+    }
+
+
+def _write_events(tmp_path, target_date: str, rows: list[dict]) -> None:
+    event_dir = tmp_path / "pipeline_events"
+    event_dir.mkdir(parents=True)
+    with (event_dir / f"pipeline_events_{target_date}.jsonl").open("w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def test_observation_source_quality_audit_flags_missing_ai_fields(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [
+            _event(
+                "ai_confirmed",
+                {
+                    "tick_source_quality_fields_sent": True,
+                    "tick_accel_source": "computed_10ticks",
+                    "tick_context_quality": "fresh_computed",
+                    "quote_age_source": "missing",
+                    "latest_strength": "120.0",
+                    "buy_pressure_10t": "61.0",
+                    "distance_from_day_high_pct": "-1.0",
+                    "intraday_range_pct": "4.0",
+                },
+            ),
+            _event(
+                "blocked_ai_score",
+                {
+                    "latest_strength": "120.0",
+                    "buy_pressure_10t": "61.0",
+                    "distance_from_day_high_pct": "0.0",
+                    "intraday_range_pct": "0.0",
+                },
+                record_id=2,
+            ),
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    assert report["status"] == "warning"
+    blocked = report["stage_contracts"]["blocked_ai_score"]
+    assert blocked["status"] == "warning"
+    assert "tick_accel_source" in blocked["missing_violations"]
+    assert blocked["zero_violations"]["intraday_range_pct"] == 1.0
+
+
+def test_observation_source_quality_audit_detects_high_volume_contract_gap(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [
+            _event("strength_momentum_observed", {"reason": "below_strength_base"}, record_id=idx)
+            for idx in range(60)
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    gaps = {item["stage"]: item for item in report["high_volume_no_source_fields"]}
+    assert gaps["strength_momentum_observed"]["event_count"] == 60
+    assert report["policy"]["decision_authority"] == "source_quality_only"
+
+
+def test_observation_source_quality_audit_accepts_high_volume_contract_labels(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [
+            _event(
+                "strength_momentum_observed",
+                {
+                    "reason": "below_strength_base",
+                    "metric_role": "ops_volume_diagnostic",
+                    "decision_authority": "source_quality_only",
+                    "runtime_effect": False,
+                    "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+                },
+                record_id=idx,
+            )
+            for idx in range(60)
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    assert report["high_volume_no_source_fields"] == []
+
+
+def test_observation_source_quality_audit_writes_json_and_markdown(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(tmp_path, "2026-05-15", [_event("swing_probe_entry_candidate", {
+        "actual_order_submitted": False,
+        "broker_order_forbidden": True,
+        "runtime_effect": False,
+        "simulated_order": True,
+        "evidence_quality": "counterfactual_after_gap",
+        "source_record_id": "1",
+        "virtual_budget_override": True,
+        "budget_authority": "sim_virtual_not_real_orderable_amount",
+    })])
+
+    report = audit.write_report("2026-05-15")
+    json_path, md_path = audit.report_paths("2026-05-15")
+
+    assert report["stage_contracts"]["swing_probe_entry_candidate"]["status"] == "pass"
+    assert json_path.exists()
+    assert md_path.exists()

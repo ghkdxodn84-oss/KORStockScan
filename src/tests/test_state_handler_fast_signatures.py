@@ -6,6 +6,8 @@ from src.engine.sniper_state_handlers import (
     _build_soft_stop_whipsaw_confirmation_decision,
     _build_ai_overlap_log_fields,
     _build_ai_ops_log_fields,
+    _build_observation_contract_fields,
+    _ensure_ai_source_quality_fields,
     _build_gatekeeper_fast_signature,
     _build_holding_ai_fast_signature,
     _extract_ai_overlap_snapshot,
@@ -289,6 +291,41 @@ def test_build_ai_ops_log_fields_preserves_operational_meta():
     assert fields["entry_score_threshold"] == "75.0"
     assert fields["big_bite_bonus_applied"] is True
     assert fields["ai_cooldown_blocked"] is False
+
+
+def test_ai_source_quality_fields_marks_not_evaluated_without_snapshot():
+    fields = _ensure_ai_source_quality_fields({}, {}, not_evaluated_reason="watching_ai_cooldown_active")
+
+    assert fields["ai_input_source_quality_status"] == "not_evaluated"
+    assert fields["ai_input_source_quality_reason"] == "watching_ai_cooldown_active"
+    assert fields["tick_source_quality_fields_sent"] is False
+
+
+def test_ai_source_quality_fields_inherits_previous_snapshot():
+    stock = {
+        "last_watching_ai_source_quality_fields": {
+            "tick_source_quality_fields_sent": True,
+            "tick_accel_source": "computed_10ticks",
+            "tick_context_quality": "fresh_computed",
+            "quote_age_source": "missing",
+        }
+    }
+
+    fields = _ensure_ai_source_quality_fields({}, stock, not_evaluated_reason="wait65_79_ev_candidate_no_tick_audit")
+
+    assert fields["tick_source_quality_fields_sent"] is True
+    assert fields["tick_accel_source"] == "computed_10ticks"
+    assert fields["ai_input_source_quality_status"] == "evaluated"
+    assert fields["ai_input_source_quality_reason"] == "fresh_computed"
+
+
+def test_observation_contract_fields_are_source_quality_only():
+    fields = _build_observation_contract_fields("funnel_count")
+
+    assert fields["metric_role"] == "funnel_count"
+    assert fields["decision_authority"] == "source_quality_only"
+    assert fields["runtime_effect"] is False
+    assert "runtime_threshold_apply" in fields["forbidden_uses"]
 
 
 def test_build_ai_overlap_log_fields_includes_momentum_and_profile():

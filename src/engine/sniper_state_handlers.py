@@ -647,6 +647,7 @@ def persist_swing_intraday_probe_state(targets=None, *, allow_empty_overwrite: b
                 reason=reason,
                 active_count=len(active_positions),
                 allow_empty_overwrite=allow_empty_overwrite,
+                **_build_observation_contract_fields("ops_volume_diagnostic"),
             )
     except Exception as exc:
         log_error(f"[SWING_PROBE_STATE] persist failed: {exc}")
@@ -5133,6 +5134,8 @@ def _build_ai_ops_log_fields(
         "tick_accel_source",
         "tick_context_quality",
         "quote_age_source",
+        "ai_input_source_quality_status",
+        "ai_input_source_quality_reason",
     ):
         if field_name in payload:
             out[field_name] = str(payload.get(field_name, "-") or "-")
@@ -5161,6 +5164,26 @@ def _build_ai_ops_log_fields(
         out["big_bite_bonus_applied"] = bool(big_bite_bonus_applied)
     if ai_cooldown_blocked is not None:
         out["ai_cooldown_blocked"] = bool(ai_cooldown_blocked)
+    return out
+
+
+def _build_ai_input_not_evaluated_fields(reason: str) -> dict:
+    return {
+        "ai_input_source_quality_status": "not_evaluated",
+        "ai_input_source_quality_reason": str(reason or "not_evaluated"),
+        "tick_source_quality_fields_sent": False,
+    }
+
+
+def _ensure_ai_source_quality_fields(fields: dict, stock: dict | None, *, not_evaluated_reason: str) -> dict:
+    out = dict(fields or {})
+    if "tick_source_quality_fields_sent" not in out and isinstance(stock, dict):
+        out.update(dict(stock.get("last_watching_ai_source_quality_fields") or {}))
+    if "tick_source_quality_fields_sent" not in out:
+        out.update(_build_ai_input_not_evaluated_fields(not_evaluated_reason))
+    elif "ai_input_source_quality_status" not in out:
+        out["ai_input_source_quality_status"] = "evaluated"
+        out["ai_input_source_quality_reason"] = str(out.get("tick_context_quality") or "tick_audit_present")
     return out
 
 
@@ -5216,6 +5239,17 @@ def _build_tick_source_quality_log_fields(feature_probe):
     if out:
         out["tick_source_quality_fields_sent"] = True
     return out
+
+
+def _build_observation_contract_fields(metric_role: str) -> dict:
+    role = str(metric_role or "ops_volume_diagnostic")
+    return {
+        "metric_role": role,
+        "decision_authority": "source_quality_only",
+        "runtime_effect": False,
+        "forbidden_uses": "runtime_threshold_apply/order_submit/provider_route_change/bot_restart",
+        "source_quality_route": "source_quality_blocker_or_workorder_only",
+    }
 
 
 def _append_holding_flow_history(stock: dict, *, now_ts: float, exit_rule: str, profit_rate: float, flow_result: dict) -> None:
@@ -5843,6 +5877,11 @@ def _log_wait65_79_ev_candidate(
 ):
     probe = feature_probe or {}
     latency_state = str((ws_data or {}).get("latency_state", "") or "").strip().upper() or "-"
+    source_quality_fields = _ensure_ai_source_quality_fields(
+        _build_tick_source_quality_log_fields(probe),
+        stock,
+        not_evaluated_reason="wait65_79_ev_candidate_no_tick_audit",
+    )
     _log_entry_pipeline(
         stock,
         code,
@@ -5853,10 +5892,11 @@ def _log_wait65_79_ev_candidate(
         tick_accel=f"{float(probe.get('tick_accel', 0.0) or 0.0):.3f}",
         micro_vwap_bp=f"{float(probe.get('micro_vwap_bp', 0.0) or 0.0):.2f}",
         latency_state=latency_state,
-        **_build_tick_source_quality_log_fields(probe),
+        **source_quality_fields,
         parse_ok=bool((ai_decision or {}).get("ai_parse_ok", False)),
         ai_response_ms=int((ai_decision or {}).get("ai_response_ms", 0) or 0),
         terminal_blocker="-",
+        **_build_observation_contract_fields("source_quality_gate"),
     )
 
 
@@ -6004,8 +6044,11 @@ def _block_ai_score_50_buy_hold_override_if_needed(
         big_bite_bonus_applied=False,
         ai_cooldown_blocked=False,
     )
-    if "tick_source_quality_fields_sent" not in ai_ops_fields:
-        ai_ops_fields.update(dict(stock.get("last_watching_ai_source_quality_fields") or {}))
+    ai_ops_fields = _ensure_ai_source_quality_fields(
+        ai_ops_fields,
+        stock,
+        not_evaluated_reason="ai_score_50_buy_hold_override_no_tick_audit",
+    )
     _log_entry_pipeline(
         stock,
         code,
@@ -6282,6 +6325,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 stock,
                                 code,
                                 "dynamic_vpw_override_pass",
+                                **_build_observation_contract_fields("ops_volume_diagnostic"),
                                 current_vpw=f"{current_vpw:.1f}",
                                 threshold=config["VPW_SCALP_LIMIT"],
                                 dynamic_reason=momentum_gate.get("reason"),
@@ -6326,6 +6370,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         stock,
                         code,
                         "blocked_liquidity",
+                        **_build_observation_contract_fields("funnel_count"),
                         liquidity_value=int(liquidity_value),
                         min_liquidity=min_liquidity,
                         marcap=marcap,
@@ -6650,6 +6695,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                 stock,
                                 code,
                                 "first_ai_wait",
+                                **_build_observation_contract_fields("funnel_count"),
                                 ai_score=f"{current_ai_score:.1f}",
                                 big_bite_confirmed=big_bite_confirmed,
                                 vip_target=is_vip_target,
@@ -6698,6 +6744,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         "ai_cooldown_blocked",
                         cooldown_elapsed_sec=int(time_elapsed),
                         cooldown_threshold_sec=config["AI_WATCHING_COOLDOWN"],
+                        **_build_ai_input_not_evaluated_fields("watching_ai_cooldown_active"),
                         **_build_ai_ops_log_fields(
                             {
                                 "ai_parse_ok": False,
@@ -6727,8 +6774,11 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                         big_bite_bonus_applied=bool(boost_applied_value),
                         ai_cooldown_blocked=False,
                     )
-                    if "tick_source_quality_fields_sent" not in ai_ops_fields:
-                        ai_ops_fields.update(dict(stock.get("last_watching_ai_source_quality_fields") or {}))
+                    ai_ops_fields = _ensure_ai_source_quality_fields(
+                        ai_ops_fields,
+                        stock,
+                        not_evaluated_reason="blocked_ai_score_no_tick_audit",
+                    )
                     _log_entry_pipeline(
                         stock,
                         code,
@@ -6786,6 +6836,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     stock,
                     code,
                     "blocked_swing_gap",
+                    **_build_observation_contract_fields("funnel_count"),
                     strategy=strategy,
                     fluctuation=f"{fluctuation:.2f}",
                     threshold=f"{max_gap:.2f}",
@@ -6834,6 +6885,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     stock,
                     code,
                     "blocked_swing_gap",
+                    **_build_observation_contract_fields("funnel_count"),
                     strategy=strategy,
                     fluctuation=f"{fluctuation:.2f}",
                     threshold=f"{max_gap:.2f}",
@@ -7139,6 +7191,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                 stock,
                 code,
                 "blocked_swing_score_vpw",
+                **_build_observation_contract_fields("funnel_count"),
                 strategy=strategy,
                 score=round(float(score), 2),
                 buy_threshold=buy_threshold,
@@ -8018,6 +8071,7 @@ def _log_strength_momentum_observation(stock, code, result):
         stock,
         code,
         stage,
+        **_build_observation_contract_fields("ops_volume_diagnostic"),
         reason=result.get("reason"),
         base_vpw=f"{float(result.get('base_vpw', 0.0) or 0.0):.1f}",
         current_vpw=f"{float(result.get('current_vpw', 0.0) or 0.0):.1f}",
