@@ -15,12 +15,12 @@
 
 | stage | raw | unique_records |
 | --- | ---: | ---: |
-| `blocked_gatekeeper_reject` | 74 | 12 |
-| `blocked_swing_gap` | 156259 | 17 |
-| `blocked_swing_score_vpw` | 270246 | 20 |
-| `gatekeeper_fast_reuse_bypass` | 74 | 12 |
+| `blocked_gatekeeper_reject` | 84 | 12 |
+| `blocked_swing_gap` | 335167 | 17 |
+| `blocked_swing_score_vpw` | 375486 | 20 |
+| `gatekeeper_fast_reuse_bypass` | 84 | 12 |
 | `holding_flow_ofi_smoothing_applied` | 28 | 2 |
-| `swing_probe_discarded` | 9824 | 28 |
+| `swing_probe_discarded` | 14898 | 28 |
 | `swing_probe_entry_candidate` | 15 | 10 |
 | `swing_probe_exit_signal` | 15 | 14 |
 | `swing_probe_holding_started` | 15 | 10 |
@@ -33,16 +33,16 @@
 
 ## Top Code Stage
 
-- `blocked_swing_score_vpw` 대한항공(003490): 20448
-- `blocked_swing_gap` 이마트(139480): 20393
-- `blocked_swing_score_vpw` 현대차(005380): 18755
-- `blocked_swing_score_vpw` 디아이씨(092200): 18755
-- `blocked_swing_score_vpw` 두산밥캣(241560): 18754
-- `blocked_swing_score_vpw` 기아(000270): 18754
-- `blocked_swing_score_vpw` 현대글로비스(086280): 18754
-- `blocked_swing_score_vpw` 한온시스템(018880): 18754
-- `blocked_swing_score_vpw` SK텔레콤(017670): 18753
-- `blocked_swing_score_vpw` HL만도(204320): 18753
+- `blocked_swing_gap` 이마트(139480): 41441
+- `blocked_swing_gap` 대한항공(003490): 31536
+- `blocked_swing_score_vpw` 현대차(005380): 29279
+- `blocked_swing_score_vpw` 디아이씨(092200): 29279
+- `blocked_swing_score_vpw` 두산밥캣(241560): 29278
+- `blocked_swing_score_vpw` 기아(000270): 29278
+- `blocked_swing_score_vpw` 현대글로비스(086280): 29278
+- `blocked_swing_score_vpw` 한온시스템(018880): 29278
+- `blocked_swing_score_vpw` SK텔레콤(017670): 29277
+- `blocked_swing_score_vpw` HL만도(204320): 29277
 
 ## OFI/QI Micro Context
 

@@ -1,86 +1,85 @@
 {
-  "bundle_as_of": "2026-05-13T22:20:16Z",
+  "bundle_as_of": "2026-05-14T22:20:16Z",
   "sp500": {
     "name": "S&P 500",
-    "value": 7444.25,
-    "prev_value": 7400.96,
-    "change": 43.29,
-    "change_pct": 0.58,
-    "as_of": "2026-05-13T20:31:00Z",
-    "source": "Dow Jones Market Data"
+    "value": 7501.24,
+    "prev_value": 7444.25,
+    "change": 56.99,
+    "change_pct": 0.77,
+    "as_of": "2026-05-14T20:30:00Z",
+    "source": "Morningstar / Dow Jones Market Data"
   },
   "nasdaq": {
-    "name": "NASDAQ Composite",
-    "value": 26402.34,
-    "prev_value": 26088.2,
-    "change": 314.14,
-    "change_pct": 1.2,
-    "as_of": "2026-05-13T20:31:00Z",
-    "source": "Dow Jones Market Data"
+    "name": "NASDAQ",
+    "value": 26635.22,
+    "prev_value": 26402.34,
+    "change": 232.88,
+    "change_pct": 0.88,
+    "as_of": "2026-05-14T20:31:00Z",
+    "source": "Morningstar / Dow Jones Market Data"
   },
   "vix": {
     "name": "VIX",
-    "value": 18.06,
-    "prev_value": 17.99,
-    "change": 0.07,
-    "change_pct": 0.39,
-    "as_of": "2026-05-13T20:00:00Z",
-    "source": "Investing.com"
+    "value": 17.45,
+    "prev_value": 17.87,
+    "change": -0.42,
+    "change_pct": -2.35,
+    "as_of": "2026-05-14T22:03:00Z",
+    "source": "Cboe Global Markets"
   },
   "us10y": {
-    "name": "US 10Y Treasury Yield",
-    "value": 4.479,
-    "prev_value": 4.47,
-    "change": 0.009,
-    "change_pct": null,
-    "as_of": "2026-05-13T19:48:00Z",
-    "source": "Tradeweb FTSE"
+    "name": "US 10-Year Treasury Yield",
+    "value": 4.46,
+    "prev_value": 4.48,
+    "change": -0.02,
+    "change_pct": -0.45,
+    "as_of": "2026-05-14T22:20:16Z",
+    "source": "MacroMicro"
   },
   "brent": {
     "name": "Brent Crude",
-    "value": 105.63,
-    "prev_value": 107.77,
-    "change": -2.14,
-    "change_pct": -1.99,
-    "as_of": "2026-05-13T22:20:16Z",
+    "value": 106.51,
+    "prev_value": 105.63,
+    "change": 0.88,
+    "change_pct": 0.83,
+    "as_of": "2026-05-14T22:20:16Z",
     "source": "Trading Economics"
   },
   "headlines": [
     {
-      "title": "Kevin Warsh Is Confirmed as Fed Chair in 54-45 Senate Vote",
-      "source": "Dow Jones / Morningstar",
-      "published_at": "2026-05-13T21:15:00Z",
-      "url": "https://www.morningstar.com"
+      "title": "China's Xi warns Trump about 'conflicts' if Taiwan isn't 'handled properly' during Beijing summit",
+      "source": "CBS News",
+      "published_at": "2026-05-14T02:20:00Z",
+      "url": "https://www.cbsnews.com"
     },
     {
-      "title": "Trump Can Keep Collecting Global 10% Tariffs After Appeals Court Stays Decision",
-      "source": "Dow Jones / Morningstar",
-      "published_at": "2026-05-13T14:06:00Z",
-      "url": "https://www.morningstar.com"
+      "title": "JP Morgan Warns Oil Could Average $151 in Q4 if Strait of Hormuz remains disrupted",
+      "source": "Rigzone",
+      "published_at": "2026-05-14T12:35:00Z",
+      "url": "https://www.rigzone.com"
     },
     {
-      "title": "Wholesale Inflation Shot Higher in April; PPI Surges 6.0% Annually",
-      "source": "Dow Jones / Morningstar",
-      "published_at": "2026-05-13T16:15:00Z",
-      "url": "https://www.morningstar.com"
+      "title": "US filings for jobless benefits hits 211,000 as the war in Iran drags on, clouding economic forecast",
+      "source": "AP News / CityNews",
+      "published_at": "2026-05-14T13:39:13Z",
+      "url": "https://halifax.citynews.ca"
     },
     {
-      "title": "Trump-Xi Summit Dominates Global Headlines As Trade and AI Competition Take Focus",
-      "source": "Informosio",
-      "published_at": "2026-05-13T12:00:00Z",
-      "url": "https://informosio.com"
+      "title": "War, inflation and Trump's tariffs have shaken the US. Why does the stock market keep going up?",
+      "source": "The Guardian",
+      "published_at": "2026-05-14T10:00:00Z",
+      "url": "https://www.theguardian.com"
     },
     {
-      "title": "Oil Price Today: Crude oil snaps 3-day fall ahead of Trump's China visit",
-      "source": "The Economic Times",
-      "published_at": "2026-05-13T02:19:17Z",
-      "url": "https://economictimes.indiatimes.com"
+      "title": "S&P 500, Nasdaq post all-time closing highs as Nvidia also reaches record",
+      "source": "Reuters",
+      "published_at": "2026-05-14T20:32:00Z",
+      "url": "https://www.reuters.com"
     }
   ],
   "notes": [
-    "S&P 500 and NASDAQ reached new record highs, driven by AI and semiconductor optimism despite hotter-than-expected April PPI inflation data.",
-    "The U.S. 10-year Treasury yield rose to 4.479% due to heightened inflation expectations.",
-    "Brent Crude prices slipped to $105.63 as markets weigh fragile Middle East ceasefire negotiations against an expected contraction in global oil demand.",
-    "Global markets remain highly sensitive to trade updates as a U.S. appeals court allowed the 10% global tariffs to proceed during the Trump-Xi summit in Beijing."
+    "U.S. markets recorded consecutive all-time highs driven by AI sector momentum, overlooking sticky inflation and Middle East geopolitical tensions.",
+    "Brent Crude remains elevated above $106/bbl amid ongoing conflicts in the Strait of Hormuz and tight global supply.",
+    "The U.S. 10-year Treasury yield stabilized near 4.46% following higher-than-expected inflation metrics."
   ]
 }
