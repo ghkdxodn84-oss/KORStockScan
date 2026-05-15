@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from src.engine.ai_engine import GeminiSniperEngine
 from src.engine.scalping_feature_packet import (
@@ -106,6 +106,29 @@ def test_build_scalping_feature_audit_fields_marks_sent_flags():
     assert fields["tick_accel_source"] == "computed_10ticks"
     assert fields["tick_context_stale"] is False
     assert fields["tick_context_quality"] == "fresh_computed"
+
+
+def test_extract_scalping_feature_packet_uses_ws_update_timestamp_for_quote_age():
+    now = datetime(2026, 5, 15, 9, 0, 12)
+    ws_data = {
+        **_sample_ws_data(),
+        "last_ws_update_ts": (now - timedelta(milliseconds=450)).timestamp(),
+    }
+
+    packet = extract_scalping_feature_packet(
+        ws_data,
+        _sample_ticks(),
+        _sample_candles(),
+        now=now,
+    )
+    fields = build_scalping_feature_audit_fields(packet)
+
+    assert packet["quote_age_ms"] == 450
+    assert packet["quote_age_source"] == "last_ws_update_ts"
+    assert packet["quote_stale"] is False
+    assert fields["quote_age_ms"] == 450
+    assert fields["quote_age_source"] == "last_ws_update_ts"
+    assert fields["quote_stale"] is False
 
 
 def test_extract_scalping_feature_packet_treats_same_second_ticks_as_burst():

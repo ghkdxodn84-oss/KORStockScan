@@ -6,8 +6,8 @@
 - panic_regime_mode: `PANIC_DETECTED`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-05-15T12:08:15`
-- latest_event_at: `2026-05-15T12:08:13`
+- as_of: `2026-05-15T12:22:17`
+- latest_event_at: `2026-05-15T12:22:16`
 - reasons: `microstructure risk_off advisory confirmed by market/breadth context; live market panic breadth risk_off advisory; recovery conditions not yet met`
 
 ## 패닉 지표
@@ -51,7 +51,7 @@
 ## Microstructure Market Context
 
 - market_risk_state: `RISK_OFF`
-- market_panic_breadth_as_of: `2026-05-15T12:08:01`
+- market_panic_breadth_as_of: `2026-05-15T12:22:01`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `true`
 - evaluated_symbol_count: `19`

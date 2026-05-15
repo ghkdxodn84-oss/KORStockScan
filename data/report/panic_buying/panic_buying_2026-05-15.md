@@ -6,8 +6,8 @@
 - panic_buy_regime_mode: `NORMAL`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-05-15T12:08:15`
-- latest_event_at: `2026-05-15T12:08:13`
+- as_of: `2026-05-15T12:22:15`
+- latest_event_at: `2026-05-15T12:22:14`
 - reasons: `no panic buying threshold breached`
 
 ## 패닉바잉 지표
@@ -25,7 +25,7 @@
 - exhaustion_candidate_count: `0`
 - exhaustion_confirmed_count: `0`
 - force_exit_runner_count: `0`
-- max_exhaustion_score: `0.545`
+- max_exhaustion_score: `0.4717`
 
 ## TP Counterfactual
 

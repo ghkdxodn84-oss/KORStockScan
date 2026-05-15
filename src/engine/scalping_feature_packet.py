@@ -57,6 +57,7 @@ def _quote_age_ms(ws_data, *, now=None):
         "ws_received_at_ms",
         "quote_received_at_ms",
         "received_at_ms",
+        "last_ws_update_ts",
         "last_update_ms",
         "updated_at_ms",
         "captured_at_ms",
