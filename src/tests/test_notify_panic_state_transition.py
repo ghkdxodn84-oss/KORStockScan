@@ -51,8 +51,10 @@ def test_panic_sell_start_and_release_notifications(tmp_path, monkeypatch):
     assert third == "sent"
     assert len(sent) == 6
     assert "패닉셀 주의" in sent[0][1]
-    assert "체감 강도: ■■■■■■■■□□ 높음" in sent[0][1]
+    assert "체감 강도\n  🔴 ▰▰▰▰▰▰▰▰▰▰▱▱ 82% · 위험 높음" in sent[0][1]
     assert "패닉셀 경보 해제" in sent[-1][1]
+    assert "해제 상태\n  🟢 회복 확인 · 신규 자동매매 변경 없음" in sent[-1][1]
+    assert "체감 강도" not in sent[-1][1]
     assert "PANIC_SELL" not in sent[0][1]
 
 
@@ -88,7 +90,8 @@ def test_panic_buying_test_notice_goes_admin_only(tmp_path, monkeypatch):
     assert status == "sent"
     assert [chat_id for chat_id, _ in sent] == ["admin"]
     assert "패닉바잉 주의" in sent[0][1]
-    assert "체감 강도: 확인중" not in sent[0][1]
+    assert "🟠 ▰▰▰▰▰▰▰▰▱▱▱▱ 66% · 주의" in sent[0][1]
+    assert "체감 강도\n  ░░░░░░░░░░░░ 확인중" not in sent[0][1]
     assert "PANIC_BUY" not in sent[0][1]
 
 

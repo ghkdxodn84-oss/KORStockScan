@@ -129,17 +129,22 @@ def _safe_float(value: object) -> float | None:
 def _score_bar(value: object) -> str:
     numeric = _safe_float(value)
     if numeric is None:
-        return "□□□□□□□□□□ 확인중"
+        return "░░░░░░░░░░░░ 확인중"
     score = max(0.0, min(1.0, numeric))
-    filled = int(round(score * 10))
-    empty = 10 - filled
+    total = 12
+    filled = int(round(score * total))
+    empty = total - filled
     if score >= 0.75:
-        label = "높음"
+        label = "위험 높음"
+        icon = "🔴"
     elif score >= 0.45:
-        label = "보통"
+        label = "주의"
+        icon = "🟠"
     else:
         label = "낮음"
-    return f"{'■' * filled}{'□' * empty} {label}"
+        icon = "🟢"
+    pct = int(round(score * 100))
+    return f"{icon} {'▰' * filled}{'▱' * empty} {pct}% · {label}"
 
 
 def _message_for_sell(report: dict, transition: str) -> str:
@@ -148,17 +153,20 @@ def _message_for_sell(report: dict, transition: str) -> str:
     if transition == "release":
         title = "✅ 패닉셀 경보 해제"
         body = "급한 매도세가 진정되어 패닉셀 관찰을 종료합니다."
+        intensity_line = "- 해제 상태\n  🟢 회복 확인 · 신규 자동매매 변경 없음"
     elif transition == "status":
         title = "ℹ️ 패닉셀 알림 테스트"
         body = "현재 패닉셀 알림 상태를 관리자 테스트로 확인합니다."
+        intensity_line = f"- 체감 강도\n  {_score_bar(micro_metrics.get('max_panic_score'))}"
     else:
         title = "⚠️ 패닉셀 주의"
         body = "시장에 급한 매도세가 감지되었습니다. 신규 진입은 평소보다 더 보수적으로 볼 구간입니다."
+        intensity_line = f"- 체감 강도\n  {_score_bar(micro_metrics.get('max_panic_score'))}"
     return "\n".join(
         [
             title,
             body,
-            f"- 체감 강도: {_score_bar(micro_metrics.get('max_panic_score'))}",
+            intensity_line,
             "- 자동매매 변경: 없음",
         ]
     )
@@ -169,17 +177,20 @@ def _message_for_buying(report: dict, transition: str) -> str:
     if transition == "release":
         title = "✅ 패닉바잉 경보 해제"
         body = "급한 매수세가 진정되어 패닉바잉 관찰을 종료합니다."
+        intensity_line = "- 해제 상태\n  🟢 과열 진정 · 신규 자동매매 변경 없음"
     elif transition == "status":
         title = "ℹ️ 패닉바잉 알림 테스트"
         body = "현재 패닉바잉 알림 상태를 관리자 테스트로 확인합니다."
+        intensity_line = f"- 체감 강도\n  {_score_bar(metrics.get('max_panic_buy_score'))}"
     else:
         title = "⚠️ 패닉바잉 주의"
         body = "시장에 급한 매수세가 감지되었습니다. 단기 과열과 소진 가능성을 함께 볼 구간입니다."
+        intensity_line = f"- 체감 강도\n  {_score_bar(metrics.get('max_panic_buy_score'))}"
     return "\n".join(
         [
             title,
             body,
-            f"- 체감 강도: {_score_bar(metrics.get('max_panic_buy_score'))}",
+            intensity_line,
             "- 자동매매 변경: 없음",
         ]
     )
