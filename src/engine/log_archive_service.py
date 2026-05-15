@@ -63,8 +63,13 @@ def _snapshot_manifest_path(target_date: str, profile: str) -> Path:
 def load_monitor_snapshot(kind: str, target_date: str) -> dict | None:
     """파일 우선으로 모니터 스냅샷을 로드하고, 필요할 때만 legacy DB를 조회합니다."""
     path = _snapshot_path(kind, target_date)
+    if not path.exists() and Path(f"{path}.gz").exists():
+        path = Path(f"{path}.gz")
     if path.exists():
         try:
+            if path.suffix == ".gz":
+                with gzip.open(path, "rt", encoding="utf-8") as handle:
+                    return json.load(handle)
             with open(path, encoding="utf-8") as handle:
                 return json.load(handle)
         except Exception:

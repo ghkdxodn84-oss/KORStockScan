@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import shutil
 from datetime import datetime, timedelta
@@ -16,13 +17,25 @@ from src.utils.threshold_cycle_registry import threshold_family_for_stage
 
 
 DEFAULT_MAX_INPUT_LINES_PER_CHUNK = 20_000
+DEFAULT_MAX_COMPRESSED_INPUT_LINES_PER_CHUNK = 5_000
 DEFAULT_MAX_OUTPUT_LINES_PER_PARTITION = 25_000
 DEFAULT_MAX_CHUNK_READ_MB = 128.0
 DEFAULT_MAX_IOWAIT_PCT = 20.0
+DEFAULT_MAX_CPU_BUSY_PCT = 95.0
 DEFAULT_MIN_MEM_AVAILABLE_MB = 512.0
 
 def raw_pipeline_path(target_date: str) -> Path:
     return DATA_DIR / "pipeline_events" / f"pipeline_events_{target_date}.jsonl"
+
+
+def _resolve_default_source(target_date: str) -> Path:
+    raw = raw_pipeline_path(target_date)
+    if raw.exists():
+        return raw
+    gz = Path(f"{raw}.gz")
+    if gz.exists():
+        return gz
+    return raw
 
 
 def compact_threshold_path(target_date: str) -> Path:
@@ -70,19 +83,34 @@ def _source_fingerprint(source: Path) -> dict[str, Any]:
         "source_path": str(source),
         "source_size": int(stat.st_size),
         "source_mtime": float(stat.st_mtime),
+        "source_compressed": source.suffix == ".gz",
     }
+
+
+def _same_logical_source(checkpoint_path: object, source_path: object) -> bool:
+    left = str(checkpoint_path or "")
+    right = str(source_path or "")
+    if left == right:
+        return True
+    return left + ".gz" == right or right + ".gz" == left
 
 
 def _checkpoint_compatible(checkpoint: dict[str, Any], source_fp: dict[str, Any]) -> bool:
     if not checkpoint:
         return True
-    if checkpoint.get("source_path") != source_fp["source_path"]:
+    if not _same_logical_source(checkpoint.get("source_path"), source_fp["source_path"]):
         return False
+    if checkpoint.get("completed"):
+        return True
     if int(checkpoint.get("source_size", 0) or 0) != int(source_fp["source_size"]):
         return False
-    if checkpoint.get("completed") and int(checkpoint.get("source_size", 0) or 0) == int(source_fp["source_size"]):
-        return True
     return float(checkpoint.get("source_mtime", 0.0) or 0.0) == float(source_fp["source_mtime"])
+
+
+def _open_text_jsonl(path: Path):
+    if path.suffix == ".gz":
+        return gzip.open(path, "rt", encoding="utf-8", errors="replace")
+    return path.open("r", encoding="utf-8", errors="replace")
 
 
 def _sample_metrics() -> dict[str, Any]:
@@ -106,6 +134,7 @@ def _availability_pause_reason(
     after: dict[str, Any],
     *,
     max_iowait_pct: float,
+    max_cpu_busy_pct: float,
     max_chunk_read_mb: float,
     min_mem_available_mb: float,
 ) -> str | None:
@@ -114,6 +143,9 @@ def _availability_pause_reason(
     iowait_pct = _metric_value(after, "cpu", "iowait_pct")
     if iowait_pct >= max_iowait_pct:
         return f"iowait_pct>={max_iowait_pct:g}"
+    cpu_busy_pct = _metric_value(after, "cpu", "cpu_busy_pct")
+    if cpu_busy_pct >= max_cpu_busy_pct:
+        return f"cpu_busy_pct>={max_cpu_busy_pct:g}"
     mem_available = _metric_value(after, "memory", "mem_available_mb", default=999999.0)
     if mem_available < min_mem_available_mb:
         return f"mem_available_mb<{min_mem_available_mb:g}"
@@ -216,10 +248,11 @@ def backfill_threshold_cycle_events(
     max_input_lines_per_chunk: int = DEFAULT_MAX_INPUT_LINES_PER_CHUNK,
     max_output_lines_per_partition: int = DEFAULT_MAX_OUTPUT_LINES_PER_PARTITION,
     max_iowait_pct: float = DEFAULT_MAX_IOWAIT_PCT,
+    max_cpu_busy_pct: float = DEFAULT_MAX_CPU_BUSY_PCT,
     max_chunk_read_mb: float = DEFAULT_MAX_CHUNK_READ_MB,
     min_mem_available_mb: float = DEFAULT_MIN_MEM_AVAILABLE_MB,
 ) -> dict[str, Any]:
-    source = Path(source_path).expanduser().resolve() if source_path else raw_pipeline_path(target_date)
+    source = Path(source_path).expanduser().resolve() if source_path else _resolve_default_source(target_date)
     checkpoint_file = checkpoint_path(target_date)
     if overwrite:
         _reset_outputs(target_date)
@@ -227,6 +260,13 @@ def backfill_threshold_cycle_events(
         return {"target_date": target_date, "source_exists": False, "written": 0, "checkpoint": str(checkpoint_file)}
 
     source_fp = _source_fingerprint(source)
+    source_compressed = bool(source_fp.get("source_compressed"))
+    effective_max_input_lines_per_chunk = max_input_lines_per_chunk
+    if source_compressed:
+        effective_max_input_lines_per_chunk = min(
+            max_input_lines_per_chunk,
+            DEFAULT_MAX_COMPRESSED_INPUT_LINES_PER_CHUNK,
+        )
     checkpoint = _load_json(checkpoint_file) if resume else {}
     if not _checkpoint_compatible(checkpoint, source_fp):
         summary = {
@@ -244,7 +284,7 @@ def backfill_threshold_cycle_events(
     raw_line_count = int(checkpoint.get("raw_line_count", 0) or 0)
     written_total = int(checkpoint.get("written_count", 0) or 0)
     partition_state = _initial_partition_state(checkpoint)
-    if checkpoint and byte_offset >= int(source_fp["source_size"]):
+    if checkpoint and (checkpoint.get("completed") or (not source_compressed and byte_offset >= int(source_fp["source_size"]))):
         recommended_next_input_lines_per_chunk = int(
             checkpoint.get("recommended_next_input_lines_per_chunk") or max_input_lines_per_chunk
         )
@@ -262,6 +302,8 @@ def backfill_threshold_cycle_events(
             "paused_reason": None,
             "recommended_next_input_lines_per_chunk": recommended_next_input_lines_per_chunk,
             "last_sample_metrics": checkpoint.get("last_sample_metrics") or {},
+            "source_compressed": source_compressed,
+            "effective_max_input_lines_per_chunk": effective_max_input_lines_per_chunk,
             "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
         }
         _save_json(checkpoint_file, checkpoint_payload)
@@ -280,19 +322,23 @@ def backfill_threshold_cycle_events(
             "recommended_next_input_lines_per_chunk": recommended_next_input_lines_per_chunk,
             "checkpoint": str(checkpoint_file),
             "partition_root": str(THRESHOLD_CYCLE_DIR / f"date={target_date}"),
+            "source_compressed": source_compressed,
+            "effective_max_input_lines_per_chunk": effective_max_input_lines_per_chunk,
         }
 
     before_sample = _sample_metrics()
     written_this_run = 0
     processed_this_run = 0
     pause_reason: str | None = None
+    reached_eof = False
 
-    with source.open("r", encoding="utf-8", errors="replace") as src:
+    with _open_text_jsonl(source) as src:
         src.seek(byte_offset)
-        while processed_this_run < max_input_lines_per_chunk:
+        while processed_this_run < effective_max_input_lines_per_chunk:
             line_start = src.tell()
             raw_line = src.readline()
             if not raw_line:
+                reached_eof = True
                 break
             byte_offset = src.tell()
             raw_line_count += 1
@@ -333,6 +379,7 @@ def backfill_threshold_cycle_events(
             before_sample,
             after_sample,
             max_iowait_pct=max_iowait_pct,
+            max_cpu_busy_pct=max_cpu_busy_pct,
             max_chunk_read_mb=max_chunk_read_mb,
             min_mem_available_mb=min_mem_available_mb,
         )
@@ -342,7 +389,7 @@ def backfill_threshold_cycle_events(
         after_sample,
     )
 
-    completed = pause_reason is None and byte_offset >= source_fp["source_size"]
+    completed = pause_reason is None and (reached_eof if source_compressed else byte_offset >= source_fp["source_size"])
     status = "completed" if completed else "paused_by_availability_guard" if pause_reason else "paused_by_chunk_limit"
     checkpoint_payload = {
         **source_fp,
@@ -358,6 +405,8 @@ def backfill_threshold_cycle_events(
         "paused_reason": pause_reason,
         "recommended_next_input_lines_per_chunk": recommended_next_input_lines_per_chunk,
         "last_sample_metrics": {"before": before_sample, "after": after_sample},
+        "source_compressed": source_compressed,
+        "effective_max_input_lines_per_chunk": effective_max_input_lines_per_chunk,
         "updated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
     }
     _save_json(checkpoint_file, checkpoint_payload)
@@ -377,6 +426,8 @@ def backfill_threshold_cycle_events(
         "recommended_next_input_lines_per_chunk": recommended_next_input_lines_per_chunk,
         "checkpoint": str(checkpoint_file),
         "partition_root": str(THRESHOLD_CYCLE_DIR / f"date={target_date}"),
+        "source_compressed": source_compressed,
+        "effective_max_input_lines_per_chunk": effective_max_input_lines_per_chunk,
     }
 
 
@@ -401,6 +452,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--max-input-lines-per-chunk", type=int, default=DEFAULT_MAX_INPUT_LINES_PER_CHUNK)
     parser.add_argument("--max-output-lines-per-partition", type=int, default=DEFAULT_MAX_OUTPUT_LINES_PER_PARTITION)
     parser.add_argument("--max-iowait-pct", type=float, default=DEFAULT_MAX_IOWAIT_PCT)
+    parser.add_argument("--max-cpu-busy-pct", type=float, default=DEFAULT_MAX_CPU_BUSY_PCT)
     parser.add_argument("--max-chunk-read-mb", type=float, default=DEFAULT_MAX_CHUNK_READ_MB)
     parser.add_argument("--min-mem-available-mb", type=float, default=DEFAULT_MIN_MEM_AVAILABLE_MB)
     args = parser.parse_args(argv)
@@ -413,6 +465,7 @@ def main(argv: list[str] | None = None) -> int:
         "max_input_lines_per_chunk": args.max_input_lines_per_chunk,
         "max_output_lines_per_partition": args.max_output_lines_per_partition,
         "max_iowait_pct": args.max_iowait_pct,
+        "max_cpu_busy_pct": args.max_cpu_busy_pct,
         "max_chunk_read_mb": args.max_chunk_read_mb,
         "min_mem_available_mb": args.min_mem_available_mb,
     }

@@ -8,6 +8,7 @@ TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
 MAX_ITERATIONS="${THRESHOLD_CYCLE_MAX_ITERATIONS:-80}"
 MAX_INPUT_LINES="${THRESHOLD_CYCLE_MAX_INPUT_LINES_PER_CHUNK:-20000}"
 MAX_OUTPUT_LINES="${THRESHOLD_CYCLE_MAX_OUTPUT_LINES_PER_PARTITION:-25000}"
+MAX_CPU_BUSY_PCT="${THRESHOLD_CYCLE_MAX_CPU_BUSY_PCT:-95}"
 SKIP_DB="${THRESHOLD_CYCLE_SKIP_DB:-false}"
 USE_SNAPSHOT="${THRESHOLD_CYCLE_USE_SNAPSHOT:-true}"
 AI_CORRECTION_PROVIDER="${THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER:-openai}"
@@ -54,9 +55,9 @@ if not snapshot_dir.exists():
     print("[threshold-cycle] snapshot cleanup skipped reason=missing_dir")
     raise SystemExit(0)
 
-pattern = re.compile(r"pipeline_events_(\d{4}-\d{2}-\d{2})_(\d{8}_\d{6})\.jsonl$")
+pattern = re.compile(r"pipeline_events_(\d{4}-\d{2}-\d{2})_(\d{8}_\d{6})\.jsonl(?:\.gz)?$")
 groups: dict[str, list[Path]] = defaultdict(list)
-for path in snapshot_dir.glob("pipeline_events_*.jsonl"):
+for path in snapshot_dir.glob("pipeline_events_*.jsonl*"):
     match = pattern.match(path.name)
     if not match:
         continue
@@ -190,7 +191,7 @@ if [ "$USE_SNAPSHOT" = "true" ]; then
   SNAPSHOT_TS="$(TZ=Asia/Seoul date +%Y%m%d_%H%M%S)"
   RAW_SOURCE="$PROJECT_DIR/data/pipeline_events/pipeline_events_${TARGET_DATE}.jsonl"
   EXISTING_SNAPSHOT_PATH="$(
-    find "$SNAPSHOT_DIR" -maxdepth 1 -type f -name "pipeline_events_${TARGET_DATE}_*.jsonl" | sort | tail -n 1
+    find "$SNAPSHOT_DIR" -maxdepth 1 -type f \( -name "pipeline_events_${TARGET_DATE}_*.jsonl" -o -name "pipeline_events_${TARGET_DATE}_*.jsonl.gz" \) | sort | tail -n 1
   )"
   SNAPSHOT_PATH="$SNAPSHOT_DIR/pipeline_events_${TARGET_DATE}_${SNAPSHOT_TS}.jsonl"
   if [ -f "$CHECKPOINT_PATH" ] && [ -n "$EXISTING_SNAPSHOT_PATH" ] && [ -f "$EXISTING_SNAPSHOT_PATH" ]; then
@@ -220,7 +221,8 @@ for i in $(seq 1 "$MAX_ITERATIONS"); do
       "${resume_args[@]}" \
       "${SOURCE_ARGS[@]}" \
       --max-input-lines-per-chunk "$MAX_INPUT_LINES" \
-      --max-output-lines-per-partition "$MAX_OUTPUT_LINES"
+      --max-output-lines-per-partition "$MAX_OUTPUT_LINES" \
+      --max-cpu-busy-pct "$MAX_CPU_BUSY_PCT"
   )"
   echo "$out"
   completed="$(printf '%s' "$out" | "$VENV_PY" -c 'import json,sys; print(str(json.load(sys.stdin).get("completed", False)).lower())')"

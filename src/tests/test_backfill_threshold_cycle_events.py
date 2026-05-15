@@ -1,3 +1,4 @@
+import gzip
 import json
 import os
 
@@ -200,6 +201,70 @@ def test_backfill_threshold_cycle_events_can_read_immutable_source_snapshot(tmp_
     )
     row = json.loads(action_weight_path.read_text(encoding="utf-8").strip())
     assert row["stage"] == "sell_completed"
+
+
+def test_backfill_threshold_cycle_events_streams_gzip_snapshot_with_smaller_chunk(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
+    monkeypatch.setattr(mod, "DEFAULT_MAX_COMPRESSED_INPUT_LINES_PER_CHUNK", 5)
+    monkeypatch.setattr(
+        mod,
+        "_sample_metrics",
+        lambda: {
+            "cpu": {"iowait_pct": 0.0, "cpu_busy_pct": 0.0},
+            "io": {"disk_read_mb_delta": 0.0},
+            "memory": {"mem_available_mb": 2048.0},
+        },
+    )
+    snapshot_path = tmp_path / "snapshot.jsonl.gz"
+    with gzip.open(snapshot_path, "wt", encoding="utf-8") as handle:
+        for idx in range(6):
+            handle.write(
+                json.dumps({"event_type": "pipeline_event", "stage": "budget_pass", "fields": {"idx": idx}})
+                + "\n"
+            )
+
+    first = mod.backfill_threshold_cycle_events(
+        "2026-04-30",
+        source_path=snapshot_path,
+        overwrite=True,
+        max_input_lines_per_chunk=10_000,
+    )
+    second = mod.backfill_threshold_cycle_events(
+        "2026-04-30",
+        source_path=snapshot_path,
+        max_input_lines_per_chunk=10_000,
+    )
+
+    assert first["source_compressed"] is True
+    assert first["effective_max_input_lines_per_chunk"] == mod.DEFAULT_MAX_COMPRESSED_INPUT_LINES_PER_CHUNK
+    assert first["status"] == "paused_by_chunk_limit"
+    assert first["written"] == mod.DEFAULT_MAX_COMPRESSED_INPUT_LINES_PER_CHUNK
+    assert second["completed"] is True
+    assert second["written_total"] == 6
+
+
+def test_backfill_threshold_cycle_events_pauses_on_cpu_busy_guard(tmp_path, monkeypatch):
+    monkeypatch.setattr(mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
+    samples = iter(
+        [
+            {"cpu": {"iowait_pct": 0.0, "cpu_busy_pct": 0.0}, "io": {"disk_read_mb_delta": 0.0}, "memory": {"mem_available_mb": 2048.0}},
+            {"cpu": {"iowait_pct": 0.0, "cpu_busy_pct": 96.0}, "io": {"disk_read_mb_delta": 0.0}, "memory": {"mem_available_mb": 2048.0}},
+        ]
+    )
+    monkeypatch.setattr(mod, "_sample_metrics", lambda: next(samples))
+    raw_dir = tmp_path / "pipeline_events"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    (raw_dir / "pipeline_events_2026-04-30.jsonl").write_text(
+        json.dumps({"event_type": "pipeline_event", "stage": "budget_pass", "fields": {}}),
+        encoding="utf-8",
+    )
+
+    summary = mod.backfill_threshold_cycle_events("2026-04-30", overwrite=True, max_cpu_busy_pct=95.0)
+
+    assert summary["status"] == "paused_by_availability_guard"
+    assert summary["paused_reason"] == "cpu_busy_pct>=95"
 
 
 def test_backfill_threshold_cycle_events_pauses_on_system_metric_guard(tmp_path, monkeypatch):

@@ -81,7 +81,9 @@ def test_postclose_wrapper_reuses_existing_snapshot_when_checkpoint_exists():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
     assert 'CHECKPOINT_PATH="$PROJECT_DIR/data/threshold_cycle/checkpoints/${TARGET_DATE}.json"' in script
-    assert 'find "$SNAPSHOT_DIR" -maxdepth 1 -type f -name "pipeline_events_${TARGET_DATE}_*.jsonl"' in script
+    assert 'MAX_CPU_BUSY_PCT="${THRESHOLD_CYCLE_MAX_CPU_BUSY_PCT:-95}"' in script
+    assert '-name "pipeline_events_${TARGET_DATE}_*.jsonl.gz"' in script
+    assert '--max-cpu-busy-pct "$MAX_CPU_BUSY_PCT"' in script
     assert '[ -f "$CHECKPOINT_PATH" ] && [ -n "$EXISTING_SNAPSHOT_PATH" ]' in script
     assert 'echo "[threshold-cycle] reusing immutable snapshot source=$EXISTING_SNAPSHOT_PATH checkpoint=$CHECKPOINT_PATH"' in script
     assert '[ "${REUSE_EXISTING_SNAPSHOT:-false}" != "true" ]' in script
@@ -93,7 +95,7 @@ def test_postclose_wrapper_cleans_up_snapshot_duplicates_with_retention():
     assert 'SNAPSHOT_RETENTION_DAYS="${THRESHOLD_CYCLE_SNAPSHOT_RETENTION_DAYS:-7}"' in script
     assert "cleanup_threshold_cycle_snapshots()" in script
     assert 'cleanup_threshold_cycle_snapshots "$SNAPSHOT_DIR" "$SNAPSHOT_RETENTION_DAYS"' in script
-    assert 'pipeline_events_(\\d{4}-\\d{2}-\\d{2})_(\\d{8}_\\d{6})\\.jsonl$' in script
+    assert 'pipeline_events_(\\d{4}-\\d{2}-\\d{2})_(\\d{8}_\\d{6})\\.jsonl(?:\\.gz)?$' in script
     assert 'retention_days={retention_days}' in script
     assert 'removed_bytes={removed_bytes}' in script
 

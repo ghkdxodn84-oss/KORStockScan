@@ -1,3 +1,4 @@
+import gzip
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -637,6 +638,29 @@ def test_calibration_source_bundle_audits_report_only_cleanup_candidates(monkeyp
     assert candidates["sentinel_followup"]["in_current_source_bundle"] is False
     assert candidates["add_blocked_lock"]["current_owner"] == "monitor_snapshot_reference_only"
     assert any("report-only cleanup candidate: sentinel_followup" in warning for warning in bundle["warnings"])
+
+
+def test_calibration_source_bundle_reads_gzip_monitor_snapshot(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "REPORT_DIR", tmp_path / "report")
+    snapshot_dir = tmp_path / "report" / "monitor_snapshots"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    with gzip.open(snapshot_dir / "post_sell_feedback_2026-05-13.json.gz", "wt", encoding="utf-8") as handle:
+        json.dump(
+            {
+                "soft_stop": {
+                    "post_sell_soft_stop_total": 2,
+                    "post_sell_rebound_above_sell_10m_rate": 50.0,
+                }
+            },
+            handle,
+        )
+
+    bundle = report_mod._summarize_calibration_report_sources("2026-05-13")
+
+    assert bundle["sources"]["post_sell_feedback"]["exists"] is True
+    assert bundle["sources"]["post_sell_feedback"]["path"].endswith(".json.gz")
+    assert bundle["sources"]["post_sell_feedback"]["loaded"] is True
+    assert "soft_stop" in bundle["sources"]["post_sell_feedback"]["top_keys"]
 
 
 def test_soft_stop_calibration_holds_on_single_post_sell_source_sample():
@@ -1907,6 +1931,31 @@ def test_daily_threshold_cycle_report_includes_pipeline_load_meta(tmp_path, monk
 
     assert report["meta"]["pipeline_load"]["2026-04-30"]["data_source"] == "partitioned_compact"
     assert report["summary"]["event_count_same_day"] == 1
+
+
+def test_default_pipeline_load_result_reads_legacy_compact_gzip(tmp_path, monkeypatch):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    monkeypatch.setattr(report_mod, "THRESHOLD_CYCLE_DIR", tmp_path / "threshold_cycle")
+    report_mod.THRESHOLD_CYCLE_DIR.mkdir(parents=True, exist_ok=True)
+    compact_path = report_mod.THRESHOLD_CYCLE_DIR / "threshold_events_2026-04-30.jsonl.gz"
+    with gzip.open(compact_path, "wt", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "event_type": "threshold_cycle_event",
+                    "stage": "bad_entry_block_observed",
+                    "fields": {},
+                },
+                ensure_ascii=False,
+            )
+            + "\n"
+        )
+
+    load_result = report_mod._default_pipeline_load_result("2026-04-30")
+
+    assert [row["stage"] for row in load_result.rows] == ["bad_entry_block_observed"]
+    assert load_result.meta["data_source"] == "legacy_compact"
+    assert load_result.meta["read_bytes_estimate"] == compact_path.stat().st_size
 
 
 def test_statistical_action_weight_artifacts_render_markdown(tmp_path, monkeypatch):

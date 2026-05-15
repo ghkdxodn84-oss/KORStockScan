@@ -1,3 +1,4 @@
+import gzip
 import json
 from datetime import date
 from unittest.mock import Mock, patch, MagicMock
@@ -147,6 +148,22 @@ def test_load_monitor_snapshot_prefer_db_past_date_file_prefer(monkeypatch, tmp_
     assert result["meta"]["source"] == "file"
 
 
+def test_load_monitor_snapshot_from_gzip_file(monkeypatch, tmp_path):
+    snapshot_dir = tmp_path / "report" / "monitor_snapshots"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        'src.engine.dashboard_data_repository.MONITOR_SNAPSHOT_DIR',
+        snapshot_dir
+    )
+    payload = {"source": "gzip_file"}
+    with gzip.open(snapshot_dir / "trade_review_2026-04-01.json.gz", "wt", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+
+    result = _load_monitor_snapshot_from_file("trade_review", "2026-04-01")
+
+    assert result == payload
+
+
 def test_load_pipeline_events_past_date_db_fallback(monkeypatch, tmp_path):
     """과거 날짜 DB에 데이터가 없으면 파일에서 로드한다."""
     # DB 빈 결과 모의
@@ -207,6 +224,21 @@ def test_load_pipeline_events_past_date_file_prefer(monkeypatch, tmp_path):
     )
     assert len(result) == 1
     assert result[0]["event"] == "file"
+
+
+def test_load_pipeline_events_from_gzip_file(monkeypatch, tmp_path):
+    events_dir = tmp_path / "pipeline_events"
+    events_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(
+        'src.engine.dashboard_data_repository.PIPELINE_EVENTS_DIR',
+        events_dir
+    )
+    with gzip.open(events_dir / "pipeline_events_2026-04-01.jsonl.gz", "wt", encoding="utf-8") as handle:
+        handle.write(json.dumps({"event": "gzip_file"}) + "\n")
+
+    result = _load_pipeline_events_from_file("2026-04-01")
+
+    assert result == [{"event": "gzip_file"}]
 
 
 def test_load_pipeline_events_today_merge(monkeypatch, tmp_path):

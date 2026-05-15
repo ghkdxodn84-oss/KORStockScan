@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import gzip
 import json
 import logging
 import os
@@ -24,6 +25,21 @@ logger = logging.getLogger(__name__)
 # 파일 기반 저장 경로 (기존 코드와 호환)
 PIPELINE_EVENTS_DIR = DATA_DIR / "pipeline_events"
 MONITOR_SNAPSHOT_DIR = DATA_DIR / "report" / "monitor_snapshots"
+
+
+def _existing_or_gzip_path(path: Path) -> Path:
+    if path.exists():
+        return path
+    gz_path = Path(f"{path}.gz")
+    if gz_path.exists():
+        return gz_path
+    return path
+
+
+def _open_text(path: Path):
+    if path.suffix == ".gz":
+        return gzip.open(path, "rt", encoding="utf-8")
+    return path.open("r", encoding="utf-8")
 
 
 def legacy_dashboard_db_enabled() -> bool:
@@ -276,11 +292,11 @@ def _load_monitor_snapshot_from_file(kind: str, target_date: str) -> dict | None
     import json
     import logging
     logger = logging.getLogger(__name__)
-    path = MONITOR_SNAPSHOT_DIR / f"{kind}_{target_date}.json"
+    path = _existing_or_gzip_path(MONITOR_SNAPSHOT_DIR / f"{kind}_{target_date}.json")
     if not path.exists():
         return None
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        with _open_text(path) as f:
             return json.load(f)
     except Exception as e:
         logger.error("Failed to load monitor snapshot from file %s: %s", path, e)
@@ -316,8 +332,14 @@ def _list_snapshot_kinds(target_date: str) -> list[str]:
     """주어진 날짜에 존재하는 모니터 스냅샷 종류(kind) 목록을 반환."""
     import re
     kinds = set()
-    for path in MONITOR_SNAPSHOT_DIR.glob(f"*_{target_date}.json"):
-        stem = path.stem  # "{kind}_{target_date}"
+    for path in MONITOR_SNAPSHOT_DIR.glob(f"*_{target_date}.json*"):
+        if path.suffix not in {".json", ".gz"}:
+            continue
+        stem = path.name
+        if stem.endswith(".gz"):
+            stem = stem[:-3]
+        if stem.endswith(".json"):
+            stem = stem[:-5]
         # target_date 부분 제거
         maybe_kind = stem[:-(len(target_date) + 1)]  # '_' 제거
         if maybe_kind:
@@ -408,11 +430,11 @@ def load_pipeline_events(
 def _load_pipeline_events_from_file(target_date: str) -> list[dict]:
     """파일에서 pipeline event 로드."""
     import json
-    path = PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl"
+    path = _existing_or_gzip_path(PIPELINE_EVENTS_DIR / f"pipeline_events_{target_date}.jsonl")
     events = []
     if path.exists():
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with _open_text(path) as f:
                 for line in f:
                     line = line.strip()
                     if not line:
@@ -485,8 +507,14 @@ def backfill_dashboard_files(until_date: str, dry_run: bool = False) -> dict:
     existing_dates = set()
     
     # pipeline events 파일 날짜 추출
-    for path in PIPELINE_EVENTS_DIR.glob("pipeline_events_*.jsonl"):
-        stem = path.stem  # "pipeline_events_YYYY-MM-DD"
+    for path in PIPELINE_EVENTS_DIR.glob("pipeline_events_*.jsonl*"):
+        if path.suffix not in {".jsonl", ".gz"}:
+            continue
+        stem = path.name
+        if stem.endswith(".gz"):
+            stem = stem[:-3]
+        if stem.endswith(".jsonl"):
+            stem = stem[:-6]
         try:
             file_date = date.fromisoformat(stem.split("_")[-1])
         except (ValueError, IndexError):
@@ -494,8 +522,14 @@ def backfill_dashboard_files(until_date: str, dry_run: bool = False) -> dict:
         existing_dates.add(file_date)
     
     # monitor snapshot 파일 날짜 추출
-    for path in MONITOR_SNAPSHOT_DIR.glob("*_*.json"):
-        stem = path.stem  # "{kind}_YYYY-MM-DD"
+    for path in MONITOR_SNAPSHOT_DIR.glob("*_*.json*"):
+        if path.suffix not in {".json", ".gz"}:
+            continue
+        stem = path.name
+        if stem.endswith(".gz"):
+            stem = stem[:-3]
+        if stem.endswith(".json"):
+            stem = stem[:-5]
         try:
             file_date = date.fromisoformat(stem.split("_")[-1])
         except (ValueError, IndexError):
@@ -517,7 +551,7 @@ def backfill_dashboard_files(until_date: str, dry_run: bool = False) -> dict:
         target = current.isoformat()
         
         # pipeline events 백필
-        file_path = PIPELINE_EVENTS_DIR / f"pipeline_events_{target}.jsonl"
+        file_path = _existing_or_gzip_path(PIPELINE_EVENTS_DIR / f"pipeline_events_{target}.jsonl")
         if file_path.exists():
             stats["pipeline_events"]["scanned"] += 1
             events = _load_pipeline_events_from_file(target)

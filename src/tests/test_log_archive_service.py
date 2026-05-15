@@ -1,3 +1,4 @@
+import gzip
 import json
 from pathlib import Path
 import sys
@@ -25,6 +26,20 @@ def test_monitor_snapshot_roundtrip(tmp_path, monkeypatch):
     # DB migration adds meta.source field
     if "meta" in loaded:
         del loaded["meta"]
+    assert loaded == payload
+
+
+def test_load_monitor_snapshot_reads_gzip_file(tmp_path, monkeypatch):
+    snapshot_dir = tmp_path / "monitor_snapshots"
+    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(service, "MONITOR_SNAPSHOT_DIR", snapshot_dir)
+
+    payload = {"date": "2026-04-06", "value": 456}
+    with gzip.open(snapshot_dir / "trade_review_2026-04-06.json.gz", "wt", encoding="utf-8") as handle:
+        json.dump(payload, handle)
+
+    loaded = service.load_monitor_snapshot("trade_review", "2026-04-06")
+
     assert loaded == payload
 
 

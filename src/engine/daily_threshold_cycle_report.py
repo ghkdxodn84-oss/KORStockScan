@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import math
 from collections import Counter, defaultdict
@@ -630,7 +631,8 @@ def _default_completed_rows_loader(start_date: str, end_date: str) -> list[dict]
 
 def _read_threshold_jsonl(path: Path) -> list[dict]:
     rows: list[dict] = []
-    with open(path, "r", encoding="utf-8", errors="replace") as handle:
+    opener = gzip.open if path.suffix == ".gz" else open
+    with opener(path, "rt", encoding="utf-8", errors="replace") as handle:
         for raw_line in handle:
             line = raw_line.strip()
             if not line:
@@ -697,11 +699,26 @@ def _load_partitioned_pipeline_events(target_date: str) -> PipelineLoadResult | 
 
 
 def _read_json_dict(path: Path) -> dict:
+    if not path.exists() and Path(f"{path}.gz").exists():
+        path = Path(f"{path}.gz")
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        if path.suffix == ".gz":
+            with gzip.open(path, "rt", encoding="utf-8") as handle:
+                payload = json.load(handle)
+        else:
+            payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return {}
     return payload if isinstance(payload, dict) else {}
+
+
+def _existing_or_gzip_path(path: Path) -> Path:
+    if path.exists():
+        return path
+    gz_path = Path(f"{path}.gz")
+    if gz_path.exists():
+        return gz_path
+    return path
 
 
 def _calibration_report_source_paths(target_date: str) -> dict[str, Path]:
@@ -772,6 +789,7 @@ def _audit_report_only_cleanup_candidates(target_date: str, source_paths: dict[s
     for item in REPORT_ONLY_CLEANUP_AUDIT_REGISTRY:
         rel_path = item["path_template"].replace("{date}", target_date)
         path = REPORT_DIR / rel_path
+        path = _existing_or_gzip_path(path)
         exists = path.exists()
         in_current_source_bundle = path.resolve() in managed_source_paths
         status = "absent"
@@ -851,12 +869,13 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             f"{candidate['id']} status={candidate['status']} path={candidate['path']}"
         )
     for name, path in source_paths.items():
+        actual_path = _existing_or_gzip_path(path)
         payload = _read_json_dict(path)
-        exists = path.exists()
+        exists = actual_path.exists()
         if exists and not payload and path.suffix == ".json":
-            warnings.append(f"{name} 로드 실패 또는 빈 JSON: {path}")
+            warnings.append(f"{name} 로드 실패 또는 빈 JSON: {actual_path}")
         sources[name] = {
-            "path": str(path),
+            "path": str(actual_path),
             "exists": exists,
             "loaded": bool(payload),
             "top_keys": list(payload.keys())[:20] if payload else [],
@@ -1629,6 +1648,8 @@ def _default_pipeline_load_result(target_date: str) -> PipelineLoadResult:
         return partitioned
 
     compact_path = THRESHOLD_CYCLE_DIR / f"threshold_events_{target_date}.jsonl"
+    if not compact_path.exists() and Path(f"{compact_path}.gz").exists():
+        compact_path = Path(f"{compact_path}.gz")
     if compact_path.exists():
         rows = _read_threshold_jsonl(compact_path)
         return PipelineLoadResult(
