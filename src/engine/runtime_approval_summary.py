@@ -32,6 +32,7 @@ _REASON_LABELS = {
     "exit_only_delta_missing": "exit-only 비교 누락",
     "post_add_mae_missing": "추가매수 MAE 누락",
     "approval_artifact_missing": "approval artifact 없음",
+    "approval_request_not_approved": "approval request 미승인",
     "approval_contract_missing": "approval 계약 미준비",
     "one_share_real_canary_approval_artifact_missing": "1주 real canary approval artifact 없음",
     "scale_in_real_canary_approval_artifact_missing": "scale-in approval artifact 없음",
@@ -229,6 +230,27 @@ def _scalping_rows(ev_report: dict[str, Any], calibration_report: dict[str, Any]
     return rows
 
 
+def _approved_swing_request_ids(target_date: str) -> set[str]:
+    if not target_date:
+        return set()
+
+    approved_ids: set[str] = set()
+    artifact = _load_json(SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_runtime_approvals_{target_date}.json")
+    for item in artifact.get("approved_requests") or []:
+        if isinstance(item, dict) and bool(item.get("approved", True)) and item.get("approval_id"):
+            approved_ids.add(str(item.get("approval_id")))
+
+    one_share = _load_json(SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_one_share_real_canary_{target_date}.json")
+    if bool(one_share.get("approved")) and str(one_share.get("policy_id") or "") == "swing_one_share_real_canary_phase0":
+        approved_ids.update(str(value) for value in one_share.get("approved_request_ids") or [] if value)
+
+    scale_in = _load_json(SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_scale_in_real_canary_{target_date}.json")
+    if bool(scale_in.get("approved")) and str(scale_in.get("policy_id") or "") == "swing_scale_in_real_canary_phase0":
+        approved_ids.update(str(value) for value in scale_in.get("approved_request_ids") or [] if value)
+
+    return approved_ids
+
+
 def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
     candidates = _candidate_by_family(swing_report.get("candidates"))
     rows: list[dict[str, Any]] = []
@@ -269,6 +291,7 @@ def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
         )
     requests = swing_report.get("approval_requests") if isinstance(swing_report.get("approval_requests"), list) else []
     blocked_families = {row["family"] for row in rows}
+    approved_ids = _approved_swing_request_ids(target_date)
     for item in requests:
         if not isinstance(item, dict):
             continue
@@ -276,7 +299,9 @@ def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
         if not family or family in blocked_families:
             continue
         contract = approval_contract_for(family, target_date)
+        approval_id = str(item.get("approval_id") or "")
         artifact_missing_reason = _swing_approval_artifact_reason(family, target_date)
+        approval_reason = "" if approval_id and approval_id in approved_ids else artifact_missing_reason or "approval_request_not_approved"
         rows.append(
             {
                 "domain": "swing",
@@ -291,9 +316,10 @@ def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
                     "count": item.get("sample_count"),
                     "floor": item.get("sample_floor"),
                 },
-                "reasons": [artifact_missing_reason] if artifact_missing_reason else [],
-                "reason_label": _reason_text([artifact_missing_reason] if artifact_missing_reason else []),
+                "reasons": [approval_reason] if approval_reason else [],
+                "reason_label": _reason_text([approval_reason] if approval_reason else []),
                 "approval_id": item.get("approval_id"),
+                "approval_artifact_approved": bool(approval_id and approval_id in approved_ids),
                 "approval_contract_status": item.get("approval_contract_status") or contract.get("approval_contract_status"),
                 "approval_live_ready": bool(item.get("approval_live_ready") or contract.get("approval_live_ready")),
                 "approval_artifact_path": item.get("approval_artifact_path") or contract.get("approval_artifact_path"),
@@ -544,9 +570,11 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
             "swing_requested": int((swing_report.get("summary") or {}).get("requested") or 0)
             if isinstance(swing_report.get("summary"), dict)
             else 0,
-            "swing_approved": int((swing_report.get("summary") or {}).get("approved") or 0)
-            if isinstance(swing_report.get("summary"), dict)
-            else 0,
+            "swing_approved": sum(
+                1
+                for row in swing_rows
+                if row.get("state") == "approval_required" and bool(row.get("approval_artifact_approved"))
+            ),
         },
         "application_timing": _application_timing(target_date, ev_report),
         "scalping": scalping_rows,

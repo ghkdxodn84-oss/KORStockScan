@@ -38,7 +38,8 @@
   - Source: [swing_runtime_approval_2026-05-15.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-15.json), [threshold_cycle_ev_2026-05-15.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-15.json)
   - 판정 기준: approval request가 있더라도 사용자 승인 artifact가 없으면 env apply 대상이 아니다.
   - 금지: 스윙 dry-run 해제, real canary, floor, scale-in real canary를 서로 자동 승인하지 않는다.
-  - 다음 액션: `approval_artifact_present`, `approval_artifact_missing`, `blocked_by_policy` 중 하나로 닫는다.
+  - 사용자 승인 요청/승인 현황 표면화: `swing_model_floor` approval_id=`swing_runtime_approval:2026-05-15:swing_model_floor`, `swing_gatekeeper_reject_cooldown` approval_id=`swing_runtime_approval:2026-05-15:swing_gatekeeper_reject_cooldown`, `swing_one_share_real_canary_phase0` approval_id=`swing_one_share_real_canary:2026-05-15:phase0`는 사용자 승인 artifact 생성 완료 상태로 확인한다.
+  - 다음 액션: 최종 보고에 `사용자 승인 필요/승인 완료` 섹션을 별도로 쓰고, 각 approval_id, artifact path, selected env, blocked reason을 `approval_artifact_present`, `approval_artifact_missing`, `blocked_by_policy` 중 하나로 닫는다.
 
 ## 장중 체크리스트 (09:05~15:20)
 
@@ -72,7 +73,7 @@
   - Source: [threshold_cycle_ev_2026-05-15.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-15.json), [time-based-operations-runbook.md](/home/ubuntu/KORStockScan/docs/time-based-operations-runbook.md)
   - 판정 기준: 개입사항을 `승인 artifact 필요`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`으로 분류한다.
   - 금지: 자동화 산출물에 있는 요청을 답변에만 남기고 checklist/Project 대상에서 누락하지 않는다.
-  - 다음 액션: 누락된 항목이 있으면 다음 영업일 checklist에 parser-friendly checkbox로 추가한다.
+  - 다음 액션: 최종 사용자 보고에 `승인 필요/승인 완료`, `Codex 구현 필요`, `수동 동기화 필요`, `관찰만`을 별도 소제목으로 풀어 쓰고, approval request가 있으면 항목별 `approval_id`, 후보/대상, artifact path, 승인 여부, 다음 PREOPEN 적용 여부를 반드시 노출한다. 누락된 항목이 있으면 다음 영업일 checklist에 parser-friendly checkbox로 추가한다.
 
 - [ ] `[ShadowCanaryCohortReview0518] shadow/canary/cohort 런타임 분류 및 정리 판정` (`Due: 2026-05-18`, `Slot: POSTCLOSE`, `TimeWindow: 18:40~18:55`, `Track: Plan`)
   - Source: [workorder-shadow-canary-runtime-classification.md](/home/ubuntu/KORStockScan/docs/workorder-shadow-canary-runtime-classification.md)

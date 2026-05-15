@@ -3,7 +3,7 @@
 - 목적: 스캘핑 threshold-cycle 판정과 스윙 runtime approval 판정을 한 화면에서 보는 읽기 전용 요약이다.
 - runtime_mutation_allowed: `False`
 - scalping_items/selected: `13` / `1`
-- swing_blocked/requested/approved: `14` / `3` / `0`
+- swing_blocked/requested/approved: `14` / `3` / `3`
 - panic_approval_requested: `0`
 - env_generated_at: `2026-05-15T07:35:01`
 - first_bot_start_at: `2026-05-15T07:40:04`
@@ -41,9 +41,9 @@
 | `swing_scale_in_ofi_qi_confirmation` | 스윙 추가매수 직전 OFI/QI 확인 신호가 유효한지 보는 축 | 스윙 dry-run/probe 관찰: 실주문 변경 없음 | `freeze` | 계측/DB/safety 문제로 runtime 변경을 금지한다 | 0.8361 | `-` | scale_in_ofi_qi_invalid_micro_context, runtime guard 없음 |
 | `swing_exit_ofi_qi_smoothing` | 스윙 청산 직전 OFI/QI로 EXIT 확정/보류를 다듬을 수 있는지 보는 축 | 스윙 dry-run/probe 관찰: 실주문 변경 없음 | `hold_sample` | 축은 유지/관찰하지만 표본 부족으로 runtime 변경은 하지 않는다 | 0.7961 | `-` | 표본 부족, runtime guard 없음 |
 | `swing_scale_in_real_canary_phase0` | 승인된 실제 스윙 보유분에 한해 PYRAMID/AVG_DOWN 1주 추가매수 canary를 열 수 있는지 보는 정책 축 | 미적용: approval artifact 없이는 실주문 추가매수 금지 | `freeze` | 계측/DB/safety 문제로 runtime 변경을 금지한다 | 없음 | `-` | scale_in_ofi_qi_invalid_micro_context, 최종 exit 수익률 누락, exit-only 비교 누락, 추가매수 MAE 누락 |
-| `swing_model_floor` | 스윙 추천 모델 floor 값을 올리거나 낮출 수 있는지 보는 선택 기준 축 | 스윙 dry-run/probe 관찰: 실주문 변경 없음 | `approval_required` | approval artifact가 있어야 다음 PREOPEN env 반영 후보가 된다 | 0.8361 | `ready` | approval artifact 없음 |
-| `swing_gatekeeper_reject_cooldown` | gatekeeper reject 이후 같은 후보를 다시 볼 cooldown 시간을 조정하는 축 | 스윙 dry-run/probe 관찰: 실주문 변경 없음 | `approval_required` | approval artifact가 있어야 다음 PREOPEN env 반영 후보가 된다 | 0.8361 | `ready` | approval artifact 없음 |
-| `swing_one_share_real_canary_phase0` | 승인된 스윙 후보에 한해 초기 BUY/SELL 1주 real canary execution 품질을 수집하는 정책 축 | 미적용: approval artifact 없이는 초기 BUY 실주문 금지 | `approval_required` | approval artifact가 있어야 다음 PREOPEN env 반영 후보가 된다 | 0.8361 | `ready` | 1주 real canary approval artifact 없음 |
+| `swing_model_floor` | 스윙 추천 모델 floor 값을 올리거나 낮출 수 있는지 보는 선택 기준 축 | 스윙 dry-run/probe 관찰: 실주문 변경 없음 | `approval_required` | approval artifact가 있어야 다음 PREOPEN env 반영 후보가 된다 | 0.8361 | `ready` | - |
+| `swing_gatekeeper_reject_cooldown` | gatekeeper reject 이후 같은 후보를 다시 볼 cooldown 시간을 조정하는 축 | 스윙 dry-run/probe 관찰: 실주문 변경 없음 | `approval_required` | approval artifact가 있어야 다음 PREOPEN env 반영 후보가 된다 | 0.8361 | `ready` | - |
+| `swing_one_share_real_canary_phase0` | 승인된 스윙 후보에 한해 초기 BUY/SELL 1주 real canary execution 품질을 수집하는 정책 축 | 미적용: approval artifact 없이는 초기 BUY 실주문 금지 | `approval_required` | approval artifact가 있어야 다음 PREOPEN env 반영 후보가 된다 | 0.8361 | `ready` | - |
 
 ## Panic
 | 항목 | 설명 | 현재 적용 | 상태 | 판정 해석 | 점수 | 계약 | 차단/판정 사유 |
