@@ -488,6 +488,8 @@ def test_build_code_improvement_workorder_adds_panic_lifecycle_orders(tmp_path, 
                             "panic_buy_active_count": 1,
                             "tp_counterfactual_count": 4,
                             "trailing_winner_count": 2,
+                            "market_wide_panic_buy_confirmed": True,
+                            "market_breadth_risk_on_advisory": True,
                             "candidate_status": {"panic_buy_runner_tp_canary": "report_only_candidate"},
                         },
                     }
@@ -524,9 +526,67 @@ def test_build_code_improvement_workorder_adds_panic_lifecycle_orders(tmp_path, 
         item for item in report["orders"] if item["order_id"] == "order_panic_buy_runner_tp_canary_lifecycle_pack"
     )
     assert any("panic_buy_regime_mode=PANIC_BUY_CONTINUATION" in item for item in panic_buy_order["evidence"])
+    assert any("market_wide_panic_buy_confirmed=True" in item for item in panic_buy_order["evidence"])
     markdown = (doc_dir / "code_improvement_workorder_2026-05-13.md").read_text(encoding="utf-8")
     assert "panic_buy_runner_tp_canary" in markdown
     assert "threshold_cycle_calibration" in markdown
+
+
+def test_build_code_improvement_workorder_routes_panic_buy_source_quality_only(tmp_path, monkeypatch):
+    automation_dir = tmp_path / "scalping_pattern_lab_automation"
+    ev_dir = tmp_path / "threshold_cycle_ev"
+    calibration_dir = tmp_path / "threshold_cycle_calibration"
+    report_dir = tmp_path / "report"
+    doc_dir = tmp_path / "docs"
+    calibration_dir.mkdir(parents=True)
+    calibration_path = calibration_dir / "threshold_cycle_calibration_2026-05-13.json"
+    calibration_path.write_text(
+        json.dumps(
+            {
+                "calibration_source_bundle": {
+                    "source_metrics": {
+                        "panic_buying": {
+                            "runtime_effect": "report_only_no_mutation",
+                            "panic_buy_state": "NORMAL",
+                            "panic_buy_regime_mode": "NORMAL",
+                            "panic_buy_active_count": 0,
+                            "tp_counterfactual_count": 0,
+                            "trailing_winner_count": 0,
+                            "market_wide_panic_buy_confirmed": False,
+                            "market_breadth_risk_on_advisory": False,
+                            "missing_orderbook_count": 15,
+                            "missing_trade_aggressor_count": 13,
+                            "source_quality_blockers": ["panic_buy_orderbook_collector_coverage_gap"],
+                            "candidate_status": {},
+                        }
+                    }
+                }
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    ev_dir.mkdir(parents=True)
+    (ev_dir / "threshold_cycle_ev_2026-05-13.json").write_text(
+        json.dumps({"sources": {"calibration": str(calibration_path)}}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(mod, "PATTERN_LAB_AUTOMATION_DIR", automation_dir)
+    monkeypatch.setattr(mod, "SWING_IMPROVEMENT_AUTOMATION_DIR", tmp_path / "missing-swing")
+    monkeypatch.setattr(mod, "SWING_PATTERN_LAB_AUTOMATION_DIR", tmp_path / "missing-swing-lab")
+    monkeypatch.setattr(mod, "THRESHOLD_CYCLE_EV_DIR", ev_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "CODE_IMPROVEMENT_WORKORDER_DIR", doc_dir)
+
+    report = mod.build_code_improvement_workorder("2026-05-13", max_orders=5)
+
+    order = next(
+        item for item in report["orders"] if item["order_id"] == "order_panic_buying_source_quality_market_breadth_micro_coverage"
+    )
+    assert order["route"] == "source_quality_blocker"
+    assert order["runtime_effect"] is False
+    assert order["threshold_family"] is None
+    assert any("source_quality_blockers=['panic_buy_orderbook_collector_coverage_gap']" in item for item in order["evidence"])
 
 
 def test_build_code_improvement_workorder_merges_swing_automation(tmp_path, monkeypatch):

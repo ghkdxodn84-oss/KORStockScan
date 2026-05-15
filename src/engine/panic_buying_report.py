@@ -53,6 +53,10 @@ def _json_report_path(dirname: str, target_date: str) -> Path:
     return DATA_DIR / "report" / dirname / f"{dirname}_{target_date}.json"
 
 
+def _market_panic_breadth_path(target_date: str) -> Path:
+    return _json_report_path("market_panic_breadth", target_date)
+
+
 def _safe_str(value: Any) -> str:
     return str(value if value is not None else "").strip()
 
@@ -253,6 +257,12 @@ def _load_source_summary(target_date: str) -> dict[str, Any]:
     buy = _load_json(_json_report_path("buy_funnel_sentinel", target_date))
     hold = _load_json(_json_report_path("holding_exit_sentinel", target_date))
     panic_sell = _load_json(_json_report_path("panic_sell_defense", target_date))
+    market_breadth = _load_json(_market_panic_breadth_path(target_date))
+    panic_breadth = (
+        market_breadth.get("panic_breadth")
+        if isinstance(market_breadth, dict) and isinstance(market_breadth.get("panic_breadth"), dict)
+        else {}
+    )
     return {
         "buy_funnel_sentinel": {
             "path": str(_json_report_path("buy_funnel_sentinel", target_date)),
@@ -269,6 +279,53 @@ def _load_source_summary(target_date: str) -> dict[str, Any]:
             "exists": _json_report_path("panic_sell_defense", target_date).exists(),
             "panic_state": (panic_sell or {}).get("panic_state") if isinstance(panic_sell, dict) else None,
         },
+        "market_panic_breadth": {
+            "path": str(_market_panic_breadth_path(target_date)),
+            "exists": _market_panic_breadth_path(target_date).exists(),
+            "as_of": market_breadth.get("as_of") if isinstance(market_breadth, dict) else None,
+            "source_quality_status": ((market_breadth or {}).get("source_quality") or {}).get("status")
+            if isinstance(market_breadth, dict)
+            else None,
+            "risk_on_advisory": bool(panic_breadth.get("risk_on_advisory")),
+            "risk_off_advisory": bool(panic_breadth.get("risk_off_advisory")),
+            "industry_breadth": panic_breadth.get("industry_breadth") if isinstance(panic_breadth, dict) else {},
+            "stock_breadth": panic_breadth.get("stock_breadth") if isinstance(panic_breadth, dict) else {},
+            "risk_on_reasons": panic_breadth.get("risk_on_reasons") if isinstance(panic_breadth, dict) else [],
+        },
+    }
+
+
+def _market_breadth_context(source_summary: dict[str, Any], micro: dict[str, Any]) -> dict[str, Any]:
+    market = (
+        source_summary.get("market_panic_breadth")
+        if isinstance(source_summary.get("market_panic_breadth"), dict)
+        else {}
+    )
+    active_or_watch = _safe_int(micro.get("panic_buy_active_count"), 0) + _safe_int(micro.get("panic_buy_watch_count"), 0)
+    source_ok = bool(market.get("exists")) and _safe_str(market.get("source_quality_status")) == "ok"
+    risk_on = bool(market.get("risk_on_advisory"))
+    reasons: list[str] = []
+    if risk_on:
+        reasons.append("market_panic_breadth_risk_on")
+    if active_or_watch > 0 and not risk_on:
+        reasons.append("local_panic_buy_unconfirmed_by_market_breadth")
+    if not source_ok:
+        reasons.append("market_panic_breadth_source_unavailable")
+    return {
+        "metric_role": "source_quality_gate",
+        "decision_authority": "source_quality_only",
+        "runtime_effect": "report_only_no_mutation",
+        "market_panic_breadth_source": market.get("path"),
+        "market_panic_breadth_as_of": market.get("as_of"),
+        "market_panic_breadth_source_quality_status": market.get("source_quality_status"),
+        "market_panic_breadth_risk_on_advisory": risk_on,
+        "market_panic_breadth_risk_off_advisory": bool(market.get("risk_off_advisory")),
+        "market_wide_panic_buy_confirmed": bool(active_or_watch > 0 and risk_on),
+        "local_panic_buy_signal_count": active_or_watch,
+        "industry_breadth": market.get("industry_breadth") or {},
+        "stock_breadth": market.get("stock_breadth") or {},
+        "reasons": reasons or ["no market-wide panic-buy confirmation required for NORMAL state"],
+        "forbidden_uses": list(dict.fromkeys(FORBIDDEN_AUTOMATIONS + ["order_submit"])),
     }
 
 
@@ -340,7 +397,10 @@ def _panic_buy_regime_contract(mode: str) -> dict[str, Any]:
         "window_policy": "same_day_intraday_light + postclose_attribution + next_preopen_apply",
         "sample_floor": "panic buying report freshness <= 2m intraday or postclose regenerated source bundle",
         "primary_decision_metric": "source_quality_adjusted_runner_vs_fixed_tp_ev_pct",
-        "source_quality_gate": "panic buying detector confidence + real/sim/probe split + TP counterfactual provenance",
+        "source_quality_gate": (
+            "panic buying detector confidence + market/breadth risk-on context + "
+            "real/sim/probe split + TP counterfactual provenance"
+        ),
         "runtime_effect": "report_only_no_mutation",
         "allowed_runtime_apply": False,
         "mode": mode,
@@ -378,6 +438,8 @@ def _panic_buy_metrics(micro: dict[str, Any]) -> dict[str, Any]:
         "missing_orderbook_count": _safe_int(micro.get("missing_orderbook_count"), 0),
         "degraded_orderbook_count": _safe_int(micro.get("degraded_orderbook_count"), 0),
         "missing_trade_aggressor_count": _safe_int(micro.get("missing_trade_aggressor_count"), 0),
+        "carried_orderbook_snapshot_count": _safe_int(micro.get("carried_orderbook_snapshot_count"), 0),
+        "carried_trade_aggressor_snapshot_count": _safe_int(micro.get("carried_trade_aggressor_snapshot_count"), 0),
         "max_panic_buy_score": _safe_float(metrics.get("max_panic_buy_score"), 0.0),
         "avg_confidence": _safe_float(metrics.get("avg_confidence"), 0.0),
     }
@@ -441,6 +503,8 @@ def build_panic_buying_report(
     if as_of is None:
         as_of = datetime.now()
     micro = summarize_microstructure_detector_from_events(events, as_of=as_of)
+    source_summary = _load_source_summary(target_date)
+    market_breadth_context = _market_breadth_context(source_summary, micro)
     panic_buy_state, reasons = _resolve_panic_buy_state(micro)
     panic_buy_regime_mode = _panic_buy_regime_mode(panic_buy_state, micro)
     panic_metrics = _panic_buy_metrics(micro)
@@ -467,6 +531,7 @@ def build_panic_buying_report(
         "panic_buy_metrics": panic_metrics,
         "exhaustion_metrics": exhaustion,
         "microstructure_detector": micro,
+        "market_breadth_context": market_breadth_context,
         "tp_counterfactual_summary": tp_counterfactual,
         "canary_candidates": _canary_candidates(
             panic_buy_state,
@@ -475,7 +540,7 @@ def build_panic_buying_report(
             exhaustion,
             tp_counterfactual,
         ),
-        "source_summary": _load_source_summary(target_date),
+        "source_summary": source_summary,
         "qna_policy": {
             "should_change_take_profit_now": "no; report-only until separate approval artifact and rollback guard exist",
             "panic_buy_is_new_buy_signal": "no; it is runner/TP attribution context for existing long positions",
@@ -498,6 +563,7 @@ def build_markdown(report: dict[str, Any]) -> str:
     exhaustion = report["exhaustion_metrics"]
     tp = report["tp_counterfactual_summary"]
     micro = report.get("microstructure_detector") if isinstance(report.get("microstructure_detector"), dict) else {}
+    market = report.get("market_breadth_context") if isinstance(report.get("market_breadth_context"), dict) else {}
     lines = [
         f"# Panic Buying {report['target_date']}",
         "",
@@ -541,9 +607,19 @@ def build_markdown(report: dict[str, Any]) -> str:
         f"- missing_orderbook_count: `{micro.get('missing_orderbook_count', 0)}`",
         f"- degraded_orderbook_count: `{micro.get('degraded_orderbook_count', 0)}`",
         f"- missing_trade_aggressor_count: `{micro.get('missing_trade_aggressor_count', 0)}`",
+        f"- carried_orderbook_snapshot_count: `{micro.get('carried_orderbook_snapshot_count', 0)}`",
+        f"- carried_trade_aggressor_snapshot_count: `{micro.get('carried_trade_aggressor_snapshot_count', 0)}`",
         f"- micro_cusum_triggered_symbol_count: `{(micro.get('micro_cusum_observer') or {}).get('triggered_symbol_count', 0) if isinstance(micro.get('micro_cusum_observer'), dict) else 0}`",
         f"- micro_consensus_pass_symbol_count: `{(micro.get('micro_cusum_observer') or {}).get('consensus_pass_symbol_count', 0) if isinstance(micro.get('micro_cusum_observer'), dict) else 0}`",
         f"- micro_cusum_decision_authority: `{(micro.get('micro_cusum_observer') or {}).get('decision_authority', '-') if isinstance(micro.get('micro_cusum_observer'), dict) else '-'}`",
+        "",
+        "## Market Breadth Context",
+        "",
+        f"- market_panic_breadth_source_quality_status: `{market.get('market_panic_breadth_source_quality_status') or '-'}`",
+        f"- market_panic_breadth_risk_on_advisory: `{str(market.get('market_panic_breadth_risk_on_advisory', False)).lower()}`",
+        f"- market_panic_breadth_risk_off_advisory: `{str(market.get('market_panic_breadth_risk_off_advisory', False)).lower()}`",
+        f"- market_wide_panic_buy_confirmed: `{str(market.get('market_wide_panic_buy_confirmed', False)).lower()}`",
+        f"- market_breadth_decision_authority: `{market.get('decision_authority', '-')}`",
         "",
         "## Canary Candidates",
         "",

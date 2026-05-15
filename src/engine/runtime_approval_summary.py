@@ -344,6 +344,11 @@ def _panic_rows(calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
     panic_buy = source_metrics.get("panic_buying") if isinstance(source_metrics.get("panic_buying"), dict) else {}
     if panic_buy:
         candidate_status = panic_buy.get("candidate_status") if isinstance(panic_buy.get("candidate_status"), dict) else {}
+        source_quality_blockers = (
+            panic_buy.get("source_quality_blockers")
+            if isinstance(panic_buy.get("source_quality_blockers"), list)
+            else []
+        )
         sample_count = max(
             _as_int(panic_buy.get("panic_buy_active_count")),
             _as_int(panic_buy.get("tp_counterfactual_count")),
@@ -353,6 +358,7 @@ def _panic_rows(calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
             _has_report_only_candidate(candidate_status),
             sample_count,
             panic_buy.get("runtime_effect"),
+            source_quality_blockers,
         )
         rows.append(
             {
@@ -374,6 +380,9 @@ def _panic_rows(calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
                 "panic_buy_regime_mode": panic_buy.get("panic_buy_regime_mode"),
                 "panic_buy_regime_decision_authority": panic_buy.get("panic_buy_regime_decision_authority"),
                 "panic_buy_regime_runtime_effect": panic_buy.get("panic_buy_regime_runtime_effect"),
+                "market_wide_panic_buy_confirmed": bool(panic_buy.get("market_wide_panic_buy_confirmed")),
+                "market_breadth_risk_on_advisory": bool(panic_buy.get("market_breadth_risk_on_advisory")),
+                "source_quality_blockers": source_quality_blockers,
                 "selected_auto_bounded_live": False,
                 "candidate_status": candidate_status,
             }

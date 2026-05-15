@@ -38,6 +38,15 @@ def _write_events(tmp_path, rows: list[dict]) -> None:
             handle.write(json.dumps(row, ensure_ascii=False) + "\n")
 
 
+def _write_market_breadth(tmp_path, payload: dict) -> None:
+    report_dir = tmp_path / "report" / "market_panic_breadth"
+    report_dir.mkdir(parents=True, exist_ok=True)
+    (report_dir / f"market_panic_breadth_{TARGET_DATE}.json").write_text(
+        json.dumps(payload, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
+
 def _micro_event(hhmmss: str, *, close: float, volume: float = 100.0, buy: float = 52.0, sell: float = 48.0, **fields):
     payload = {
         "curr_price": close,
@@ -151,6 +160,99 @@ def test_microstructure_detector_adds_report_only_runner_flags(monkeypatch, tmp_
     assert micro["micro_cusum_observer"]["consensus_pass_symbol_count"] == 1
     assert "order_submit" in micro["micro_cusum_observer"]["forbidden_uses"]
     assert all(item["allowed_runtime_apply"] is False for item in report["canary_candidates"])
+
+
+def test_microstructure_detector_carries_recent_micro_snapshot_to_price_row(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        [
+            _micro_event("10:00:00", close=100.0, buy=0, sell=0),
+            _micro_event("10:01:00", close=100.4, buy=0, sell=0),
+            _event(
+                "10:02:30",
+                fields={
+                    "exec_buy_ratio": 72,
+                    "best_bid": 10180,
+                    "best_ask": 10190,
+                    "bid_depth_l5": 1500,
+                    "ask_depth_l5": 450,
+                    "ask_depth_drop_ratio": 0.52,
+                    "bid_depth_support_ratio": 1.40,
+                    "panic_buy_spread_ratio": 2.0,
+                    "orderbook_micro_ofi_z": 3.2,
+                    "orderbook_micro_qi_ewma": 0.72,
+                    "orderbook_micro_state": "bullish",
+                    "orderbook_micro_ready": True,
+                    "orderbook_micro_observer_healthy": True,
+                },
+            ),
+            _event(
+                "10:03:00",
+                fields={
+                    "curr_price": 102.2,
+                    "open": 100.8,
+                    "high": 102.4,
+                    "low": 100.8,
+                    "volume": 430,
+                },
+            ),
+        ],
+    )
+
+    report = report_mod.build_panic_buying_report(
+        TARGET_DATE,
+        as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:04:00"),
+    )
+
+    micro = report["microstructure_detector"]
+    latest = micro["latest_signals"][0]["metrics"]
+    assert micro["missing_orderbook_count"] == 0
+    assert micro["missing_trade_aggressor_count"] == 0
+    assert micro["carried_orderbook_snapshot_count"] == 1
+    assert micro["carried_trade_aggressor_snapshot_count"] == 1
+    assert latest["orderbook_carried_forward"] is True
+    assert latest["trade_flow_carried_forward"] is True
+    assert latest["orderbook_age_sec"] == 30.0
+    assert latest["trade_flow_age_sec"] == 30.0
+
+
+def test_panic_buying_report_includes_market_breadth_context(monkeypatch, tmp_path):
+    monkeypatch.setattr(report_mod, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        [
+            _micro_event("10:00:00", close=100.0),
+            _micro_event("10:01:00", close=101.5, buy=80, sell=20),
+            _micro_event("10:02:00", close=102.8, buy=82, sell=18),
+        ],
+    )
+    _write_market_breadth(
+        tmp_path,
+        {
+            "as_of": f"{TARGET_DATE}T10:02:00",
+            "source_quality": {"status": "ok"},
+            "panic_breadth": {
+                "risk_on_advisory": True,
+                "risk_off_advisory": False,
+                "industry_breadth": {"up_ratio_pct": 76.0},
+                "stock_breadth": {"max_rise_ratio_pct": 81.0},
+                "risk_on_reasons": ["market_index_intraday_rise"],
+            },
+        },
+    )
+
+    report = report_mod.build_panic_buying_report(
+        TARGET_DATE,
+        as_of=datetime.fromisoformat(f"{TARGET_DATE}T10:03:00"),
+    )
+
+    context = report["market_breadth_context"]
+    assert context["decision_authority"] == "source_quality_only"
+    assert context["market_panic_breadth_risk_on_advisory"] is True
+    assert context["market_panic_breadth_risk_off_advisory"] is False
+    assert context["market_panic_breadth_source_quality_status"] == "ok"
+    assert "order_submit" in context["forbidden_uses"]
 
 
 def test_tp_counterfactual_does_not_create_order_decision(monkeypatch, tmp_path):

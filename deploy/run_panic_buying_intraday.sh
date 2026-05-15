@@ -18,6 +18,7 @@ DRY_RUN="${PANIC_BUYING_DRY_RUN:-0}"
 NOTIFY_ENABLED="${PANIC_BUYING_NOTIFY_TELEGRAM_ENABLED:-true}"
 NOTIFY_AUDIENCE="${PANIC_BUYING_NOTIFY_AUDIENCE:-all}"
 NOTIFY_STATE_FILE="${PANIC_BUYING_NOTIFY_STATE_FILE:-$PROJECT_DIR/tmp/panic_state_telegram_notify_state.json}"
+MARKET_BREADTH_COLLECT_ENABLED="${PANIC_MARKET_BREADTH_COLLECT_ENABLED:-true}"
 IONICE_CLASS="${PANIC_BUYING_IONICE_CLASS:-2}"
 IONICE_LEVEL="${PANIC_BUYING_IONICE_LEVEL:-7}"
 NICE_LEVEL="${PANIC_BUYING_NICE_LEVEL:-12}"
@@ -78,6 +79,15 @@ fi
 
 started_at="$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')"
 echo "[START] panic buying target_date=${TARGET_DATE} started_at=${started_at} dry_run=${DRY_RUN}" | tee -a "$LOG_FILE"
+
+if [[ "$MARKET_BREADTH_COLLECT_ENABLED" != "0" && "$MARKET_BREADTH_COLLECT_ENABLED" != "false" && "$MARKET_BREADTH_COLLECT_ENABLED" != "no" && "$MARKET_BREADTH_COLLECT_ENABLED" != "off" ]]; then
+  echo "[START] market panic breadth collect target_date=${TARGET_DATE}" | tee -a "$LOG_FILE"
+  if env PYTHONPATH=. "$VENV_PY" -m src.engine.market_panic_breadth_collector --date "$TARGET_DATE" --print-json 2>&1 | tee -a "$LOG_FILE"; then
+    echo "[DONE] market panic breadth collect target_date=${TARGET_DATE}" | tee -a "$LOG_FILE"
+  else
+    echo "[WARN] market panic breadth collect failed target_date=${TARGET_DATE}; continuing panic report with prior/missing breadth" | tee -a "$LOG_FILE"
+  fi
+fi
 
 if "${cmd[@]}" 2>&1 | tee -a "$LOG_FILE"; then
   REPORT_FILE="$PROJECT_DIR/data/report/panic_buying/panic_buying_${TARGET_DATE}.json"

@@ -881,27 +881,46 @@ def _panic_lifecycle_followup_orders(calibration_report: dict[str, Any]) -> list
 
     panic_buy = source_metrics.get("panic_buying") if isinstance(source_metrics.get("panic_buying"), dict) else {}
     panic_buy_candidates = panic_buy.get("candidate_status") if isinstance(panic_buy.get("candidate_status"), dict) else {}
+    panic_buy_source_quality_blockers = (
+        panic_buy.get("source_quality_blockers")
+        if isinstance(panic_buy.get("source_quality_blockers"), list)
+        else []
+    )
     panic_buy_triggered = bool(panic_buy_candidates) or (_safe_int(panic_buy.get("panic_buy_active_count"), 0) > 0)
     panic_buy_triggered = panic_buy_triggered or (_safe_int(panic_buy.get("tp_counterfactual_count"), 0) > 0)
     panic_buy_triggered = panic_buy_triggered or (_safe_int(panic_buy.get("trailing_winner_count"), 0) > 0)
+    panic_buy_triggered = panic_buy_triggered or bool(panic_buy_source_quality_blockers)
     if panic_buy_triggered:
+        source_quality_only = bool(panic_buy_source_quality_blockers)
         orders.append(
             {
-                "order_id": "order_panic_buy_runner_tp_canary_lifecycle_pack",
-                "title": "panic buy runner TP canary lifecycle pack",
+                "order_id": (
+                    "order_panic_buying_source_quality_market_breadth_micro_coverage"
+                    if source_quality_only
+                    else "order_panic_buy_runner_tp_canary_lifecycle_pack"
+                ),
+                "title": (
+                    "panic buying source-quality market breadth and micro coverage"
+                    if source_quality_only
+                    else "panic buy runner TP canary lifecycle pack"
+                ),
                 "source_report_type": "threshold_cycle_calibration_source_bundle",
-                "lifecycle_stage": "holding_exit",
+                "lifecycle_stage": "source_quality" if source_quality_only else "holding_exit",
                 "target_subsystem": "panic_buying",
-                "route": "auto_family_candidate",
+                "route": "source_quality_blocker" if source_quality_only else "auto_family_candidate",
                 "mapped_family": None,
-                "threshold_family": "panic_buy_runner_tp_canary",
-                "improvement_type": "runtime_transition_design",
+                "threshold_family": None if source_quality_only else "panic_buy_runner_tp_canary",
+                "improvement_type": "source_quality_instrumentation" if source_quality_only else "runtime_transition_design",
                 "confidence": "consensus",
                 "priority": 7,
                 "runtime_effect": False,
                 "expected_ev_effect": (
-                    "Use panic-buying TP counterfactuals to reduce missed upside versus full fixed-TP exits, "
-                    "while keeping hard/protect/emergency stops and order provenance guards dominant."
+                    "Route market breadth and micro coverage gaps as source-quality blockers before any panic-buying runtime candidate."
+                    if source_quality_only
+                    else (
+                        "Use panic-buying TP counterfactuals to reduce missed upside versus full fixed-TP exits, "
+                        "while keeping hard/protect/emergency stops and order provenance guards dominant."
+                    )
                 ),
                 "evidence": [
                     f"panic_buy_state={panic_buy.get('panic_buy_state')}",
@@ -910,12 +929,21 @@ def _panic_lifecycle_followup_orders(calibration_report: dict[str, Any]) -> list
                     f"exhaustion_confirmed_count={panic_buy.get('exhaustion_confirmed_count')}",
                     f"tp_counterfactual_count={panic_buy.get('tp_counterfactual_count')}",
                     f"trailing_winner_count={panic_buy.get('trailing_winner_count')}",
+                    f"market_wide_panic_buy_confirmed={panic_buy.get('market_wide_panic_buy_confirmed')}",
+                    f"market_breadth_risk_on_advisory={panic_buy.get('market_breadth_risk_on_advisory')}",
+                    f"missing_orderbook_count={panic_buy.get('missing_orderbook_count')}",
+                    f"missing_trade_aggressor_count={panic_buy.get('missing_trade_aggressor_count')}",
+                    f"source_quality_blockers={panic_buy_source_quality_blockers}",
                     f"candidate_status={panic_buy_candidates}",
                     "allowed_runtime_apply=false",
                 ],
                 "next_postclose_metric": (
-                    "panic_buying should expose runner-vs-full-TP EV, MAE/giveback/sell-failure rollback guards, "
-                    "approval artifact status, panic_buy_regime_mode owner split, and no live TP mutation before approval."
+                    "panic_buying source-quality blockers must be resolved or explicitly carried before runner TP approval is reviewed."
+                    if source_quality_only
+                    else (
+                        "panic_buying should expose runner-vs-full-TP EV, MAE/giveback/sell-failure rollback guards, "
+                        "approval artifact status, panic_buy_regime_mode owner split, and no live TP mutation before approval."
+                    )
                 ),
                 "files_likely_touched": [
                     "src/engine/panic_buying_report.py",

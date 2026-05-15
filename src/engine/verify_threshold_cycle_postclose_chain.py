@@ -5,7 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
-from datetime import date, datetime
+from datetime import date, datetime, time as dtime
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +57,11 @@ def _latest_run_lines(log_lines: list[str], target_date: str) -> tuple[list[str]
 def _artifact_paths(target_date: str) -> dict[str, Path]:
     next_day = _next_krx_trading_day(target_date)
     return {
+        "market_panic_breadth": REPORT_DIR
+        / "market_panic_breadth"
+        / f"market_panic_breadth_{target_date}.json",
+        "panic_sell_defense": REPORT_DIR / "panic_sell_defense" / f"panic_sell_defense_{target_date}.json",
+        "panic_buying": REPORT_DIR / "panic_buying" / f"panic_buying_{target_date}.json",
         "threshold_cycle_ev": REPORT_DIR / "threshold_cycle_ev" / f"threshold_cycle_ev_{target_date}.json",
         "code_improvement_workorder": REPORT_DIR / "code_improvement_workorder" / f"code_improvement_workorder_{target_date}.json",
         "runtime_approval_summary": REPORT_DIR / "runtime_approval_summary" / f"runtime_approval_summary_{target_date}.json",
@@ -74,6 +79,15 @@ def _next_krx_trading_day(target_date: str) -> str:
 
 def _json_valid(path: Path) -> bool:
     return bool(_load_json(path))
+
+
+def _postclose_not_yet_due(target_date: str) -> bool:
+    try:
+        parsed = date.fromisoformat(target_date)
+    except ValueError:
+        return False
+    now = datetime.now()
+    return parsed == now.date() and now.time() < dtime(16, 10)
 
 
 def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, Any]:
@@ -165,8 +179,11 @@ def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, 
 
     status = "pass"
     if not start_line:
-        status = "fail"
-        log_issues.append("postclose_start_marker_missing")
+        if _postclose_not_yet_due(target_date):
+            status = "not_yet_due"
+        else:
+            status = "fail"
+            log_issues.append("postclose_start_marker_missing")
     elif predecessor_timeouts or log_issues:
         status = "fail"
     elif predecessor_waits:
@@ -182,7 +199,15 @@ def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, 
         "log_path": str(LOG_PATH),
         "latest_start_marker": start_line,
         "predecessor_integrity": {
-            "status": "fail" if predecessor_timeouts or log_issues else "warning" if predecessor_waits else "pass",
+            "status": (
+                "not_yet_due"
+                if status == "not_yet_due"
+                else "fail"
+                if predecessor_timeouts or log_issues
+                else "warning"
+                if predecessor_waits
+                else "pass"
+            ),
             "wait_count": len(predecessor_waits),
             "timeout_count": len(predecessor_timeouts),
             "waits": predecessor_waits,

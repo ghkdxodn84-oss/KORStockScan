@@ -198,6 +198,12 @@ def _parse_dt(value: Any) -> datetime | None:
     return None
 
 
+def _age_seconds(current: datetime, previous: datetime | None) -> float | None:
+    if previous is None:
+        return None
+    return (current - previous).total_seconds()
+
+
 def _clamp01(value: float | None) -> float:
     if value is None or not math.isfinite(float(value)):
         return 0.0
@@ -1119,12 +1125,16 @@ def trade_flow_from_event(row: dict[str, Any]) -> PanicBuyingTradeFlow | None:
     buy_volume = _safe_float(_field(fields, "buy_exec_volume", "buy_volume"), None)
     sell_volume = _safe_float(_field(fields, "sell_exec_volume", "sell_volume"), None)
     total_volume = _safe_float(_field(fields, "total_volume", "volume", "today_vol"), None)
+    buy_ratio = _safe_float(_field(fields, "exec_buy_ratio", "buy_ratio", "buy_ratio_ws"), None)
     if (buy_volume is None or sell_volume is None) and total_volume is not None and total_volume > 0:
-        buy_ratio = _safe_float(_field(fields, "exec_buy_ratio", "buy_ratio", "buy_ratio_ws"), None)
         if buy_ratio is not None:
             ratio = buy_ratio / 100.0 if buy_ratio > 1.0 else buy_ratio
             buy_volume = total_volume * _clamp01(ratio)
             sell_volume = total_volume - buy_volume
+    if buy_volume is None and sell_volume is None and buy_ratio is not None:
+        ratio = buy_ratio / 100.0 if buy_ratio > 1.0 else buy_ratio
+        buy_volume = _clamp01(ratio)
+        sell_volume = 1.0 - buy_volume
     if buy_volume is None and sell_volume is None:
         return None
     return PanicBuyingTradeFlow(ts=ts, buy_volume=max(0.0, buy_volume or 0.0), sell_volume=max(0.0, sell_volume or 0.0))
@@ -1135,10 +1145,10 @@ def orderbook_micro_from_event(row: dict[str, Any]) -> PanicBuyingOrderbookMicro
     ts = _parse_dt(row.get("emitted_at"))
     if ts is None:
         return None
-    best_bid = _safe_float(_field(fields, "best_bid", "bid_price"), None)
-    best_ask = _safe_float(_field(fields, "best_ask", "ask_price"), None)
+    best_bid = _safe_float(_field(fields, "best_bid", "bid_price", "swing_micro_ws_best_bid"), None)
+    best_ask = _safe_float(_field(fields, "best_ask", "ask_price", "swing_micro_ws_best_ask"), None)
     ofi_z = _safe_float(_field(fields, "orderbook_micro_ofi_z", "ofi_z"), None)
-    qi_ewma = _safe_float(_field(fields, "orderbook_micro_qi_ewma", "qi_ewma"), None)
+    qi_ewma = _safe_float(_field(fields, "orderbook_micro_qi_ewma", "orderbook_micro_qi", "qi_ewma"), None)
     spread_ratio = _safe_float(_field(fields, "panic_buy_spread_ratio", "panic_spread_ratio", "micro_spread_ratio"), None)
     if spread_ratio is None:
         raw_spread_ratio = _safe_float(_field(fields, "spread_ratio"), None)
@@ -1182,6 +1192,7 @@ def summarize_microstructure_detector_from_events(
     as_of: datetime | None = None,
     config: PanicBuyingDetectorConfig | None = None,
     max_symbols: int = 20,
+    micro_snapshot_max_age_sec: float = 120.0,
 ) -> dict[str, Any]:
     cfg = config or PanicBuyingDetectorConfig()
     grouped: dict[str, list[dict[str, Any]]] = {}
@@ -1193,7 +1204,11 @@ def summarize_microstructure_detector_from_events(
         code = str(row.get("stock_code") or "").strip()[:6]
         if not code:
             continue
-        if candle_from_event(row) is None:
+        if (
+            candle_from_event(row) is None
+            and trade_flow_from_event(row) is None
+            and orderbook_micro_from_event(row) is None
+        ):
             continue
         grouped.setdefault(code, []).append(row)
         names[code] = str(row.get("stock_name") or code)
@@ -1204,20 +1219,64 @@ def summarize_microstructure_detector_from_events(
     missing_orderbook = 0
     degraded_orderbook = 0
     missing_trade = 0
+    carried_orderbook = 0
+    carried_trade = 0
     for code, rows in grouped.items():
         detector = PanicBuyingStateDetector(cfg)
         latest_signal: PanicBuyingSignal | None = None
         latest_ts: str | None = None
+        latest_trade_flow: PanicBuyingTradeFlow | None = None
+        latest_trade_ts: datetime | None = None
+        latest_orderbook_micro: PanicBuyingOrderbookMicro | None = None
+        latest_orderbook_ts: datetime | None = None
         for row in sorted(rows, key=lambda item: str(item.get("emitted_at") or "")):
             candle = candle_from_event(row)
+            current_trade_flow = trade_flow_from_event(row)
+            current_orderbook_micro = orderbook_micro_from_event(row)
+            if current_trade_flow is not None:
+                latest_trade_flow = current_trade_flow
+                latest_trade_ts = current_trade_flow.ts
+            if current_orderbook_micro is not None:
+                latest_orderbook_micro = current_orderbook_micro
+                latest_orderbook_ts = current_orderbook_micro.ts
             if candle is None:
                 continue
+            trade_flow = current_trade_flow
+            trade_flow_carried = False
+            trade_flow_age_sec = _age_seconds(candle.ts, latest_trade_ts)
+            if (
+                trade_flow is None
+                and latest_trade_flow is not None
+                and trade_flow_age_sec is not None
+                and 0 <= trade_flow_age_sec <= micro_snapshot_max_age_sec
+            ):
+                trade_flow = latest_trade_flow
+                trade_flow_carried = True
+            orderbook_micro = current_orderbook_micro
+            orderbook_carried = False
+            orderbook_age_sec = _age_seconds(candle.ts, latest_orderbook_ts)
+            if (
+                orderbook_micro is None
+                and latest_orderbook_micro is not None
+                and orderbook_age_sec is not None
+                and 0 <= orderbook_age_sec <= micro_snapshot_max_age_sec
+            ):
+                orderbook_micro = latest_orderbook_micro
+                orderbook_carried = True
             latest_ts = candle.ts.isoformat(timespec="seconds")
             latest_signal = detector.update(
                 candle,
-                trade_flow=trade_flow_from_event(row),
-                orderbook_micro=orderbook_micro_from_event(row),
+                trade_flow=trade_flow,
+                orderbook_micro=orderbook_micro,
             )
+            latest_signal.metrics["trade_flow_carried_forward"] = bool(trade_flow_carried)
+            latest_signal.metrics["trade_flow_age_sec"] = None if trade_flow_age_sec is None else round(trade_flow_age_sec, 6)
+            latest_signal.metrics["orderbook_carried_forward"] = bool(orderbook_carried)
+            latest_signal.metrics["orderbook_age_sec"] = None if orderbook_age_sec is None else round(orderbook_age_sec, 6)
+            if trade_flow_carried:
+                carried_trade += 1
+            if orderbook_carried:
+                carried_orderbook += 1
         if latest_signal is None:
             continue
         symbol_signals.append(
@@ -1276,6 +1335,9 @@ def summarize_microstructure_detector_from_events(
         "missing_orderbook_count": missing_orderbook,
         "degraded_orderbook_count": degraded_orderbook,
         "missing_trade_aggressor_count": missing_trade,
+        "carried_orderbook_snapshot_count": carried_orderbook,
+        "carried_trade_aggressor_snapshot_count": carried_trade,
+        "micro_snapshot_max_age_sec": int(micro_snapshot_max_age_sec),
         "state_counts": dict(state_counter),
         "reason_counts": dict(reason_counter.most_common(20)),
         "micro_cusum_observer": {

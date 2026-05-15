@@ -32,6 +32,11 @@ DEFAULT_INDUSTRY_DOWN_RATIO_FLOOR_PCT = 62.0
 DEFAULT_SEVERE_DOWN_FLOOR_PCT = -2.0
 DEFAULT_SEVERE_DOWN_RATIO_FLOOR_PCT = 15.0
 DEFAULT_STOCK_FALL_RATIO_FLOOR_PCT = 70.0
+DEFAULT_INDEX_RISE_FLOOR_PCT = 1.2
+DEFAULT_INDUSTRY_UP_RATIO_FLOOR_PCT = 62.0
+DEFAULT_SEVERE_UP_FLOOR_PCT = 2.0
+DEFAULT_SEVERE_UP_RATIO_FLOOR_PCT = 15.0
+DEFAULT_STOCK_RISE_RATIO_FLOOR_PCT = 70.0
 
 
 def _report_dir() -> Path:
@@ -169,6 +174,11 @@ def summarize_breadth(
     severe_down_floor_pct: float = DEFAULT_SEVERE_DOWN_FLOOR_PCT,
     severe_down_ratio_floor_pct: float = DEFAULT_SEVERE_DOWN_RATIO_FLOOR_PCT,
     stock_fall_ratio_floor_pct: float = DEFAULT_STOCK_FALL_RATIO_FLOOR_PCT,
+    index_rise_floor_pct: float = DEFAULT_INDEX_RISE_FLOOR_PCT,
+    industry_up_ratio_floor_pct: float = DEFAULT_INDUSTRY_UP_RATIO_FLOOR_PCT,
+    severe_up_floor_pct: float = DEFAULT_SEVERE_UP_FLOOR_PCT,
+    severe_up_ratio_floor_pct: float = DEFAULT_SEVERE_UP_RATIO_FLOOR_PCT,
+    stock_rise_ratio_floor_pct: float = DEFAULT_STOCK_RISE_RATIO_FLOOR_PCT,
 ) -> dict[str, Any]:
     market_indices: dict[str, dict[str, Any]] = {}
     industry_rows: list[dict[str, Any]] = []
@@ -185,14 +195,22 @@ def summarize_breadth(
     down_rows = [row for row in pct_rows if float(row.get("change_pct") or 0.0) < 0.0]
     severe_down_rows = [row for row in pct_rows if float(row.get("change_pct") or 0.0) <= severe_down_floor_pct]
     up_rows = [row for row in pct_rows if float(row.get("change_pct") or 0.0) > 0.0]
+    severe_up_rows = [row for row in pct_rows if float(row.get("change_pct") or 0.0) >= severe_up_floor_pct]
     sample_count = len(pct_rows)
     down_ratio = round((len(down_rows) / sample_count) * 100.0, 1) if sample_count else 0.0
     severe_ratio = round((len(severe_down_rows) / sample_count) * 100.0, 1) if sample_count else 0.0
+    up_ratio = round((len(up_rows) / sample_count) * 100.0, 1) if sample_count else 0.0
+    severe_up_ratio = round((len(severe_up_rows) / sample_count) * 100.0, 1) if sample_count else 0.0
     min_index_change = min(
         [float(row.get("change_pct")) for row in market_indices.values() if row.get("change_pct") is not None],
         default=None,
     )
+    max_index_change = max(
+        [float(row.get("change_pct")) for row in market_indices.values() if row.get("change_pct") is not None],
+        default=None,
+    )
     stock_fall_rows = []
+    stock_rise_rows = []
     for market, row in market_indices.items():
         listed = _safe_int(row.get("listed_count"), 0)
         fall = _safe_int(row.get("fall_count"), 0)
@@ -200,6 +218,7 @@ def summarize_breadth(
         flat = _safe_int(row.get("flat_count"), 0)
         denominator = listed or (fall + rising + flat)
         fall_ratio = round((fall / denominator) * 100.0, 1) if denominator else 0.0
+        rise_ratio = round((rising / denominator) * 100.0, 1) if denominator else 0.0
         stock_fall_rows.append(
             {
                 "market": market,
@@ -210,12 +229,28 @@ def summarize_breadth(
                 "fall_ratio_pct": fall_ratio,
             }
         )
+        stock_rise_rows.append(
+            {
+                "market": market,
+                "listed_count": denominator,
+                "rising_count": rising,
+                "flat_count": flat,
+                "fall_count": fall,
+                "rise_ratio_pct": rise_ratio,
+            }
+        )
     max_stock_fall_ratio = max([row["fall_ratio_pct"] for row in stock_fall_rows], default=0.0)
+    max_stock_rise_ratio = max([row["rise_ratio_pct"] for row in stock_rise_rows], default=0.0)
     index_risk_off = min_index_change is not None and min_index_change <= index_drop_floor_pct
     industry_risk_off = sample_count > 0 and down_ratio >= industry_down_ratio_floor_pct
     severe_risk_off = sample_count > 0 and severe_ratio >= severe_down_ratio_floor_pct
     stock_breadth_risk_off = max_stock_fall_ratio >= stock_fall_ratio_floor_pct
     risk_off = bool(index_risk_off and (industry_risk_off or severe_risk_off or stock_breadth_risk_off))
+    index_risk_on = max_index_change is not None and max_index_change >= index_rise_floor_pct
+    industry_risk_on = sample_count > 0 and up_ratio >= industry_up_ratio_floor_pct
+    severe_risk_on = sample_count > 0 and severe_up_ratio >= severe_up_ratio_floor_pct
+    stock_breadth_risk_on = max_stock_rise_ratio >= stock_rise_ratio_floor_pct
+    risk_on = bool(index_risk_on and (industry_risk_on or severe_risk_on or stock_breadth_risk_on))
     reasons: list[str] = []
     if index_risk_off:
         reasons.append("market_index_intraday_drop")
@@ -227,6 +262,17 @@ def summarize_breadth(
         reasons.append("listed_stock_fall_ratio_high")
     if not risk_off:
         reasons.append("live market breadth panic thresholds not breached")
+    risk_on_reasons: list[str] = []
+    if index_risk_on:
+        risk_on_reasons.append("market_index_intraday_rise")
+    if industry_risk_on:
+        risk_on_reasons.append("industry_breadth_up_ratio_high")
+    if severe_risk_on:
+        risk_on_reasons.append("industry_severe_up_ratio_high")
+    if stock_breadth_risk_on:
+        risk_on_reasons.append("listed_stock_rise_ratio_high")
+    if not risk_on:
+        risk_on_reasons.append("live market breadth panic-buy thresholds not breached")
 
     return {
         "metric_role": "risk_regime_state",
@@ -240,25 +286,38 @@ def summarize_breadth(
         "industry_breadth": {
             "sample_count": sample_count,
             "up_count": len(up_rows),
+            "up_ratio_pct": up_ratio,
             "down_count": len(down_rows),
             "down_ratio_pct": down_ratio,
             "severe_down_count": len(severe_down_rows),
             "severe_down_floor_pct": severe_down_floor_pct,
             "severe_down_ratio_pct": severe_ratio,
+            "severe_up_count": len(severe_up_rows),
+            "severe_up_floor_pct": severe_up_floor_pct,
+            "severe_up_ratio_pct": severe_up_ratio,
         },
         "stock_breadth": {
             "markets": stock_fall_rows,
+            "rise_markets": stock_rise_rows,
             "max_fall_ratio_pct": max_stock_fall_ratio,
             "fall_ratio_floor_pct": stock_fall_ratio_floor_pct,
+            "max_rise_ratio_pct": max_stock_rise_ratio,
+            "rise_ratio_floor_pct": stock_rise_ratio_floor_pct,
         },
         "thresholds": {
             "index_drop_floor_pct": index_drop_floor_pct,
             "industry_down_ratio_floor_pct": industry_down_ratio_floor_pct,
             "severe_down_ratio_floor_pct": severe_down_ratio_floor_pct,
             "stock_fall_ratio_floor_pct": stock_fall_ratio_floor_pct,
+            "index_rise_floor_pct": index_rise_floor_pct,
+            "industry_up_ratio_floor_pct": industry_up_ratio_floor_pct,
+            "severe_up_ratio_floor_pct": severe_up_ratio_floor_pct,
+            "stock_rise_ratio_floor_pct": stock_rise_ratio_floor_pct,
         },
         "risk_off_advisory": risk_off,
+        "risk_on_advisory": risk_on,
         "reasons": reasons,
+        "risk_on_reasons": risk_on_reasons,
     }
 
 

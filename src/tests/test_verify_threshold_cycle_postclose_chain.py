@@ -1,4 +1,5 @@
 import json
+from datetime import datetime
 from pathlib import Path
 
 from src.engine import verify_threshold_cycle_postclose_chain as mod
@@ -11,6 +12,9 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
     (report_dir / "threshold_cycle_ev").mkdir(parents=True)
     (report_dir / "code_improvement_workorder").mkdir(parents=True)
     (report_dir / "runtime_approval_summary").mkdir(parents=True)
+    (report_dir / "market_panic_breadth").mkdir(parents=True)
+    (report_dir / "panic_sell_defense").mkdir(parents=True)
+    (report_dir / "panic_buying").mkdir(parents=True)
     (report_dir / "swing_daily_simulation").mkdir(parents=True)
     (report_dir / "swing_lifecycle_audit").mkdir(parents=True)
     (project_root / "docs").mkdir(parents=True)
@@ -71,6 +75,18 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
         ),
         encoding="utf-8",
     )
+    (report_dir / "market_panic_breadth" / "market_panic_breadth_2026-05-12.json").write_text(
+        json.dumps({"report_type": "market_panic_breadth"}),
+        encoding="utf-8",
+    )
+    (report_dir / "panic_sell_defense" / "panic_sell_defense_2026-05-12.json").write_text(
+        json.dumps({"report_type": "panic_sell_defense"}),
+        encoding="utf-8",
+    )
+    (report_dir / "panic_buying" / "panic_buying_2026-05-12.json").write_text(
+        json.dumps({"report_type": "panic_buying"}),
+        encoding="utf-8",
+    )
     (report_dir / "swing_daily_simulation" / "swing_daily_simulation_2026-05-12.json").write_text("{}", encoding="utf-8")
     (report_dir / "swing_lifecycle_audit" / "swing_lifecycle_audit_2026-05-12.json").write_text("{}", encoding="utf-8")
     (project_root / "docs" / "checklists").mkdir(parents=True)
@@ -94,6 +110,8 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
     assert report["downstream_links"]["runtime_approval_summary_sources_ev"].endswith(
         "threshold_cycle_ev_2026-05-12.json"
     )
+    artifact_labels = {item["label"] for item in report["artifact_status"]}
+    assert {"market_panic_breadth", "panic_sell_defense", "panic_buying"}.issubset(artifact_labels)
 
 
 def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(tmp_path, monkeypatch):
@@ -103,6 +121,9 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
     (report_dir / "threshold_cycle_ev").mkdir(parents=True)
     (report_dir / "code_improvement_workorder").mkdir(parents=True)
     (report_dir / "runtime_approval_summary").mkdir(parents=True)
+    (report_dir / "market_panic_breadth").mkdir(parents=True)
+    (report_dir / "panic_sell_defense").mkdir(parents=True)
+    (report_dir / "panic_buying").mkdir(parents=True)
     (report_dir / "swing_daily_simulation").mkdir(parents=True)
     (report_dir / "swing_lifecycle_audit").mkdir(parents=True)
     (project_root / "docs").mkdir(parents=True)
@@ -121,6 +142,9 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
         "threshold_cycle_ev/threshold_cycle_ev_2026-05-12.json",
         "code_improvement_workorder/code_improvement_workorder_2026-05-12.json",
         "runtime_approval_summary/runtime_approval_summary_2026-05-12.json",
+        "market_panic_breadth/market_panic_breadth_2026-05-12.json",
+        "panic_sell_defense/panic_sell_defense_2026-05-12.json",
+        "panic_buying/panic_buying_2026-05-12.json",
         "swing_daily_simulation/swing_daily_simulation_2026-05-12.json",
         "swing_lifecycle_audit/swing_lifecycle_audit_2026-05-12.json",
     ):
@@ -142,3 +166,29 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
 
     assert report["status"] == "warning"
     assert report["predecessor_integrity"]["wait_count"] == 1
+
+
+def test_build_threshold_cycle_postclose_verification_not_yet_due_before_postclose(tmp_path, monkeypatch):
+    project_root = tmp_path
+    report_dir = project_root / "data" / "report"
+    (project_root / "logs").mkdir(parents=True)
+    log_path = project_root / "logs" / "threshold_cycle_postclose_cron.log"
+    log_path.write_text("", encoding="utf-8")
+
+    class FakeDateTime(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 5, 12, 15, 59, 0)
+
+    monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification")
+    monkeypatch.setattr(mod, "LOG_PATH", log_path)
+    monkeypatch.setattr(mod, "_next_krx_trading_day", lambda target_date: "2026-05-13")
+    monkeypatch.setattr(mod, "datetime", FakeDateTime)
+
+    report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
+
+    assert report["status"] == "not_yet_due"
+    assert report["predecessor_integrity"]["status"] == "not_yet_due"
+    assert report["predecessor_integrity"]["log_issues"] == []

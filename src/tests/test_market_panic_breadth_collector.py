@@ -40,6 +40,31 @@ def test_summarize_breadth_sets_report_only_risk_off_advisory():
     assert summary["decision_authority"] == "source_quality_only"
     assert "order_submit" in summary["forbidden_uses"]
     assert summary["industry_breadth"]["down_count"] == 3
+    assert summary["risk_on_advisory"] is False
+
+
+def test_summarize_breadth_sets_report_only_risk_on_advisory():
+    rows = [
+        {"code": "001", "name": "종합(KOSPI)", "change_pct": 1.5, "rising_count": 760, "fall_count": 120, "listed_count": 900},
+        {"code": "101", "name": "코스닥", "change_pct": 2.1, "rising_count": 820, "fall_count": 130, "listed_count": 1000},
+        {"code": "201", "name": "반도체", "change_pct": 2.4},
+        {"code": "202", "name": "IT", "change_pct": 1.2},
+        {"code": "203", "name": "바이오", "change_pct": 2.2},
+        {"code": "204", "name": "운송", "change_pct": -0.2},
+    ]
+
+    summary = collector.summarize_breadth(
+        rows,
+        industry_up_ratio_floor_pct=50.0,
+        severe_up_ratio_floor_pct=40.0,
+    )
+
+    assert summary["risk_on_advisory"] is True
+    assert summary["risk_off_advisory"] is False
+    assert summary["decision_authority"] == "source_quality_only"
+    assert "order_submit" in summary["forbidden_uses"]
+    assert summary["industry_breadth"]["up_count"] == 3
+    assert summary["stock_breadth"]["max_rise_ratio_pct"] >= 80.0
 
 
 def test_build_market_panic_breadth_report_from_injected_rows():

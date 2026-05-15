@@ -589,6 +589,19 @@ def test_calibration_source_bundle_includes_panic_buying_read_only(monkeypatch, 
                     "tp_like_exit_count": 2,
                     "trailing_winner_count": 1,
                 },
+                "microstructure_detector": {
+                    "panic_buy_signal_count": 3,
+                    "missing_orderbook_count": 2,
+                    "missing_trade_aggressor_count": 1,
+                    "carried_orderbook_snapshot_count": 4,
+                    "carried_trade_aggressor_snapshot_count": 5,
+                },
+                "market_breadth_context": {
+                    "market_panic_breadth_source_quality_status": "ok",
+                    "market_panic_breadth_risk_on_advisory": False,
+                    "market_panic_breadth_risk_off_advisory": True,
+                    "market_wide_panic_buy_confirmed": False,
+                },
                 "canary_candidates": [
                     {"family": "panic_buy_runner_tp_canary", "status": "report_only_candidate"}
                 ],
@@ -614,6 +627,12 @@ def test_calibration_source_bundle_includes_panic_buying_read_only(monkeypatch, 
     assert metrics["tp_counterfactual_count"] == 3
     assert metrics["candidate_status"]["panic_buy_runner_tp_canary"] == "report_only_candidate"
     assert metrics["allowed_runtime_apply"] is False
+    assert metrics["market_breadth_risk_on_advisory"] is False
+    assert metrics["market_breadth_risk_off_advisory"] is True
+    assert metrics["market_wide_panic_buy_confirmed"] is False
+    assert metrics["missing_orderbook_count"] == 2
+    assert "panic_buy_local_unconfirmed_by_market_breadth" in metrics["source_quality_blockers"]
+    assert "panic_buy_orderbook_collector_coverage_gap" in metrics["source_quality_blockers"]
 
 
 def test_calibration_source_bundle_audits_report_only_cleanup_candidates(monkeypatch, tmp_path):

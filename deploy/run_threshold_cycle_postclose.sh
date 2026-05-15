@@ -22,6 +22,7 @@ CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS="${CODE_IMPROVEMENT_WORKORDER_MAX_ORDERS:-
 RUN_DEEPSEEK_SWING_LAB="${THRESHOLD_CYCLE_RUN_DEEPSEEK_SWING_LAB:-true}"
 RUN_PANIC_SELL_DEFENSE_REPORT="${THRESHOLD_CYCLE_RUN_PANIC_SELL_DEFENSE_REPORT:-true}"
 RUN_PANIC_BUYING_REPORT="${THRESHOLD_CYCLE_RUN_PANIC_BUYING_REPORT:-true}"
+RUN_MARKET_PANIC_BREADTH_REPORT="${THRESHOLD_CYCLE_RUN_MARKET_PANIC_BREADTH_REPORT:-true}"
 RUN_OPENAI_WS_STABILITY_REPORT="${THRESHOLD_CYCLE_RUN_OPENAI_WS_STABILITY_REPORT:-true}"
 RUN_PIPELINE_EVENT_VERBOSITY_REPORT="${THRESHOLD_CYCLE_RUN_PIPELINE_EVENT_VERBOSITY_REPORT:-true}"
 RUN_OBSERVATION_SOURCE_QUALITY_AUDIT="${THRESHOLD_CYCLE_RUN_OBSERVATION_SOURCE_QUALITY_AUDIT:-true}"
@@ -248,6 +249,13 @@ if [ "${completed:-false}" != "true" ]; then
   exit 2
 fi
 
+if { [ "$RUN_PANIC_SELL_DEFENSE_REPORT" = "true" ] || [ "$RUN_PANIC_SELL_DEFENSE_REPORT" = "1" ] || [ "$RUN_PANIC_BUYING_REPORT" = "true" ] || [ "$RUN_PANIC_BUYING_REPORT" = "1" ]; } && { [ "$RUN_MARKET_PANIC_BREADTH_REPORT" = "true" ] || [ "$RUN_MARKET_PANIC_BREADTH_REPORT" = "1" ]; }; then
+  PYTHONPATH=. "$VENV_PY" -m src.engine.market_panic_breadth_collector \
+    --date "$TARGET_DATE"
+  wait_for_json_artifact \
+    "$PROJECT_DIR/data/report/market_panic_breadth/market_panic_breadth_${TARGET_DATE}.json" \
+    "market_panic_breadth_postclose"
+fi
 if [ "$RUN_PANIC_SELL_DEFENSE_REPORT" = "true" ] || [ "$RUN_PANIC_SELL_DEFENSE_REPORT" = "1" ]; then
   PYTHONPATH=. "$VENV_PY" -m src.engine.panic_sell_defense_report \
     --date "$TARGET_DATE"
@@ -412,4 +420,4 @@ wait_for_report_artifact \
   "threshold_cycle_postclose_verification"
 PYTHONPATH=. "$VENV_PY" -m src.engine.sync_docs_backlog_to_project --print-backlog-only --limit 500 >/dev/null
 finished_at="$(TZ=Asia/Seoul date +%FT%T%z)"
-echo "[DONE] threshold-cycle postclose target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER panic_sell_defense=$RUN_PANIC_SELL_DEFENSE_REPORT panic_buying=$RUN_PANIC_BUYING_REPORT openai_ws_stability=$RUN_OPENAI_WS_STABILITY_REPORT pipeline_event_verbosity=$RUN_PIPELINE_EVENT_VERBOSITY_REPORT observation_source_quality_audit=$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT codebase_performance_workorder=$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT plan_rebase_daily_renewal=$RUN_PLAN_REBASE_DAILY_RENEWAL swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER pattern_labs=$RUN_PATTERN_LABS deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true runtime_approval_summary=true next_stage2_checklist=true finished_at=$finished_at"
+echo "[DONE] threshold-cycle postclose target_date=$TARGET_DATE ai_correction_provider=$AI_CORRECTION_PROVIDER panic_sell_defense=$RUN_PANIC_SELL_DEFENSE_REPORT panic_buying=$RUN_PANIC_BUYING_REPORT market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT openai_ws_stability=$RUN_OPENAI_WS_STABILITY_REPORT pipeline_event_verbosity=$RUN_PIPELINE_EVENT_VERBOSITY_REPORT observation_source_quality_audit=$RUN_OBSERVATION_SOURCE_QUALITY_AUDIT codebase_performance_workorder=$RUN_CODEBASE_PERFORMANCE_WORKORDER_REPORT plan_rebase_daily_renewal=$RUN_PLAN_REBASE_DAILY_RENEWAL swing_lifecycle=$RUN_SWING_LIFECYCLE_AUDIT swing_ai_review_provider=$SWING_THRESHOLD_AI_REVIEW_PROVIDER pattern_labs=$RUN_PATTERN_LABS deepseek_swing_lab=$RUN_DEEPSEEK_SWING_LAB code_improvement_workorder=$BUILD_CODE_IMPROVEMENT_WORKORDER daily_ev=true runtime_approval_summary=true next_stage2_checklist=true finished_at=$finished_at"

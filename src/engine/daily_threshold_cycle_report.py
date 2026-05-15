@@ -1003,6 +1003,10 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
     panic_buy_exhaustion = panic_buy_exhaustion if isinstance(panic_buy_exhaustion, dict) else {}
     panic_buy_tp = panic_buying.get("tp_counterfactual_summary") if isinstance(panic_buying, dict) else {}
     panic_buy_tp = panic_buy_tp if isinstance(panic_buy_tp, dict) else {}
+    panic_buy_micro = panic_buying.get("microstructure_detector") if isinstance(panic_buying, dict) else {}
+    panic_buy_micro = panic_buy_micro if isinstance(panic_buy_micro, dict) else {}
+    panic_buy_market = panic_buying.get("market_breadth_context") if isinstance(panic_buying, dict) else {}
+    panic_buy_market = panic_buy_market if isinstance(panic_buy_market, dict) else {}
     panic_buy_candidates = (
         panic_buying.get("canary_candidates")
         if isinstance(panic_buying.get("canary_candidates"), list)
@@ -1013,6 +1017,12 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
         for item in panic_buy_candidates
         if isinstance(item, dict) and item.get("family")
     }
+    panic_buy_source_quality_blockers: list[str] = []
+    panic_buy_signal_count = _safe_int(panic_buy_micro.get("panic_buy_signal_count"), 0) or 0
+    if panic_buy_signal_count > 0 and not bool(panic_buy_market.get("market_wide_panic_buy_confirmed")):
+        panic_buy_source_quality_blockers.append("panic_buy_local_unconfirmed_by_market_breadth")
+    if (_safe_int(panic_buy_micro.get("missing_orderbook_count"), 0) or 0) > 0:
+        panic_buy_source_quality_blockers.append("panic_buy_orderbook_collector_coverage_gap")
     matrix_entries = decision_matrix.get("entries") if isinstance(decision_matrix.get("entries"), list) else []
     non_clear_matrix_entries = [
         entry
@@ -1406,6 +1416,18 @@ def _summarize_calibration_report_sources(target_date: str) -> dict:
             "tp_counterfactual_count": _safe_int(panic_buy_tp.get("candidate_context_count"), 0) or 0,
             "tp_like_exit_count": _safe_int(panic_buy_tp.get("tp_like_exit_count"), 0) or 0,
             "trailing_winner_count": _safe_int(panic_buy_tp.get("trailing_winner_count"), 0) or 0,
+            "market_breadth_source_quality_status": panic_buy_market.get("market_panic_breadth_source_quality_status"),
+            "market_breadth_risk_on_advisory": bool(panic_buy_market.get("market_panic_breadth_risk_on_advisory")),
+            "market_breadth_risk_off_advisory": bool(panic_buy_market.get("market_panic_breadth_risk_off_advisory")),
+            "market_wide_panic_buy_confirmed": bool(panic_buy_market.get("market_wide_panic_buy_confirmed")),
+            "missing_orderbook_count": _safe_int(panic_buy_micro.get("missing_orderbook_count"), 0) or 0,
+            "missing_trade_aggressor_count": _safe_int(panic_buy_micro.get("missing_trade_aggressor_count"), 0) or 0,
+            "carried_orderbook_snapshot_count": _safe_int(panic_buy_micro.get("carried_orderbook_snapshot_count"), 0) or 0,
+            "carried_trade_aggressor_snapshot_count": _safe_int(
+                panic_buy_micro.get("carried_trade_aggressor_snapshot_count"), 0
+            )
+            or 0,
+            "source_quality_blockers": panic_buy_source_quality_blockers,
             "candidate_status": panic_buy_candidate_status,
             "allowed_runtime_apply": False,
         },

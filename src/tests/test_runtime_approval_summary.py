@@ -157,6 +157,8 @@ def test_runtime_approval_summary_surfaces_panic_approval_requests(tmp_path, mon
                             "tp_counterfactual_count": 3,
                             "trailing_winner_count": 1,
                             "max_panic_buy_score": 0.88,
+                            "market_wide_panic_buy_confirmed": True,
+                            "market_breadth_risk_on_advisory": True,
                             "candidate_status": {"panic_buy_runner_tp_canary": "report_only_candidate"},
                         },
                     }
@@ -196,6 +198,8 @@ def test_runtime_approval_summary_surfaces_panic_approval_requests(tmp_path, mon
     panic_buy = next(row for row in report["panic"] if row["family"] == "panic_buy_runner_tp_canary")
     assert panic_buy["panic_buy_regime_mode"] == "PANIC_BUY_CONTINUATION"
     assert panic_buy["panic_buy_regime_decision_authority"] == "source_quality_only"
+    assert panic_buy["market_wide_panic_buy_confirmed"] is True
+    assert panic_buy["market_breadth_risk_on_advisory"] is True
     markdown = (out_dir / "runtime_approval_summary_2026-05-13.md").read_text(encoding="utf-8")
     assert "## Panic" in markdown
     assert "panic_buy_runner_tp_canary" in markdown
@@ -222,7 +226,21 @@ def test_runtime_approval_summary_freezes_panic_request_on_source_quality_blocke
                             "candidate_status": {"panic_entry_freeze_guard": "report_only_candidate"},
                             "source_quality_blockers": ["market_regime_not_risk_off"],
                             "market_breadth_followup_candidate": True,
-                        }
+                        },
+                        "panic_buying": {
+                            "runtime_effect": "report_only_no_mutation",
+                            "panic_buy_state": "PANIC_BUY",
+                            "panic_buy_regime_mode": "PANIC_BUY_CONTINUATION",
+                            "panic_buy_regime_decision_authority": "source_quality_only",
+                            "panic_buy_regime_runtime_effect": "report_only_no_mutation",
+                            "panic_buy_active_count": 1,
+                            "tp_counterfactual_count": 3,
+                            "max_panic_buy_score": 0.88,
+                            "market_wide_panic_buy_confirmed": False,
+                            "market_breadth_risk_on_advisory": False,
+                            "source_quality_blockers": ["panic_buy_local_unconfirmed_by_market_breadth"],
+                            "candidate_status": {"panic_buy_runner_tp_canary": "report_only_candidate"},
+                        },
                     }
                 }
             },
@@ -247,12 +265,16 @@ def test_runtime_approval_summary_freezes_panic_request_on_source_quality_blocke
 
     report = mod.build_runtime_approval_summary("2026-05-14")
 
-    row = report["panic"][0]
-    assert row["family"] == "panic_sell_defense"
+    rows = {row["family"]: row for row in report["panic"]}
+    row = rows["panic_sell_defense"]
     assert row["state"] == "freeze"
     assert "source_quality_blocker" in row["reasons"]
     assert row["source_quality_blockers"] == ["market_regime_not_risk_off"]
     assert row["market_breadth_followup_candidate"] is True
+    panic_buy = rows["panic_buy_runner_tp_canary"]
+    assert panic_buy["state"] == "freeze"
+    assert "source_quality_blocker" in panic_buy["reasons"]
+    assert panic_buy["source_quality_blockers"] == ["panic_buy_local_unconfirmed_by_market_breadth"]
 
 
 def test_runtime_approval_summary_does_not_request_for_inactive_panic_candidate_status(tmp_path, monkeypatch):

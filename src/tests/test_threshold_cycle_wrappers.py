@@ -52,6 +52,30 @@ def test_postclose_wrapper_runs_threshold_ev_before_and_after_workorder():
     )
 
 
+def test_postclose_wrapper_refreshes_market_breadth_before_panic_reports():
+    script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
+
+    breadth_idx = script.index("src.engine.market_panic_breadth_collector")
+    breadth_wait_idx = script.index("market_panic_breadth_postclose")
+    panic_sell_idx = script.index("src.engine.panic_sell_defense_report")
+    panic_buy_idx = script.index("src.engine.panic_buying_report")
+
+    assert 'RUN_MARKET_PANIC_BREADTH_REPORT="${THRESHOLD_CYCLE_RUN_MARKET_PANIC_BREADTH_REPORT:-true}"' in script
+    assert breadth_idx < breadth_wait_idx < panic_sell_idx < panic_buy_idx
+    assert "market_panic_breadth=$RUN_MARKET_PANIC_BREADTH_REPORT" in script
+
+
+def test_panic_buying_wrapper_collects_market_breadth_independently():
+    script = Path("deploy/run_panic_buying_intraday.sh").read_text(encoding="utf-8")
+
+    breadth_idx = script.index("[START] market panic breadth collect")
+    report_idx = script.index('if "${cmd[@]}"')
+
+    assert 'MARKET_BREADTH_COLLECT_ENABLED="${PANIC_MARKET_BREADTH_COLLECT_ENABLED:-true}"' in script
+    assert "market panic breadth collect failed" in script
+    assert breadth_idx < report_idx
+
+
 def test_postclose_wrapper_waits_for_prerequisite_artifacts_before_downstream_steps():
     script = Path("deploy/run_threshold_cycle_postclose.sh").read_text(encoding="utf-8")
 
