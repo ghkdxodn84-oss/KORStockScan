@@ -2,11 +2,11 @@
 
 ## 판정
 
-- 분석 기간: `2026-05-14` ~ `2026-05-14`
+- 분석 기간: `2026-05-15` ~ `2026-05-15`
 - trade_rows: `0`
-- lifecycle_event_rows: `38`
+- lifecycle_event_rows: `39`
 - completed_valid_profit_rows: `0`
-- ofi_qi_rows: `1111`
+- ofi_qi_rows: `127`
 - total_findings: `5`
 - code_improvement_orders: `3`
 - runtime_change: `False`
@@ -54,7 +54,7 @@
 - lifecycle_stage: `scale_in`
 - route: `attach_existing_family`
 - mapped_family: `swing_scale_in_ofi_qi_confirmation`
-- confidence: `solo`
+- confidence: `consensus`
 - runtime_effect: `False`
 - expected_ev_effect: Evaluate PYRAMID/AVG_DOWN outcome quality with OFI/QI confirmation.
 
@@ -121,4 +121,4 @@
 
 ## Data Quality Warnings
 
-- OFI/QI stale/missing ratio: 0.0531 (59/1111); reasons: micro_missing=59, observer_unhealthy=31, micro_not_ready=2, state_insufficient=2
+- OFI/QI stale/missing ratio: 0.126 (16/127); reasons: micro_missing=16, observer_unhealthy=2, micro_not_ready=15, state_insufficient=15

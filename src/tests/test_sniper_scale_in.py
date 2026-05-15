@@ -1111,6 +1111,11 @@ def test_p2_observe_skip_does_not_change_live_order(monkeypatch):
     assert p2_logs
     assert p2_logs[0]["live_runtime_effect"] is False
     assert p2_logs[0]["action"] == "SKIP"
+    assert "orderbook_micro_ready" in p2_logs[0]
+    assert "orderbook_micro_state" in p2_logs[0]
+    assert "orderbook_micro_reason" in p2_logs[0]
+    assert "orderbook_micro_snapshot_age_ms" in p2_logs[0]
+    assert "orderbook_micro_observer_healthy" in p2_logs[0]
 
 
 def test_calc_scale_in_qty_scalping_reversal_add_uses_configured_ratio():

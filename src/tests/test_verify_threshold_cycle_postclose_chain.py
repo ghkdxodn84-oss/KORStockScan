@@ -26,6 +26,7 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
                 "[START] threshold-cycle postclose target_date=2026-05-12 started_at=2026-05-12T21:00:00+0900",
                 "[threshold-cycle] artifact ready label=swing_daily_simulation.json path=/tmp/a waited=0s json_valid=true",
                 "[threshold-cycle] artifact ready label=threshold_cycle_ev_pre_workorder.json path=/tmp/b waited=0s json_valid=true",
+                "[DONE] threshold-cycle postclose target_date=2026-05-12 swing_lifecycle=true pattern_labs=true deepseek_swing_lab=true finished_at=2026-05-12T21:30:00+0900",
             ]
         ),
         encoding="utf-8",
@@ -134,6 +135,7 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
             [
                 "[START] threshold-cycle postclose target_date=2026-05-12 started_at=2026-05-12T21:00:00+0900",
                 "[threshold-cycle] artifact ready label=swing_daily_simulation.json path=/tmp/a waited=5s json_valid=true",
+                "[DONE] threshold-cycle postclose target_date=2026-05-12 swing_lifecycle=true pattern_labs=true deepseek_swing_lab=true finished_at=2026-05-12T21:30:00+0900",
             ]
         ),
         encoding="utf-8",
@@ -166,6 +168,69 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
 
     assert report["status"] == "warning"
     assert report["predecessor_integrity"]["wait_count"] == 1
+
+
+def test_build_threshold_cycle_postclose_verification_warns_on_recovery_profile(tmp_path, monkeypatch):
+    project_root = tmp_path
+    report_dir = project_root / "data" / "report"
+    (project_root / "logs").mkdir(parents=True)
+    for folder in (
+        "threshold_cycle_ev",
+        "code_improvement_workorder",
+        "runtime_approval_summary",
+        "market_panic_breadth",
+        "panic_sell_defense",
+        "panic_buying",
+        "swing_daily_simulation",
+        "swing_lifecycle_audit",
+    ):
+        (report_dir / folder).mkdir(parents=True)
+    (project_root / "docs" / "checklists").mkdir(parents=True)
+
+    log_path = project_root / "logs" / "threshold_cycle_postclose_cron.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                "[START] threshold-cycle postclose target_date=2026-05-12 started_at=2026-05-12T21:00:00+0900",
+                "[DONE] threshold-cycle postclose target_date=2026-05-12 swing_lifecycle=false pattern_labs=false deepseek_swing_lab=false daily_ev=true runtime_approval_summary=true finished_at=2026-05-12T21:30:00+0900",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    for rel in (
+        "threshold_cycle_ev/threshold_cycle_ev_2026-05-12.json",
+        "code_improvement_workorder/code_improvement_workorder_2026-05-12.json",
+        "runtime_approval_summary/runtime_approval_summary_2026-05-12.json",
+        "market_panic_breadth/market_panic_breadth_2026-05-12.json",
+        "panic_sell_defense/panic_sell_defense_2026-05-12.json",
+        "panic_buying/panic_buying_2026-05-12.json",
+        "swing_daily_simulation/swing_daily_simulation_2026-05-12.json",
+        "swing_lifecycle_audit/swing_lifecycle_audit_2026-05-12.json",
+    ):
+        (report_dir / rel).write_text(
+            json.dumps({"generation_id": "g", "source_hash": "h"} if "code_improvement" in rel else {}),
+            encoding="utf-8",
+        )
+    (project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md").write_text(
+        "# next\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "VERIFY_DIR", report_dir / "threshold_cycle_postclose_verification")
+    monkeypatch.setattr(mod, "LOG_PATH", log_path)
+    monkeypatch.setattr(mod, "_next_krx_trading_day", lambda target_date: "2026-05-13")
+
+    report = mod.build_threshold_cycle_postclose_verification("2026-05-12")
+
+    assert report["status"] == "warning"
+    assert report["execution_profile"]["status"] == "recovered_partial_profile"
+    assert report["execution_profile"]["disabled_stage_flags"] == [
+        "swing_lifecycle",
+        "pattern_labs",
+        "deepseek_swing_lab",
+    ]
 
 
 def test_build_threshold_cycle_postclose_verification_not_yet_due_before_postclose(tmp_path, monkeypatch):

@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="${PROJECT_DIR}/.venv/bin/python"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
+# shellcheck source=cpu_affinity_profile.sh
+. "$SCRIPT_DIR/cpu_affinity_profile.sh"
 
 if [[ $# -gt 0 ]]; then
   shift
@@ -25,7 +27,7 @@ IONICE_CLASS="${PANIC_BUYING_IONICE_CLASS:-2}"
 IONICE_LEVEL="${PANIC_BUYING_IONICE_LEVEL:-7}"
 NICE_LEVEL="${PANIC_BUYING_NICE_LEVEL:-12}"
 NICE_COMMAND="${PANIC_BUYING_NICE_COMMAND:-nice}"
-CPU_AFFINITY="${PANIC_BUYING_CPU_AFFINITY:-1}"
+CPU_AFFINITY="${PANIC_BUYING_CPU_AFFINITY:-$(korstockscan_default_cpu_affinity panic)}"
 
 mkdir -p "$PROJECT_DIR/tmp" "$PROJECT_DIR/logs"
 cd "$PROJECT_DIR"
@@ -87,7 +89,7 @@ run_market_breadth_collect() {
   fi
 
   local breadth_cmd=(env PYTHONPATH=. "$VENV_PY" -m src.engine.market_panic_breadth_collector --date "$TARGET_DATE" --print-json)
-  if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]] && [[ "$(nproc 2>/dev/null || echo 1)" -gt 1 ]]; then
+  if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]] && [[ "$(korstockscan_nproc)" -gt 1 ]]; then
     breadth_cmd=(taskset -c "$CPU_AFFINITY" "${breadth_cmd[@]}")
   fi
   if command -v ionice >/dev/null 2>&1 && [[ "$IONICE_CLASS" -ge 0 ]]; then
@@ -127,7 +129,7 @@ if [[ "$DRY_RUN" == "1" ]]; then
   cmd+=(--dry-run)
 fi
 
-if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]] && [[ "$(nproc 2>/dev/null || echo 1)" -gt 1 ]]; then
+if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]] && [[ "$(korstockscan_nproc)" -gt 1 ]]; then
   cmd=(taskset -c "$CPU_AFFINITY" "${cmd[@]}")
 fi
 

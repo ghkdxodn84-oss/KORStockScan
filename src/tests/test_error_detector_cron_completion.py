@@ -94,6 +94,46 @@ class TestCronCompletionDetector:
 
         assert "update_kospi: no completion marker after window end" not in result.summary
 
+    def test_long_verbose_log_keeps_once_job_done_marker_visible(self, monkeypatch, tmp_path):
+        import src.engine.error_detectors.cron_completion as cc
+
+        logs_dir = tmp_path / "logs"
+        logs_dir.mkdir(parents=True)
+        noise = "\n".join(f'{{"row": {idx}, "payload": "verbose report output"}}' for idx in range(300))
+        (logs_dir / "threshold_cycle_postclose_cron.log").write_text(
+            "\n".join(
+                [
+                    "[START] threshold-cycle postclose target_date=2026-05-15 started_at=2026-05-15T16:10:01+0900",
+                    noise,
+                    "[DONE] threshold-cycle postclose target_date=2026-05-15 finished_at=2026-05-15T19:49:19+0900",
+                    noise,
+                ]
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(cc, "PROJECT_ROOT", tmp_path)
+        monkeypatch.setattr(cc, "_today_kst", lambda: "2026-05-15")
+        monkeypatch.setattr(
+            cc,
+            "CRON_JOB_REGISTRY",
+            [
+                {
+                    "id": "threshold_cycle_postclose",
+                    "log": "logs/threshold_cycle_postclose_cron.log",
+                    "window_start": (16, 10),
+                    "window_end": (17, 0),
+                    "mode": "once",
+                    "critical": True,
+                }
+            ],
+        )
+
+        with _mock_time(19, 55):
+            result = CronCompletionDetector().check()
+
+        assert result.severity == "pass"
+        assert result.details["threshold_cycle_postclose_status"] == "pass"
+
 
 @contextmanager
 def _mock_time(hour: int, minute: int):

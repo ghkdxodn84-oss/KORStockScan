@@ -15,6 +15,10 @@ STATUS_FILE="${TUNING_MONITORING_STATUS_FILE:-$STATUS_DIR/tuning_monitoring_post
 DRY_RUN="${TUNING_MONITORING_DRY_RUN:-0}"
 RUN_PATTERN_LABS="${TUNING_MONITORING_RUN_PATTERN_LABS:-false}"
 PATTERN_LAB_START_DATE="${PATTERN_LAB_ANALYSIS_START_DATE:-2026-04-21}"
+REQUIRE_THRESHOLD_POSTCLOSE_DONE="${TUNING_MONITORING_REQUIRE_THRESHOLD_POSTCLOSE_DONE:-true}"
+PREDECESSOR_LOG="${TUNING_MONITORING_PREDECESSOR_LOG:-$PROJECT_DIR/logs/threshold_cycle_postclose_cron.log}"
+PREDECESSOR_WAIT_SEC="${TUNING_MONITORING_PREDECESSOR_WAIT_SEC:-3600}"
+PREDECESSOR_WAIT_INTERVAL_SEC="${TUNING_MONITORING_PREDECESSOR_WAIT_INTERVAL_SEC:-60}"
 
 mkdir -p "$PROJECT_DIR/logs" "$PROJECT_DIR/tmp" "$STATUS_DIR"
 cd "$PROJECT_DIR"
@@ -37,6 +41,76 @@ validate_int() {
 LOCK_WAIT_SEC="$(validate_int "$LOCK_WAIT_SEC" 60)"
 MAX_RETRIES="$(validate_int "$MAX_RETRIES" 2)"
 RETRY_DELAY_SEC="$(validate_int "$RETRY_DELAY_SEC" 10)"
+PREDECESSOR_WAIT_SEC="$(validate_int "$PREDECESSOR_WAIT_SEC" 3600)"
+PREDECESSOR_WAIT_INTERVAL_SEC="$(validate_int "$PREDECESSOR_WAIT_INTERVAL_SEC" 60)"
+
+threshold_postclose_terminal_marker() {
+  env PYTHONPATH=. "$VENV_PY" - "$PREDECESSOR_LOG" "$TARGET_DATE" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+target_date = sys.argv[2]
+if not path.exists():
+    print("missing_log")
+    raise SystemExit(0)
+
+marker_re = re.compile(r"\[(START|DONE|FAIL|ERROR|CRITICAL)\].*target_date=" + re.escape(target_date), re.IGNORECASE)
+try:
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+except OSError:
+    print("missing_log")
+    raise SystemExit(0)
+
+for line in reversed(lines):
+    match = marker_re.search(line)
+    if not match:
+        continue
+    marker = match.group(1).upper()
+    if marker == "START":
+        print("in_progress")
+    elif marker == "DONE":
+        print("done")
+    else:
+        print("failed")
+    raise SystemExit(0)
+print("missing_marker")
+PY
+}
+
+wait_for_threshold_postclose_done() {
+  if [[ "$REQUIRE_THRESHOLD_POSTCLOSE_DONE" != "1" && "$REQUIRE_THRESHOLD_POSTCLOSE_DONE" != "true" ]]; then
+    echo "[INFO] threshold_cycle_postclose predecessor check skipped target_date=${TARGET_DATE}"
+    return 0
+  fi
+
+  local waited=0
+  local status
+  while true; do
+    status="$(threshold_postclose_terminal_marker)"
+    case "$status" in
+      done)
+        echo "[INFO] threshold_cycle_postclose predecessor done target_date=${TARGET_DATE} waited=${waited}s"
+        return 0
+        ;;
+      failed)
+        echo "[FAIL] tuning_monitoring_postclose target_date=${TARGET_DATE} reason=threshold_cycle_postclose_failed"
+        return 1
+        ;;
+    esac
+
+    if [[ "$waited" -ge "$PREDECESSOR_WAIT_SEC" ]]; then
+      echo "[FAIL] tuning_monitoring_postclose target_date=${TARGET_DATE} reason=threshold_cycle_postclose_not_done waited=${waited}s status=${status}"
+      return 1
+    fi
+    if [[ "$waited" -eq 0 ]]; then
+      echo "[INFO] waiting for threshold_cycle_postclose predecessor target_date=${TARGET_DATE} status=${status}"
+    fi
+    sleep "$PREDECESSOR_WAIT_INTERVAL_SEC"
+    waited=$((waited + PREDECESSOR_WAIT_INTERVAL_SEC))
+  done
+}
 
 write_status() {
   local overall_status="$1"
@@ -144,6 +218,7 @@ run_step() {
 
 main() {
   write_status "running" "" 0 0
+  wait_for_threshold_postclose_done
 
   run_step "build_parquet_pipeline_events" env PYTHONPATH=. "$VENV_PY" -m src.engine.build_tuning_monitoring_parquet \
     --dataset pipeline_events \
@@ -173,7 +248,7 @@ main() {
 }
 
 set +e
-flock -w "$LOCK_WAIT_SEC" "$LOCK_FILE" bash -c "$(declare -f validate_int write_status record_step run_step main); set -euo pipefail; PROJECT_DIR='$PROJECT_DIR' VENV_PY='$VENV_PY' TARGET_DATE='$TARGET_DATE' START_DATE='$START_DATE' STATUS_FILE='$STATUS_FILE' MAX_RETRIES='$MAX_RETRIES' RETRY_DELAY_SEC='$RETRY_DELAY_SEC' DRY_RUN='$DRY_RUN' RUN_PATTERN_LABS='$RUN_PATTERN_LABS' PATTERN_LAB_START_DATE='$PATTERN_LAB_START_DATE'; main"
+flock -w "$LOCK_WAIT_SEC" "$LOCK_FILE" bash -c "$(declare -f validate_int write_status record_step run_step threshold_postclose_terminal_marker wait_for_threshold_postclose_done main); set -euo pipefail; PROJECT_DIR='$PROJECT_DIR' VENV_PY='$VENV_PY' TARGET_DATE='$TARGET_DATE' START_DATE='$START_DATE' STATUS_FILE='$STATUS_FILE' MAX_RETRIES='$MAX_RETRIES' RETRY_DELAY_SEC='$RETRY_DELAY_SEC' DRY_RUN='$DRY_RUN' RUN_PATTERN_LABS='$RUN_PATTERN_LABS' PATTERN_LAB_START_DATE='$PATTERN_LAB_START_DATE' REQUIRE_THRESHOLD_POSTCLOSE_DONE='$REQUIRE_THRESHOLD_POSTCLOSE_DONE' PREDECESSOR_LOG='$PREDECESSOR_LOG' PREDECESSOR_WAIT_SEC='$PREDECESSOR_WAIT_SEC' PREDECESSOR_WAIT_INTERVAL_SEC='$PREDECESSOR_WAIT_INTERVAL_SEC'; main"
 RUN_STATUS=$?
 set -e
 

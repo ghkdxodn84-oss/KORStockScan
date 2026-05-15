@@ -135,8 +135,8 @@ CRON_JOB_REGISTRY: list[dict[str, Any]] = [
     {
         "id": "tuning_monitoring_postclose",
         "log": "logs/tuning_monitoring_postclose_cron.log",
-        "window_start": (18, 0),
-        "window_end": (18, 15),
+        "window_start": (20, 5),
+        "window_end": (20, 45),
         "mode": "once",
         "critical": False,
     },
@@ -205,6 +205,7 @@ class CronCompletionDetector(BaseDetector):
     category = "cron"
 
     RECENT_MINUTES: int = 60
+    MARKER_TAIL_LINES: int = 5000
 
     def check(self) -> DetectionResult:
         now_h, now_m = _kst_time_tuple()
@@ -244,7 +245,7 @@ class CronCompletionDetector(BaseDetector):
                     details[f"{jid}_status"] = "not_yet_due"
                 continue
 
-            recent_lines = self._read_tail(log_path, 200)
+            recent_lines = self._read_tail(log_path, self.MARKER_TAIL_LINES)
             today_str = _today_kst()
             today_lines = self._filter_today_lines(recent_lines, today_str)
             has_matching_date = bool(today_lines)

@@ -14,7 +14,7 @@
 | exit_only | 1 |
 | avg_down_wait | 0 |
 | pyramid_wait | 0 |
-| compact_exit_signal | 41 |
+| compact_exit_signal | 48 |
 | compact_sell_completed | 0 |
 | compact_scale_in_executed | 7 |
 | compact_decision_snapshot | 92 |

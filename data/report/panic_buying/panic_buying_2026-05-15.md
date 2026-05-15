@@ -6,8 +6,8 @@
 - panic_buy_regime_mode: `NORMAL`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-05-15T15:29:26`
-- latest_event_at: `2026-05-15T15:29:25`
+- as_of: `2026-05-15T19:41:20`
+- latest_event_at: `2026-05-15T19:35:46`
 - reasons: `no panic buying threshold breached`
 
 ## 패닉바잉 지표

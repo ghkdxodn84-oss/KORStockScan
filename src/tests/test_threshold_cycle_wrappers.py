@@ -132,6 +132,16 @@ def test_tuning_monitoring_wrapper_skips_pattern_labs_by_default():
     assert 'if [[ "$RUN_PATTERN_LABS" == "1" || "$RUN_PATTERN_LABS" == "true" ]]' in script
 
 
+def test_tuning_monitoring_waits_for_threshold_postclose_done_by_default():
+    script = Path("deploy/run_tuning_monitoring_postclose.sh").read_text(encoding="utf-8")
+
+    assert 'REQUIRE_THRESHOLD_POSTCLOSE_DONE="${TUNING_MONITORING_REQUIRE_THRESHOLD_POSTCLOSE_DONE:-true}"' in script
+    assert "wait_for_threshold_postclose_done" in script
+    assert "threshold_postclose_terminal_marker" in script
+    assert "reason=threshold_cycle_postclose_not_done" in script
+    assert "reason=threshold_cycle_postclose_failed" in script
+
+
 def test_run_bot_waits_for_threshold_runtime_env_before_launching_bot():
     script = Path("src/run_bot.sh").read_text(encoding="utf-8")
 

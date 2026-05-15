@@ -8,7 +8,9 @@ TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
 RUN_PHASE="${THRESHOLD_CYCLE_CALIBRATION_PHASE:-intraday}"
 AI_CORRECTION_PROVIDER="${THRESHOLD_CYCLE_AI_CORRECTION_PROVIDER:-openai}"
 AI_CORRECTION_RESPONSE_JSON="${THRESHOLD_CYCLE_AI_CORRECTION_RESPONSE_JSON:-}"
-CPU_AFFINITY="${THRESHOLD_CYCLE_CALIBRATION_CPU_AFFINITY:-1}"
+# shellcheck source=cpu_affinity_profile.sh
+. "$SCRIPT_DIR/cpu_affinity_profile.sh"
+CPU_AFFINITY="${THRESHOLD_CYCLE_CALIBRATION_CPU_AFFINITY:-$(korstockscan_default_cpu_affinity threshold)}"
 
 mkdir -p "$PROJECT_DIR/logs"
 cd "$PROJECT_DIR"
@@ -30,7 +32,7 @@ cmd=(env PYTHONPATH=. "$VENV_PY" -m src.engine.daily_threshold_cycle_report \
   --calibration-only \
   "${AI_CORRECTION_ARGS[@]}")
 
-if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]] && [[ "$(nproc 2>/dev/null || echo 1)" -gt 1 ]]; then
+if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]] && [[ "$(korstockscan_nproc)" -gt 1 ]]; then
   cmd=(taskset -c "$CPU_AFFINITY" "${cmd[@]}")
 fi
 

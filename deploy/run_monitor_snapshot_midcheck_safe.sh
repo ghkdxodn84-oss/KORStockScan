@@ -4,7 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
-CPU_AFFINITY="${MONITOR_SNAPSHOT_CPU_AFFINITY:-1}"
+# shellcheck source=cpu_affinity_profile.sh
+. "$SCRIPT_DIR/cpu_affinity_profile.sh"
+CPU_AFFINITY="${MONITOR_SNAPSHOT_CPU_AFFINITY:-$(korstockscan_default_cpu_affinity monitor)}"
 
 # BUY drought 중간점검(장중)에서 스토리지 I/O burst 완화를 위한 경량 실행 프로필.
 MONITOR_SNAPSHOT_PROFILE="${MONITOR_SNAPSHOT_PROFILE:-intraday_light}" \

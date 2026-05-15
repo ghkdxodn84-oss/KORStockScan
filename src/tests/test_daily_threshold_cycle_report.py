@@ -2267,4 +2267,7 @@ def test_window_policy_registry_consumes_rolling_source_metrics_when_snapshot_sa
     assert candidate["sample_count"] == 30
     assert candidate["source_metrics"]["evaluated_candidates"] == 30
     assert candidate["allowed_runtime_apply"] is False
-    assert report["window_policy_audit"]["issue_counts"] == {"rolling_source_snapshot_mismatch": 1}
+    assert report["window_policy_audit"]["issue_counts"] == {}
+    audit_item = report["window_policy_audit"]["items"][0]
+    assert audit_item["snapshot_alignment_status"] == "source_denominator_used"
+    assert "rendering-only" in audit_item["snapshot_alignment_reason"]

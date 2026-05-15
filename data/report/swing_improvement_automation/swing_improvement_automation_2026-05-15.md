@@ -2,8 +2,8 @@
 
 - Runtime change: `false`
 - Generated orders are inputs for `build_code_improvement_workorder`; implementation is manual.
-- simulation_opportunity_sample_state: `None`
-- simulation_opportunity_closed/winner: `None` / `None`
+- simulation_opportunity_sample_state: `hold_sample`
+- simulation_opportunity_closed/winner: `0` / `0`
 
 ## Orders
 

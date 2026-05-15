@@ -1,42 +1,43 @@
 {
-  "timestamp": "2026-05-15T12:29:58.164902",
-  "vix_close": 17.260000228881836,
-  "vix_ma3": 17.706666946411133,
+  "timestamp": "2026-05-15T19:35:44.406608",
+  "vix_close": 18.75,
+  "vix_ma3": 17.96000035603841,
   "vix_peak_passed": false,
-  "vix_two_day_down": true,
+  "vix_two_day_down": false,
   "vix_extreme": false,
-  "wti_close": 102.48999786376953,
-  "wti_rsi": 55.91432225996677,
-  "wti_macd": 1.6787160869751716,
-  "wti_macd_signal": 1.734161342127595,
+  "wti_close": 100.04000091552734,
+  "wti_rsi": 53.147026873047245,
+  "wti_macd": 1.499608643438961,
+  "wti_macd_signal": 1.6704029430371234,
   "wti_dead_cross": false,
-  "wti_from_recent_high_pct": -4.107409714129695,
-  "oil_reversal": false,
-  "fng_value": 66.1428571428572,
+  "wti_from_recent_high_pct": -6.399697336885812,
+  "oil_reversal": true,
+  "fng_value": 65.3428571428571,
   "fng_prev": 66.1428571428572,
   "fng_description": "greed",
   "fng_extreme_fear": false,
   "fng_recovery": false,
   "allow_swing_entry": false,
-  "swing_score": 25,
+  "swing_score": 60,
   "volatility_mode": "NORMAL",
-  "risk_state": "RISK_OFF",
+  "risk_state": "NEUTRAL",
   "reasons": [
+    "원유 반전 시그널",
     "국내 breadth 상승장(20일선 위 57.9%)"
   ],
   "debug": {
     "oil_rsi_turned": false,
-    "fng_curr": 66.1428571428572,
+    "fng_curr": 65.3428571428571,
     "fng_prev": 66.1428571428572,
     "score_threshold": 70,
     "component_scores": {
       "vix": 0,
-      "oil": 0,
+      "oil": 35,
       "fng": 0,
       "local_breadth": 25
     },
     "vix_signal": "none",
-    "oil_signal": "none",
+    "oil_signal": "reversal",
     "fng_signal": "none",
     "local_market_context": {
       "ma20_ratio": 57.9,
@@ -52,5 +53,5 @@
     "local_breadth_signal": "bullish"
   },
   "cached_session_date": "2026-05-15",
-  "cached_at": "2026-05-15T12:29:58.170466+09:00"
+  "cached_at": "2026-05-15T19:35:44.412253+09:00"
 }

@@ -299,6 +299,9 @@ def test_ai_source_quality_fields_marks_not_evaluated_without_snapshot():
     assert fields["ai_input_source_quality_status"] == "not_evaluated"
     assert fields["ai_input_source_quality_reason"] == "watching_ai_cooldown_active"
     assert fields["tick_source_quality_fields_sent"] is False
+    assert fields["tick_accel_source"] == "not_evaluated"
+    assert fields["tick_context_quality"] == "not_evaluated"
+    assert fields["quote_age_source"] == "not_evaluated"
 
 
 def test_ai_source_quality_fields_inherits_previous_snapshot():

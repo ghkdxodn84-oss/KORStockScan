@@ -35,7 +35,7 @@
 - route: `attach_existing_family`
 - priority: `MEDIUM`
 - mapped_family: `swing_scale_in_ofi_qi_confirmation`
-- confidence: `solo`
+- confidence: `consensus`
 - expected_ev_effect: Evaluate PYRAMID/AVG_DOWN outcome quality with OFI/QI confirmation.
 
 ### 4. OFI/QI stale/missing quality review

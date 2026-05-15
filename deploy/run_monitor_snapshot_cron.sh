@@ -4,7 +4,9 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
-CPU_AFFINITY="${MONITOR_SNAPSHOT_CPU_AFFINITY:-1}"
+# shellcheck source=cpu_affinity_profile.sh
+. "$SCRIPT_DIR/cpu_affinity_profile.sh"
+CPU_AFFINITY="${MONITOR_SNAPSHOT_CPU_AFFINITY:-$(korstockscan_default_cpu_affinity monitor)}"
 started_at="$(TZ=Asia/Seoul date +%FT%T%z)"
 echo "[START] monitor_snapshot target_date=${TARGET_DATE} profile=${MONITOR_SNAPSHOT_PROFILE:-full} started_at=${started_at}"
 

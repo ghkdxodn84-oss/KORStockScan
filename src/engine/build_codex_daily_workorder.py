@@ -687,12 +687,13 @@ def build_runbook_operational_checks(*, target_date: str | None, slots: list[str
                 check_id=f"PostcloseAutomationHealthCheck{compact}",
                 title="장후 자동화체인 상태 확인",
                 slot="POSTCLOSE",
-                time_window="16:10~18:30",
+                time_window="16:10~20:45",
                 source="docs/time-based-operations-runbook.md",
                 section="장후 확인 절차",
                 artifact_checks=(
                     "logs/threshold_cycle_postclose_cron.log",
                     "logs/swing_model_retrain_cron.log",
+                    "logs/tuning_monitoring_postclose_cron.log",
                     f"data/report/threshold_cycle_ev/threshold_cycle_ev_{date_text}.md",
                     f"data/report/swing_selection_funnel/swing_selection_funnel_{date_text}.md",
                     f"data/report/swing_lifecycle_audit/swing_lifecycle_audit_{date_text}.md",
@@ -708,11 +709,13 @@ def build_runbook_operational_checks(*, target_date: str | None, slots: list[str
                 decision_rule=(
                     "pass|warning|fail|not_yet_due 중 하나로 판정. daily EV 제출물, postclose AI correction, "
                     "real/sim/combined split, swing lifecycle automation, swing runtime approval, pattern lab automation, "
-                    "swing model retrain status/promotion guard, code improvement workorder 생성 여부 확인. "
+                    "swing model retrain status/promotion guard, tuning monitoring의 threshold postclose predecessor DONE 확인, "
+                    "code improvement workorder 생성 여부 확인. "
                     "SystemErrorDetector 하루 누적 fail detector가 있으면 incident/playbook 분류."
                 ),
                 forbidden="postclose 실패 시 threshold 수동 변경이 아니라 같은 date wrapper 재실행/복구 우선. "
                           "swing model retrain 결과로 스윙 dry-run 해제/브로커 주문 허용 금지. "
+                          "tuning monitoring은 threshold_cycle_postclose 완료 전 선행 산출물을 소비하지 않는다. "
                           "SystemErrorDetector 결과로 runtime threshold/spread/주문 변경 금지.",
             )
         )

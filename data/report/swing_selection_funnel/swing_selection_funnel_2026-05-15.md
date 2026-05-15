@@ -15,35 +15,35 @@
 
 | stage | raw | unique_records |
 | --- | ---: | ---: |
-| `blocked_gatekeeper_reject` | 81 | 11 |
-| `blocked_swing_gap` | 28948 | 7 |
-| `blocked_swing_score_vpw` | 332663 | 23 |
-| `gatekeeper_fast_reuse_bypass` | 81 | 11 |
+| `blocked_gatekeeper_reject` | 101 | 11 |
+| `blocked_swing_gap` | 59125 | 7 |
+| `blocked_swing_score_vpw` | 523784 | 23 |
+| `gatekeeper_fast_reuse_bypass` | 101 | 11 |
 | `holding_flow_ofi_smoothing_applied` | 1 | 1 |
 | `holding_started` | 1 | 1 |
-| `swing_probe_discarded` | 8213 | 24 |
+| `swing_probe_discarded` | 12161 | 24 |
 | `swing_probe_entry_candidate` | 42 | 16 |
 | `swing_probe_exit_signal` | 42 | 21 |
 | `swing_probe_holding_started` | 42 | 16 |
 | `swing_probe_scale_in_order_assumed_filled` | 28 | 19 |
 | `swing_probe_sell_order_assumed_filled` | 42 | 21 |
-| `swing_reentry_counterfactual_after_loss` | 829 | 10 |
+| `swing_reentry_counterfactual_after_loss` | 836 | 10 |
 | `swing_same_symbol_loss_reentry_cooldown` | 21 | 13 |
 | `swing_scale_in_micro_context_observed` | 28 | 19 |
 | `swing_sim_scale_in_order_assumed_filled` | 28 | 19 |
 
 ## Top Code Stage
 
-- `blocked_swing_score_vpw` NAVER(035420): 17771
-- `blocked_swing_score_vpw` 삼성물산(028260): 17769
-- `blocked_swing_gap` LG(003550): 17768
-- `blocked_swing_score_vpw` 이마트(139480): 17768
-- `blocked_swing_score_vpw` 대한항공(003490): 17767
-- `blocked_swing_score_vpw` 크래프톤(259960): 17767
-- `blocked_swing_score_vpw` 동원산업(006040): 17764
-- `blocked_swing_score_vpw` 한국콜마(161890): 17762
-- `blocked_swing_score_vpw` 현대백화점(069960): 17762
-- `blocked_swing_score_vpw` 현대해상(001450): 16955
+- `blocked_swing_score_vpw` NAVER(035420): 27830
+- `blocked_swing_score_vpw` 삼성물산(028260): 27828
+- `blocked_swing_gap` LG(003550): 27827
+- `blocked_swing_score_vpw` 이마트(139480): 27827
+- `blocked_swing_score_vpw` 대한항공(003490): 27826
+- `blocked_swing_score_vpw` 크래프톤(259960): 27826
+- `blocked_swing_score_vpw` 동원산업(006040): 27823
+- `blocked_swing_score_vpw` 한국콜마(161890): 27821
+- `blocked_swing_score_vpw` 현대백화점(069960): 27821
+- `blocked_swing_score_vpw` 현대해상(001450): 27014
 
 ## OFI/QI Micro Context
 

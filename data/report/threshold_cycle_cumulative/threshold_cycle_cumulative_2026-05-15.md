@@ -11,10 +11,10 @@
 
 | window | dates | events | completed | avg_profit | win_rate | loss_rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| cumulative | 25 | 85320 | 177 | -0.4913 | 0.4124 | 0.5706 |
-| rolling_5d | 5 | 8278 | 1 | -1.55 | 0 | 1 |
-| rolling_10d | 10 | 15448 | 16 | -0.7962 | 0.375 | 0.625 |
-| rolling_20d | 20 | 85314 | 158 | -0.5116 | 0.4051 | 0.5823 |
+| cumulative | 25 | 85329 | 177 | -0.4913 | 0.4124 | 0.5706 |
+| rolling_5d | 5 | 8287 | 1 | -1.55 | 0 | 1 |
+| rolling_10d | 10 | 15457 | 16 | -0.7962 | 0.375 | 0.625 |
+| rolling_20d | 20 | 85323 | 158 | -0.5116 | 0.4051 | 0.5823 |
 
 ## Real / Sim Source Summary
 
@@ -76,7 +76,7 @@
 | cumulative | scalp_trailing_take_profit | holding_exit | 46 | True | report_only_reference |
 | cumulative | protect_trailing_smoothing | holding_exit | 818 | True | report_only_reference |
 | cumulative | holding_flow_ofi_smoothing | holding_exit | 2 | False | report_only_reference |
-| cumulative | scale_in_price_guard | holding_exit | 314 | True | report_only_reference |
+| cumulative | scale_in_price_guard | holding_exit | 316 | True | report_only_reference |
 | cumulative | position_sizing_cap_release | position_sizing | 177 | False | report_only_reference |
 | cumulative | position_sizing_dynamic_formula | position_sizing | 177 | False | report_only_reference |
 | cumulative | statistical_action_weight | decision_support | 177 | False | report_only_reference |
@@ -94,7 +94,7 @@
 | rolling_5d | scalp_trailing_take_profit | holding_exit | 6 | False | report_only_reference |
 | rolling_5d | protect_trailing_smoothing | holding_exit | 8 | False | report_only_reference |
 | rolling_5d | holding_flow_ofi_smoothing | holding_exit | 0 | False | report_only_reference |
-| rolling_5d | scale_in_price_guard | holding_exit | 199 | True | report_only_reference |
+| rolling_5d | scale_in_price_guard | holding_exit | 201 | True | report_only_reference |
 | rolling_5d | position_sizing_cap_release | position_sizing | 1 | False | report_only_reference |
 | rolling_5d | position_sizing_dynamic_formula | position_sizing | 1 | False | report_only_reference |
 | rolling_5d | statistical_action_weight | decision_support | 1 | False | report_only_reference |
@@ -112,7 +112,7 @@
 | rolling_10d | scalp_trailing_take_profit | holding_exit | 12 | False | report_only_reference |
 | rolling_10d | protect_trailing_smoothing | holding_exit | 150 | True | report_only_reference |
 | rolling_10d | holding_flow_ofi_smoothing | holding_exit | 2 | False | report_only_reference |
-| rolling_10d | scale_in_price_guard | holding_exit | 314 | True | report_only_reference |
+| rolling_10d | scale_in_price_guard | holding_exit | 316 | True | report_only_reference |
 | rolling_10d | position_sizing_cap_release | position_sizing | 16 | False | report_only_reference |
 | rolling_10d | position_sizing_dynamic_formula | position_sizing | 16 | False | report_only_reference |
 | rolling_10d | statistical_action_weight | decision_support | 16 | False | report_only_reference |
@@ -130,7 +130,7 @@
 | rolling_20d | scalp_trailing_take_profit | holding_exit | 46 | True | report_only_reference |
 | rolling_20d | protect_trailing_smoothing | holding_exit | 818 | True | report_only_reference |
 | rolling_20d | holding_flow_ofi_smoothing | holding_exit | 2 | False | report_only_reference |
-| rolling_20d | scale_in_price_guard | holding_exit | 314 | True | report_only_reference |
+| rolling_20d | scale_in_price_guard | holding_exit | 316 | True | report_only_reference |
 | rolling_20d | position_sizing_cap_release | position_sizing | 158 | False | report_only_reference |
 | rolling_20d | position_sizing_dynamic_formula | position_sizing | 158 | False | report_only_reference |
 | rolling_20d | statistical_action_weight | decision_support | 158 | False | report_only_reference |

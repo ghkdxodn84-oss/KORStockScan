@@ -3,7 +3,10 @@
 THRESHOLD_RUNTIME_ENV_WAIT_SEC="${KORSTOCKSCAN_THRESHOLD_RUNTIME_ENV_WAIT_SEC:-1800}"
 THRESHOLD_RUNTIME_ENV_REQUIRED="${KORSTOCKSCAN_THRESHOLD_RUNTIME_ENV_REQUIRED:-true}"
 THRESHOLD_RUNTIME_ENV_BOOTSTRAP="${KORSTOCKSCAN_THRESHOLD_RUNTIME_ENV_BOOTSTRAP:-true}"
-BOT_CPU_AFFINITY="${KORSTOCKSCAN_BOT_CPU_AFFINITY:-0}"
+PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+# shellcheck source=../deploy/cpu_affinity_profile.sh
+. "$PROJECT_DIR/deploy/cpu_affinity_profile.sh"
+BOT_CPU_AFFINITY="${KORSTOCKSCAN_BOT_CPU_AFFINITY:-$(korstockscan_default_cpu_affinity bot)}"
 
 wait_for_threshold_runtime_env() {
     local env_path="$1"
@@ -69,7 +72,7 @@ while true; do
 
     # 봇 실행 (경로나 파일명은 환경에 맞게 수정)
     cmd=(../.venv/bin/python bot_main.py)
-    if command -v taskset >/dev/null 2>&1 && [ -n "$BOT_CPU_AFFINITY" ] && [ "$(nproc 2>/dev/null || echo 1)" -gt 1 ]; then
+    if command -v taskset >/dev/null 2>&1 && [ -n "$BOT_CPU_AFFINITY" ] && [ "$(korstockscan_nproc)" -gt 1 ]; then
         cmd=(taskset -c "$BOT_CPU_AFFINITY" "${cmd[@]}")
     fi
     "${cmd[@]}"

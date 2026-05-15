@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="${PROJECT_DIR}/.venv/bin/python"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
+# shellcheck source=cpu_affinity_profile.sh
+. "$SCRIPT_DIR/cpu_affinity_profile.sh"
 
 if [[ $# -gt 0 ]]; then
   shift
@@ -21,7 +23,7 @@ IONICE_CLASS="${BUY_FUNNEL_SENTINEL_IONICE_CLASS:-2}"
 IONICE_LEVEL="${BUY_FUNNEL_SENTINEL_IONICE_LEVEL:-7}"
 NICE_LEVEL="${BUY_FUNNEL_SENTINEL_NICE_LEVEL:-12}"
 NICE_COMMAND="${BUY_FUNNEL_SENTINEL_NICE_COMMAND:-nice}"
-CPU_AFFINITY="${BUY_FUNNEL_SENTINEL_CPU_AFFINITY:-1}"
+CPU_AFFINITY="${BUY_FUNNEL_SENTINEL_CPU_AFFINITY:-$(korstockscan_default_cpu_affinity sentinel)}"
 
 mkdir -p "$PROJECT_DIR/tmp" "$PROJECT_DIR/logs"
 cd "$PROJECT_DIR"
@@ -69,7 +71,7 @@ if [[ "$USE_SUMMARY" == "1" ]]; then
   cmd+=(--use-summary)
 fi
 
-if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]] && [[ "$(nproc 2>/dev/null || echo 1)" -gt 1 ]]; then
+if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]] && [[ "$(korstockscan_nproc)" -gt 1 ]]; then
   cmd=(taskset -c "$CPU_AFFINITY" "${cmd[@]}")
 fi
 

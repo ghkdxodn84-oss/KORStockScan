@@ -768,6 +768,8 @@ def persist_swing_intraday_probe_state(targets=None, *, allow_empty_overwrite: b
             _log_swing_probe_state_event(
                 "swing_probe_state_persisted",
                 reason=reason,
+                simulation_book=SWING_INTRADAY_PROBE_BOOK,
+                simulation_owner=_swing_intraday_probe_owner(),
                 active_count=len(active_positions),
                 allow_empty_overwrite=allow_empty_overwrite,
                 **_build_observation_contract_fields("ops_volume_diagnostic"),
@@ -4284,6 +4286,9 @@ def _build_orderbook_micro_log_fields(micro):
         return {
             "orderbook_micro_ready": False,
             "orderbook_micro_state": "missing",
+            "orderbook_micro_reason": "micro_context_missing",
+            "orderbook_micro_snapshot_age_ms": "-",
+            "orderbook_micro_observer_healthy": False,
         }
     fields = {
         "orderbook_micro_ready": bool(micro.get("ready")),
@@ -5332,6 +5337,9 @@ def _build_ai_input_not_evaluated_fields(reason: str) -> dict:
         "ai_input_source_quality_status": "not_evaluated",
         "ai_input_source_quality_reason": str(reason or "not_evaluated"),
         "tick_source_quality_fields_sent": False,
+        "tick_accel_source": "not_evaluated",
+        "tick_context_quality": "not_evaluated",
+        "quote_age_source": "not_evaluated",
     }
 
 
@@ -5657,6 +5665,7 @@ def _evaluate_holding_flow_override(
             min_review_sec=min_review_sec,
             max_review_sec=max_review_sec,
             price_trigger_pct=f"{price_trigger_pct:.2f}",
+            **_build_observation_contract_fields("ops_volume_diagnostic"),
             **(
                 _build_swing_micro_log_fields(
                     _build_live_orderbook_micro_context(code, curr_price=curr_price),
@@ -5865,6 +5874,7 @@ def _evaluate_holding_flow_override(
                 worsen_pct=f"{worsen_pct:.2f}",
                 elapsed_sec=elapsed_sec,
                 defer_reason="ofi_stable_bullish_debounce",
+                **_build_observation_contract_fields("ops_volume_diagnostic"),
                 **swing_exit_micro_fields,
             )
             _emit_stat_action_decision_snapshot(
@@ -5961,6 +5971,7 @@ def _evaluate_holding_flow_override(
         candidate_profit=f"{candidate_profit:+.2f}",
         worsen_pct=f"{worsen_pct:.2f}",
         elapsed_sec=elapsed_sec,
+        **_build_observation_contract_fields("ops_volume_diagnostic"),
         **swing_exit_micro_fields,
     )
     _emit_stat_action_decision_snapshot(
@@ -6323,6 +6334,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                 remaining_sec=f"{float(entry_arm.get('remaining_sec', 0.0) or 0.0):.1f}",
                 armed_reason=entry_arm.get('reason'),
                 dynamic_reason=entry_arm.get('dynamic_reason'),
+                **_build_observation_contract_fields("funnel_count"),
             )
             is_trigger = True
         else:
@@ -7265,6 +7277,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                     gatekeeper_packet_build_ms=stock.get('last_gatekeeper_packet_build_ms', 0),
                     gatekeeper_model_call_ms=stock.get('last_gatekeeper_model_call_ms', 0),
                     gatekeeper_total_internal_ms=stock.get('last_gatekeeper_total_internal_ms', 0),
+                    **_build_observation_contract_fields("funnel_count"),
                 )
                 maybe_start_swing_intraday_probe(
                     stock=stock,
@@ -7487,6 +7500,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         stock, code, "budget_pass", deposit=deposit, ratio=f"{ratio:.4f}", target_budget=target_budget,
         safe_budget=safe_budget, safety_ratio=f"{used_safety_ratio:.4f}",
         budget_cap=budget_cap if budget_cap_applied else "-", qty=real_buy_qty,
+        **_build_observation_contract_fields("funnel_count"),
     )
 
     if _is_swing_strategy(strategy):
@@ -10040,6 +10054,7 @@ def handle_holding_state(stock, code, ws_data, admin_id, market_regime, *, now_t
                     current_ai_score=f"{current_ai_score:.0f}",
                     held_sec=int(held_time_min * 60),
                     exit_rule_candidate="scalp_soft_stop_pct",
+                    **_build_observation_contract_fields("ops_volume_diagnostic"),
                 )
             else:
                 is_sell_signal = True
@@ -11420,6 +11435,8 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             add_type=add_type,
             **swing_scale_micro_fields,
         )
+    else:
+        swing_scale_micro_fields = _build_orderbook_micro_log_fields(None)
     price_resolution = resolve_scale_in_order_price(
         stock=stock,
         ws_data=ws_data,

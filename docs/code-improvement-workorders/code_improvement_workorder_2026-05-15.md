@@ -10,16 +10,16 @@
 ## Source
 
 - pattern_lab_automation: `/home/ubuntu/KORStockScan/data/report/scalping_pattern_lab_automation/scalping_pattern_lab_automation_2026-05-15.json`
-- swing_improvement_automation: `-`
-- swing_pattern_lab_automation: `-`
+- swing_improvement_automation: `/home/ubuntu/KORStockScan/data/report/swing_improvement_automation/swing_improvement_automation_2026-05-15.json`
+- swing_pattern_lab_automation: `/home/ubuntu/KORStockScan/data/report/swing_pattern_lab_automation/swing_pattern_lab_automation_2026-05-15.json`
 - threshold_cycle_ev: `/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-15.json`
 - threshold_cycle_calibration: `/home/ubuntu/KORStockScan/data/report/threshold_cycle_calibration/threshold_cycle_calibration_2026-05-15_postclose.json`
-- pipeline_event_verbosity: `-`
+- pipeline_event_verbosity: `/home/ubuntu/KORStockScan/data/report/pipeline_event_verbosity/pipeline_event_verbosity_2026-05-15.json`
 - observation_source_quality_audit: `/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-05-15.json`
-- codebase_performance_workorder: `-`
-- generated_at: `2026-05-15T14:43:10+09:00`
-- generation_id: `2026-05-15-c86461e801f4`
-- source_hash: `c86461e801f412aa39be4bb430c3a08a0463c80ee39c69e5983ce061f047dbe0`
+- codebase_performance_workorder: `/home/ubuntu/KORStockScan/data/report/codebase_performance_workorder/codebase_performance_workorder_2026-05-15.json`
+- generated_at: `2026-05-15T19:49:18+09:00`
+- generation_id: `2026-05-15-91398d8ed99e`
+- source_hash: `91398d8ed99eba4cd1c8c947ced311e6358c5a17ac6ec69f9a738337260b75c1`
 
 ## 운영 원칙
 
@@ -41,31 +41,31 @@
 ## Snapshot Lineage
 
 - previous_exists: `True`
-- previous_generation_id: `2026-05-15-1b3477b0c7f0`
-- previous_source_hash: `1b3477b0c7f02aa106966407e781ce80b00d5ec3ede0025fb1cb4fe518b108a3`
-- new_order_ids: `['order_panic_buying_source_quality_market_breadth_micro_coverage', 'order_panic_sell_defense_lifecycle_transition_pack', 'order_threshold_window_policy_source_snapshot_alignment']`
-- removed_order_ids: `[]`
+- previous_generation_id: `2026-05-15-c0e28721deb5`
+- previous_source_hash: `c0e28721deb54bb68df757a62a926a0b8ce55e1d77d18d968a93a9932b6fadb5`
+- new_order_ids: `['order_ai_threshold_dominance']`
+- removed_order_ids: `['order_swing_gatekeeper_reject_threshold_review']`
 - decision_changed_order_ids: `[]`
 
 ## Summary
 
-- source_order_count: `5`
-- scalping_source_order_count: `0`
-- swing_source_order_count: `0`
-- swing_lab_source_order_count: `0`
-- threshold_ev_source_order_count: `5`
-- pipeline_event_verbosity_source_order_count: `0`
-- observation_source_quality_source_order_count: `2`
-- codebase_performance_source_order_count: `0`
+- source_order_count: `41`
+- scalping_source_order_count: `15`
+- swing_source_order_count: `5`
+- swing_lab_source_order_count: `3`
+- threshold_ev_source_order_count: `18`
+- pipeline_event_verbosity_source_order_count: `1`
+- observation_source_quality_source_order_count: `3`
+- codebase_performance_source_order_count: `12`
 - panic_lifecycle_source_order_count: `2`
-- selected_order_count: `5`
-- decision_counts: `{'implement_now': 3, 'design_family_candidate': 1, 'defer_evidence': 1}`
-- gemini_fresh: `None`
-- claude_fresh: `None`
-- swing_lifecycle_audit_available: `False`
-- swing_pattern_lab_automation_available: `False`
-- swing_pattern_lab_fresh: `None`
-- swing_threshold_ai_status: `None`
+- selected_order_count: `12`
+- decision_counts: `{'implement_now': 11, 'attach_existing_family': 8, 'design_family_candidate': 6, 'defer_evidence': 10, 'reject': 6}`
+- gemini_fresh: `True`
+- claude_fresh: `True`
+- swing_lifecycle_audit_available: `True`
+- swing_pattern_lab_automation_available: `True`
+- swing_pattern_lab_fresh: `True`
+- swing_threshold_ai_status: `parsed`
 - daily_ev_available: `True`
 
 ## Codex 실행 지시
@@ -108,7 +108,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - data_quality_effect: `False`
 - tuning_axis_effect: `False`
 - expected_ev_effect: none_direct_source_quality_attribution_only
-- evidence: `status=warning`, `event_count=596422`, `warning_stage_count=7`, `warning_stages=ai_confirmed,blocked_ai_score,wait65_79_ev_candidate,blocked_strength_momentum,blocked_overbought,swing_probe_state_persisted,scale_in_price_p2_observe`, `high_volume_no_source_field_stage_count=0`, `decision_authority=source_quality_only`, `runtime_effect=false`
+- evidence: `status=warning`, `event_count=1413933`, `warning_stage_count=7`, `warning_stages=ai_confirmed,blocked_ai_score,wait65_79_ev_candidate,blocked_strength_momentum,blocked_overbought,swing_probe_state_persisted,scale_in_price_p2_observe`, `high_volume_no_source_field_stage_count=5`, `decision_authority=source_quality_only`, `runtime_effect=false`
 - parity_contract: -
 - next_postclose_metric: observation_source_quality_audit.warning_stage_count and high_volume_no_source_field_stage_count
 - files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/observation_source_quality_audit.py`
@@ -121,7 +121,135 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - runtime 판단값을 직접 바꾸지 않는다.
 - 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
 
-### 2. `order_swing_source_quality_micro_context_provenance`
+### 2. `order_perf_buy_funnel_json_scan`
+
+- title: BUY funnel sentinel field scan without repeated json.dumps
+- decision: `implement_now`
+- decision_reason: accepted codebase performance order is logic-preserving and report/workorder-only; implementation still requires parity tests
+- source_report_type: `codebase_performance_workorder`
+- lifecycle_stage: `ops_performance`
+- target_subsystem: `buy_funnel_sentinel`
+- route: `performance_optimization_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `-`
+- confidence: `consensus`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: none_direct_ops_cpu_io_reduction_only
+- evidence: `source_doc_hash=6bc37e5b3d13f356392d83e4ec1ecdcd2f57a05a0f9bc58f6329a1ea20fbed88`, `candidate_state=accepted`, `risk_tier=low`, `runtime_effect=false`, `strategy_effect=false`, `data_quality_effect=false`, `tuning_axis_effect=false`, `parity_contract=classification, blocker counts, unique submitted count, actual_order_submitted split, source-quality/provenance fields exact match`
+- parity_contract: classification, blocker counts, unique submitted count, actual_order_submitted split, source-quality/provenance fields exact match
+- next_postclose_metric: same report/output parity with lower runtime or CPU/IO overhead
+- files_likely_touched: `src/engine/buy_funnel_sentinel.py`
+- acceptance_tests: `pytest src/tests/test_buy_funnel_sentinel.py`, `BUY Sentinel classification parity on same raw/cache input`
+- automation_reentry: After implementation, rerun the same artifact/report parity tests before postclose workorder refresh.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 3. `order_pipeline_event_compaction_v2_shadow`
+
+- title: Pipeline event compaction V2 shadow producer summary
+- decision: `implement_now`
+- decision_reason: pipeline event compaction V2 is report-only instrumentation; shadow means producer-summary observe mode, not trading shadow
+- source_report_type: `pipeline_event_verbosity`
+- lifecycle_stage: `ops_volume_diagnostic`
+- target_subsystem: `runtime_instrumentation`
+- route: `instrumentation_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `-`
+- confidence: `consensus`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: none_direct_ops_cpu_io_reduction_only
+- evidence: `state=v2_shadow_missing`, `recommended_workorder_state=open_shadow_order`, `raw_size_bytes=1704673128`, `high_volume_line_count=1376713`, `high_volume_byte_share_pct=96.87`, `producer_summary_exists=False`, `parity_ok=False`, `raw_derived_event_count=1376713`, `producer_event_count=0`
+- parity_contract: -
+- next_postclose_metric: pipeline_event_verbosity.parity.ok
+- files_likely_touched: `src/utils/pipeline_event_logger.py`, `src/engine/pipeline_event_summary.py`, `src/engine/pipeline_event_verbosity_report.py`
+- acceptance_tests: `pytest src/tests/test_pipeline_event_logger.py src/tests/test_pipeline_event_verbosity_report.py`
+- automation_reentry: Next postclose pipeline_event_verbosity report must show producer summary freshness and parity status.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 4. `order_high_volume_diagnostic_stage_contract_labels`
+
+- title: High-volume diagnostic stage metric contract labels
+- decision: `implement_now`
+- decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
+- source_report_type: `observation_source_quality_audit`
+- lifecycle_stage: `source_quality_gate`
+- target_subsystem: `runtime_instrumentation`
+- route: `instrumentation_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `-`
+- confidence: `audit`
+- priority: `2`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: none_direct_source_quality_attribution_only
+- evidence: `status=warning`, `event_count=1413933`, `warning_stage_count=7`, `warning_stages=ai_confirmed,blocked_ai_score,wait65_79_ev_candidate,blocked_strength_momentum,blocked_overbought,swing_probe_state_persisted,scale_in_price_p2_observe`, `high_volume_no_source_field_stage_count=5`, `decision_authority=source_quality_only`, `runtime_effect=false`, `gap_stages=blocked_gatekeeper_reject,soft_stop_micro_grace,budget_pass,entry_armed_resume,holding_flow_override_defer_exit`
+- parity_contract: -
+- next_postclose_metric: observation_source_quality_audit.warning_stage_count and high_volume_no_source_field_stage_count
+- files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/observation_source_quality_audit.py`, `docs/report-based-automation-traceability.md`
+- acceptance_tests: `pytest src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py`
+- automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 5. `order_perf_daily_report_bulk_history`
+
+- title: Daily report market snapshot bulk history query
+- decision: `implement_now`
+- decision_reason: accepted codebase performance order is logic-preserving and report/workorder-only; implementation still requires parity tests
+- source_report_type: `codebase_performance_workorder`
+- lifecycle_stage: `ops_performance`
+- target_subsystem: `daily_report`
+- route: `performance_optimization_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `-`
+- confidence: `consensus`
+- priority: `2`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: none_direct_ops_cpu_io_reduction_only
+- evidence: `source_doc_hash=6bc37e5b3d13f356392d83e4ec1ecdcd2f57a05a0f9bc58f6329a1ea20fbed88`, `candidate_state=accepted`, `risk_tier=medium`, `runtime_effect=false`, `strategy_effect=false`, `data_quality_effect=false`, `tuning_axis_effect=false`, `parity_contract=per-stock history window, feature columns, model input row count, and report JSON exact match`
+- parity_contract: per-stock history window, feature columns, model input row count, and report JSON exact match
+- next_postclose_metric: same report/output parity with lower runtime or CPU/IO overhead
+- files_likely_touched: `src/engine/daily_report_service.py`
+- acceptance_tests: `pytest src/tests/test_daily_report_service.py src/tests/test_daily_report.py`, `daily report output parity on injected DB/model fixture`
+- automation_reentry: After implementation, rerun the same artifact/report parity tests before postclose workorder refresh.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 6. `order_swing_source_quality_micro_context_provenance`
 
 - title: Swing source-quality micro context provenance
 - decision: `implement_now`
@@ -140,7 +268,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - data_quality_effect: `False`
 - tuning_axis_effect: `False`
 - expected_ev_effect: none_direct_source_quality_attribution_only
-- evidence: `status=warning`, `event_count=596422`, `warning_stage_count=7`, `warning_stages=ai_confirmed,blocked_ai_score,wait65_79_ev_candidate,blocked_strength_momentum,blocked_overbought,swing_probe_state_persisted,scale_in_price_p2_observe`, `high_volume_no_source_field_stage_count=0`, `decision_authority=source_quality_only`, `runtime_effect=false`, `swing_warning_stages=swing_probe_state_persisted,scale_in_price_p2_observe`, `swing_probe_state_persisted:sample_count=77 missing_fields=metric_role,decision_authority,runtime_effect,forbidden_uses`, `scale_in_price_p2_observe:sample_count=22 missing_fields=orderbook_micro_ready,orderbook_micro_state,orderbook_micro_reason,orderbook_micro_snapshot_age_ms,orderbook_micro_observer_healthy`
+- evidence: `status=warning`, `event_count=1413933`, `warning_stage_count=7`, `warning_stages=ai_confirmed,blocked_ai_score,wait65_79_ev_candidate,blocked_strength_momentum,blocked_overbought,swing_probe_state_persisted,scale_in_price_p2_observe`, `high_volume_no_source_field_stage_count=5`, `decision_authority=source_quality_only`, `runtime_effect=false`, `swing_warning_stages=swing_probe_state_persisted,scale_in_price_p2_observe`, `swing_probe_state_persisted:sample_count=118 missing_fields=metric_role,decision_authority,runtime_effect,forbidden_uses`, `scale_in_price_p2_observe:sample_count=29 missing_fields=orderbook_micro_ready,orderbook_micro_state,orderbook_micro_reason,orderbook_micro_snapshot_age_ms,orderbook_micro_observer_healthy`
 - parity_contract: -
 - next_postclose_metric: observation_source_quality_audit.warning_stage_count and high_volume_no_source_field_stage_count
 - files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/observation_source_quality_audit.py`, `src/engine/build_code_improvement_workorder.py`, `docs/report-based-automation-traceability.md`
@@ -153,31 +281,31 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - runtime 판단값을 직접 바꾸지 않는다.
 - 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
 
-### 3. `order_threshold_window_policy_source_snapshot_alignment`
+### 7. `order_perf_daily_report_engine_singleton`
 
-- title: threshold window policy source snapshot alignment
+- title: Daily report SQLAlchemy engine singleton
 - decision: `implement_now`
-- decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
-- source_report_type: `threshold_cycle_calibration`
-- lifecycle_stage: `threshold_cycle`
-- target_subsystem: `threshold_cycle_report`
-- route: `instrumentation_order`
+- decision_reason: accepted codebase performance order is logic-preserving and report/workorder-only; implementation still requires parity tests
+- source_report_type: `codebase_performance_workorder`
+- lifecycle_stage: `ops_performance`
+- target_subsystem: `daily_report`
+- route: `performance_optimization_order`
 - mapped_family: `-`
-- threshold_family: `window_policy_registry`
-- improvement_type: `source_quality_alignment`
+- threshold_family: `-`
+- improvement_type: `-`
 - confidence: `consensus`
 - priority: `3`
 - runtime_effect: `False`
 - strategy_effect: `False`
 - data_quality_effect: `False`
 - tuning_axis_effect: `False`
-- expected_ev_effect: Prevent daily-only or snapshot-only calibration blind spots by aligning rolling/cumulative source metrics, snapshot denominators, AI correction context, and EV/workorder rendering.
-- evidence: `issue_counts={"rolling_source_snapshot_mismatch": 4}`, `affected_families=trailing_continuation,score65_74_recovery_probe,liquidity_gate_refined_candidate,overbought_gate_refined_candidate`, `family=trailing_continuation primary=rolling_10d state=freeze primary_sample=119 snapshot_sample=12 source_sample=119 issues=rolling_source_snapshot_mismatch`, `family=score65_74_recovery_probe primary=rolling_5d state=adjust_up primary_sample=189 snapshot_sample=0 source_sample=189 issues=rolling_source_snapshot_mismatch`, `family=liquidity_gate_refined_candidate primary=rolling_5d state=hold primary_sample=28009 snapshot_sample=0 source_sample=28009 issues=rolling_source_snapshot_mismatch`, `family=overbought_gate_refined_candidate primary=rolling_5d state=hold primary_sample=471261 snapshot_sample=0 source_sample=471261 issues=rolling_source_snapshot_mismatch`
-- parity_contract: -
-- next_postclose_metric: window_policy_audit should have no daily_only_leak or rolling_consumer_gap; rolling_source_snapshot_mismatch must be explained as rendering-only or eliminated.
-- files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/threshold_cycle_ev_report.py`, `src/engine/build_code_improvement_workorder.py`, `data/threshold_cycle/README.md`
-- acceptance_tests: `PYTHONPATH=. .venv/bin/pytest src/tests/test_daily_threshold_cycle_report.py src/tests/test_build_code_improvement_workorder.py`, `threshold_cycle_YYYY-MM-DD.json includes window_policy_audit and calibration_source_bundle_by_window lineage`
-- automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
+- expected_ev_effect: none_direct_ops_cpu_io_reduction_only
+- evidence: `source_doc_hash=6bc37e5b3d13f356392d83e4ec1ecdcd2f57a05a0f9bc58f6329a1ea20fbed88`, `candidate_state=accepted`, `risk_tier=low`, `runtime_effect=false`, `strategy_effect=false`, `data_quality_effect=false`, `tuning_axis_effect=false`, `parity_contract=query result and rendered daily report exact match`
+- parity_contract: query result and rendered daily report exact match
+- next_postclose_metric: same report/output parity with lower runtime or CPU/IO overhead
+- files_likely_touched: `src/engine/daily_report_service.py`
+- acceptance_tests: `pytest src/tests/test_daily_report_service.py src/tests/test_daily_report.py`, `engine creation count regression test`
+- automation_reentry: After implementation, rerun the same artifact/report parity tests before postclose workorder refresh.
 
 실행 기준:
 
@@ -185,68 +313,165 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - runtime 판단값을 직접 바꾸지 않는다.
 - 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
 
-### 4. `order_panic_sell_defense_lifecycle_transition_pack`
+### 8. `order_perf_recommend_update_vectorization`
 
-- title: panic sell defense lifecycle transition pack
-- decision: `design_family_candidate`
-- decision_reason: finding needs family design; allowed_runtime_apply remains false until metadata/tests/guards are closed
-- source_report_type: `threshold_cycle_calibration_source_bundle`
-- lifecycle_stage: `holding_exit`
-- target_subsystem: `panic_sell_defense`
-- route: `auto_family_candidate`
+- title: Recommendation and update_kospi vectorized membership checks
+- decision: `implement_now`
+- decision_reason: accepted codebase performance order is logic-preserving and report/workorder-only; implementation still requires parity tests
+- source_report_type: `codebase_performance_workorder`
+- lifecycle_stage: `ops_performance`
+- target_subsystem: `swing_daily_recommendation`
+- route: `performance_optimization_order`
 - mapped_family: `-`
-- threshold_family: `panic_sell_defense`
-- improvement_type: `runtime_transition_design`
+- threshold_family: `-`
+- improvement_type: `-`
+- confidence: `consensus`
+- priority: `4`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: none_direct_ops_cpu_io_reduction_only
+- evidence: `source_doc_hash=6bc37e5b3d13f356392d83e4ec1ecdcd2f57a05a0f9bc58f6329a1ea20fbed88`, `candidate_state=accepted`, `risk_tier=low`, `runtime_effect=false`, `strategy_effect=false`, `data_quality_effect=false`, `tuning_axis_effect=false`, `parity_contract=selected keys, diagnostics rows, CSV row order, and update_kospi inserted-row set exact match`
+- parity_contract: selected keys, diagnostics rows, CSV row order, and update_kospi inserted-row set exact match
+- next_postclose_metric: same report/output parity with lower runtime or CPU/IO overhead
+- files_likely_touched: `src/model/recommend_daily_v2.py`, `src/utils/update_kospi.py`
+- acceptance_tests: `pytest src/tests/test_swing_retrain_automation.py src/tests/test_swing_feature_ssot.py`, `recommendation CSV and diagnostics parity`
+- automation_reentry: After implementation, rerun the same artifact/report parity tests before postclose workorder refresh.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 9. `order_perf_swing_simulation_iteration`
+
+- title: Swing simulation iteration and quote grouping
+- decision: `implement_now`
+- decision_reason: accepted codebase performance order is logic-preserving and report/workorder-only; implementation still requires parity tests
+- source_report_type: `codebase_performance_workorder`
+- lifecycle_stage: `ops_performance`
+- target_subsystem: `swing_daily_simulation`
+- route: `performance_optimization_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `-`
+- confidence: `consensus`
+- priority: `5`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: none_direct_ops_cpu_io_reduction_only
+- evidence: `source_doc_hash=6bc37e5b3d13f356392d83e4ec1ecdcd2f57a05a0f9bc58f6329a1ea20fbed88`, `candidate_state=accepted`, `risk_tier=medium`, `runtime_effect=false`, `strategy_effect=false`, `data_quality_effect=false`, `tuning_axis_effect=false`, `parity_contract=selection funnel, lifecycle arms, gate counterfactuals, and runtime funnel summary exact match`
+- parity_contract: selection funnel, lifecycle arms, gate counterfactuals, and runtime funnel summary exact match
+- next_postclose_metric: same report/output parity with lower runtime or CPU/IO overhead
+- files_likely_touched: `src/engine/swing_daily_simulation_report.py`
+- acceptance_tests: `pytest src/tests/test_swing_model_selection_funnel_repair.py`, `swing simulation JSON parity on injected sources`
+- automation_reentry: After implementation, rerun the same artifact/report parity tests before postclose workorder refresh.
+
+실행 기준:
+
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 10. `order_perf_monitor_snapshot_stream_tail`
+
+- title: Monitor snapshot runtime streaming tail read
+- decision: `implement_now`
+- decision_reason: accepted codebase performance order is logic-preserving and report/workorder-only; implementation still requires parity tests
+- source_report_type: `codebase_performance_workorder`
+- lifecycle_stage: `ops_performance`
+- target_subsystem: `monitor_snapshot`
+- route: `performance_optimization_order`
+- mapped_family: `-`
+- threshold_family: `-`
+- improvement_type: `-`
 - confidence: `consensus`
 - priority: `6`
 - runtime_effect: `False`
 - strategy_effect: `False`
 - data_quality_effect: `False`
 - tuning_axis_effect: `False`
-- expected_ev_effect: Use panic-sell simulation and post-sell rebound evidence to propose threshold/guard changes, then request explicit live-runtime approval without mutating exits automatically.
-- evidence: `panic_state=PANIC_SELL`, `panic_regime_mode=PANIC_DETECTED`, `stop_loss_exit_count=3`, `confirmation_eligible_exit_count=2`, `active_sim_probe_positions=10`, `post_sell_rebound_above_sell_10_20m_pct=0.0`, `microstructure_market_risk_state=RISK_OFF`, `microstructure_confirmed_risk_off_advisory=True`, `microstructure_portfolio_local_risk_off_only=False`, `market_breadth_followup_candidate=False`, `source_quality_blockers=[]`, `candidate_status={'panic_entry_freeze_guard': 'report_only_candidate', 'panic_stop_confirmation': 'report_only_candidate', 'panic_rebound_probe': 'hold_until_recovery_confirmed', 'panic_attribution_pack': 'active_report_only'}`, `allowed_runtime_apply=false`
-- parity_contract: -
-- next_postclose_metric: panic_sell_defense should expose simulation EV, rollback guard, approval artifact status, market/breadth confirmation, and candidate-specific threshold recommendations before any runtime transition.
-- files_likely_touched: `src/engine/panic_sell_defense_report.py`, `src/engine/daily_threshold_cycle_report.py`, `src/engine/runtime_approval_summary.py`, `docs/plan-korStockScanPerformanceOptimization.rebase.md`
-- acceptance_tests: `pytest panic sell defense/report lifecycle tests`, `pytest src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py`
-- automation_reentry: Create report-only family metadata first; only later can auto_bounded_live consider it.
+- expected_ev_effect: none_direct_ops_cpu_io_reduction_only
+- evidence: `source_doc_hash=6bc37e5b3d13f356392d83e4ec1ecdcd2f57a05a0f9bc58f6329a1ea20fbed88`, `candidate_state=accepted`, `risk_tier=low`, `runtime_effect=false`, `strategy_effect=false`, `data_quality_effect=false`, `tuning_axis_effect=false`, `parity_contract=latest parsed snapshot payload and missing/malformed fallback behavior exact match`
+- parity_contract: latest parsed snapshot payload and missing/malformed fallback behavior exact match
+- next_postclose_metric: same report/output parity with lower runtime or CPU/IO overhead
+- files_likely_touched: `src/engine/monitor_snapshot_runtime.py`
+- acceptance_tests: `pytest src/tests/test_log_archive_service.py`, `last valid JSON line parity`
+- automation_reentry: After implementation, rerun the same artifact/report parity tests before postclose workorder refresh.
 
 실행 기준:
 
-- 새 family 후보 metadata와 report-only source를 설계한다.
-- `allowed_runtime_apply=false`를 유지한다.
-- sample floor, safety guard, target env key, tests가 닫히기 전 runtime 적용 금지.
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
 
-### 5. `order_panic_buying_source_quality_market_breadth_micro_coverage`
+### 11. `order_perf_final_ensemble_records`
 
-- title: panic buying source-quality market breadth and micro coverage
-- decision: `defer_evidence`
-- decision_reason: route is not strong enough for immediate implementation
-- source_report_type: `threshold_cycle_calibration_source_bundle`
-- lifecycle_stage: `source_quality`
-- target_subsystem: `panic_buying`
-- route: `source_quality_blocker`
+- title: Final ensemble scanner records conversion without iterrows
+- decision: `implement_now`
+- decision_reason: accepted codebase performance order is logic-preserving and report/workorder-only; implementation still requires parity tests
+- source_report_type: `codebase_performance_workorder`
+- lifecycle_stage: `ops_performance`
+- target_subsystem: `final_ensemble_scanner`
+- route: `performance_optimization_order`
 - mapped_family: `-`
 - threshold_family: `-`
-- improvement_type: `source_quality_instrumentation`
+- improvement_type: `-`
 - confidence: `consensus`
 - priority: `7`
 - runtime_effect: `False`
 - strategy_effect: `False`
 - data_quality_effect: `False`
 - tuning_axis_effect: `False`
-- expected_ev_effect: Route market breadth and micro coverage gaps as source-quality blockers before any panic-buying runtime candidate.
-- evidence: `panic_buy_state=NORMAL`, `panic_buy_regime_mode=NORMAL`, `panic_buy_active_count=0`, `exhaustion_confirmed_count=0`, `tp_counterfactual_count=8`, `trailing_winner_count=4`, `market_wide_panic_buy_confirmed=False`, `market_breadth_risk_on_advisory=False`, `missing_orderbook_count=13`, `missing_trade_aggressor_count=13`, `source_quality_blockers=['panic_buy_orderbook_collector_coverage_gap']`, `candidate_status={'panic_buy_runner_tp_canary': 'hold_until_confirmed_panic_buy_with_tp_context'}`, `allowed_runtime_apply=false`
-- parity_contract: -
-- next_postclose_metric: panic_buying source-quality blockers must be resolved or explicitly carried before runner TP approval is reviewed.
-- files_likely_touched: `src/engine/panic_buying_report.py`, `src/engine/daily_threshold_cycle_report.py`, `src/engine/runtime_approval_summary.py`, `docs/plan-korStockScanPerformanceOptimization.rebase.md`, `docs/code-improvement-workorders/panic_buying_regime_mode_v2_2026-05-14.md`
-- acceptance_tests: `pytest src/tests/test_panic_buying_report.py`, `pytest src/tests/test_build_code_improvement_workorder.py src/tests/test_runtime_approval_summary.py`
-- automation_reentry: Keep in generated workorder as deferred context and re-check after next daily EV report.
+- expected_ev_effect: none_direct_ops_cpu_io_reduction_only
+- evidence: `source_doc_hash=6bc37e5b3d13f356392d83e4ec1ecdcd2f57a05a0f9bc58f6329a1ea20fbed88`, `candidate_state=accepted`, `risk_tier=low`, `runtime_effect=false`, `strategy_effect=false`, `data_quality_effect=false`, `tuning_axis_effect=false`, `parity_contract=Code/Name record list, selection count, and diagnostics output exact match`
+- parity_contract: Code/Name record list, selection count, and diagnostics output exact match
+- next_postclose_metric: same report/output parity with lower runtime or CPU/IO overhead
+- files_likely_touched: `src/scanners/final_ensemble_scanner.py`
+- acceptance_tests: `pytest src/tests/test_swing_model_selection_funnel_repair.py`, `V2 CSV pick list parity`
+- automation_reentry: After implementation, rerun the same artifact/report parity tests before postclose workorder refresh.
 
 실행 기준:
 
-- 구현하지 말고 부족한 evidence와 다음 확인 artifact를 명시한다.
-- 필요한 경우 report warning 또는 다음 pattern lab 재평가 항목으로만 남긴다.
+- instrumentation/provenance/report source 보강을 우선 구현한다.
+- runtime 판단값을 직접 바꾸지 않는다.
+- 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
+
+### 12. `order_ai_threshold_dominance`
+
+- title: AI threshold dominance
+- decision: `attach_existing_family`
+- decision_reason: finding maps to an existing threshold family and should strengthen source metrics/provenance
+- source_report_type: `scalping_pattern_lab_automation`
+- lifecycle_stage: `-`
+- target_subsystem: `entry_funnel`
+- route: `existing_family`
+- mapped_family: `score65_74_recovery_probe`
+- threshold_family: `score65_74_recovery_probe`
+- improvement_type: `-`
+- confidence: `consensus`
+- priority: `1`
+- runtime_effect: `False`
+- strategy_effect: `False`
+- data_quality_effect: `False`
+- tuning_axis_effect: `False`
+- expected_ev_effect: Improve EV attribution and prepare bounded calibration input.
+- evidence: `{'judgment': '경고', 'why': '`blocked_ai_score_share=100.0%`로 WAIT/BLOCK 비중이 높아 BUY drought 해석을 지지한다.'}`, `{'judgment': '경고', 'why': '`blocked_ai_score_share=100.0%`로 WAIT/BLOCK 비중이 높아 BUY drought 해석을 지지한다.'}`
+- parity_contract: -
+- next_postclose_metric: -
+- files_likely_touched: `src/engine/daily_threshold_cycle_report.py`, `src/engine/sniper_missed_entry_counterfactual.py`
+- acceptance_tests: `pytest relevant report/threshold tests`, `runtime_effect remains false until a separate implementation order is completed`, `daily EV report includes the order summary`
+- automation_reentry: After implementation, intraday/postclose calibration should include the updated family input.
+
+실행 기준:
+
+- 기존 threshold family의 source metric/provenance를 보강한다.
+- 다음 intraday/postclose calibration에서 해당 family 입력으로 소비되어야 한다.
+- family state/value 변경은 deterministic guard와 auto_bounded_live 체인을 통해서만 가능하다.
 
 ## 자동화체인 재투입
 

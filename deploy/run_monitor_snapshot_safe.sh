@@ -5,6 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="$PROJECT_DIR/.venv/bin/python"
 TARGET_DATE="${1:-$(TZ=Asia/Seoul date +%F)}"
+# shellcheck source=cpu_affinity_profile.sh
+. "$SCRIPT_DIR/cpu_affinity_profile.sh"
 LOCK_FILE="${MONITOR_SNAPSHOT_LOCK_FILE:-$PROJECT_DIR/tmp/run_monitor_snapshot.lock}"
 LOG_FILE="${MONITOR_SNAPSHOT_LOG_FILE:-$PROJECT_DIR/logs/run_monitor_snapshot.log}"
 TIMEOUT_SEC="${MONITOR_SNAPSHOT_TIMEOUT_SEC:-1200}"
@@ -30,7 +32,7 @@ IONICE_CLASS="${MONITOR_SNAPSHOT_IONICE_CLASS:-2}"
 IONICE_LEVEL="${MONITOR_SNAPSHOT_IONICE_LEVEL:-6}"
 NICE_LEVEL="${MONITOR_SNAPSHOT_NICE_LEVEL:-10}"
 NICE_COMMAND="${MONITOR_SNAPSHOT_NICE_COMMAND:-nice}"
-CPU_AFFINITY="${MONITOR_SNAPSHOT_CPU_AFFINITY:-1}"
+CPU_AFFINITY="${MONITOR_SNAPSHOT_CPU_AFFINITY:-$(korstockscan_default_cpu_affinity monitor)}"
 
 if [[ -z "${MONITOR_SNAPSHOT_LOCK_WAIT_SEC:-}" ]]; then
   if [[ "$PROFILE" == "full" ]]; then
@@ -149,7 +151,7 @@ build_throttled_command() {
     output_cmd=("$NICE_COMMAND" -n "$NICE_LEVEL" "${output_cmd[@]}")
   fi
 
-  if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]] && [[ "$(nproc 2>/dev/null || echo 1)" -gt 1 ]]; then
+  if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]] && [[ "$(korstockscan_nproc)" -gt 1 ]]; then
     output_cmd=(taskset -c "$CPU_AFFINITY" "${output_cmd[@]}")
   fi
 }

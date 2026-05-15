@@ -6,8 +6,8 @@
 - panic_regime_mode: `PANIC_DETECTED`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-05-15T15:28:16`
-- latest_event_at: `2026-05-15T15:28:15`
+- as_of: `2026-05-15T19:40:59`
+- latest_event_at: `2026-05-15T19:35:46`
 - reasons: `microstructure risk_off advisory confirmed by market/breadth context; live market panic breadth risk_off advisory; recovery conditions not yet met`
 
 ## 패닉 지표
@@ -24,10 +24,10 @@
 
 ## 회복 지표
 
-- active_positions: `9`
-- active_profit_sample: `9`
-- active_avg_unrealized_profit_rate_pct: `-0.1665`
-- active_win_rate_pct: `33.3`
+- active_positions: `10`
+- active_profit_sample: `10`
+- active_avg_unrealized_profit_rate_pct: `-0.1452`
+- active_win_rate_pct: `30`
 - sim_probe_provenance_passed: `true`
 - post_sell_rebound_above_sell_10_20m_pct: `0`
 - post_sell_rebound_above_buy_10_20m_pct: `0`
@@ -40,18 +40,18 @@
 - panic_signal_count: `0`
 - recovery_candidate_count: `0`
 - recovery_confirmed_count: `0`
-- missing_orderbook_count: `12`
-- degraded_orderbook_count: `12`
+- missing_orderbook_count: `13`
+- degraded_orderbook_count: `13`
 - max_panic_score: `0.3708`
-- max_recovery_score: `0.5793`
+- max_recovery_score: `0.5068`
 - micro_cusum_triggered_symbol_count: `1`
 - micro_consensus_pass_symbol_count: `0`
 - micro_cusum_decision_authority: `source_quality_only`
 
 ## Microstructure Market Context
 
-- market_risk_state: `RISK_OFF`
-- market_panic_breadth_as_of: `2026-05-15T15:28:01`
+- market_risk_state: `NEUTRAL`
+- market_panic_breadth_as_of: `2026-05-15T19:40:41`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `true`
 - evaluated_symbol_count: `24`
@@ -59,7 +59,7 @@
 - confirmed_risk_off_advisory: `true`
 - portfolio_local_risk_off_only: `false`
 - source_quality_gate: `microstructure risk_off requires market RISK_OFF or broad evaluated-symbol confirmation`
-- reasons: `market_regime_risk_off; market_panic_breadth_risk_off`
+- reasons: `market_panic_breadth_risk_off`
 
 ## 방어 액션
 

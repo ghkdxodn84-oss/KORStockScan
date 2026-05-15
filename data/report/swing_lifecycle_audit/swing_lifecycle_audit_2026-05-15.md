@@ -13,31 +13,31 @@
 - simulated_order_unique_records: `26`
 - observation_axis_status: `{'ready': 9, 'hold_sample': 1}`
 - panic_state: `PANIC_SELL`
-- panic_active_sim_probe: `{'active_positions': 9, 'profit_sample': 9, 'avg_unrealized_profit_rate_pct': -0.1665, 'win_rate_pct': 33.3, 'wins': 3, 'losses': 5, 'flat': 1}`
-- panic_origin_outcome: `{'blocked_gatekeeper_reject': {'count': 2, 'avg_profit_rate_pct': -1.215}, 'blocked_swing_gap': {'count': 3, 'avg_profit_rate_pct': 0.0247}, 'blocked_swing_score_vpw': {'count': 4, 'avg_profit_rate_pct': 0.2143}}`
+- panic_active_sim_probe: `{'active_positions': 10, 'profit_sample': 10, 'avg_unrealized_profit_rate_pct': -0.1452, 'win_rate_pct': 30.0, 'wins': 3, 'losses': 5, 'flat': 2}`
+- panic_origin_outcome: `{'blocked_gatekeeper_reject': {'count': 3, 'avg_profit_rate_pct': -0.7483}, 'blocked_swing_gap': {'count': 3, 'avg_profit_rate_pct': 0.0936}, 'blocked_swing_score_vpw': {'count': 4, 'avg_profit_rate_pct': 0.1279}}`
 
 ## Lifecycle Funnel
 
 | group | raw | unique_records |
 | --- | ---: | ---: |
-| `entry` | 440559 | 24 |
+| `entry` | 595356 | 24 |
 | `holding` | 2 | 2 |
 | `scale_in` | 84 | 19 |
 | `exit` | 89 | 23 |
-| `other` | 1003 | 14 |
+| `other` | 1005 | 14 |
 
 ## Key Stages
 
 | stage | raw | unique_records |
 | --- | ---: | ---: |
-| `blocked_gatekeeper_reject` | 87 | 11 |
-| `blocked_swing_gap` | 38386 | 7 |
-| `blocked_swing_score_vpw` | 392437 | 23 |
-| `gatekeeper_fast_reuse_bypass` | 87 | 11 |
+| `blocked_gatekeeper_reject` | 101 | 11 |
+| `blocked_swing_gap` | 59125 | 7 |
+| `blocked_swing_score_vpw` | 523784 | 23 |
+| `gatekeeper_fast_reuse_bypass` | 101 | 11 |
 | `holding_flow_ofi_smoothing_applied` | 1 | 1 |
 | `holding_started` | 1 | 1 |
 | `sell_order_sent` | 5 | 2 |
-| `swing_probe_discarded` | 9478 | 24 |
+| `swing_probe_discarded` | 12161 | 24 |
 | `swing_probe_entry_candidate` | 42 | 16 |
 | `swing_probe_exit_signal` | 42 | 21 |
 | `swing_probe_holding_started` | 42 | 16 |
@@ -45,10 +45,10 @@
 | `swing_probe_sell_order_assumed_filled` | 42 | 21 |
 | `swing_probe_state_empty_overwrite_blocked` | 1 | 1 |
 | `swing_probe_state_persisted` | 118 | 1 |
-| `swing_probe_state_restored` | 16 | 1 |
+| `swing_probe_state_restored` | 17 | 1 |
 | `swing_reentry_counterfactual_after_loss` | 836 | 10 |
 | `swing_same_symbol_loss_reentry_cooldown` | 21 | 13 |
-| `swing_same_symbol_loss_reentry_cooldowns_restored` | 11 | 1 |
+| `swing_same_symbol_loss_reentry_cooldowns_restored` | 12 | 1 |
 | `swing_scale_in_micro_context_observed` | 28 | 19 |
 | `swing_sim_scale_in_order_assumed_filled` | 28 | 19 |
 
@@ -80,15 +80,19 @@
 
 ## Simulation Opportunity
 
-- available: `False`
-- sample_state: `None`
-- rows: `0`
+- available: `True`
+- sample_state: `hold_sample`
+- rows: `75`
 - closed_count: `0`
 - winner_count: `0`
 - loser_count: `0`
 
 | family | rows | closed | winner | loser | avg_net_ret |
 | --- | ---: | ---: | ---: | ---: | ---: |
+| `swing_gatekeeper_reject_cooldown` | 25 | 0 | 0 | 0 | None |
+| `swing_market_regime_sensitivity` | 25 | 0 | 0 | 0 | None |
+| `swing_model_floor` | 3 | 0 | 0 | 0 | None |
+| `swing_selection_top_k` | 22 | 0 | 0 | 0 | None |
 
 ## Observation Axes
 

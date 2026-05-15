@@ -5,11 +5,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$SCRIPT_DIR/.." && pwd)}"
 VENV_PY="${PROJECT_DIR}/.venv/bin/python"
 MODE="${1:-full}"
+# shellcheck source=cpu_affinity_profile.sh
+. "$SCRIPT_DIR/cpu_affinity_profile.sh"
 
 LOCK_FILE="${PROJECT_DIR}/tmp/run_error_detection.lock"
 LOG_FILE="${PROJECT_DIR}/logs/run_error_detection.log"
 REPORT_FILE="${PROJECT_DIR}/data/report/error_detection/error_detection_$(TZ=Asia/Seoul date +%F).json"
-CPU_AFFINITY="${ERROR_DETECTION_CPU_AFFINITY:-1}"
+CPU_AFFINITY="${ERROR_DETECTION_CPU_AFFINITY:-$(korstockscan_default_cpu_affinity health)}"
 
 mkdir -p "$PROJECT_DIR/tmp" "$PROJECT_DIR/logs"
 touch "$LOG_FILE"
@@ -25,7 +27,7 @@ started_at="$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')"
 echo "[START] error detection mode=${MODE} started_at=${started_at}" | tee -a "$LOG_FILE"
 
 cmd=(env PYTHONPATH=. "$VENV_PY" -m src.engine.error_detector --mode "$MODE")
-if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]] && [[ "$(nproc 2>/dev/null || echo 1)" -gt 1 ]]; then
+if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]] && [[ "$(korstockscan_nproc)" -gt 1 ]]; then
     cmd=(taskset -c "$CPU_AFFINITY" "${cmd[@]}")
 fi
 
@@ -35,7 +37,7 @@ if "${cmd[@]}" 2>&1 | tee -a "$LOG_FILE"; then
             --report-file "$REPORT_FILE" \
             --mode "$MODE" \
             --log-file "$LOG_FILE")
-        if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]] && [[ "$(nproc 2>/dev/null || echo 1)" -gt 1 ]]; then
+        if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]] && [[ "$(korstockscan_nproc)" -gt 1 ]]; then
             notify_cmd=(taskset -c "$CPU_AFFINITY" "${notify_cmd[@]}")
         fi
         "${notify_cmd[@]}" 2>&1 | tee -a "$LOG_FILE" || true

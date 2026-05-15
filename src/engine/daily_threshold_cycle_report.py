@@ -5190,6 +5190,8 @@ def _build_window_policy_audit(candidates: list[dict]) -> dict:
             issues.append("rolling_consumer_gap")
         snapshot_sample = _safe_int(resolution.get("primary_snapshot_sample_count"), None)
         source_window_sample = _safe_int(resolution.get("primary_source_sample_count"), None)
+        snapshot_alignment_status = "aligned"
+        snapshot_alignment_reason = "primary snapshot/source denominator aligned"
         if (
             primary
             and primary not in {"daily_intraday", "latest_report"}
@@ -5197,7 +5199,11 @@ def _build_window_policy_audit(candidates: list[dict]) -> dict:
             and source_window_sample >= sample_floor
             and (snapshot_sample is None or snapshot_sample < sample_floor)
         ):
-            issues.append("rolling_source_snapshot_mismatch")
+            snapshot_alignment_status = "source_denominator_used"
+            snapshot_alignment_reason = (
+                "rolling source metrics supplied the registered primary denominator; "
+                "threshold snapshot sample is rendering-only for this family/window"
+            )
         if str(candidate.get("runtime_apply_blocker") or "") == "window_policy_primary_not_ready":
             issues.append("daily_only_leak_blocked")
         if (
@@ -5229,6 +5235,8 @@ def _build_window_policy_audit(candidates: list[dict]) -> dict:
                 "primary_snapshot_available": primary_available,
                 "primary_source_available": primary_source_available,
                 "sample_denominator_keys": denominator_keys,
+                "snapshot_alignment_status": snapshot_alignment_status,
+                "snapshot_alignment_reason": snapshot_alignment_reason,
                 "issues": issues,
             }
         )

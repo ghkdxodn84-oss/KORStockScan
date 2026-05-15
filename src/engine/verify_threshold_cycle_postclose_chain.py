@@ -16,6 +16,7 @@ LOG_PATH = PROJECT_ROOT / "logs" / "threshold_cycle_postclose_cron.log"
 VERIFY_DIR = REPORT_DIR / "threshold_cycle_postclose_verification"
 
 _START_MARKER = "[START] threshold-cycle postclose"
+_DONE_MARKER = "[DONE] threshold-cycle postclose"
 _FAIL_MARKER = "[FAIL] threshold-cycle postclose"
 _PAUSED_MARKER = "[PAUSED] threshold-cycle postclose"
 _READY_RE = re.compile(
@@ -52,6 +53,13 @@ def _latest_run_lines(log_lines: list[str], target_date: str) -> tuple[list[str]
     start_idx = start_indexes[-1]
     start_line = log_lines[start_idx]
     return log_lines[start_idx + 1 :], start_line
+
+
+def _parse_bool_flags(line: str) -> dict[str, bool]:
+    flags: dict[str, bool] = {}
+    for key, value in re.findall(r"([A-Za-z0-9_]+)=(true|false|1|0)", line):
+        flags[key] = value in {"true", "1"}
+    return flags
 
 
 def _artifact_paths(target_date: str) -> dict[str, Path]:
@@ -99,6 +107,7 @@ def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, 
     predecessor_waits: list[dict[str, Any]] = []
     predecessor_timeouts: list[dict[str, Any]] = []
     log_issues: list[str] = []
+    done_line: str | None = None
 
     for line in run_lines:
         ready_match = _READY_RE.search(line)
@@ -126,6 +135,8 @@ def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, 
             log_issues.append("postclose_fail_marker_present")
         if _PAUSED_MARKER in line and f"target_date={target_date}" in line:
             log_issues.append("postclose_paused_marker_present")
+        if _DONE_MARKER in line and f"target_date={target_date}" in line:
+            done_line = line
 
     artifact_status = []
     for label, path in _artifact_paths(target_date).items():
@@ -177,6 +188,22 @@ def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, 
         ),
     }
 
+    execution_flags = _parse_bool_flags(done_line or "")
+    disabled_stage_flags = [
+        key
+        for key in (
+            "swing_lifecycle",
+            "pattern_labs",
+            "deepseek_swing_lab",
+        )
+        if key in execution_flags and not execution_flags[key]
+    ]
+    execution_profile_status = "full_profile"
+    if disabled_stage_flags:
+        execution_profile_status = "recovered_partial_profile"
+    elif done_line is None and start_line:
+        execution_profile_status = "done_marker_missing"
+
     status = "pass"
     if not start_line:
         if _postclose_not_yet_due(target_date):
@@ -186,7 +213,12 @@ def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, 
             log_issues.append("postclose_start_marker_missing")
     elif predecessor_timeouts or log_issues:
         status = "fail"
+    elif done_line is None:
+        status = "fail"
+        log_issues.append("postclose_done_marker_missing")
     elif predecessor_waits:
+        status = "warning"
+    elif disabled_stage_flags:
         status = "warning"
     elif workorder_snapshot_status == "missing_snapshot_identity":
         status = "fail"
@@ -198,6 +230,20 @@ def build_threshold_cycle_postclose_verification(target_date: str) -> dict[str, 
         "status": status,
         "log_path": str(LOG_PATH),
         "latest_start_marker": start_line,
+        "latest_done_marker": done_line,
+        "execution_profile": {
+            "status": execution_profile_status,
+            "flags": execution_flags,
+            "disabled_stage_flags": disabled_stage_flags,
+            "interpretation": (
+                "latest DONE marker was produced by a recovery run with selected heavy stages disabled; "
+                "same-date artifacts are still validated separately"
+                if disabled_stage_flags
+                else "latest DONE marker used full/default stage profile"
+                if done_line
+                else "latest START marker has no matching DONE marker"
+            ),
+        },
         "predecessor_integrity": {
             "status": (
                 "not_yet_due"
@@ -232,10 +278,16 @@ def _render_markdown(report: dict[str, Any]) -> str:
         "",
         f"- status: `{report.get('status')}`",
         f"- latest_start_marker: `{report.get('latest_start_marker') or '-'}`",
+        f"- latest_done_marker: `{report.get('latest_done_marker') or '-'}`",
         f"- predecessor_status: `{predecessor.get('status')}`",
         f"- predecessor_wait_count: `{predecessor.get('wait_count')}`",
         f"- predecessor_timeout_count: `{predecessor.get('timeout_count')}`",
         f"- log_issues: `{predecessor.get('log_issues') or []}`",
+        "",
+        "## Execution Profile",
+        f"- profile_status: `{(report.get('execution_profile') or {}).get('status') or '-'}`",
+        f"- disabled_stage_flags: `{(report.get('execution_profile') or {}).get('disabled_stage_flags') or []}`",
+        f"- interpretation: `{(report.get('execution_profile') or {}).get('interpretation') or '-'}`",
         "",
         "## Workorder Snapshot",
         f"- generation_id: `{workorder.get('generation_id') or '-'}`",
