@@ -1,5 +1,6 @@
 from http.client import RemoteDisconnected
 from io import BytesIO
+from pathlib import Path
 
 from src.engine.sync_docs_backlog_to_project import (
     BacklogTask,
@@ -8,6 +9,7 @@ from src.engine.sync_docs_backlog_to_project import (
     DOC_PLAN,
     DOC_CHECKLIST,
     ProjectItem,
+    _checklist_doc_candidates,
     _due_date_from_checklist_path,
     _desired_status_option_id,
     _env,
@@ -81,6 +83,24 @@ def test_parse_checklist_fallback_when_primary_missing(monkeypatch):
     tasks = parse_checklist_tasks()
     assert len(tasks) > 0
     assert any("-stage2-todo-checklist.md" in t.source for t in tasks)
+
+
+def test_checklist_candidates_include_nested_checklist_dir(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    nested = tmp_path / "docs" / "checklists" / "2026-05-12-stage2-todo-checklist.md"
+    legacy = tmp_path / "docs" / "2026-05-11-stage2-todo-checklist.md"
+    nested.parent.mkdir(parents=True)
+    legacy.parent.mkdir(parents=True, exist_ok=True)
+    nested.write_text("# nested\n", encoding="utf-8")
+    legacy.write_text("# legacy\n", encoding="utf-8")
+
+    candidates = _checklist_doc_candidates()
+
+    assert Path("docs/checklists/2026-05-12-stage2-todo-checklist.md") in candidates
+    assert Path("docs/2026-05-11-stage2-todo-checklist.md") in candidates
+    assert candidates.index(Path("docs/checklists/2026-05-12-stage2-todo-checklist.md")) < candidates.index(
+        Path("docs/2026-05-11-stage2-todo-checklist.md")
+    )
 
 
 def test_parse_checklist_collects_multiple_stage2_files(monkeypatch, tmp_path):

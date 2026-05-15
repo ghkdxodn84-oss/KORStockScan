@@ -166,7 +166,9 @@ def _save_server_comparison_artifacts(target_date: str) -> dict[str, str] | None
     report_path = SERVER_COMPARISON_REPORT_DIR / f"server_comparison_{target_date}.md"
     report_path.write_text(render_markdown_report(comparison), encoding="utf-8")
 
-    checklist_path = DOCS_DIR / f"{target_date}-stage2-todo-checklist.md"
+    nested_checklist_path = DOCS_DIR / "checklists" / f"{target_date}-stage2-todo-checklist.md"
+    legacy_checklist_path = DOCS_DIR / f"{target_date}-stage2-todo-checklist.md"
+    checklist_path = nested_checklist_path if nested_checklist_path.exists() else legacy_checklist_path
     checklist_updated = False
     if checklist_path.exists():
         checklist_block = render_checklist_append_block(

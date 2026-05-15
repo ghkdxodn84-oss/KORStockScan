@@ -214,6 +214,7 @@ def _checklist_doc_candidates() -> list[Path]:
     env_path = os.getenv("DOC_CHECKLIST_PATH", "").strip()
     if env_path:
         candidates.append(Path(env_path))
+    candidates.extend(sorted(Path("docs/checklists").glob("*-stage2-todo-checklist.md"), reverse=True))
     candidates.extend(sorted(Path("docs").glob("*-stage2-todo-checklist.md"), reverse=True))
     candidates.append(DOC_CHECKLIST)
 

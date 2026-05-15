@@ -190,7 +190,7 @@ def build_plan_rebase_daily_renewal(target_date: str) -> dict[str, Any]:
                 "basis_date": f"{target_date} KST",
                 "source_of_truth": [
                     "plan-korStockScanPerformanceOptimization.rebase.md",
-                    f"{target_date}-stage2-todo-checklist.md",
+                    f"checklists/{target_date}-stage2-todo-checklist.md",
                     "report-based-automation-traceability.md",
                     "data/threshold_cycle/README.md",
                 ],

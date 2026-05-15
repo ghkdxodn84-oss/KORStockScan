@@ -73,7 +73,11 @@ def test_build_threshold_cycle_postclose_verification_prefers_workorder_lineage(
     )
     (report_dir / "swing_daily_simulation" / "swing_daily_simulation_2026-05-12.json").write_text("{}", encoding="utf-8")
     (report_dir / "swing_lifecycle_audit" / "swing_lifecycle_audit_2026-05-12.json").write_text("{}", encoding="utf-8")
-    (project_root / "docs" / "2026-05-13-stage2-todo-checklist.md").write_text("# next\n", encoding="utf-8")
+    (project_root / "docs" / "checklists").mkdir(parents=True)
+    (project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md").write_text(
+        "# next\n",
+        encoding="utf-8",
+    )
 
     monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
@@ -122,7 +126,11 @@ def test_build_threshold_cycle_postclose_verification_warns_on_predecessor_wait(
     ):
         path = report_dir / rel
         path.write_text("{}", encoding="utf-8")
-    (project_root / "docs" / "2026-05-13-stage2-todo-checklist.md").write_text("# next\n", encoding="utf-8")
+    (project_root / "docs" / "checklists").mkdir(parents=True)
+    (project_root / "docs" / "checklists" / "2026-05-13-stage2-todo-checklist.md").write_text(
+        "# next\n",
+        encoding="utf-8",
+    )
 
     monkeypatch.setattr(mod, "PROJECT_ROOT", project_root)
     monkeypatch.setattr(mod, "REPORT_DIR", report_dir)

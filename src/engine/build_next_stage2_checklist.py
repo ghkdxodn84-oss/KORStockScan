@@ -17,6 +17,7 @@ from src.utils.market_day import get_krx_trading_day_status
 
 
 DOCS_DIR = PROJECT_ROOT / "docs"
+CHECKLIST_DIR = DOCS_DIR / "checklists"
 EV_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "threshold_cycle_ev"
 OPENAI_WS_REPORT_DIR = PROJECT_ROOT / "data" / "report" / "openai_ws"
 SWING_RUNTIME_APPROVAL_DIR = PROJECT_ROOT / "data" / "report" / "swing_runtime_approval"
@@ -70,6 +71,10 @@ def _rel(path: Path) -> str:
         return str(path.relative_to(PROJECT_ROOT))
     except ValueError:
         return str(path)
+
+
+def stage2_checklist_path(target_date: str) -> Path:
+    return CHECKLIST_DIR / f"{target_date}-stage2-todo-checklist.md"
 
 
 def _list_selected_families(ev_report: dict[str, Any]) -> list[str]:
@@ -473,7 +478,7 @@ def build_next_stage2_checklist(source_date: str) -> dict[str, Any]:
         raise ValueError("source_date is required")
     date.fromisoformat(source_date)
     target_date = _next_krx_trading_day(source_date)
-    target_path = DOCS_DIR / f"{target_date}-stage2-todo-checklist.md"
+    target_path = stage2_checklist_path(target_date)
     ev_report = _load_json(EV_REPORT_DIR / f"threshold_cycle_ev_{source_date}.json")
     openai_report = _load_json(OPENAI_WS_REPORT_DIR / f"openai_ws_stability_{source_date}.json")
     swing_report = _load_json(SWING_RUNTIME_APPROVAL_DIR / f"swing_runtime_approval_{source_date}.json")

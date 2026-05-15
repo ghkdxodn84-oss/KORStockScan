@@ -13,7 +13,7 @@
 - `time-based-operations-runbook.md`: 장전, 장중, 장후, 21:00 EOD 데이터 갱신 cron 확인 절차.
 - `report-based-automation-traceability.md`: report 산출물, downstream consumer, runtime mutation 금지선, postclose chain contract.
 - `stage2-todo-checklist-template.md`: 날짜별 checklist 작성 형식.
-- `2026-05-04-stage2-todo-checklist.md` 이후 날짜별 checklist: 실제 실행 작업항목의 소유 문서. 최신 미래 실행표는 `2026-05-13-stage2-todo-checklist.md`다.
+- `checklists/YYYY-MM-DD-stage2-todo-checklist.md`: 날짜별 checklist의 신규 생성 위치. 실제 실행 작업항목의 소유 문서이며, root의 기존 checklist는 legacy 경로로 점진 이동한다.
 
 작업 시작 시에는 `plan-korStockScanPerformanceOptimization.rebase.md` §1~§8과 당일 checklist의 `오늘 목적`, `오늘 강제 규칙`을 먼저 확인한다. 당일 checklist가 없으면 Plan Rebase §7~§8과 최신 실행표의 상단 요약을 같이 확인한다.
 
@@ -21,7 +21,7 @@
 
 루트 `docs/`에는 아래 성격의 문서만 유지한다.
 
-- 현재 또는 미래 작업을 소유하는 날짜별 checklist.
+- 현재 또는 미래 작업을 소유하는 날짜별 checklist. 신규 생성분은 `docs/checklists/`에 둔다.
 - Plan Rebase, prompt, execution delta, performance report처럼 반복 참조되는 기준 문서.
 - 현재 checklist 또는 Plan Rebase가 직접 참조하는 workorder, 운영 runbook, report traceability 문서.
 - 날짜별 checklist parser가 읽어야 하는 작업항목 소유 문서.
@@ -30,8 +30,8 @@
 
 ## 날짜별 Checklist
 
-- `2026-05-04-stage2-todo-checklist.md`부터 `2026-05-13-stage2-todo-checklist.md`: 현재 Plan Rebase 흐름의 장전/장중/장후 작업 소유 문서.
-- `2026-04-20-stage2-todo-checklist.md`부터 `2026-05-02-stage2-todo-checklist.md`: 과거 실행 증적. 현재 문서에서 직접 참조되는 동안 루트에 유지한다.
+- `checklists/YYYY-MM-DD-stage2-todo-checklist.md`: `build_next_stage2_checklist.py`가 생성하는 신규 checklist 위치.
+- `2026-04-20-stage2-todo-checklist.md`부터 `2026-05-15-stage2-todo-checklist.md`: legacy root checklist. 현재일 또는 직접 참조가 남은 파일은 우선 유지하고, 참조 링크 보정과 parser 검증을 같은 변경 세트에서 완료할 수 있을 때 `checklists/`로 이동한다.
 - 완료된 checklist의 `[x]` 항목은 증적이며 현재 OPEN owner로 보지 않는다. 현재 owner는 Plan Rebase와 최신 checklist에서 확인한다.
 
 ## 하위 디렉터리
@@ -40,6 +40,7 @@
 - `audit-reports/`: Plan Rebase, OFI/QI, hotfix, 운영 감리 보고서.
 - `code-improvement-workorders/`: 코드 개선 전용 workorder.
 - `code-reviews/`: 스나이퍼 엔진 코드리뷰, 성능 감사, holding flow override 리뷰.
+- `checklists/`: 신규 날짜별 checklist와 이동 완료된 legacy checklist.
 - `proposals/`: 스캐너 개선, preclose sell target 등 운영 제안서.
 - `personal/`: 개인 보조 메모. 실행 판정의 `Source`로 쓰지 않는다.
 - `reference/`: API 문서, AI coding instruction 등 일반 참조 문서.

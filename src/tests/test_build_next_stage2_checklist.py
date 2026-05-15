@@ -14,6 +14,7 @@ def _patch_dirs(monkeypatch, tmp_path):
     for path in (docs, ev, openai, swing, code):
         path.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(mod, "DOCS_DIR", docs)
+    monkeypatch.setattr(mod, "CHECKLIST_DIR", docs / "checklists")
     monkeypatch.setattr(mod, "EV_REPORT_DIR", ev)
     monkeypatch.setattr(mod, "OPENAI_WS_REPORT_DIR", openai)
     monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing)
@@ -56,7 +57,7 @@ def test_build_next_stage2_checklist_generates_next_trading_day_and_tasks(monkey
     summary = mod.build_next_stage2_checklist("2026-05-08")
 
     assert summary["target_date"] == "2026-05-11"
-    checklist = docs / "2026-05-11-stage2-todo-checklist.md"
+    checklist = docs / "checklists" / "2026-05-11-stage2-todo-checklist.md"
     text = checklist.read_text(encoding="utf-8")
     assert "[ThresholdEnvAutoApplyPreopen0511]" in text
     assert "[SwingApprovalArtifactPreopen0511]" in text
@@ -73,7 +74,8 @@ def test_build_next_stage2_checklist_preserves_manual_content_and_replaces_auto_
     _write_json(openai_dir / "openai_ws_stability_2026-05-11.json", {"decision": "keep_ws"})
     _write_json(swing_dir / "swing_runtime_approval_2026-05-11.json", {"approval_requests": []})
     _write_json(code_dir / "code_improvement_workorder_2026-05-11.json", {"summary": {"selected_order_count": 0}})
-    target = docs / "2026-05-12-stage2-todo-checklist.md"
+    target = docs / "checklists" / "2026-05-12-stage2-todo-checklist.md"
+    target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         "\n".join(
             [
@@ -119,7 +121,7 @@ def test_build_next_stage2_checklist_excludes_codex_daily_workorder_snapshots(mo
 
     mod.build_next_stage2_checklist("2026-05-11")
 
-    text = (docs / "2026-05-12-stage2-todo-checklist.md").read_text(encoding="utf-8")
+    text = (docs / "checklists" / "2026-05-12-stage2-todo-checklist.md").read_text(encoding="utf-8")
     assert "FakeCodexOnlyFamily" not in text
     assert "RuntimeEnvIntradayObserve0512" not in text
 
@@ -132,7 +134,7 @@ def test_generated_checklist_is_parser_friendly(monkeypatch, tmp_path):
     _write_json(code_dir / "code_improvement_workorder_2026-05-11.json", {"summary": {"selected_order_count": 1}})
 
     mod.build_next_stage2_checklist("2026-05-11")
-    checklist = docs / "2026-05-12-stage2-todo-checklist.md"
+    checklist = docs / "checklists" / "2026-05-12-stage2-todo-checklist.md"
     monkeypatch.setenv("DOC_BACKLOG_TODAY", "2026-05-11")
     monkeypatch.setenv("DOC_CHECKLIST_PATH", str(checklist))
 

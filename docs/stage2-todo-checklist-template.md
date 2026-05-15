@@ -1,6 +1,6 @@
 # Stage2 To-Do Checklist Template
 
-목적: 날짜별 `docs/YYYY-MM-DD-stage2-todo-checklist.md`의 상단 운영 형식을 공통화한다.  
+목적: 날짜별 `docs/checklists/YYYY-MM-DD-stage2-todo-checklist.md`의 상단 운영 형식을 공통화한다.  
 기준: 상세 정책/용어/가드는 [plan-korStockScanPerformanceOptimization.rebase.md](./plan-korStockScanPerformanceOptimization.rebase.md) §1~§6을 따르고, 날짜별 checklist 상단에는 `오늘 목적`과 `오늘 강제 규칙`만 짧고 강하게 유지한다.
 
 ---

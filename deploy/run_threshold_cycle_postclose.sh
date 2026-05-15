@@ -175,11 +175,11 @@ next_stage2_checklist_path() {
   SOURCE_DATE="$TARGET_DATE" PYTHONPATH=. "$VENV_PY" - <<'PY'
 import os
 
-from src.engine.build_next_stage2_checklist import DOCS_DIR, _next_krx_trading_day
+from src.engine.build_next_stage2_checklist import _next_krx_trading_day, stage2_checklist_path
 
 source_date = os.environ["SOURCE_DATE"]
 target_date = _next_krx_trading_day(source_date)
-print(DOCS_DIR / f"{target_date}-stage2-todo-checklist.md")
+print(stage2_checklist_path(target_date))
 PY
 }
 

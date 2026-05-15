@@ -62,7 +62,7 @@ def _artifact_paths(target_date: str) -> dict[str, Path]:
         "runtime_approval_summary": REPORT_DIR / "runtime_approval_summary" / f"runtime_approval_summary_{target_date}.json",
         "swing_daily_simulation": REPORT_DIR / "swing_daily_simulation" / f"swing_daily_simulation_{target_date}.json",
         "swing_lifecycle_audit": REPORT_DIR / "swing_lifecycle_audit" / f"swing_lifecycle_audit_{target_date}.json",
-        "next_stage2_checklist": PROJECT_ROOT / "docs" / f"{next_day}-stage2-todo-checklist.md",
+        "next_stage2_checklist": PROJECT_ROOT / "docs" / "checklists" / f"{next_day}-stage2-todo-checklist.md",
     }
 
 
