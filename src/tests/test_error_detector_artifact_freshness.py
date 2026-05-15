@@ -418,4 +418,70 @@ class TestArtifactFreshnessDetector:
         assert registry["pipeline_events"]["window_grace_sec"] == 300
         assert registry["threshold_events"]["critical"] is False
         assert registry["threshold_events"]["window_grace_sec"] == 300
+        assert "partitioned_compact" in registry["threshold_events"]
         assert registry["threshold_postclose_report"]["one_shot"] is True
+
+    def test_partitioned_threshold_events_checkpoint_passes_when_legacy_file_missing(self, tmp_path):
+        today = datetime.now().strftime("%Y-%m-%d")
+        checkpoint = tmp_path / "checkpoints" / f"{today}.json"
+        part = tmp_path / f"date={today}" / "family=soft_stop_whipsaw_confirmation" / "part-000001.jsonl"
+        checkpoint.parent.mkdir(parents=True)
+        part.parent.mkdir(parents=True)
+        checkpoint.write_text(
+            '{"completed": true, "status": "completed", "written_count": 1}',
+            encoding="utf-8",
+        )
+        part.write_text('{"stage":"soft_stop_micro_grace"}\n', encoding="utf-8")
+        artifact = {
+            "id": "threshold_events",
+            "path_template": str(tmp_path / f"threshold_events_{today}.jsonl"),
+            "max_staleness_sec": 600,
+            "critical": False,
+            "partitioned_compact": {
+                "checkpoint_template": str(checkpoint),
+                "partition_glob_template": str(tmp_path / f"date={today}" / "family=*" / "part-*.jsonl"),
+            },
+        }
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+        ):
+            detector = ArtifactFreshnessDetector()
+            result = detector.check()
+            assert result.severity == "pass"
+            assert result.details["threshold_events_status"] == "pass_partitioned_checkpoint"
+            assert result.details["threshold_events_legacy_path_missing"] is True
+            assert result.details["threshold_events_partitioned_completed"] is True
+            assert result.details["threshold_events_partitioned_part_count"] == 1
+
+    def test_partitioned_threshold_events_incomplete_checkpoint_warns(self, tmp_path):
+        today = datetime.now().strftime("%Y-%m-%d")
+        checkpoint = tmp_path / "checkpoints" / f"{today}.json"
+        part = tmp_path / f"date={today}" / "family=soft_stop_whipsaw_confirmation" / "part-000001.jsonl"
+        checkpoint.parent.mkdir(parents=True)
+        part.parent.mkdir(parents=True)
+        checkpoint.write_text(
+            '{"completed": false, "status": "paused_by_availability_guard", "paused_reason": "cpu_busy_pct>=95"}',
+            encoding="utf-8",
+        )
+        part.write_text('{"stage":"soft_stop_micro_grace"}\n', encoding="utf-8")
+        artifact = {
+            "id": "threshold_events",
+            "path_template": str(tmp_path / f"threshold_events_{today}.jsonl"),
+            "max_staleness_sec": 600,
+            "critical": False,
+            "partitioned_compact": {
+                "checkpoint_template": str(checkpoint),
+                "partition_glob_template": str(tmp_path / f"date={today}" / "family=*" / "part-*.jsonl"),
+            },
+        }
+        with (
+            patch(_TRADING_MOCK, return_value=True),
+            patch("src.engine.error_detectors.artifact_freshness.ARTIFACT_REGISTRY", [artifact]),
+        ):
+            detector = ArtifactFreshnessDetector()
+            result = detector.check()
+            assert result.severity == "warning"
+            assert result.details["threshold_events_status"] == "warning"
+            assert result.details["threshold_events_partitioned_completed"] is False
+            assert result.details["threshold_events_partitioned_paused_reason"] == "cpu_busy_pct>=95"

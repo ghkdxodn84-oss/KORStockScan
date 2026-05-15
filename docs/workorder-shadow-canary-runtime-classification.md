@@ -1,7 +1,7 @@
 # 작업지시서: Shadow/Canary 런타임 경로와 Live Cohort 분류 기준
 
 작성일: `2026-04-25 KST`  
-마지막 갱신: `2026-05-14 KST`
+마지막 갱신: `2026-05-15 KST`
 대상: KORStockScan 메인 코드베이스 운영/튜닝 문서 소유자  
 ApplyTarget: `main` 문서/후속 코드정리 기준  
 
@@ -43,6 +43,22 @@ ApplyTarget: `main` 문서/후속 코드정리 기준
 | `swing_runtime_approval` | approval-required dry-run, real canary 아님 | 5/14 approval request 2건, approved 0건, runtime_change=false | approval artifact 없이는 env/live order 반영 금지 |
 
 5/14 결론은 `no_runtime_classification_change_with_snapshot_update`다. 신규 `remove`, `baseline-promote`, `active-canary` 전환은 없고, report-only/observe-only 축은 threshold/order/provider/bot restart 권한이 없다.
+
+### 2026-05-15 POSTCLOSE Snapshot Addendum
+
+이 addendum은 `runtime_approval_summary_2026-05-15`, `threshold_cycle_ev_2026-05-15`, `pipeline_event_verbosity_2026-05-15`, `panic_sell_defense_2026-05-15`, `panic_buying_2026-05-15` 기준의 당일 분류 보정이다. 기존 분류 체계는 바꾸지 않고, 5/15에 새 baseline 승격이나 remove 판정이 없었음을 잠근다.
+
+| 축 | 2026-05-15 판정 | 근거 | 다음 액션 |
+| --- | --- | --- | --- |
+| `soft_stop_whipsaw_confirmation` | active-canary / selected auto-bounded-live 유지 | runtime approval summary에서 유일한 scalping selected auto-bounded-live이며 당일 runtime env 적용 family다 | 5/18 PREOPEN apply에서 다음 장전 env 반영 여부를 deterministic guard로 재확인 |
+| `score65_74_recovery_probe` | active-canary 후보 / 당일 runtime selected 아님 | threshold EV postclose에서 `adjust_up`, `sample_count=196`, `source_sample_count=19`이나 `threshold_relaxation_approved=false`, panic sell context 동반 | 장중 수동 threshold 변경 금지. 다음 장전 rolling/cumulative guard와 panic context를 같이 본다 |
+| `bad_entry_refined_canary` | observe-only / live OFF | `adjust_up` 후보지만 current application은 `OFF/관찰 only`이고 same-stage live owner가 아니다 | post-sell join 품질과 single-owner guard가 닫히기 전 live 승격 금지 |
+| `pipeline_event_compaction_v2_shadow` | report-only diagnostic aggregation | raw 1.70GB, high-volume diagnostic share 96.87%, parity not ok, suppress eligibility false | V1/V2 parity 2영업일 이상 통과 전 suppress 금지 |
+| `panic_entry_freeze_guard` | report-only candidate / approval contract missing | `panic_regime_mode=PANIC_DETECTED`지만 runtime effect는 `report_only_no_mutation`; loader/env/pre-submit guard/rollback tests 미구현 | V2.0 approval contract workorder가 생기기 전 신규 BUY pre-submit freeze 적용 금지 |
+| `panic_buy_runner_tp_canary` | report-only/freeze | `panic_buy_regime_mode=NORMAL`, market-wide panic-buy unconfirmed, orderbook collector coverage source-quality blocker와 approval contract missing | 기존 보유분 TP/runner 전용 owner로 유지. TP/trailing 변경 금지 |
+| `swing_runtime_approval` | approval-required dry-run, real canary 아님 | `swing_model_floor`, `swing_gatekeeper_reject_cooldown`, `swing_one_share_real_canary_phase0` request가 있으나 approved 0, approval artifact missing | 승인 artifact 없이는 env/live order 반영 금지 |
+
+5/15 결론은 `no_runtime_classification_change_with_snapshot_update`다. 신규 `remove`, `baseline-promote`, 추가 `active-canary` 전환은 없고, report-only/observe-only 축은 threshold/order/provider/bot restart 권한이 없다. `soft_stop_whipsaw_confirmation` 외의 당일 후보는 다음 장전 deterministic guard 또는 별도 approval contract가 닫히기 전까지 runtime owner가 아니다.
 
 ## 0.1 Runtime ON/OFF 스냅샷 (`2026-05-12` 기준)
 

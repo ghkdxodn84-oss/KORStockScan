@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import glob
 import json
 import os
 import time
@@ -36,6 +37,10 @@ ARTIFACT_REGISTRY: list[dict[str, Any]] = [
     {
         "id": "threshold_events",
         "path_template": "data/threshold_cycle/threshold_events_{date}.jsonl",
+        "partitioned_compact": {
+            "checkpoint_template": "data/threshold_cycle/checkpoints/{date}.json",
+            "partition_glob_template": "data/threshold_cycle/date={date}/family=*/part-*.jsonl",
+        },
         "max_staleness_sec": 600,
         "critical": False,
         "trading_day_only": True,
@@ -437,6 +442,18 @@ class ArtifactFreshnessDetector(BaseDetector):
             exists = artifact_path.exists()
 
             if not exists:
+                alternate_status = self._validate_partitioned_compact(
+                    artifact,
+                    today,
+                    details,
+                )
+                if alternate_status:
+                    status, warning = alternate_status
+                    details[f"{aid}_status"] = status
+                    if warning:
+                        warnings.append(warning)
+                    continue
+
                 in_progress_cron = self._is_upstream_cron_in_progress(
                     artifact.get("suppress_missing_while_cron_in_progress"),
                     today,
@@ -562,6 +579,63 @@ class ArtifactFreshnessDetector(BaseDetector):
         if has_fail:
             return False
         return True
+
+    @staticmethod
+    def _validate_partitioned_compact(
+        artifact: dict[str, Any],
+        today: str,
+        details: dict[str, Any],
+    ) -> tuple[str, str] | None:
+        config = artifact.get("partitioned_compact")
+        if not isinstance(config, dict):
+            return None
+
+        aid = str(artifact["id"])
+        checkpoint_template = str(config.get("checkpoint_template") or "").strip()
+        partition_glob_template = str(config.get("partition_glob_template") or "").strip()
+        if not checkpoint_template or not partition_glob_template:
+            return "warning", f"{aid}: partitioned compact detector config incomplete"
+
+        checkpoint_path = PROJECT_ROOT / checkpoint_template.replace("{date}", today)
+        partition_glob = partition_glob_template.replace("{date}", today)
+        if Path(partition_glob).is_absolute():
+            partition_paths = sorted(Path(path) for path in glob.glob(partition_glob))
+        else:
+            partition_paths = sorted(PROJECT_ROOT.glob(partition_glob))
+
+        details[f"{aid}_legacy_path_missing"] = True
+        details[f"{aid}_partitioned_checkpoint_path"] = str(checkpoint_path)
+        details[f"{aid}_partitioned_part_count"] = len(partition_paths)
+
+        if not checkpoint_path.exists():
+            return "warning", f"{aid}: partitioned checkpoint missing"
+        if not partition_paths:
+            return "warning", f"{aid}: partitioned compact parts missing"
+
+        try:
+            checkpoint = json.loads(checkpoint_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            details[f"{aid}_partitioned_checkpoint_status"] = "invalid_json"
+            return "warning", f"{aid}: invalid partitioned checkpoint ({exc})"
+
+        completed = bool(checkpoint.get("completed"))
+        status = str(checkpoint.get("status") or checkpoint.get("state") or "").strip()
+        paused_reason = checkpoint.get("paused_reason")
+        written_count = checkpoint.get("written_count", checkpoint.get("written_total"))
+
+        details[f"{aid}_partitioned_checkpoint_status"] = status or "unknown"
+        details[f"{aid}_partitioned_completed"] = completed
+        details[f"{aid}_partitioned_written_count"] = written_count
+        if paused_reason:
+            details[f"{aid}_partitioned_paused_reason"] = paused_reason
+
+        if not completed:
+            reason = f" paused_reason={paused_reason}" if paused_reason else ""
+            return "warning", f"{aid}: partitioned compact checkpoint incomplete{reason}"
+
+        latest_mtime = max(path.stat().st_mtime for path in partition_paths)
+        details[f"{aid}_age_sec"] = round(time.time() - latest_mtime, 1)
+        return "pass_partitioned_checkpoint", ""
 
     @staticmethod
     def _validate_json_status(
