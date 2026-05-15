@@ -13,12 +13,12 @@
 
 ## 근거
 
-- as_of: `2026-05-15T12:35:02`
-- exit_signal unique: `16`
+- as_of: `2026-05-15T12:55:02`
+- exit_signal unique: `17`
 - sell_order_sent unique: `0`
 - sell_completed unique: `0`
 - real exit/sell_sent/sell_completed: `0` / `0` / `0`
-- non-real exit/sell_sent/sell_completed: `16` / `0` / `0`
+- non-real exit/sell_sent/sell_completed: `17` / `0` / `0`
 - sell_sent/exit_signal: `0.0%`
 - real sell_sent/exit_signal: `0.0%`
 - non-real sell_sent/exit_signal: `0.0%`
@@ -26,7 +26,7 @@
 - AI holding cache MISS: `0.0%`
 - soft_stop rebound above sell 10m: `90.9%`
 - trailing missed-upside: `27.8%`
-- top reasons: `청산신호:kospi_regime_stop_loss=16, 청산신호:kosdaq_trailing_take_profit=5, 청산신호:kosdaq_stop_loss=3, 청산신호:kospi_trailing_start_take_profit=1`
+- top reasons: `청산신호:kospi_regime_stop_loss=16, 청산신호:kosdaq_trailing_take_profit=5, 청산신호:kosdaq_stop_loss=3, 청산신호:kospi_trailing_start_take_profit=2`
 
 ## 금지된 자동변경
 

@@ -2,18 +2,18 @@
 
 ## 판정
 
-- panic_state: `PANIC_SELL`
-- panic_regime_mode: `PANIC_DETECTED`
+- panic_state: `RECOVERY_CONFIRMED`
+- panic_regime_mode: `RECOVERY_CONFIRMED`
 - report_only: `true`
 - runtime_effect: `report_only_no_mutation`
-- as_of: `2026-05-15T12:38:16`
-- latest_event_at: `2026-05-15T12:38:15`
-- reasons: `microstructure risk_off advisory confirmed by market/breadth context; live market panic breadth risk_off advisory; recovery conditions not yet met`
+- as_of: `2026-05-15T12:56:31`
+- latest_event_at: `2026-05-15T12:56:30`
+- reasons: `microstructure risk_off advisory confirmed by market/breadth context; live market panic breadth risk_off advisory; recovery confirmed by active sim/probe or post-sell rebound above buy`
 
 ## 패닉 지표
 
 - real_exit_count: `5`
-- non_real_exit_count: `52`
+- non_real_exit_count: `54`
 - stop_loss_exit_count: `3`
 - current_30m_stop_loss_exit_count: `3`
 - max_rolling_30m_stop_loss_exit_count: `3`
@@ -24,17 +24,17 @@
 
 ## 회복 지표
 
-- active_positions: `9`
-- active_profit_sample: `9`
-- active_avg_unrealized_profit_rate_pct: `0.4868`
-- active_win_rate_pct: `66.7`
+- active_positions: `10`
+- active_profit_sample: `10`
+- active_avg_unrealized_profit_rate_pct: `1.0161`
+- active_win_rate_pct: `90`
 - sim_probe_provenance_passed: `true`
 - post_sell_rebound_above_sell_10_20m_pct: `0`
 - post_sell_rebound_above_buy_10_20m_pct: `0`
 
 ## Microstructure Detector
 
-- evaluated_symbol_count: `20`
+- evaluated_symbol_count: `21`
 - risk_off_advisory_count: `0`
 - allow_new_long_false_count: `0`
 - panic_signal_count: `0`
@@ -51,10 +51,10 @@
 ## Microstructure Market Context
 
 - market_risk_state: `RISK_OFF`
-- market_panic_breadth_as_of: `2026-05-15T12:38:01`
+- market_panic_breadth_as_of: `2026-05-15T12:56:02`
 - market_panic_breadth_source_quality_status: `ok`
 - market_panic_breadth_risk_off_advisory: `true`
-- evaluated_symbol_count: `20`
+- evaluated_symbol_count: `21`
 - risk_off_advisory_ratio_pct: `0`
 - confirmed_risk_off_advisory: `true`
 - portfolio_local_risk_off_only: `false`
@@ -65,14 +65,14 @@
 
 - `hard_protect_emergency_delay_forbidden`: `enforced` / runtime_effect=`false`
 - `live_threshold_mutation_forbidden`: `enforced` / runtime_effect=`false`
-- `entry_relaxation_blocked`: `report_only_recommendation` / runtime_effect=`false`
+- `recovery_probe_review`: `candidate_only` / runtime_effect=`false`
 - `soft_trailing_flow_confirmation_review`: `candidate_only` / runtime_effect=`false`
 
 ## Canary Candidates
 
 - `panic_entry_freeze_guard`: `report_only_candidate`, allowed_runtime_apply=`false`
 - `panic_stop_confirmation`: `report_only_candidate`, allowed_runtime_apply=`false`
-- `panic_rebound_probe`: `hold_until_recovery_confirmed`, allowed_runtime_apply=`false`
+- `panic_rebound_probe`: `report_only_candidate`, allowed_runtime_apply=`false`
 - `panic_attribution_pack`: `active_report_only`, allowed_runtime_apply=`false`
 
 ## 금지된 자동변경
