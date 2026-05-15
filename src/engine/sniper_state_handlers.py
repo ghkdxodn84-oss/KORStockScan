@@ -5090,9 +5090,48 @@ def _build_ai_ops_log_fields(
         "same_price_buy_absorption_sent",
         "large_sell_print_detected_sent",
         "ask_depth_ratio_sent",
+        "tick_source_quality_fields_sent",
     ):
         if field_name in payload:
             out[field_name] = bool(payload.get(field_name))
+    for field_name in (
+        "tick_sample_count",
+        "tick_window_sample_count",
+        "tick_latest_age_ms",
+        "tick_window_span_sec",
+        "tick_accel_effective_recent_5tick_seconds",
+        "tick_acceleration_ratio_raw",
+        "quote_age_ms",
+    ):
+        if field_name in payload:
+            raw_value = payload.get(field_name)
+            try:
+                out[field_name] = int(float(raw_value))
+            except Exception:
+                out[field_name] = str(raw_value or "-")
+    for field_name in (
+        "tick_latest_time",
+        "tick_accel_source",
+        "tick_context_quality",
+        "quote_age_source",
+    ):
+        if field_name in payload:
+            out[field_name] = str(payload.get(field_name, "-") or "-")
+    for field_name in (
+        "tick_context_stale",
+        "quote_stale",
+    ):
+        if field_name in payload:
+            raw_value = payload.get(field_name)
+            if isinstance(raw_value, bool):
+                out[field_name] = raw_value
+            else:
+                text_value = str(raw_value or "unknown").strip().lower()
+                out[field_name] = (
+                    text_value in {"1", "true", "yes", "y"}
+                    if text_value not in {"unknown", "-", "none", ""}
+                    else "unknown"
+                )
     if ai_score_raw is not None:
         out["ai_score_raw"] = f"{float(ai_score_raw or 0.0):.1f}"
     if ai_score_after_bonus is not None:
@@ -5103,6 +5142,60 @@ def _build_ai_ops_log_fields(
         out["big_bite_bonus_applied"] = bool(big_bite_bonus_applied)
     if ai_cooldown_blocked is not None:
         out["ai_cooldown_blocked"] = bool(ai_cooldown_blocked)
+    return out
+
+
+def _build_tick_source_quality_log_fields(feature_probe):
+    payload = feature_probe or {}
+    out = {}
+    for field_name in (
+        "tick_sample_count",
+        "tick_window_sample_count",
+        "tick_latest_age_ms",
+        "tick_window_span_sec",
+        "quote_age_ms",
+    ):
+        if field_name in payload:
+            raw_value = payload.get(field_name)
+            try:
+                out[field_name] = int(float(raw_value))
+            except Exception:
+                out[field_name] = str(raw_value or "-")
+    for field_name in (
+        "tick_latest_time",
+        "tick_accel_source",
+        "tick_context_quality",
+        "quote_age_source",
+    ):
+        if field_name in payload:
+            out[field_name] = str(payload.get(field_name, "-") or "-")
+    for field_name in (
+        "tick_context_stale",
+        "quote_stale",
+    ):
+        if field_name in payload:
+            raw_value = payload.get(field_name)
+            if isinstance(raw_value, bool):
+                out[field_name] = raw_value
+            else:
+                text_value = str(raw_value or "unknown").strip().lower()
+                out[field_name] = (
+                    text_value in {"1", "true", "yes", "y"}
+                    if text_value not in {"unknown", "-", "none", ""}
+                    else "unknown"
+                )
+    for field_name in (
+        "tick_accel_effective_recent_5tick_seconds",
+        "tick_acceleration_ratio_raw",
+    ):
+        if field_name in payload:
+            raw_value = payload.get(field_name)
+            try:
+                out[field_name] = f"{float(raw_value):.3f}"
+            except Exception:
+                out[field_name] = str(raw_value or "-")
+    if out:
+        out["tick_source_quality_fields_sent"] = True
     return out
 
 
@@ -5691,6 +5784,19 @@ def _extract_buy_recovery_probe_features(ai_engine, ws_data, recent_ticks, recen
         "tick_accel": float(features.get("tick_acceleration_ratio", 0.0) or 0.0),
         "micro_vwap_bp": float(features.get("curr_vs_micro_vwap_bp", 0.0) or 0.0),
         "large_sell_print": bool(features.get("large_sell_print_detected", False)),
+        "tick_sample_count": features.get("tick_sample_count", "-"),
+        "tick_window_sample_count": features.get("tick_window_sample_count", "-"),
+        "tick_latest_time": features.get("tick_latest_time", "-"),
+        "tick_latest_age_ms": features.get("tick_latest_age_ms", "-"),
+        "tick_window_span_sec": features.get("tick_window_span_sec", "-"),
+        "tick_accel_effective_recent_5tick_seconds": features.get("tick_accel_effective_recent_5tick_seconds", "-"),
+        "tick_acceleration_ratio_raw": features.get("tick_acceleration_ratio_raw", "-"),
+        "tick_accel_source": features.get("tick_accel_source", "-"),
+        "tick_context_stale": features.get("tick_context_stale", "unknown"),
+        "tick_context_quality": features.get("tick_context_quality", "unknown"),
+        "quote_age_ms": features.get("quote_age_ms", "-"),
+        "quote_age_source": features.get("quote_age_source", "missing"),
+        "quote_stale": features.get("quote_stale", "unknown"),
     }
 
 
@@ -5728,6 +5834,7 @@ def _log_wait65_79_ev_candidate(
         tick_accel=f"{float(probe.get('tick_accel', 0.0) or 0.0):.3f}",
         micro_vwap_bp=f"{float(probe.get('micro_vwap_bp', 0.0) or 0.0):.2f}",
         latency_state=latency_state,
+        **_build_tick_source_quality_log_fields(probe),
         parse_ok=bool((ai_decision or {}).get("ai_parse_ok", False)),
         ai_response_ms=int((ai_decision or {}).get("ai_response_ms", 0) or 0),
         terminal_blocker="-",
@@ -6382,6 +6489,7 @@ def _handle_watching_strategy_branch(stock, code, ws_data, radar, ai_engine, run
                                     tick_accel=f"{float(feature_probe.get('tick_accel', 0.0) or 0.0):.3f}",
                                     micro_vwap_bp=f"{float(feature_probe.get('micro_vwap_bp', 0.0) or 0.0):.2f}",
                                     latency_state=str((ws_data or {}).get("latency_state", "") or "").strip().upper() or "-",
+                                    **_build_tick_source_quality_log_fields(feature_probe),
                                     qty_cap=1,
                                     budget_cap_krw=int(_rule("AI_WAIT6579_PROBE_CANARY_MAX_BUDGET_KRW", 50_000) or 50_000),
                                 )

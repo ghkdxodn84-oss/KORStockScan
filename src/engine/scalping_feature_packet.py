@@ -16,7 +16,66 @@ def _safe_hhmmss_to_seconds(value):
         return None
 
 
-def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None):
+def _age_ms_from_hhmmss(value, *, now=None):
+    tick_sec = _safe_hhmmss_to_seconds(value)
+    if tick_sec is None:
+        return None
+    now_dt = now or datetime.now()
+    now_sec = now_dt.hour * 3600 + now_dt.minute * 60 + now_dt.second
+    age_sec = now_sec - tick_sec
+    if age_sec < -43200:
+        age_sec += 86400
+    elif age_sec > 43200:
+        age_sec -= 86400
+    return max(0, int(age_sec * 1000))
+
+
+def _safe_epoch_ms(value):
+    if value in (None, "", "-"):
+        return None
+    try:
+        numeric = float(value)
+        if numeric <= 0:
+            return None
+        if numeric > 1_000_000_000_000:
+            return int(numeric)
+        if numeric > 1_000_000_000:
+            return int(numeric * 1000)
+    except Exception:
+        pass
+    try:
+        text = str(value).strip()
+        if text.endswith("Z"):
+            text = f"{text[:-1]}+00:00"
+        return int(datetime.fromisoformat(text).timestamp() * 1000)
+    except Exception:
+        return None
+
+
+def _quote_age_ms(ws_data, *, now=None):
+    quote_ts_keys = (
+        "ws_received_at_ms",
+        "quote_received_at_ms",
+        "received_at_ms",
+        "last_update_ms",
+        "updated_at_ms",
+        "captured_at_ms",
+        "timestamp_ms",
+        "ts_ms",
+        "updated_at",
+        "timestamp",
+    )
+    now_ms = int((now or datetime.now()).timestamp() * 1000)
+    for key in quote_ts_keys:
+        raw = (ws_data or {}).get(key)
+        epoch_ms = _safe_epoch_ms(raw)
+        if epoch_ms is None:
+            continue
+        return max(0, now_ms - epoch_ms), key
+    return None, "missing"
+
+
+def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None, *, now=None):
     if recent_candles is None:
         recent_candles = []
 
@@ -69,11 +128,18 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None):
     recent_5tick_seconds = 999.0
     prev_5tick_seconds = 999.0
     tick_acceleration_ratio = 0.0
+    tick_acceleration_ratio_raw = 0.0
+    tick_accel_effective_recent_5tick_seconds = 999.0
     same_price_buy_absorption = 0
     large_sell_print_detected = False
     large_buy_print_detected = False
 
     ticks = recent_ticks[:10] if recent_ticks else []
+    tick_sample_count = len(ticks)
+    tick_latest_time = str(ticks[0].get("time", "") or "") if ticks else ""
+    tick_latest_age_ms = _age_ms_from_hhmmss(tick_latest_time, now=now) if tick_latest_time else None
+    tick_window_span_sec = None
+    tick_accel_source = "no_ticks"
 
     if ticks:
         buy_vol_10 = sum(tick.get("volume", 0) for tick in ticks if tick.get("dir") == "BUY")
@@ -89,18 +155,37 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None):
         price_change_10t_pct = round(((latest_price - oldest_price) / oldest_price) * 100, 3) if oldest_price > 0 else 0.0
 
         tick_secs = [_safe_hhmmss_to_seconds(tick.get("time")) for tick in ticks]
+        if len(tick_secs) >= 2 and tick_secs[0] is not None and tick_secs[-1] is not None:
+            tick_window_span_sec = tick_secs[0] - tick_secs[-1]
+            if tick_window_span_sec < 0:
+                tick_window_span_sec += 86400
+        tick_accel_source = "insufficient_ticks"
         if len(tick_secs) >= 5 and tick_secs[0] is not None and tick_secs[4] is not None:
             recent_5tick_seconds = tick_secs[0] - tick_secs[4]
             if recent_5tick_seconds < 0:
                 recent_5tick_seconds += 86400
+        elif len(tick_secs) >= 5:
+            tick_accel_source = "invalid_recent_tick_time"
 
         if len(tick_secs) >= 10 and tick_secs[5] is not None and tick_secs[9] is not None:
             prev_5tick_seconds = tick_secs[5] - tick_secs[9]
             if prev_5tick_seconds < 0:
                 prev_5tick_seconds += 86400
+        elif len(tick_secs) >= 10:
+            tick_accel_source = "invalid_previous_tick_time"
 
         if recent_5tick_seconds > 0 and prev_5tick_seconds < 999:
-            tick_acceleration_ratio = round(prev_5tick_seconds / recent_5tick_seconds, 3)
+            tick_acceleration_ratio_raw = round(prev_5tick_seconds / recent_5tick_seconds, 3)
+            tick_acceleration_ratio = tick_acceleration_ratio_raw
+            tick_accel_effective_recent_5tick_seconds = recent_5tick_seconds
+            tick_accel_source = "computed_10ticks"
+        elif recent_5tick_seconds <= 0 and prev_5tick_seconds < 999:
+            tick_accel_effective_recent_5tick_seconds = 1.0
+            tick_acceleration_ratio_raw = 0.0
+            tick_acceleration_ratio = round(prev_5tick_seconds / tick_accel_effective_recent_5tick_seconds, 3)
+            tick_accel_source = "same_second_burst_10ticks"
+        elif recent_5tick_seconds <= 0:
+            tick_accel_source = "same_second_burst_insufficient_previous_window"
 
         volumes = [tick.get("volume", 0) for tick in ticks if tick.get("volume", 0) > 0]
         avg_tick_vol = mean(volumes) if volumes else 0
@@ -123,6 +208,21 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None):
         same_price_buy_absorption = max(price_buy_count.values()) if price_buy_count else 0
     else:
         buy_pressure_10t = 50.0
+
+    quote_age_ms, quote_age_source = _quote_age_ms(ws_data, now=now)
+    tick_stale = tick_latest_age_ms is not None and tick_latest_age_ms > 5000
+    quote_stale = quote_age_ms is not None and quote_age_ms > 1200
+    tick_context_quality = "unknown"
+    if not ticks:
+        tick_context_quality = "missing_ticks"
+    elif tick_latest_age_ms is None:
+        tick_context_quality = "missing_tick_time"
+    elif tick_stale:
+        tick_context_quality = "stale_tick"
+    elif tick_accel_source not in {"computed_10ticks", "same_second_burst_10ticks"}:
+        tick_context_quality = f"accel_{tick_accel_source}"
+    else:
+        tick_context_quality = "fresh_computed"
 
     volume_ratio_pct = 0.0
     curr_vs_micro_vwap_bp = 0.0
@@ -171,8 +271,23 @@ def extract_scalping_feature_packet(ws_data, recent_ticks, recent_candles=None):
         "net_aggressive_delta_10t": int(net_aggressive_delta_10t),
         "price_change_10t_pct": price_change_10t_pct,
         "recent_5tick_seconds": round(recent_5tick_seconds, 3),
+        "tick_accel_effective_recent_5tick_seconds": round(tick_accel_effective_recent_5tick_seconds, 3)
+        if tick_accel_effective_recent_5tick_seconds < 999
+        else 999.0,
         "prev_5tick_seconds": round(prev_5tick_seconds, 3) if prev_5tick_seconds < 999 else 999.0,
         "tick_acceleration_ratio": tick_acceleration_ratio,
+        "tick_acceleration_ratio_raw": tick_acceleration_ratio_raw,
+        "tick_accel_source": tick_accel_source,
+        "tick_sample_count": tick_sample_count,
+        "tick_window_sample_count": tick_sample_count,
+        "tick_latest_time": tick_latest_time or "-",
+        "tick_latest_age_ms": tick_latest_age_ms if tick_latest_age_ms is not None else "-",
+        "tick_window_span_sec": tick_window_span_sec if tick_window_span_sec is not None else "-",
+        "tick_context_stale": bool(tick_stale) if tick_latest_age_ms is not None else "unknown",
+        "tick_context_quality": tick_context_quality,
+        "quote_age_ms": quote_age_ms if quote_age_ms is not None else "-",
+        "quote_age_source": quote_age_source,
+        "quote_stale": bool(quote_stale) if quote_age_ms is not None else "unknown",
         "same_price_buy_absorption": same_price_buy_absorption,
         "large_sell_print_detected": large_sell_print_detected,
         "large_buy_print_detected": large_buy_print_detected,
@@ -196,4 +311,26 @@ def build_scalping_feature_audit_fields(packet):
         "same_price_buy_absorption_sent": "same_price_buy_absorption" in payload,
         "large_sell_print_detected_sent": "large_sell_print_detected" in payload,
         "ask_depth_ratio_sent": "ask_depth_ratio" in payload,
+        "tick_source_quality_fields_sent": all(
+            field in payload
+            for field in (
+                "tick_sample_count",
+                "tick_latest_age_ms",
+                "tick_accel_source",
+                "tick_context_quality",
+            )
+        ),
+        "tick_sample_count": payload.get("tick_sample_count", "-"),
+        "tick_window_sample_count": payload.get("tick_window_sample_count", "-"),
+        "tick_latest_time": payload.get("tick_latest_time", "-"),
+        "tick_latest_age_ms": payload.get("tick_latest_age_ms", "-"),
+        "tick_window_span_sec": payload.get("tick_window_span_sec", "-"),
+        "tick_accel_effective_recent_5tick_seconds": payload.get("tick_accel_effective_recent_5tick_seconds", "-"),
+        "tick_acceleration_ratio_raw": payload.get("tick_acceleration_ratio_raw", "-"),
+        "tick_accel_source": payload.get("tick_accel_source", "-"),
+        "tick_context_stale": payload.get("tick_context_stale", "unknown"),
+        "tick_context_quality": payload.get("tick_context_quality", "unknown"),
+        "quote_age_ms": payload.get("quote_age_ms", "-"),
+        "quote_age_source": payload.get("quote_age_source", "missing"),
+        "quote_stale": payload.get("quote_stale", "unknown"),
     }

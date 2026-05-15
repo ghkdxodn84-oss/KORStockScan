@@ -114,6 +114,10 @@ def test_openai_scalping_analyze_target_returns_feature_audit_fields(monkeypatch
     assert result["same_price_buy_absorption_sent"] is True
     assert result["large_sell_print_detected_sent"] is True
     assert result["ask_depth_ratio_sent"] is True
+    assert result["tick_source_quality_fields_sent"] is True
+    assert result["tick_sample_count"] == 10
+    assert result["tick_accel_source"] == "computed_10ticks"
+    assert result["tick_context_quality"] in {"fresh_computed", "stale_tick"}
 
 
 def test_openai_scalping_analyze_target_returns_parse_fallback_meta(monkeypatch):
