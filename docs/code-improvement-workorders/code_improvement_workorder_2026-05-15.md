@@ -17,9 +17,9 @@
 - pipeline_event_verbosity: `-`
 - observation_source_quality_audit: `/home/ubuntu/KORStockScan/data/report/observation_source_quality_audit/observation_source_quality_audit_2026-05-15.json`
 - codebase_performance_workorder: `-`
-- generated_at: `2026-05-15T11:55:28+09:00`
-- generation_id: `2026-05-15-6cb38b561ab7`
-- source_hash: `6cb38b561ab716ec5785eba6485a02cff5ecd94a3743bcc89bbfda43615e2854`
+- generated_at: `2026-05-15T12:35:46+09:00`
+- generation_id: `2026-05-15-1b3477b0c7f0`
+- source_hash: `1b3477b0c7f02aa106966407e781ce80b00d5ec3ede0025fb1cb4fe518b108a3`
 
 ## 운영 원칙
 
@@ -40,11 +40,11 @@
 
 ## Snapshot Lineage
 
-- previous_exists: `False`
-- previous_generation_id: `-`
-- previous_source_hash: `-`
-- new_order_ids: `['order_ai_source_quality_not_evaluated_provenance', 'order_high_volume_diagnostic_stage_contract_labels']`
-- removed_order_ids: `[]`
+- previous_exists: `True`
+- previous_generation_id: `2026-05-15-6cb38b561ab7`
+- previous_source_hash: `6cb38b561ab716ec5785eba6485a02cff5ecd94a3743bcc89bbfda43615e2854`
+- new_order_ids: `['order_swing_source_quality_micro_context_provenance']`
+- removed_order_ids: `['order_high_volume_diagnostic_stage_contract_labels']`
 - decision_changed_order_ids: `[]`
 
 ## Summary
@@ -108,7 +108,7 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - data_quality_effect: `False`
 - tuning_axis_effect: `False`
 - expected_ev_effect: none_direct_source_quality_attribution_only
-- evidence: `status=warning`, `event_count=457732`, `warning_stage_count=5`, `warning_stages=ai_confirmed,blocked_ai_score,wait65_79_ev_candidate,blocked_strength_momentum,blocked_overbought`, `high_volume_no_source_field_stage_count=8`, `decision_authority=source_quality_only`, `runtime_effect=false`
+- evidence: `status=warning`, `event_count=596422`, `warning_stage_count=7`, `warning_stages=ai_confirmed,blocked_ai_score,wait65_79_ev_candidate,blocked_strength_momentum,blocked_overbought,swing_probe_state_persisted,scale_in_price_p2_observe`, `high_volume_no_source_field_stage_count=0`, `decision_authority=source_quality_only`, `runtime_effect=false`
 - parity_contract: -
 - next_postclose_metric: observation_source_quality_audit.warning_stage_count and high_volume_no_source_field_stage_count
 - files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/observation_source_quality_audit.py`
@@ -121,9 +121,9 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - runtime 판단값을 직접 바꾸지 않는다.
 - 다음 postclose report에서 source freshness, warning 감소, sample count가 확인되어야 한다.
 
-### 2. `order_high_volume_diagnostic_stage_contract_labels`
+### 2. `order_swing_source_quality_micro_context_provenance`
 
-- title: High-volume diagnostic stage metric contract labels
+- title: Swing source-quality micro context provenance
 - decision: `implement_now`
 - decision_reason: instrumentation/provenance work can improve attribution without direct runtime mutation
 - source_report_type: `observation_source_quality_audit`
@@ -140,11 +140,11 @@ PYTHONPATH=. .venv/bin/pytest -q src/tests/test_daily_threshold_cycle_report.py 
 - data_quality_effect: `False`
 - tuning_axis_effect: `False`
 - expected_ev_effect: none_direct_source_quality_attribution_only
-- evidence: `status=warning`, `event_count=457732`, `warning_stage_count=5`, `warning_stages=ai_confirmed,blocked_ai_score,wait65_79_ev_candidate,blocked_strength_momentum,blocked_overbought`, `high_volume_no_source_field_stage_count=8`, `decision_authority=source_quality_only`, `runtime_effect=false`, `gap_stages=strength_momentum_observed,blocked_swing_score_vpw,blocked_swing_gap,strength_momentum_pass,blocked_liquidity,dynamic_vpw_override_pass,first_ai_wait,swing_probe_state_persisted`
+- evidence: `status=warning`, `event_count=596422`, `warning_stage_count=7`, `warning_stages=ai_confirmed,blocked_ai_score,wait65_79_ev_candidate,blocked_strength_momentum,blocked_overbought,swing_probe_state_persisted,scale_in_price_p2_observe`, `high_volume_no_source_field_stage_count=0`, `decision_authority=source_quality_only`, `runtime_effect=false`, `swing_warning_stages=swing_probe_state_persisted,scale_in_price_p2_observe`, `swing_probe_state_persisted:sample_count=77 missing_fields=metric_role,decision_authority,runtime_effect,forbidden_uses`, `scale_in_price_p2_observe:sample_count=22 missing_fields=orderbook_micro_ready,orderbook_micro_state,orderbook_micro_reason,orderbook_micro_snapshot_age_ms,orderbook_micro_observer_healthy`
 - parity_contract: -
 - next_postclose_metric: observation_source_quality_audit.warning_stage_count and high_volume_no_source_field_stage_count
-- files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/observation_source_quality_audit.py`, `docs/report-based-automation-traceability.md`
-- acceptance_tests: `pytest src/tests/test_observation_source_quality_audit.py src/tests/test_build_code_improvement_workorder.py`
+- files_likely_touched: `src/engine/sniper_state_handlers.py`, `src/engine/observation_source_quality_audit.py`, `src/engine/build_code_improvement_workorder.py`, `docs/report-based-automation-traceability.md`
+- acceptance_tests: `pytest src/tests/test_observation_source_quality_audit.py src/tests/test_swing_model_selection_funnel_repair.py src/tests/test_build_code_improvement_workorder.py`
 - automation_reentry: After implementation, next postclose report must show source freshness or warning reduction.
 
 실행 기준:

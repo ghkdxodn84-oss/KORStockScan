@@ -139,6 +139,16 @@ STAGE_CONTRACTS: dict[str, StageContract] = {
     "swing_same_symbol_loss_reentry_cooldown": StageContract(
         required_fields=("actual_order_submitted", "broker_order_forbidden", "source_book", "source_probe_id"),
     ),
+    "swing_probe_state_persisted": StageContract(
+        required_fields=(
+            "simulation_book",
+            "simulation_owner",
+            "metric_role",
+            "decision_authority",
+            "runtime_effect",
+            "forbidden_uses",
+        ),
+    ),
     "swing_scale_in_micro_context_observed": StageContract(required_fields=ORDERBOOK_MICRO_FIELDS),
     "scale_in_price_resolved": StageContract(
         required_fields=("price_source", "virtual_budget_override", "budget_authority", *ORDERBOOK_MICRO_FIELDS),
@@ -278,7 +288,7 @@ def _evaluate_contracts(rows: list[dict[str, Any]], stage_counts: Counter[str]) 
             if _source_like_field(key) and _is_present(value):
                 field_presence[stage][key] += 1
     for stage, count in stage_counts.most_common():
-        if count < 50 or field_presence.get(stage):
+        if count < 50 or field_presence.get(stage) or stage in STAGE_CONTRACTS:
             continue
         high_volume_no_source_fields.append(
             {

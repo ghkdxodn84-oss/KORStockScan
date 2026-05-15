@@ -110,6 +110,34 @@ def test_observation_source_quality_audit_accepts_high_volume_contract_labels(mo
     assert report["high_volume_no_source_fields"] == []
 
 
+def test_observation_source_quality_audit_routes_probe_state_persisted_by_contract(monkeypatch, tmp_path):
+    monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
+    _write_events(
+        tmp_path,
+        "2026-05-15",
+        [
+            _event(
+                "swing_probe_state_persisted",
+                {
+                    "simulation_book": "swing_intraday_probe",
+                    "simulation_owner": "owner",
+                    "reason": "probe_scale_in",
+                    "active_count": 1,
+                },
+                record_id=idx,
+            )
+            for idx in range(60)
+        ],
+    )
+
+    report = audit.build_observation_source_quality_audit("2026-05-15")
+
+    assert report["high_volume_no_source_fields"] == []
+    persisted = report["stage_contracts"]["swing_probe_state_persisted"]
+    assert persisted["status"] == "warning"
+    assert "metric_role" in persisted["missing_violations"]
+
+
 def test_observation_source_quality_audit_writes_json_and_markdown(monkeypatch, tmp_path):
     monkeypatch.setattr(audit, "DATA_DIR", tmp_path)
     _write_events(tmp_path, "2026-05-15", [_event("swing_probe_entry_candidate", {

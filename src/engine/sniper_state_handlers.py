@@ -4234,18 +4234,43 @@ def _build_swing_orderbook_micro_context(
     return _build_live_orderbook_micro_context(code, curr_price=curr_price)
 
 
+def _build_swing_ws_quote_quality_fields(ws_data: dict | None) -> dict:
+    best_ask, best_bid = _get_best_levels_from_ws(ws_data or {})
+    quote_age_sec = _get_ws_snapshot_age_sec(ws_data or {})
+    quote_age_ms = "-" if quote_age_sec is None else int(round(quote_age_sec * 1000.0))
+    quote_present = bool(best_ask > 0 or best_bid > 0 or _safe_int((ws_data or {}).get("curr"), 0) > 0)
+    quote_stale = quote_age_ms != "-" and int(quote_age_ms) > max(1, _rule_int("OFI_AI_SMOOTHING_STALE_THRESHOLD_MS", 700))
+    if quote_age_sec is not None:
+        source = "last_ws_update_ts"
+    elif quote_present:
+        source = "ws_quote_without_timestamp"
+    else:
+        source = "missing"
+    return {
+        "swing_micro_ws_quote_present": bool(quote_present),
+        "swing_micro_ws_quote_source": source,
+        "swing_micro_ws_quote_age_ms": quote_age_ms,
+        "swing_micro_ws_quote_stale": bool(quote_stale) if quote_age_ms != "-" else "unknown",
+        "swing_micro_ws_best_bid": best_bid or "-",
+        "swing_micro_ws_best_ask": best_ask or "-",
+    }
+
+
 def _build_swing_micro_log_fields(
     micro: dict | None,
     *,
     phase: str,
     add_type: str | None = None,
+    ws_data: dict | None = None,
 ) -> dict:
     fields = _build_orderbook_micro_log_fields(micro)
+    ws_quote_fields = _build_swing_ws_quote_quality_fields(ws_data)
     state = str(fields.get("orderbook_micro_state") or "missing").strip().lower()
     ready = bool(fields.get("orderbook_micro_ready"))
     observer_healthy = fields.get("orderbook_micro_observer_healthy")
     if observer_healthy == "-":
         observer_healthy = False
+    observer_unhealthy = observer_healthy is not True
     snapshot_age_ms = _safe_float(fields.get("orderbook_micro_snapshot_age_ms"), None)
     stale_threshold_ms = max(1, _rule_int("OFI_AI_SMOOTHING_STALE_THRESHOLD_MS", 700))
     is_stale = snapshot_age_ms is not None and snapshot_age_ms > stale_threshold_ms
@@ -4253,7 +4278,7 @@ def _build_swing_micro_log_fields(
         not isinstance(micro, dict)
         or not ready
         or state in {"", "missing", "insufficient"}
-        or observer_healthy is False
+        or observer_unhealthy
         or is_stale
     )
     if missing:
@@ -4261,21 +4286,31 @@ def _build_swing_micro_log_fields(
         price_action = "NO_CHANGE"
         timeout_sec = 0
         reason = "missing_stale_or_insufficient_orderbook_micro"
+        source_quality_status = "source_quality_blocker"
+        if (
+            observer_unhealthy
+            and ws_quote_fields["swing_micro_ws_quote_present"] is True
+            and ws_quote_fields["swing_micro_ws_quote_stale"] is False
+        ):
+            source_quality_status = "observer_gap_with_fresh_ws_quote"
     elif state == "bullish":
         advice = "SUPPORT_ENTRY"
         price_action = "ALLOW_EXISTING_PRICE"
         timeout_sec = 0
         reason = "ofi_qi_bullish_support_observed"
+        source_quality_status = "ok"
     elif state == "bearish":
         advice = "RISK_BEARISH"
         price_action = "WAIT_FOR_PULLBACK"
         timeout_sec = 30
         reason = "ofi_qi_bearish_risk_observed"
+        source_quality_status = "ok"
     else:
         advice = "WAIT_FOR_PULLBACK"
         price_action = "KEEP_EXISTING_PRICE"
         timeout_sec = 0
         reason = "ofi_qi_neutral_or_mixed_observed"
+        source_quality_status = "ok"
 
     add_label = str(add_type or "").upper()
     micro_support = add_label == "PYRAMID" and advice in {"SUPPORT_ENTRY", "WAIT_FOR_PULLBACK"}
@@ -4290,6 +4325,7 @@ def _build_swing_micro_log_fields(
             "swing_micro_counterfactual_reason": reason,
             "swing_micro_runtime_effect": False,
             "swing_micro_observe_only": True,
+            "swing_micro_source_quality_status": source_quality_status,
             "swing_micro_state": state,
             "swing_micro_stale": bool(is_stale),
             "swing_micro_micro_support": bool(micro_support),
@@ -4298,6 +4334,7 @@ def _build_swing_micro_log_fields(
             "swing_micro_risk": bool(micro_risk),
             "swing_micro_recovery_support_observed": bool(recovery_support_observed),
             "recovery_support_observed": bool(recovery_support_observed),
+            **ws_quote_fields,
         }
     )
     return fields
@@ -11167,6 +11204,7 @@ def execute_scale_in_order(*, stock, code, ws_data, action, admin_id):
             _build_live_orderbook_micro_context(code, curr_price=curr_price),
             phase="scale_in",
             add_type=add_type,
+            ws_data=ws_data,
         )
         _log_holding_pipeline(
             stock,

@@ -333,7 +333,8 @@ def test_swing_lifecycle_audit_separates_intraday_probe_evidence_quality():
     assert approval["rolling_source_bundle"]["panic_context"]["panic_state"] == "RECOVERY_CONFIRMED"
 
 
-def test_swing_micro_context_advice_is_observe_only():
+def test_swing_micro_context_advice_is_observe_only(monkeypatch):
+    monkeypatch.setattr(state_handlers.time, "time", lambda: 100.0)
     bullish = state_handlers._build_swing_micro_log_fields(
         {
             "ready": True,
@@ -356,6 +357,16 @@ def test_swing_micro_context_advice_is_observe_only():
         add_type="PYRAMID",
     )
     missing = state_handlers._build_swing_micro_log_fields(None, phase="entry")
+    missing_with_fresh_ws_quote = state_handlers._build_swing_micro_log_fields(
+        None,
+        phase="scale_in",
+        add_type="PYRAMID",
+        ws_data={
+            "curr": 10_000,
+            "last_ws_update_ts": 99.6,
+            "orderbook": {"bids": [{"price": 9_990}], "asks": [{"price": 10_010}]},
+        },
+    )
     avg_down = state_handlers._build_swing_micro_log_fields(
         {
             "ready": True,
@@ -374,6 +385,10 @@ def test_swing_micro_context_advice_is_observe_only():
     assert bearish_pyramid["swing_micro_counterfactual_price_action"] == "WAIT_FOR_PULLBACK"
     assert bearish_pyramid["swing_micro_micro_risk"] is True
     assert missing["swing_micro_advice"] == "MISSING"
+    assert missing_with_fresh_ws_quote["swing_micro_advice"] == "MISSING"
+    assert missing_with_fresh_ws_quote["swing_micro_source_quality_status"] == "observer_gap_with_fresh_ws_quote"
+    assert missing_with_fresh_ws_quote["swing_micro_ws_quote_present"] is True
+    assert missing_with_fresh_ws_quote["swing_micro_ws_quote_source"] == "last_ws_update_ts"
     assert avg_down["swing_micro_recovery_support_observed"] is True
 
 

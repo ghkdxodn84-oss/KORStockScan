@@ -242,6 +242,21 @@ def test_build_code_improvement_workorder_adds_observation_source_quality_orders
                 },
                 "stage_contracts": {
                     "blocked_ai_score": {"status": "warning"},
+                    "swing_probe_state_persisted": {
+                        "status": "warning",
+                        "sample_count": 60,
+                        "missing_violations": {
+                            "metric_role": 1.0,
+                            "decision_authority": 1.0,
+                        },
+                    },
+                    "scale_in_price_p2_observe": {
+                        "status": "warning",
+                        "sample_count": 12,
+                        "missing_violations": {
+                            "orderbook_micro_ready": 0.0833,
+                        },
+                    },
                 },
                 "high_volume_no_source_fields": [
                     {"stage": "strength_momentum_observed", "event_count": 60},
@@ -266,7 +281,11 @@ def test_build_code_improvement_workorder_adds_observation_source_quality_orders
     order_ids = {item["order_id"]: item for item in report["orders"]}
     assert order_ids["order_ai_source_quality_not_evaluated_provenance"]["decision"] == "implement_now"
     assert order_ids["order_high_volume_diagnostic_stage_contract_labels"]["runtime_effect"] is False
-    assert report["summary"]["observation_source_quality_source_order_count"] == 2
+    swing_order = order_ids["order_swing_source_quality_micro_context_provenance"]
+    assert swing_order["runtime_effect"] is False
+    assert swing_order["decision"] == "implement_now"
+    assert any("swing_warning_stages=swing_probe_state_persisted,scale_in_price_p2_observe" in item for item in swing_order["evidence"])
+    assert report["summary"]["observation_source_quality_source_order_count"] == 3
     assert report["source"]["observation_source_quality_audit"] == str(
         audit_dir / "observation_source_quality_audit_2026-05-15.json"
     )

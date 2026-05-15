@@ -597,6 +597,57 @@ def _observation_source_quality_followup_orders(report: dict[str, Any]) -> list[
                 ],
             }
         )
+    swing_warning_stages = [
+        stage
+        for stage in warning_stages
+        if stage
+        in {
+            "swing_probe_state_persisted",
+            "scale_in_price_p2_observe",
+            "swing_scale_in_micro_context_observed",
+            "scale_in_price_resolved",
+            "swing_probe_scale_in_order_assumed_filled",
+            "swing_sim_scale_in_order_assumed_filled",
+        }
+    ]
+    if swing_warning_stages:
+        stage_evidence: list[str] = []
+        for stage in swing_warning_stages[:8]:
+            contract = stage_contracts.get(stage) if isinstance(stage_contracts.get(stage), dict) else {}
+            missing = contract.get("missing_violations") if isinstance(contract.get("missing_violations"), dict) else {}
+            missing_fields = ",".join(str(key) for key in list(missing)[:8])
+            stage_evidence.append(
+                f"{stage}:sample_count={contract.get('sample_count')} missing_fields={missing_fields or '-'}"
+            )
+        orders.append(
+            {
+                **base,
+                "order_id": "order_swing_source_quality_micro_context_provenance",
+                "title": "Swing source-quality micro context provenance",
+                "priority": 2,
+                "intent": (
+                    "Route swing probe-state contract warnings and OFI/QI micro-context observer gaps as "
+                    "source-quality workorders, including fresh WS quote provenance where available, without "
+                    "changing swing thresholds, order submission, approval gates, or provider route."
+                ),
+                "evidence": [
+                    *evidence,
+                    f"swing_warning_stages={','.join(swing_warning_stages)}",
+                    *stage_evidence,
+                ],
+                "files_likely_touched": [
+                    "src/engine/sniper_state_handlers.py",
+                    "src/engine/observation_source_quality_audit.py",
+                    "src/engine/build_code_improvement_workorder.py",
+                    "docs/report-based-automation-traceability.md",
+                ],
+                "acceptance_tests": [
+                    "pytest src/tests/test_observation_source_quality_audit.py "
+                    "src/tests/test_swing_model_selection_funnel_repair.py "
+                    "src/tests/test_build_code_improvement_workorder.py",
+                ],
+            }
+        )
     return orders
 
 
