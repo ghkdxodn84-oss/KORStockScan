@@ -485,6 +485,164 @@ def test_swing_scale_in_real_canary_requires_separate_artifact(tmp_path, monkeyp
     assert "KORSTOCKSCAN_SWING_SCALE_IN_REAL_CANARY_ENABLED" not in env_text
 
 
+def test_swing_one_share_real_canary_requires_separate_artifact(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    swing_request_dir = tmp_path / "swing_runtime_approval"
+    approval_dir = tmp_path / "approvals"
+    for directory in (report_dir, swing_request_dir, approval_dir):
+        directory.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_REPORT_DIR", swing_request_dir)
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_ARTIFACT_DIR", approval_dir)
+
+    approval_id = "swing_one_share_real_canary:2026-05-08:phase0"
+    (report_dir / "threshold_cycle_2026-05-08.json").write_text(
+        json.dumps({"date": "2026-05-08", "calibration_candidates": []}),
+        encoding="utf-8",
+    )
+    (swing_request_dir / "swing_runtime_approval_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "real_canary_policy": {"policy_id": "swing_one_share_real_canary_phase0"},
+                "approval_requests": [
+                    {
+                        "approval_id": approval_id,
+                        "policy_id": "swing_one_share_real_canary_phase0",
+                        "family": "swing_one_share_real_canary_phase0",
+                        "stage": "real_canary_entry",
+                        "target_env_keys": ["SWING_ONE_SHARE_REAL_CANARY_ENABLED"],
+                        "current_values": {"enabled": False},
+                        "recommended_values": {"enabled": True, "allowed_codes": "123456"},
+                        "candidate_codes": ["123456"],
+                        "dry_run_required": True,
+                        "actual_order_submitted": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-11",
+        source_date="2026-05-08",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    assert manifest["runtime_change"] is False
+    assert "one_share_real_canary_approval_artifact_missing" in manifest["swing_runtime_approval"]["blocked"]
+    env_text = (runtime_dir / "threshold_runtime_env_2026-05-11.env").read_text(encoding="utf-8")
+    assert "KORSTOCKSCAN_THRESHOLD_RUNTIME_AUTO_APPLY_ENABLED=true" in env_text
+    assert "KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_ENABLED" not in env_text
+
+
+def test_swing_one_share_real_canary_artifact_applies_env_and_keeps_dry_run(tmp_path, monkeypatch):
+    report_dir = tmp_path / "report"
+    apply_dir = tmp_path / "apply_plans"
+    runtime_dir = tmp_path / "runtime_env"
+    swing_request_dir = tmp_path / "swing_runtime_approval"
+    approval_dir = tmp_path / "approvals"
+    for directory in (report_dir, swing_request_dir, approval_dir):
+        directory.mkdir(parents=True)
+    monkeypatch.setattr(mod, "REPORT_DIR", report_dir)
+    monkeypatch.setattr(mod, "APPLY_PLAN_DIR", apply_dir)
+    monkeypatch.setattr(mod, "RUNTIME_ENV_DIR", runtime_dir)
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_REPORT_DIR", swing_request_dir)
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_ARTIFACT_DIR", approval_dir)
+
+    approval_id = "swing_one_share_real_canary:2026-05-08:phase0"
+    (report_dir / "threshold_cycle_2026-05-08.json").write_text(
+        json.dumps({"date": "2026-05-08", "calibration_candidates": []}),
+        encoding="utf-8",
+    )
+    (swing_request_dir / "swing_runtime_approval_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "real_canary_policy": {"policy_id": "swing_one_share_real_canary_phase0"},
+                "approval_requests": [
+                    {
+                        "approval_id": approval_id,
+                        "policy_id": "swing_one_share_real_canary_phase0",
+                        "family": "swing_one_share_real_canary_phase0",
+                        "stage": "real_canary_entry",
+                        "target_env_keys": [
+                            "SWING_ONE_SHARE_REAL_CANARY_ENABLED",
+                            "SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES",
+                            "SWING_ONE_SHARE_REAL_CANARY_MAX_QTY",
+                            "SWING_ONE_SHARE_REAL_CANARY_MAX_NEW_ENTRIES_PER_DAY",
+                            "SWING_ONE_SHARE_REAL_CANARY_MAX_OPEN_POSITIONS",
+                            "SWING_ONE_SHARE_REAL_CANARY_MAX_TOTAL_NOTIONAL_KRW",
+                            "SWING_ONE_SHARE_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT",
+                        ],
+                        "current_values": {
+                            "enabled": False,
+                            "allowed_codes": "",
+                            "max_order_qty": 1,
+                            "max_new_entries_per_day": 1,
+                            "max_open_positions": 3,
+                            "max_total_notional_krw": 300000,
+                            "require_approval_artifact": True,
+                        },
+                        "recommended_values": {
+                            "enabled": True,
+                            "allowed_codes": "123456",
+                            "max_order_qty": 1,
+                            "max_new_entries_per_day": 1,
+                            "max_open_positions": 3,
+                            "max_total_notional_krw": 300000,
+                            "require_approval_artifact": True,
+                        },
+                        "candidate_codes": ["123456"],
+                        "dry_run_required": True,
+                        "actual_order_submitted": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (approval_dir / "swing_one_share_real_canary_2026-05-08.json").write_text(
+        json.dumps(
+            {
+                "policy_id": "swing_one_share_real_canary_phase0",
+                "approved": True,
+                "target_date": "2026-05-11",
+                "allowed_codes": ["123456"],
+                "max_order_qty": 1,
+                "max_new_entries_per_day": 1,
+                "max_open_positions": 3,
+                "max_total_notional_krw": 300000,
+                "approval_source_report": "data/report/swing_runtime_approval/swing_runtime_approval_2026-05-08.json",
+                "approved_request_ids": [approval_id],
+                "expires_after_target_date": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    manifest = mod.build_preopen_apply_manifest(
+        "2026-05-11",
+        source_date="2026-05-08",
+        apply_mode="auto_bounded_live",
+        auto_apply=True,
+        require_ai=False,
+    )
+
+    assert manifest["runtime_change"] is True
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_ENABLED"] == "true"
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES"] == "123456"
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_MAX_QTY"] == "1"
+    assert manifest["runtime_env_overrides"]["KORSTOCKSCAN_SWING_LIVE_ORDER_DRY_RUN_ENABLED"] == "true"
+    assert manifest["swing_runtime_approval"]["selected"][0]["family"] == "swing_one_share_real_canary_phase0"
+    assert manifest["swing_runtime_approval"]["selected"][0]["one_share_real_canary"] is True
+
+
 def test_swing_scale_in_real_canary_artifact_applies_env(tmp_path, monkeypatch):
     report_dir = tmp_path / "report"
     apply_dir = tmp_path / "apply_plans"

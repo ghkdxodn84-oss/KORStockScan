@@ -98,6 +98,13 @@ class TradingConfig:
     SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_POSITION: int = 1
     SWING_SCALE_IN_REAL_CANARY_MAX_DAILY_NOTIONAL_KRW: int = 100000
     SWING_SCALE_IN_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT: bool = True
+    SWING_ONE_SHARE_REAL_CANARY_ENABLED: bool = False  # 별도 approval artifact 없이는 스윙 초기 1주 실주문 금지
+    SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES: str = ""  # approval artifact가 지정한 종목만 허용
+    SWING_ONE_SHARE_REAL_CANARY_MAX_QTY: int = 1
+    SWING_ONE_SHARE_REAL_CANARY_MAX_NEW_ENTRIES_PER_DAY: int = 1
+    SWING_ONE_SHARE_REAL_CANARY_MAX_OPEN_POSITIONS: int = 3
+    SWING_ONE_SHARE_REAL_CANARY_MAX_TOTAL_NOTIONAL_KRW: int = 300000
+    SWING_ONE_SHARE_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT: bool = True
     SWING_LIVE_ORDER_DRY_RUN_ENABLED: bool = True  # 스윙 live 로직은 동일 실행, 실제 주문 접수만 차단
     SWING_LIVE_ORDER_DRY_RUN_OWNER: str = "SwingLiveOrderDryRunSimulation0511"
     SWING_INTRADAY_LIVE_EQUIV_PROBE_ENABLED: bool = True  # 스윙 차단 stage 이후 live-equivalent observe-only probe
@@ -1229,6 +1236,23 @@ def _build_trading_rules() -> TradingConfig:
     env_swing_scale_in_real_canary_require_approval = _env_bool(
         "KORSTOCKSCAN_SWING_SCALE_IN_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT"
     )
+    env_swing_one_share_real_canary_enabled = _env_bool("KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_ENABLED")
+    env_swing_one_share_real_canary_allowed_codes = _env_str(
+        "KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES"
+    )
+    env_swing_one_share_real_canary_max_qty = _env_int("KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_MAX_QTY")
+    env_swing_one_share_real_canary_max_new_entries_per_day = _env_int(
+        "KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_MAX_NEW_ENTRIES_PER_DAY"
+    )
+    env_swing_one_share_real_canary_max_open_positions = _env_int(
+        "KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_MAX_OPEN_POSITIONS"
+    )
+    env_swing_one_share_real_canary_max_total_notional = _env_int(
+        "KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_MAX_TOTAL_NOTIONAL_KRW"
+    )
+    env_swing_one_share_real_canary_require_approval = _env_bool(
+        "KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT"
+    )
     env_ml_gatekeeper_reject_cooldown = _env_int("KORSTOCKSCAN_ML_GATEKEEPER_REJECT_COOLDOWN")
     env_swing_live_order_dry_run_enabled = _env_bool(
         "KORSTOCKSCAN_SWING_LIVE_ORDER_DRY_RUN_ENABLED"
@@ -1331,6 +1355,13 @@ def _build_trading_rules() -> TradingConfig:
         or env_swing_scale_in_real_canary_max_orders_per_position is not None
         or env_swing_scale_in_real_canary_max_daily_notional is not None
         or env_swing_scale_in_real_canary_require_approval is not None
+        or env_swing_one_share_real_canary_enabled is not None
+        or env_swing_one_share_real_canary_allowed_codes is not None
+        or env_swing_one_share_real_canary_max_qty is not None
+        or env_swing_one_share_real_canary_max_new_entries_per_day is not None
+        or env_swing_one_share_real_canary_max_open_positions is not None
+        or env_swing_one_share_real_canary_max_total_notional is not None
+        or env_swing_one_share_real_canary_require_approval is not None
         or env_ml_gatekeeper_reject_cooldown is not None
         or env_swing_live_order_dry_run_enabled is not None
         or env_swing_intraday_probe_enabled is not None
@@ -1428,6 +1459,27 @@ def _build_trading_rules() -> TradingConfig:
             SWING_SCALE_IN_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT=env_swing_scale_in_real_canary_require_approval
             if env_swing_scale_in_real_canary_require_approval is not None
             else config.SWING_SCALE_IN_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT,
+            SWING_ONE_SHARE_REAL_CANARY_ENABLED=env_swing_one_share_real_canary_enabled
+            if env_swing_one_share_real_canary_enabled is not None
+            else config.SWING_ONE_SHARE_REAL_CANARY_ENABLED,
+            SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES=env_swing_one_share_real_canary_allowed_codes
+            if env_swing_one_share_real_canary_allowed_codes is not None
+            else config.SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES,
+            SWING_ONE_SHARE_REAL_CANARY_MAX_QTY=env_swing_one_share_real_canary_max_qty
+            if env_swing_one_share_real_canary_max_qty is not None
+            else config.SWING_ONE_SHARE_REAL_CANARY_MAX_QTY,
+            SWING_ONE_SHARE_REAL_CANARY_MAX_NEW_ENTRIES_PER_DAY=env_swing_one_share_real_canary_max_new_entries_per_day
+            if env_swing_one_share_real_canary_max_new_entries_per_day is not None
+            else config.SWING_ONE_SHARE_REAL_CANARY_MAX_NEW_ENTRIES_PER_DAY,
+            SWING_ONE_SHARE_REAL_CANARY_MAX_OPEN_POSITIONS=env_swing_one_share_real_canary_max_open_positions
+            if env_swing_one_share_real_canary_max_open_positions is not None
+            else config.SWING_ONE_SHARE_REAL_CANARY_MAX_OPEN_POSITIONS,
+            SWING_ONE_SHARE_REAL_CANARY_MAX_TOTAL_NOTIONAL_KRW=env_swing_one_share_real_canary_max_total_notional
+            if env_swing_one_share_real_canary_max_total_notional is not None
+            else config.SWING_ONE_SHARE_REAL_CANARY_MAX_TOTAL_NOTIONAL_KRW,
+            SWING_ONE_SHARE_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT=env_swing_one_share_real_canary_require_approval
+            if env_swing_one_share_real_canary_require_approval is not None
+            else config.SWING_ONE_SHARE_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT,
             ML_GATEKEEPER_REJECT_COOLDOWN=env_ml_gatekeeper_reject_cooldown
             if env_ml_gatekeeper_reject_cooldown is not None
             else config.ML_GATEKEEPER_REJECT_COOLDOWN,

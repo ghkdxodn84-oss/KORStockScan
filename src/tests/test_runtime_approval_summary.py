@@ -123,6 +123,59 @@ def test_runtime_approval_summary_warns_when_sources_missing(tmp_path, monkeypat
     assert "swing_runtime_approval_missing" in report["warnings"]
 
 
+def test_runtime_approval_summary_surfaces_swing_one_share_approval_request(tmp_path, monkeypatch):
+    ev_dir = tmp_path / "threshold_cycle_ev"
+    swing_dir = tmp_path / "swing_runtime_approval"
+    approval_dir = tmp_path / "approvals"
+    out_dir = tmp_path / "runtime_approval_summary"
+    ev_dir.mkdir(parents=True)
+    swing_dir.mkdir(parents=True)
+    approval_dir.mkdir(parents=True)
+    monkeypatch.setattr(
+        mod,
+        "ev_report_paths",
+        lambda target_date: (
+            ev_dir / f"threshold_cycle_ev_{target_date}.json",
+            ev_dir / f"threshold_cycle_ev_{target_date}.md",
+        ),
+    )
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_DIR", swing_dir)
+    monkeypatch.setattr(mod, "SWING_RUNTIME_APPROVAL_ARTIFACT_DIR", approval_dir)
+    monkeypatch.setattr(mod, "SUMMARY_DIR", out_dir)
+
+    (ev_dir / "threshold_cycle_ev_2026-05-15.json").write_text(
+        json.dumps({"calibration_outcome": {"decisions": []}}),
+        encoding="utf-8",
+    )
+    (swing_dir / "swing_runtime_approval_2026-05-15.json").write_text(
+        json.dumps(
+            {
+                "date": "2026-05-15",
+                "summary": {"requested": 1, "approved": 0},
+                "approval_requests": [
+                    {
+                        "family": "swing_one_share_real_canary_phase0",
+                        "policy_id": "swing_one_share_real_canary_phase0",
+                        "approval_id": "swing_one_share_real_canary:2026-05-15:phase0",
+                        "calibration_state": "approval_required",
+                    }
+                ],
+                "blocked_requests": [],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    report = mod.build_runtime_approval_summary("2026-05-15")
+
+    assert report["summary"]["swing_requested"] == 1
+    assert report["swing"][0]["family"] == "swing_one_share_real_canary_phase0"
+    assert report["swing"][0]["state"] == "approval_required"
+    assert report["swing"][0]["reason_label"] == "1주 real canary approval artifact 없음"
+    assert report["swing"][0]["approval_id"] == "swing_one_share_real_canary:2026-05-15:phase0"
+
+
 def test_runtime_approval_summary_surfaces_panic_approval_requests(tmp_path, monkeypatch):
     ev_dir = tmp_path / "threshold_cycle_ev"
     calibration_dir = tmp_path / "threshold_cycle_calibration"
@@ -185,16 +238,18 @@ def test_runtime_approval_summary_surfaces_panic_approval_requests(tmp_path, mon
 
     report = mod.build_runtime_approval_summary("2026-05-13")
 
-    assert report["summary"]["panic_approval_requested"] == 2
+    assert report["summary"]["panic_approval_requested"] == 0
     assert {row["family"] for row in report["panic"]} == {
-        "panic_sell_defense",
+        "panic_entry_freeze_guard",
         "panic_buy_runner_tp_canary",
     }
-    assert all(row["state"] == "approval_required" for row in report["panic"])
+    assert all(row["state"] == "approval_contract_missing" for row in report["panic"])
+    assert all(row["approval_contract_status"] == "contract_missing" for row in report["panic"])
     assert all(row["selected_auto_bounded_live"] is False for row in report["panic"])
-    panic_sell = next(row for row in report["panic"] if row["family"] == "panic_sell_defense")
+    panic_sell = next(row for row in report["panic"] if row["family"] == "panic_entry_freeze_guard")
     assert panic_sell["panic_regime_mode"] == "PANIC_DETECTED"
     assert panic_sell["panic_regime_decision_authority"] == "source_quality_only"
+    assert "entry_pre_submit_runtime_guard" in panic_sell["approval_contract_missing_components"]
     panic_buy = next(row for row in report["panic"] if row["family"] == "panic_buy_runner_tp_canary")
     assert panic_buy["panic_buy_regime_mode"] == "PANIC_BUY_CONTINUATION"
     assert panic_buy["panic_buy_regime_decision_authority"] == "source_quality_only"
@@ -266,7 +321,7 @@ def test_runtime_approval_summary_freezes_panic_request_on_source_quality_blocke
     report = mod.build_runtime_approval_summary("2026-05-14")
 
     rows = {row["family"]: row for row in report["panic"]}
-    row = rows["panic_sell_defense"]
+    row = rows["panic_entry_freeze_guard"]
     assert row["state"] == "freeze"
     assert "source_quality_blocker" in row["reasons"]
     assert row["source_quality_blockers"] == ["market_regime_not_risk_off"]

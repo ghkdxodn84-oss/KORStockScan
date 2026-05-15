@@ -12,6 +12,7 @@ from typing import Any, Iterable
 import pandas as pd
 from sqlalchemy import create_engine, text
 
+from src.engine.approval_contracts import annotate_approval_request
 from src.engine.ai_response_contracts import build_openai_response_text_format
 from src.engine.swing_selection_funnel_report import (
     SWING_EVENT_STAGES,
@@ -2142,6 +2143,138 @@ def build_swing_threshold_candidates(audit_report: dict[str, Any]) -> list[dict[
     return candidates
 
 
+def _swing_one_share_candidate_rows(audit_report: dict[str, Any]) -> list[dict[str, Any]]:
+    source_paths = audit_report.get("source_paths") if isinstance(audit_report.get("source_paths"), dict) else {}
+    csv_path = Path(str(source_paths.get("recommendations_csv") or RECO_PATH))
+    if not csv_path.exists():
+        return []
+    try:
+        frame = pd.read_csv(csv_path, dtype={"code": str})
+    except Exception:
+        return []
+    if frame.empty or "code" not in frame.columns:
+        return []
+    if "selection_mode" in frame.columns:
+        frame = frame[frame["selection_mode"].astype(str).str.upper() == "SELECTED"]
+    if "score_rank" in frame.columns:
+        frame = frame.sort_values("score_rank", ascending=True)
+    rows: list[dict[str, Any]] = []
+    for _, row in frame.head(10).iterrows():
+        code = str(row.get("code") or "").strip().zfill(6)
+        if not code:
+            continue
+        rows.append(
+            {
+                "code": code,
+                "name": str(row.get("name") or ""),
+                "score_rank": _safe_int(row.get("score_rank"), 0),
+                "selection_mode": str(row.get("selection_mode") or "SELECTED"),
+                "close": _safe_float(row.get("close"), None),
+                "hybrid_mean": _safe_float(row.get("hybrid_mean"), None),
+                "meta_score": _safe_float(row.get("meta_score"), None),
+            }
+        )
+    return rows
+
+
+def _build_swing_one_share_real_canary_request(
+    audit_report: dict[str, Any],
+    candidates: list[dict[str, Any]],
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    date_key = str(audit_report.get("date") or "")
+    policy = swing_one_share_real_canary_phase0_policy()
+    candidate_rows = _swing_one_share_candidate_rows(audit_report)
+    eligible_requests = [
+        item
+        for item in candidates
+        if str(item.get("calibration_state") or "") == "approval_required"
+        and bool(item.get("human_approval_required"))
+        and str(item.get("family") or "") in SWING_RUNTIME_APPROVAL_LIVE_FAMILIES
+    ]
+    db_load = audit_report.get("recommendation_db_load") if isinstance(audit_report.get("recommendation_db_load"), dict) else {}
+    axis_summary = (
+        audit_report.get("observation_axis_summary")
+        if isinstance(audit_report.get("observation_axis_summary"), dict)
+        else {}
+    )
+    blockers: list[str] = []
+    if not eligible_requests:
+        blockers.append("runtime_approval_hard_floor_or_tradeoff_missing")
+    if not candidate_rows:
+        blockers.append("one_share_candidate_rows_missing")
+    if bool(db_load.get("db_load_gap")):
+        blockers.append("db_load_gap")
+    if _safe_int(axis_summary.get("instrumentation_gap_count"), 0) > 0:
+        blockers.append("critical_instrumentation_gap")
+    if blockers:
+        return None, {
+            "family": policy["policy_id"],
+            "stage": "real_canary_entry",
+            "calibration_state": "freeze",
+            "tradeoff_score": None,
+            "block_reasons": blockers,
+            "candidate_rows": candidate_rows,
+        }
+
+    tradeoff_score = max(_safe_float(item.get("tradeoff_score"), 0.0) or 0.0 for item in eligible_requests)
+    sample_count = sum(_safe_int(item.get("sample_count"), 0) or 0 for item in eligible_requests)
+    sample_floor = max(_safe_int(item.get("sample_floor"), 0) or 0 for item in eligible_requests)
+    candidate_codes = [row["code"] for row in candidate_rows if row.get("code")]
+    approval_id = f"swing_one_share_real_canary:{date_key}:phase0"
+    request = {
+        "approval_id": approval_id,
+        "policy_id": policy["policy_id"],
+        "family": policy["policy_id"],
+        "stage": "real_canary_entry",
+        "calibration_state": "approval_required",
+        "approval_reason": "swing runtime hard floor/trade-off 통과 후보의 broker execution 품질 1주 real canary 수집",
+        "human_approval_required": True,
+        "tradeoff_score": round(float(tradeoff_score), 4),
+        "sample_count": sample_count,
+        "sample_floor": sample_floor,
+        "candidate_rows": candidate_rows,
+        "candidate_codes": candidate_codes,
+        "target_env_keys": [
+            "SWING_ONE_SHARE_REAL_CANARY_ENABLED",
+            "SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES",
+            "SWING_ONE_SHARE_REAL_CANARY_MAX_QTY",
+            "SWING_ONE_SHARE_REAL_CANARY_MAX_NEW_ENTRIES_PER_DAY",
+            "SWING_ONE_SHARE_REAL_CANARY_MAX_OPEN_POSITIONS",
+            "SWING_ONE_SHARE_REAL_CANARY_MAX_TOTAL_NOTIONAL_KRW",
+            "SWING_ONE_SHARE_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT",
+        ],
+        "current_values": {
+            "enabled": False,
+            "allowed_codes": "",
+            "max_order_qty": 1,
+            "max_new_entries_per_day": 1,
+            "max_open_positions": 3,
+            "max_total_notional_krw": 300000,
+            "require_approval_artifact": True,
+        },
+        "recommended_values": {
+            "enabled": True,
+            "allowed_codes": ",".join(candidate_codes),
+            "max_order_qty": 1,
+            "max_new_entries_per_day": 1,
+            "max_open_positions": 3,
+            "max_total_notional_krw": 300000,
+            "require_approval_artifact": True,
+        },
+        "actual_order_submitted": False,
+        "dry_run_required": True,
+        "global_swing_dry_run_must_remain_enabled": True,
+        "broker_order_submission_scope": policy["broker_order_submission_scope"],
+        "real_order_allowed_actions": list(policy["real_order_allowed_actions"]),
+        "sim_only_actions": list(policy["sim_only_actions"]),
+        "blocked_real_order_actions": list(policy["blocked_real_order_actions"]),
+        "execution_quality_authority": "real_only",
+        "ev_calibration_source": policy["ev_calibration_source"],
+        "broker_execution_quality_source": policy["execution_quality_source"],
+    }
+    return request, None
+
+
 def build_swing_runtime_approval_report(
     audit_report: dict[str, Any],
     threshold_ai_review: dict[str, Any] | None = None,
@@ -2151,6 +2284,7 @@ def build_swing_runtime_approval_report(
     candidates = build_swing_threshold_candidates(audit_report)
     real_canary_policy = swing_one_share_real_canary_phase0_policy()
     scale_in_real_canary_policy = swing_scale_in_real_canary_phase0_policy()
+    one_share_request, one_share_block = _build_swing_one_share_real_canary_request(audit_report, candidates)
     scale_in_request, scale_in_arm_decisions = _build_swing_scale_in_real_canary_request(audit_report)
     source_quality_blocked_families = [
         {
@@ -2218,6 +2352,9 @@ def build_swing_runtime_approval_report(
     ]
     if scale_in_request is not None:
         requests.append(scale_in_request)
+    if one_share_request is not None:
+        requests.append(one_share_request)
+    requests = [annotate_approval_request(item, date_key) for item in requests]
     blocked = [
         {
             "family": item.get("family"),
@@ -2244,6 +2381,8 @@ def build_swing_runtime_approval_report(
                 "arm_decisions": scale_in_arm_decisions,
             }
         )
+    if one_share_block is not None:
+        blocked.append(one_share_block)
     db = audit_report.get("db_lifecycle") if isinstance(audit_report.get("db_lifecycle"), dict) else {}
     events = audit_report.get("lifecycle_events") if isinstance(audit_report.get("lifecycle_events"), dict) else {}
     return {

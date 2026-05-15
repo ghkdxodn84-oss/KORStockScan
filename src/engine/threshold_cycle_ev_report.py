@@ -10,6 +10,7 @@ from typing import Any
 
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.engine.build_code_improvement_workorder import code_improvement_workorder_paths
+from src.engine.approval_contracts import annotate_approval_request
 from src.engine.scalping_pattern_lab_automation import automation_report_paths
 from src.engine.swing_pattern_lab_automation import swing_pattern_lab_automation_report_paths
 from src.engine.threshold_cycle_preopen_apply import apply_manifest_path
@@ -129,13 +130,21 @@ def _swing_runtime_approval_summary(apply_manifest: dict[str, Any]) -> dict[str,
         if isinstance(item, dict)
         and str(item.get("policy_id") or item.get("family") or "") == "swing_scale_in_real_canary_phase0"
     ]
+    one_share_selected = [
+        item
+        for item in selected
+        if isinstance(item, dict)
+        and str(item.get("policy_id") or item.get("family") or "") == "swing_one_share_real_canary_phase0"
+    ]
     return {
         "request_report": swing.get("request_report"),
         "approval_artifact": swing.get("approval_artifact"),
+        "one_share_real_canary_approval_artifact": swing.get("one_share_real_canary_approval_artifact"),
         "scale_in_real_canary_approval_artifact": swing.get("scale_in_real_canary_approval_artifact"),
         "requested": _safe_int(swing.get("requested"), len(requests)),
         "approved": _safe_int(swing.get("approved"), len(approved)),
         "selected_live_dry_run": len(selected),
+        "selected_one_share_real_canary": len(one_share_selected),
         "selected_scale_in_real_canary": len(scale_in_selected),
         "dry_run_forced": bool(swing.get("dry_run_forced")),
         "real_canary_policy": real_canary_policy,
@@ -146,6 +155,7 @@ def _swing_runtime_approval_summary(apply_manifest: dict[str, Any]) -> dict[str,
             else []
         ),
         "real_execution_quality": {
+            "one_share_canary_selected": len(one_share_selected),
             "scale_in_canary_selected": len(scale_in_selected),
             "execution_quality_source": "real_only",
             "sim_probe_ev_source": "separate_from_broker_execution_quality",
@@ -232,6 +242,7 @@ def _approval_requests(calibration_report: dict[str, Any]) -> list[dict[str, Any
     if not isinstance(candidates, list):
         return []
     requests: list[dict[str, Any]] = []
+    source_date = str(calibration_report.get("date") or "").strip() or None
     for item in candidates:
         if not isinstance(item, dict):
             continue
@@ -240,15 +251,18 @@ def _approval_requests(calibration_report: dict[str, Any]) -> list[dict[str, Any
         if str(item.get("calibration_state") or "") != "approval_required":
             continue
         requests.append(
-            {
-                "family": item.get("family"),
-                "stage": item.get("stage"),
-                "calibration_reason": item.get("calibration_reason"),
-                "current_values": item.get("current_values"),
-                "recommended_values": item.get("recommended_values"),
-                "sample_count": item.get("sample_count"),
-                "sample_floor": item.get("sample_floor"),
-            }
+            annotate_approval_request(
+                {
+                    "family": item.get("family"),
+                    "stage": item.get("stage"),
+                    "calibration_reason": item.get("calibration_reason"),
+                    "current_values": item.get("current_values"),
+                    "recommended_values": item.get("recommended_values"),
+                    "sample_count": item.get("sample_count"),
+                    "sample_floor": item.get("sample_floor"),
+                },
+                source_date,
+            )
         )
     return requests
 
@@ -702,6 +716,8 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
         f"- requested/approved/live_dry_run: `{swing_runtime.get('requested')}` / `{swing_runtime.get('approved')}` / `{swing_runtime.get('selected_live_dry_run')}`",
         f"- dry_run_forced: `{swing_runtime.get('dry_run_forced')}`",
         f"- real_canary_policy: `{((swing_runtime.get('real_canary_policy') or {}).get('policy_id')) or '-'}`",
+        f"- one_share_real_canary_artifact: `{swing_runtime.get('one_share_real_canary_approval_artifact') or '-'}`",
+        f"- selected_one_share_real_canary: `{swing_runtime.get('selected_one_share_real_canary')}`",
         f"- real_order_allowed_actions: `{', '.join((swing_runtime.get('real_canary_policy') or {}).get('real_order_allowed_actions') or [])}`",
         f"- sim_only_actions: `{', '.join((swing_runtime.get('real_canary_policy') or {}).get('sim_only_actions') or [])}`",
         f"- scale_in_real_canary_policy: `{((swing_runtime.get('scale_in_real_canary_policy') or {}).get('policy_id')) or '-'}`",
@@ -722,7 +738,9 @@ def render_threshold_cycle_ev_markdown(report: dict[str, Any]) -> str:
             if isinstance(item, dict):
                 lines.append(
                     f"- `{item.get('family')}` sample=`{item.get('sample_count')}/{item.get('sample_floor')}` "
-                    f"reason=`{item.get('calibration_reason')}`"
+                    f"reason=`{item.get('calibration_reason')}` "
+                    f"contract=`{item.get('approval_contract_status')}` "
+                    f"live_ready=`{item.get('approval_live_ready')}`"
                 )
     else:
         lines.append("- none")

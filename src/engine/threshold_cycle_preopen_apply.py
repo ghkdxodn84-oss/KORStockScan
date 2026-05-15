@@ -10,6 +10,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine.approval_contracts import annotate_approval_request
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.utils.constants import DATA_DIR
 
@@ -63,6 +64,13 @@ TARGET_ENV_VALUE_KEYS = {
     "SWING_SCALE_IN_REAL_CANARY_MAX_ORDERS_PER_POSITION": "max_orders_per_position",
     "SWING_SCALE_IN_REAL_CANARY_MAX_DAILY_NOTIONAL_KRW": "max_daily_notional_krw",
     "SWING_SCALE_IN_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT": "require_approval_artifact",
+    "SWING_ONE_SHARE_REAL_CANARY_ENABLED": "enabled",
+    "SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES": "allowed_codes",
+    "SWING_ONE_SHARE_REAL_CANARY_MAX_QTY": "max_order_qty",
+    "SWING_ONE_SHARE_REAL_CANARY_MAX_NEW_ENTRIES_PER_DAY": "max_new_entries_per_day",
+    "SWING_ONE_SHARE_REAL_CANARY_MAX_OPEN_POSITIONS": "max_open_positions",
+    "SWING_ONE_SHARE_REAL_CANARY_MAX_TOTAL_NOTIONAL_KRW": "max_total_notional_krw",
+    "SWING_ONE_SHARE_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT": "require_approval_artifact",
 }
 
 
@@ -111,6 +119,10 @@ def swing_runtime_approval_artifact_path(source_date: str) -> Path:
 
 def swing_scale_in_real_canary_artifact_path(source_date: str) -> Path:
     return SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_scale_in_real_canary_{source_date}.json"
+
+
+def swing_one_share_real_canary_artifact_path(source_date: str) -> Path:
+    return SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_one_share_real_canary_{source_date}.json"
 
 
 def _report_path_for_date(target_date: str) -> Path:
@@ -199,7 +211,8 @@ def _env_overrides_for_candidate(candidate: dict[str, Any]) -> dict[str, str]:
     recommended = candidate.get("recommended_values") if isinstance(candidate.get("recommended_values"), dict) else {}
     current = candidate.get("current_values") if isinstance(candidate.get("current_values"), dict) else {}
     calibration_state = str(candidate.get("calibration_state") or "")
-    force_emit = str(candidate.get("policy_id") or candidate.get("family") or "") == "swing_scale_in_real_canary_phase0"
+    policy_or_family = str(candidate.get("policy_id") or candidate.get("family") or "")
+    force_emit = policy_or_family in {"swing_scale_in_real_canary_phase0", "swing_one_share_real_canary_phase0"}
     overrides: dict[str, str] = {}
     for target_key in candidate.get("target_env_keys") or []:
         target_key = str(target_key)
@@ -226,9 +239,11 @@ def _load_swing_runtime_approval_bundle(source_date: str | None) -> dict[str, An
         }
     request_path = swing_runtime_approval_report_path(source_date)
     artifact_path = swing_runtime_approval_artifact_path(source_date)
+    one_share_artifact_path = swing_one_share_real_canary_artifact_path(source_date)
     scale_artifact_path = swing_scale_in_real_canary_artifact_path(source_date)
     request_report = _load_json(request_path)
     artifact = _load_json(artifact_path)
+    one_share_artifact = _load_json(one_share_artifact_path)
     scale_artifact = _load_json(scale_artifact_path)
     requests = request_report.get("approval_requests") if isinstance(request_report.get("approval_requests"), list) else []
     real_canary_policy = (
@@ -245,6 +260,10 @@ def _load_swing_runtime_approval_bundle(source_date: str | None) -> dict[str, An
         for item in approved_items
         if isinstance(item, dict) and bool(item.get("approved", True))
     }
+    if bool(one_share_artifact.get("approved")) and str(one_share_artifact.get("policy_id") or "") == "swing_one_share_real_canary_phase0":
+        for approval_id in one_share_artifact.get("approved_request_ids") or []:
+            if approval_id:
+                approved_ids.add(str(approval_id))
     if bool(scale_artifact.get("approved")) and str(scale_artifact.get("policy_id") or "") == "swing_scale_in_real_canary_phase0":
         for approval_id in scale_artifact.get("approved_request_ids") or []:
             if approval_id:
@@ -260,16 +279,25 @@ def _load_swing_runtime_approval_bundle(source_date: str | None) -> dict[str, An
         if isinstance(item, dict)
         and str(item.get("policy_id") or item.get("family") or "") == "swing_scale_in_real_canary_phase0"
     ]
+    one_share_requests = [
+        item
+        for item in requests
+        if isinstance(item, dict)
+        and str(item.get("policy_id") or item.get("family") or "") == "swing_one_share_real_canary_phase0"
+    ]
     non_scale_requests = [
         item
         for item in requests
         if isinstance(item, dict)
         and str(item.get("policy_id") or item.get("family") or "") != "swing_scale_in_real_canary_phase0"
+        and str(item.get("policy_id") or item.get("family") or "") != "swing_one_share_real_canary_phase0"
     ]
     approved_requests = []
     blocked: list[str] = []
     if non_scale_requests and not artifact:
         blocked.append("approval_artifact_missing")
+    if one_share_requests and not one_share_artifact:
+        blocked.append("one_share_real_canary_approval_artifact_missing")
     if scale_requests and not scale_artifact:
         blocked.append("scale_in_real_canary_approval_artifact_missing")
     for approval_id in sorted(approved_ids):
@@ -277,7 +305,56 @@ def _load_swing_runtime_approval_bundle(source_date: str | None) -> dict[str, An
         if not request:
             blocked.append(f"approval_request_not_found:{approval_id}")
             continue
-        if str(request.get("policy_id") or request.get("family") or "") == "swing_scale_in_real_canary_phase0":
+        request_policy = str(request.get("policy_id") or request.get("family") or "")
+        if request_policy == "swing_one_share_real_canary_phase0":
+            request_codes = {
+                str(value).zfill(6)
+                for value in (
+                    request.get("candidate_codes")
+                    or [item.get("code") for item in (request.get("candidate_rows") or []) if isinstance(item, dict)]
+                    or []
+                )
+                if str(value or "").strip()
+            }
+            artifact_codes = {
+                str(value).zfill(6)
+                for value in (one_share_artifact.get("allowed_codes") or [])
+                if str(value or "").strip()
+            }
+            if not artifact_codes:
+                blocked.append(f"one_share_real_canary_allowed_codes_missing:{approval_id}")
+                continue
+            if request_codes and not artifact_codes.issubset(request_codes):
+                blocked.append(f"one_share_real_canary_allowed_codes_mismatch:{approval_id}")
+                continue
+            max_order_qty = int(one_share_artifact.get("max_order_qty") or 1)
+            max_new_entries = int(one_share_artifact.get("max_new_entries_per_day") or 1)
+            max_open_positions = int(one_share_artifact.get("max_open_positions") or 3)
+            max_total_notional = int(one_share_artifact.get("max_total_notional_krw") or 300000)
+            if max_order_qty != 1:
+                blocked.append(f"one_share_real_canary_qty_cap_mismatch:{approval_id}")
+                continue
+            if max_new_entries < 1 or max_new_entries > 1:
+                blocked.append(f"one_share_real_canary_daily_entry_cap_mismatch:{approval_id}")
+                continue
+            if max_open_positions < 1 or max_open_positions > 3:
+                blocked.append(f"one_share_real_canary_open_position_cap_mismatch:{approval_id}")
+                continue
+            if max_total_notional < 1 or max_total_notional > 300000:
+                blocked.append(f"one_share_real_canary_notional_cap_mismatch:{approval_id}")
+                continue
+            request = {
+                **request,
+                "recommended_values": {
+                    **(request.get("recommended_values") or {}),
+                    "allowed_codes": ",".join(sorted(artifact_codes)),
+                    "max_order_qty": max_order_qty,
+                    "max_new_entries_per_day": max_new_entries,
+                    "max_open_positions": max_open_positions,
+                    "max_total_notional_krw": max_total_notional,
+                },
+            }
+        if request_policy == "swing_scale_in_real_canary_phase0":
             allowed = set(str(value).upper() for value in (request.get("allowed_actions") or []))
             artifact_allowed = set(str(value).upper() for value in (scale_artifact.get("allowed_actions") or []))
             if not artifact_allowed or not artifact_allowed.issubset(allowed):
@@ -297,6 +374,9 @@ def _load_swing_runtime_approval_bundle(source_date: str | None) -> dict[str, An
     return {
         "request_report": str(request_path) if request_path.exists() else None,
         "approval_artifact": str(artifact_path) if artifact_path.exists() else None,
+        "one_share_real_canary_approval_artifact": (
+            str(one_share_artifact_path) if one_share_artifact_path.exists() else None
+        ),
         "scale_in_real_canary_approval_artifact": (
             str(scale_artifact_path) if scale_artifact_path.exists() else None
         ),
@@ -304,6 +384,7 @@ def _load_swing_runtime_approval_bundle(source_date: str | None) -> dict[str, An
         "approved_requests": approved_requests,
         "blocked": blocked,
         "artifact_payload": artifact,
+        "one_share_real_canary_artifact_payload": one_share_artifact,
         "scale_in_real_canary_artifact_payload": scale_artifact,
         "real_canary_policy": real_canary_policy,
         "scale_in_real_canary_policy": scale_in_real_canary_policy,
@@ -321,18 +402,21 @@ def _select_swing_approved_candidates(bundle: dict[str, Any]) -> tuple[list[dict
         family = str(item.get("family") or "")
         policy_id = str(item.get("policy_id") or "")
         is_scale_in_real_canary = policy_id == "swing_scale_in_real_canary_phase0" or family == "swing_scale_in_real_canary_phase0"
+        is_one_share_real_canary = policy_id == "swing_one_share_real_canary_phase0" or family == "swing_one_share_real_canary_phase0"
         stage = str(item.get("stage") or "unknown")
         candidate = {
             **item,
             "calibration_state": "approved_live",
             "allowed_runtime_apply": True,
             "safety_revert_required": False,
+            "one_share_real_canary": bool(is_one_share_real_canary),
+            "scale_in_real_canary": bool(is_scale_in_real_canary),
         }
         overrides = _env_overrides_for_candidate(candidate)
         reject_reason = ""
         if bool(item.get("actual_order_submitted")):
             reject_reason = "actual_order_submission_not_allowed"
-        elif (not is_scale_in_real_canary) and not bool(item.get("dry_run_required", True)):
+        elif (not is_scale_in_real_canary) and (not is_one_share_real_canary) and not bool(item.get("dry_run_required", True)):
             reject_reason = "dry_run_required_missing"
         elif stage in selected_by_stage:
             reject_reason = f"same_stage_owner_conflict:{selected_by_stage[stage]}"
@@ -346,6 +430,7 @@ def _select_swing_approved_candidates(bundle: dict[str, Any]) -> tuple[list[dict
             "decision_reason": reject_reason or "user_approval_artifact_accepted",
             "env_overrides": overrides if not reject_reason else {},
             "dry_run_required": not is_scale_in_real_canary,
+            "one_share_real_canary": bool(is_one_share_real_canary),
             "scale_in_real_canary": bool(is_scale_in_real_canary),
         }
         decisions.append(decision)
@@ -488,23 +573,34 @@ def build_preopen_apply_manifest(
         calibration_candidates = (
             report.get("calibration_candidates") if isinstance(report.get("calibration_candidates"), list) else []
         )
-        approval_requests = [
-            {
-                "family": item.get("family"),
-                "stage": item.get("stage"),
-                "threshold_version": item.get("threshold_version"),
-                "calibration_state": item.get("calibration_state"),
-                "calibration_reason": item.get("calibration_reason"),
-                "current_values": item.get("current_values"),
-                "recommended_values": item.get("recommended_values"),
-                "sample_count": item.get("sample_count"),
-                "sample_floor": item.get("sample_floor"),
-                "source_reports": item.get("source_reports"),
-            }
-            for item in calibration_candidates
-            if isinstance(item, dict)
-            and bool(item.get("human_approval_required"))
-            and str(item.get("calibration_state") or "") == "approval_required"
+        approval_requests = []
+        for item in calibration_candidates:
+            if (
+                isinstance(item, dict)
+                and bool(item.get("human_approval_required"))
+                and str(item.get("calibration_state") or "") == "approval_required"
+            ):
+                approval_requests.append(
+                    annotate_approval_request(
+                        {
+                            "family": item.get("family"),
+                            "stage": item.get("stage"),
+                            "threshold_version": item.get("threshold_version"),
+                            "calibration_state": item.get("calibration_state"),
+                            "calibration_reason": item.get("calibration_reason"),
+                            "current_values": item.get("current_values"),
+                            "recommended_values": item.get("recommended_values"),
+                            "sample_count": item.get("sample_count"),
+                            "sample_floor": item.get("sample_floor"),
+                            "source_reports": item.get("source_reports"),
+                        },
+                        str(report.get("date") or source_date or ""),
+                    )
+                )
+        approval_contract_gaps = [
+            item
+            for item in approval_requests
+            if isinstance(item, dict) and not bool(item.get("approval_live_ready"))
         ]
         auto_apply_requested = bool(auto_apply) or apply_mode in AUTO_APPLY_MODES
         ai_review = _load_ai_review(str(report.get("date") or source_date or ""))
@@ -558,9 +654,11 @@ def build_preopen_apply_manifest(
             "auto_apply_selected": selected,
             "auto_apply_decisions": decisions,
             "approval_requests": approval_requests,
+            "approval_contract_gaps": approval_contract_gaps,
             "swing_runtime_approval": {
                 "request_report": swing_bundle.get("request_report"),
                 "approval_artifact": swing_bundle.get("approval_artifact"),
+                "one_share_real_canary_approval_artifact": swing_bundle.get("one_share_real_canary_approval_artifact"),
                 "scale_in_real_canary_approval_artifact": swing_bundle.get("scale_in_real_canary_approval_artifact"),
                 "requested": len(swing_bundle.get("requests") or []),
                 "approved": len(swing_bundle.get("approved_requests") or []),

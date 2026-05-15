@@ -264,6 +264,129 @@ def _swing_scale_in_real_canary_allowed_arms() -> set[str]:
     return {part.strip().upper() for part in raw.split(",") if part.strip()}
 
 
+def _swing_one_share_real_canary_allowed_codes() -> set[str]:
+    raw = str(_rule("SWING_ONE_SHARE_REAL_CANARY_ALLOWED_CODES", "") or "")
+    return {part.strip().zfill(6) for part in raw.split(",") if part.strip()}
+
+
+def _is_swing_one_share_real_canary_position(stock: dict | None, strategy: str | None = None) -> bool:
+    if not isinstance(stock, dict):
+        return False
+    if not _is_swing_strategy(strategy or stock.get("strategy")):
+        return False
+    return bool(
+        stock.get("swing_one_share_real_canary")
+        or str(stock.get("cohort") or stock.get("real_canary_cohort") or "").strip() == "swing_one_share_real_canary"
+    )
+
+
+def _swing_one_share_real_canary_daily_key(now_ts: float | None = None) -> str:
+    try:
+        return datetime.fromtimestamp(float(now_ts or time.time())).date().isoformat()
+    except Exception:
+        return datetime.now().date().isoformat()
+
+
+def _swing_one_share_real_canary_usage(day_key: str) -> tuple[int, int, int]:
+    new_entries = 0
+    open_positions = 0
+    notional = 0
+    for target in ACTIVE_TARGETS or []:
+        if not isinstance(target, dict):
+            continue
+        if not _is_swing_one_share_real_canary_position(target, target.get("strategy")):
+            continue
+        if _active_runtime_status(target):
+            open_positions += 1
+        if str(target.get("swing_one_share_real_canary_order_date") or "") != day_key:
+            continue
+        new_entries += int(target.get("swing_one_share_real_canary_order_count", 0) or 0)
+        notional += int(target.get("swing_one_share_real_canary_notional_krw", 0) or 0)
+    return new_entries, open_positions, notional
+
+
+def _evaluate_swing_one_share_real_canary(
+    stock: dict,
+    code: str,
+    *,
+    request_qty: int,
+    request_price: int,
+    ws_data: dict,
+    submit_revalidation_fields: dict,
+    swing_entry_micro_fields: dict,
+) -> dict:
+    day_key = _swing_one_share_real_canary_daily_key()
+    common = {
+        "policy_id": "swing_one_share_real_canary_phase0",
+        "cohort": "swing_one_share_real_canary",
+        "request_price": request_price,
+        "source_requested_qty": request_qty,
+    }
+    if not _rule_bool("SWING_ONE_SHARE_REAL_CANARY_ENABLED", False):
+        return {"allowed": False, "reason": "real_canary_disabled", "fields": common}
+    if _rule_bool("SWING_ONE_SHARE_REAL_CANARY_REQUIRE_APPROVAL_ARTIFACT", True) and not _swing_one_share_real_canary_allowed_codes():
+        return {"allowed": False, "reason": "approval_allowed_codes_missing", "fields": common}
+    if not _is_swing_strategy(stock.get("strategy")):
+        return {"allowed": False, "reason": "not_swing_strategy", "fields": common}
+    if _is_any_simulated_position(stock, stock.get("strategy")):
+        return {"allowed": False, "reason": "sim_or_probe_real_order_forbidden", "fields": common}
+    allowed_codes = _swing_one_share_real_canary_allowed_codes()
+    normalized_code = str(code or "").strip().zfill(6)
+    if normalized_code not in allowed_codes:
+        return {"allowed": False, "reason": "code_not_approved", "fields": {**common, "allowed_codes": ",".join(sorted(allowed_codes))}}
+    if request_price <= 0:
+        return {"allowed": False, "reason": "invalid_order_price", "fields": common}
+    if bool((submit_revalidation_fields or {}).get("entry_submit_revalidation_warning")):
+        return {"allowed": False, "reason": "submit_revalidation_warning", "fields": {**common, **(submit_revalidation_fields or {})}}
+    if bool((swing_entry_micro_fields or {}).get("swing_micro_stale")):
+        return {"allowed": False, "reason": "orderbook_micro_stale", "fields": common}
+    if str((swing_entry_micro_fields or {}).get("swing_micro_advice") or "") == "RISK_BEARISH":
+        return {"allowed": False, "reason": "ofi_qi_risk_bearish", "fields": common}
+
+    max_qty = min(1, max(1, _rule_int("SWING_ONE_SHARE_REAL_CANARY_MAX_QTY", 1)))
+    actual_qty = max(0, min(int(request_qty or 0), max_qty))
+    if actual_qty <= 0:
+        return {"allowed": False, "reason": "real_canary_qty_zero", "fields": common}
+    daily_entries, open_positions, daily_notional = _swing_one_share_real_canary_usage(day_key)
+    max_new_entries = min(1, max(1, _rule_int("SWING_ONE_SHARE_REAL_CANARY_MAX_NEW_ENTRIES_PER_DAY", 1)))
+    if daily_entries >= max_new_entries:
+        return {"allowed": False, "reason": "daily_new_entry_cap_reached", "fields": {**common, "daily_entries": daily_entries}}
+    max_open_positions = min(3, max(1, _rule_int("SWING_ONE_SHARE_REAL_CANARY_MAX_OPEN_POSITIONS", 3)))
+    if open_positions >= max_open_positions:
+        return {"allowed": False, "reason": "open_position_cap_reached", "fields": {**common, "open_positions": open_positions}}
+    if any(
+        _is_swing_one_share_real_canary_position(target, target.get("strategy"))
+        and _active_runtime_status(target)
+        and str(target.get("code") or "").strip().zfill(6) == normalized_code
+        for target in ACTIVE_TARGETS or []
+        if isinstance(target, dict)
+    ):
+        return {"allowed": False, "reason": "same_symbol_active_limit_reached", "fields": common}
+    max_total_notional = min(300000, max(1, _rule_int("SWING_ONE_SHARE_REAL_CANARY_MAX_TOTAL_NOTIONAL_KRW", 300000)))
+    order_notional = int(request_price * actual_qty)
+    if daily_notional + order_notional > max_total_notional:
+        return {
+            "allowed": False,
+            "reason": "total_notional_cap_reached",
+            "fields": {**common, "daily_notional": daily_notional, "order_notional": order_notional},
+        }
+    return {
+        "allowed": True,
+        "reason": "swing_one_share_real_canary_allowed",
+        "qty": actual_qty,
+        "fields": {
+            **common,
+            "actual_order_submitted": True,
+            "broker_order_forbidden": False,
+            "real_canary_actual_qty": actual_qty,
+            "real_canary_qty_cap": max_qty,
+            "qty_cap_reason": "swing_one_share_real_canary_phase0",
+            "order_notional_krw": order_notional,
+            "day_key": day_key,
+        },
+    }
+
+
 def _is_swing_scale_in_real_canary_holding(stock: dict | None, strategy: str | None = None) -> bool:
     if not isinstance(stock, dict):
         return False
@@ -7690,13 +7813,42 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
         _mutate_stock_state(stock, set_fields={'msg_audience': 'ADMIN_ONLY'})
 
+    swing_one_share_real_canary_fields = None
+    if _is_swing_strategy(strategy) and _is_swing_live_order_dry_run(strategy):
+        one_share_eval = _evaluate_swing_one_share_real_canary(
+            stock,
+            code,
+            request_qty=requested_qty,
+            request_price=int(final_price or latency_gate.get('order_price', 0) or 0),
+            ws_data=ws_data,
+            submit_revalidation_fields=submit_revalidation_fields,
+            swing_entry_micro_fields=swing_entry_micro_fields,
+        )
+        if one_share_eval.get("allowed"):
+            swing_one_share_real_canary_fields = one_share_eval.get("fields") or {}
+            requested_qty = int(one_share_eval.get("qty") or 1)
+            log_info(
+                f"[SWING_ONE_SHARE_REAL_CANARY] {stock.get('name')}({code}) "
+                f"approved qty={requested_qty} price={final_price} global_dry_run_kept=true"
+            )
+        elif _rule_bool("SWING_ONE_SHARE_REAL_CANARY_ENABLED", False):
+            _log_entry_pipeline(
+                stock,
+                code,
+                "swing_one_share_real_canary_blocked",
+                block_reason=one_share_eval.get("reason"),
+                actual_order_submitted=False,
+                broker_order_forbidden=True,
+                **(one_share_eval.get("fields") or {}),
+            )
+
     msg = msg or (
         f"✅ **{stock['name']} ({code}) 진입 주문 전송!**\n전략: `{strategy}`\n현재가: `{curr_price:,}원`\n주문 수량: `{requested_qty}주`"
         f"{big_bite_summary}"
     )
 
     successful_orders = []
-    swing_order_dry_run = _is_swing_live_order_dry_run(strategy)
+    swing_order_dry_run = _is_swing_live_order_dry_run(strategy) and swing_one_share_real_canary_fields is None
     for planned_order in planned_orders:
         request = _resolve_live_entry_order_request(
             strategy=strategy, entry_mode=entry_mode, planned_order=planned_order,
@@ -7704,6 +7856,20 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         )
         qty = request['qty']
         price = request['price']
+        if swing_one_share_real_canary_fields is not None:
+            if successful_orders:
+                _log_entry_pipeline(
+                    stock,
+                    code,
+                    "swing_one_share_real_canary_extra_leg_skipped",
+                    tag=request['tag'],
+                    actual_order_submitted=False,
+                    broker_order_forbidden=True,
+                    **swing_one_share_real_canary_fields,
+                )
+                continue
+            qty = min(qty, int(swing_one_share_real_canary_fields.get("real_canary_actual_qty") or 1))
+            request = {**request, "qty": qty}
         if qty <= 0:
             _log_entry_pipeline(stock, code, "skip_order_leg_zero_qty", tag=request['tag'])
             continue
@@ -7735,6 +7901,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             **submit_revalidation_fields,
             **price_snapshot,
             **swing_entry_micro_fields,
+            **(swing_one_share_real_canary_fields or {}),
         )
         if swing_order_dry_run:
             ord_no = _simulated_order_no("SIMBUY", code)
@@ -7793,15 +7960,54 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
             'price_below_bid_bps': price_snapshot.get('price_below_bid_bps'),
             'price_decision_context_age_ms': submit_revalidation_fields.get('price_decision_context_age_ms'),
             'quote_age_at_submit_ms': submit_revalidation_fields.get('quote_age_at_submit_ms'),
+            'swing_one_share_real_canary': bool(swing_one_share_real_canary_fields),
         })
         _stage_buy_order_submission(
             stock=stock, code=code, curr_price=curr_price, requested_qty=requested_qty, msg=msg, entry_orders=successful_orders,
         )
+        if swing_one_share_real_canary_fields is not None:
+            previous_count = int(stock.get("swing_one_share_real_canary_order_count", 0) or 0)
+            previous_notional = int(stock.get("swing_one_share_real_canary_notional_krw", 0) or 0)
+            order_notional = int(swing_one_share_real_canary_fields.get("order_notional_krw", 0) or 0)
+            _mutate_stock_state(
+                stock,
+                set_fields={
+                    "cohort": "swing_one_share_real_canary",
+                    "swing_one_share_real_canary": True,
+                    "actual_order_submitted": True,
+                    "broker_order_forbidden": False,
+                    "canary_qty_cap": int(swing_one_share_real_canary_fields.get("real_canary_qty_cap") or 1),
+                    "real_canary_actual_qty": qty,
+                    "swing_one_share_real_canary_order_date": str(
+                        swing_one_share_real_canary_fields.get("day_key") or _swing_one_share_real_canary_daily_key(now_ts)
+                    ),
+                    "swing_one_share_real_canary_order_count": previous_count + 1,
+                    "swing_one_share_real_canary_notional_krw": previous_notional + order_notional,
+                },
+            )
         log_info(
             f"[LATENCY_ENTRY_ORDER_SENT] {stock.get('name')}({code}) "
             f"tag={request['tag']} qty={qty} price={price} type={request['order_type_code']} tif={request['tif']} ord_no={ord_no}"
         )
-        _log_entry_pipeline(stock, code, "order_leg_sent", tag=request['tag'], ord_no=ord_no)
+        _log_entry_pipeline(
+            stock,
+            code,
+            "order_leg_sent",
+            tag=request['tag'],
+            ord_no=ord_no,
+            **(swing_one_share_real_canary_fields or {}),
+        )
+        if swing_one_share_real_canary_fields is not None:
+            _log_entry_pipeline(
+                stock,
+                code,
+                "swing_one_share_real_canary_order_submitted",
+                tag=request['tag'],
+                ord_no=ord_no,
+                request_qty=qty,
+                request_price=price,
+                **swing_one_share_real_canary_fields,
+            )
 
     if not successful_orders:
         log_info(f"❌ [{stock['name']}] 매수 주문 전송 실패 (성공 주문 없음)")
@@ -7886,6 +8092,7 @@ def _submit_watching_triggered_entry(stock, code, ws_data, admin_id, runtime):
         **submit_revalidation_fields,
         **bundle_price_snapshot,
         **swing_entry_micro_fields,
+        **(swing_one_share_real_canary_fields or {}),
     )
 
     if strategy in ['SCALPING', 'SCALP']:

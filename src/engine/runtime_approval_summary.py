@@ -9,12 +9,14 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any
 
+from src.engine.approval_contracts import approval_contract_for
 from src.engine.daily_threshold_cycle_report import REPORT_DIR
 from src.engine.threshold_cycle_ev_report import ev_report_paths
 
 
 SUMMARY_DIR = REPORT_DIR / "runtime_approval_summary"
 SWING_RUNTIME_APPROVAL_DIR = REPORT_DIR / "swing_runtime_approval"
+SWING_RUNTIME_APPROVAL_ARTIFACT_DIR = Path(__file__).resolve().parents[2] / "data" / "threshold_cycle" / "approvals"
 BOT_HISTORY_LOG = Path(__file__).resolve().parents[2] / "logs" / "bot_history.log"
 
 
@@ -30,6 +32,8 @@ _REASON_LABELS = {
     "exit_only_delta_missing": "exit-only 비교 누락",
     "post_add_mae_missing": "추가매수 MAE 누락",
     "approval_artifact_missing": "approval artifact 없음",
+    "approval_contract_missing": "approval 계약 미준비",
+    "one_share_real_canary_approval_artifact_missing": "1주 real canary approval artifact 없음",
     "scale_in_real_canary_approval_artifact_missing": "scale-in approval artifact 없음",
     "selected_auto_bounded_live": "auto_bounded_live 선택",
     "hold": "유지",
@@ -63,7 +67,9 @@ _FAMILY_DESCRIPTIONS = {
     "swing_scale_in_ofi_qi_confirmation": "스윙 추가매수 직전 OFI/QI 확인 신호가 유효한지 보는 축",
     "swing_exit_ofi_qi_smoothing": "스윙 청산 직전 OFI/QI로 EXIT 확정/보류를 다듬을 수 있는지 보는 축",
     "swing_scale_in_real_canary_phase0": "승인된 실제 스윙 보유분에 한해 PYRAMID/AVG_DOWN 1주 추가매수 canary를 열 수 있는지 보는 정책 축",
+    "swing_one_share_real_canary_phase0": "승인된 스윙 후보에 한해 초기 BUY/SELL 1주 real canary execution 품질을 수집하는 정책 축",
     "panic_sell_defense": "패닉셀 구간의 stop/rebound simulation 결과로 방어 guard와 rollback 조건을 설계하는 축",
+    "panic_entry_freeze_guard": "패닉셀 구간에서 scalping 신규 BUY pre-submit freeze canary를 열 수 있는지 보는 축",
     "panic_buy_runner_tp_canary": "패닉바잉 구간에서 fixed TP 전량청산 대비 runner 유지가 missed upside를 줄이는지 보는 축",
 }
 
@@ -78,8 +84,10 @@ _BASELINE_APPLICATION = {
     "liquidity_gate_refined_candidate": "관찰/리포트 only: gate 기준 변경 없음",
     "overbought_gate_refined_candidate": "관찰/리포트 only: gate 기준 변경 없음",
     "position_sizing_cap_release": "미적용: 1주 cap 유지",
+    "swing_one_share_real_canary_phase0": "미적용: approval artifact 없이는 초기 BUY 실주문 금지",
     "swing_scale_in_real_canary_phase0": "미적용: approval artifact 없이는 실주문 추가매수 금지",
     "panic_sell_defense": "report-only: 주문/청산/threshold/runtime env 변경 없음",
+    "panic_entry_freeze_guard": "계약 미준비: approval artifact를 만들어도 pre-submit freeze runtime 반영 불가",
     "panic_buy_runner_tp_canary": "report-only: TP/trailing/live exit 변경 없음",
 }
 
@@ -90,6 +98,8 @@ _STATE_INTERPRETATIONS = {
     "hold_sample": "축은 유지/관찰하지만 표본 부족으로 runtime 변경은 하지 않는다",
     "hold_no_edge": "명확한 edge가 없어 runtime 변경은 하지 않는다",
     "freeze": "계측/DB/safety 문제로 runtime 변경을 금지한다",
+    "approval_required": "approval artifact가 있어야 다음 PREOPEN env 반영 후보가 된다",
+    "approval_contract_missing": "approval artifact를 만들어도 소비할 코드 계약이 없어 live 반영할 수 없다",
 }
 
 
@@ -100,6 +110,8 @@ def _description(family: str) -> str:
 def _current_application(family: str, state: str, selected: bool) -> str:
     if selected:
         return "PREOPEN env 적용: 당일 runtime 변경 대상"
+    if state == "approval_contract_missing":
+        return "계약 미준비: approval artifact를 만들어도 live 반영 불가"
     baseline = _BASELINE_APPLICATION.get(family)
     if baseline:
         return baseline
@@ -221,6 +233,7 @@ def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
     candidates = _candidate_by_family(swing_report.get("candidates"))
     rows: list[dict[str, Any]] = []
     blocked = swing_report.get("blocked_requests") if isinstance(swing_report.get("blocked_requests"), list) else []
+    target_date = str(swing_report.get("date") or "").strip()
     for item in blocked:
         if not isinstance(item, dict):
             continue
@@ -254,7 +267,56 @@ def _swing_rows(swing_report: dict[str, Any]) -> list[dict[str, Any]]:
                 "selected_auto_bounded_live": False,
             }
         )
+    requests = swing_report.get("approval_requests") if isinstance(swing_report.get("approval_requests"), list) else []
+    blocked_families = {row["family"] for row in rows}
+    for item in requests:
+        if not isinstance(item, dict):
+            continue
+        family = str(item.get("family") or item.get("policy_id") or "").strip()
+        if not family or family in blocked_families:
+            continue
+        contract = approval_contract_for(family, target_date)
+        artifact_missing_reason = _swing_approval_artifact_reason(family, target_date)
+        rows.append(
+            {
+                "domain": "swing",
+                "family": family,
+                "description": _description(family),
+                "state": item.get("calibration_state") or "approval_required",
+                "current_application": _current_application(family, str(item.get("calibration_state") or "approval_required"), False),
+                "state_interpretation": _state_interpretation(str(item.get("calibration_state") or "approval_required"), False),
+                "score": item.get("tradeoff_score"),
+                "score_label": _format_score(item.get("tradeoff_score")),
+                "sample": {
+                    "count": item.get("sample_count"),
+                    "floor": item.get("sample_floor"),
+                },
+                "reasons": [artifact_missing_reason] if artifact_missing_reason else [],
+                "reason_label": _reason_text([artifact_missing_reason] if artifact_missing_reason else []),
+                "approval_id": item.get("approval_id"),
+                "approval_contract_status": item.get("approval_contract_status") or contract.get("approval_contract_status"),
+                "approval_live_ready": bool(item.get("approval_live_ready") or contract.get("approval_live_ready")),
+                "approval_artifact_path": item.get("approval_artifact_path") or contract.get("approval_artifact_path"),
+                "approval_contract_missing_components": item.get("approval_contract_missing_components")
+                or contract.get("missing_components")
+                or [],
+                "selected_auto_bounded_live": False,
+            }
+        )
     return rows
+
+
+def _swing_approval_artifact_reason(family: str, target_date: str) -> str:
+    if not target_date:
+        return "approval_artifact_missing"
+    if family == "swing_one_share_real_canary_phase0":
+        artifact = SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_one_share_real_canary_{target_date}.json"
+        return "" if artifact.exists() else "one_share_real_canary_approval_artifact_missing"
+    if family == "swing_scale_in_real_canary_phase0":
+        artifact = SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_scale_in_real_canary_{target_date}.json"
+        return "" if artifact.exists() else "scale_in_real_canary_approval_artifact_missing"
+    artifact = SWING_RUNTIME_APPROVAL_ARTIFACT_DIR / f"swing_runtime_approvals_{target_date}.json"
+    return "" if artifact.exists() else "approval_artifact_missing"
 
 
 def _panic_request_state(
@@ -262,6 +324,7 @@ def _panic_request_state(
     sample_count: int,
     runtime_effect: Any,
     source_quality_blockers: list[Any] | None = None,
+    approval_live_ready: bool = False,
 ) -> tuple[str, list[str]]:
     reasons: list[str] = []
     if runtime_effect != "report_only_no_mutation":
@@ -276,6 +339,9 @@ def _panic_request_state(
         reasons.append("sample_floor_not_met")
         return "hold_sample", reasons
     if has_candidate:
+        if not approval_live_ready:
+            reasons.append("approval_contract_missing")
+            return "approval_contract_missing", reasons
         reasons.append("approval_artifact_missing")
         return "approval_required", reasons
     reasons.append("hold")
@@ -286,7 +352,7 @@ def _has_report_only_candidate(candidate_status: dict[str, Any]) -> bool:
     return any(str(value or "") == "report_only_candidate" for value in candidate_status.values())
 
 
-def _panic_rows(calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
+def _panic_rows(calibration_report: dict[str, Any], target_date: str) -> list[dict[str, Any]]:
     bundle = (
         calibration_report.get("calibration_source_bundle")
         if isinstance(calibration_report.get("calibration_source_bundle"), dict)
@@ -308,19 +374,21 @@ def _panic_rows(calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
             if isinstance(panic_sell.get("source_quality_blockers"), list)
             else []
         )
+        contract = approval_contract_for("panic_entry_freeze_guard", target_date)
         state, reasons = _panic_request_state(
             _has_report_only_candidate(candidate_status),
             sample_count,
             panic_sell.get("runtime_effect"),
             source_quality_blockers,
+            bool(contract.get("approval_live_ready")),
         )
         rows.append(
             {
                 "domain": "panic_sell",
-                "family": "panic_sell_defense",
-                "description": _description("panic_sell_defense"),
+                "family": "panic_entry_freeze_guard",
+                "description": _description("panic_entry_freeze_guard"),
                 "state": state,
-                "current_application": _current_application("panic_sell_defense", state, False),
+                "current_application": _current_application("panic_entry_freeze_guard", state, False),
                 "state_interpretation": (
                     "simulation/counterfactual 기반 runtime 전환 승인요청 후보이며 approval artifact 전 live 반영 없음"
                     if state == "approval_required"
@@ -338,6 +406,10 @@ def _panic_rows(calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
                 "candidate_status": candidate_status,
                 "source_quality_blockers": source_quality_blockers,
                 "market_breadth_followup_candidate": bool(panic_sell.get("market_breadth_followup_candidate")),
+                "approval_contract_status": contract.get("approval_contract_status"),
+                "approval_live_ready": bool(contract.get("approval_live_ready")),
+                "approval_artifact_path": contract.get("approval_artifact_path"),
+                "approval_contract_missing_components": contract.get("missing_components") or [],
             }
         )
 
@@ -354,11 +426,13 @@ def _panic_rows(calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
             _as_int(panic_buy.get("tp_counterfactual_count")),
             _as_int(panic_buy.get("trailing_winner_count")),
         )
+        contract = approval_contract_for("panic_buy_runner_tp_canary", target_date)
         state, reasons = _panic_request_state(
             _has_report_only_candidate(candidate_status),
             sample_count,
             panic_buy.get("runtime_effect"),
             source_quality_blockers,
+            bool(contract.get("approval_live_ready")),
         )
         rows.append(
             {
@@ -385,6 +459,10 @@ def _panic_rows(calibration_report: dict[str, Any]) -> list[dict[str, Any]]:
                 "source_quality_blockers": source_quality_blockers,
                 "selected_auto_bounded_live": False,
                 "candidate_status": candidate_status,
+                "approval_contract_status": contract.get("approval_contract_status"),
+                "approval_live_ready": bool(contract.get("approval_live_ready")),
+                "approval_artifact_path": contract.get("approval_artifact_path"),
+                "approval_contract_missing_components": contract.get("missing_components") or [],
             }
         )
     return rows
@@ -447,7 +525,7 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
     calibration_report = _load_json(Path(str(calibration_source))) if calibration_source else {}
     scalping_rows = _scalping_rows(ev_report, calibration_report)
     swing_rows = _swing_rows(swing_report)
-    panic_rows = _panic_rows(calibration_report)
+    panic_rows = _panic_rows(calibration_report, target_date)
     report = {
         "date": target_date,
         "generated_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -492,15 +570,18 @@ def build_runtime_approval_summary(target_date: str) -> dict[str, Any]:
 
 def _render_rows(rows: list[dict[str, Any]]) -> list[str]:
     lines = [
-        "| 항목 | 설명 | 현재 적용 | 상태 | 판정 해석 | 점수 | 차단/판정 사유 |",
-        "| --- | --- | --- | --- | --- | ---: | --- |",
+        "| 항목 | 설명 | 현재 적용 | 상태 | 판정 해석 | 점수 | 계약 | 차단/판정 사유 |",
+        "| --- | --- | --- | --- | --- | ---: | --- | --- |",
     ]
     if not rows:
-        lines.append("| - | - | - | - | - | - | - |")
+        lines.append("| - | - | - | - | - | - | - | - |")
         return lines
     for row in rows:
+        contract_status = row.get("approval_contract_status") or "-"
+        if row.get("approval_live_ready") is True:
+            contract_status = "ready"
         lines.append(
-            f"| `{row.get('family')}` | {row.get('description') or '-'} | {row.get('current_application') or '-'} | `{row.get('state')}` | {row.get('state_interpretation') or '-'} | {row.get('score_label')} | {row.get('reason_label')} |"
+            f"| `{row.get('family')}` | {row.get('description') or '-'} | {row.get('current_application') or '-'} | `{row.get('state')}` | {row.get('state_interpretation') or '-'} | {row.get('score_label')} | `{contract_status}` | {row.get('reason_label')} |"
         )
     return lines
 

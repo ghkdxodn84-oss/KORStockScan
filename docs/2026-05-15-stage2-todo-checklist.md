@@ -13,6 +13,7 @@
 - provider transport/provenance 확인은 threshold 값, 주문가/수량 guard, 스윙 dry-run guard 변경과 분리한다.
 - `actual_order_submitted=false`인 sim/probe 표본은 EV/source-quality와 threshold 개선 입력이며, 실주문 전환·broker execution 품질 근거가 아니다.
 - 실계좌 주문가능금액, real order guard, approval artifact 부재는 sim/probe 후보 생성 제외 사유가 아니다. 단, provenance는 real/sim/combined를 분리한다.
+- 추가매수는 `ENABLE_SCALE_IN` 공통 master gate와 AVG_DOWN/PYRAMID arm별 gate를 분리해서 본다. 한쪽 arm만 observe/live-equivalent로 열 수 있으나, real canary 또는 cap 확대는 별도 approval artifact 없이는 열지 않는다.
 - `panic_regime_mode`와 `panic_buy_regime_mode`는 report/approval source이며, approval artifact와 rollback guard 없이 신규 BUY 차단, 미체결 주문 취소, holding/exit 강제 변경, 자동매도, TP/trailing 변경, 추격매수 차단, 시장가 전량청산에 직접 쓰지 않는다.
 - Project/Calendar 동기화는 사용자가 표준 동기화 명령으로 수행한다.
 
@@ -162,6 +163,12 @@
 
 ## 장후 체크리스트 (16:30~18:55)
 
+- 운영 확인 기록 (`SimToLiveAutomationContractAudit0515`): 판정은 `gap_fixed_default_off_artifact_required`. 시뮬레이션/프로브 결과를 라이브로 반영하는 계약을 `source artifact -> approval request -> approval artifact -> preopen env -> runtime guard -> rollback/provenance` 기준으로 전수 점검했다. 실제 누락은 스윙 `swing_one_share_real_canary_phase0`였고, 기존에는 정책 문서만 있어 1주 canary도 `approval request -> 별도 artifact -> env -> initial BUY runtime guard`로 이어지지 않았다. 보강 후 [swing_runtime_approval_2026-05-15.json](/home/ubuntu/KORStockScan/data/report/swing_runtime_approval/swing_runtime_approval_2026-05-15.json)은 `swing_one_share_real_canary_phase0` approval request를 생성한다. 하지만 `data/threshold_cycle/approvals/swing_one_share_real_canary_2026-05-15.json`이 없으므로 현재 라이브 반영은 차단 상태가 맞고, `SWING_LIVE_ORDER_DRY_RUN_ENABLED=True`는 유지된다. [sim-to-live-automation-contract-audit-2026-05-15.md](/home/ubuntu/KORStockScan/docs/sim-to-live-automation-contract-audit-2026-05-15.md)에 `position_sizing_cap_release`, `panic_entry_freeze_guard`, `panic_buy_runner_tp_canary`까지 포함한 전수표를 남겼다.
+  - 구현: [swing_lifecycle_audit.py](/home/ubuntu/KORStockScan/src/engine/swing_lifecycle_audit.py)는 one-share request를 생성하고, [threshold_cycle_preopen_apply.py](/home/ubuntu/KORStockScan/src/engine/threshold_cycle_preopen_apply.py)는 `data/threshold_cycle/approvals/swing_one_share_real_canary_YYYY-MM-DD.json` artifact가 있을 때만 `KORSTOCKSCAN_SWING_ONE_SHARE_REAL_CANARY_*` env를 생성한다. [sniper_state_handlers.py](/home/ubuntu/KORStockScan/src/engine/sniper_state_handlers.py)는 승인 code allowlist, qty 1, daily/open/notional cap, stale/bearish submit guard를 runtime에서 fail-closed로 확인한다.
+  - 추가 보강: [approval_contracts.py](/home/ubuntu/KORStockScan/src/engine/approval_contracts.py)를 추가해 approval 후보마다 `approval_contract_status`, `approval_live_ready`, `approval_artifact_path`, `approval_contract_missing_components`를 강제로 남긴다. 현재 ready 계약은 스윙 dry-run env approval, `swing_one_share_real_canary_phase0`, `swing_scale_in_real_canary_phase0`이고, `position_sizing_cap_release`, `position_sizing_dynamic_formula`, `panic_entry_freeze_guard`, `panic_buy_runner_tp_canary`는 `contract_missing`이다. 즉 이 축들은 조건이 충족되어도 approval artifact만 만들어서는 바로 live 반영할 수 없고, loader/env/runtime guard/rollback 테스트 작업이 필요하다.
+  - 검증: `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_threshold_cycle_preopen_apply.py` -> `12 passed`; `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_sniper_scale_in.py -k "one_share_real_canary or swing_real_canary"` -> `4 passed, 143 deselected`; `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_swing_model_selection_funnel_repair.py -k "runtime_approval_report_emits_machine_readable_requests"` -> `1 passed, 40 deselected`; `PYTHONPATH=. .venv/bin/pytest -q src/tests/test_threshold_cycle_ev_report.py` -> `5 passed`.
+  - 다음 액션: 사용자가 1주 canary를 승인하려면 승인 종목과 request id를 포함한 `swing_one_share_real_canary_YYYY-MM-DD.json` artifact를 별도로 만든 뒤 다음 PREOPEN apply에서만 소비한다. `position_sizing_cap_release`, `panic_entry_freeze_guard`, `panic_buy_runner_tp_canary`는 현재 live 연결 누락이 아니라 의도적 미구현 계약이므로 실제 적용하려면 새 approval artifact loader/env mapping/runtime guard/rollback 테스트 작업으로 연다.
+
 - [ ] `[SimFirstLifecycleCoverageAudit0515] 스캘핑/스윙 적극 sim-first 전주기 실행 및 consumer 연결 확인` (`Due: 2026-05-15`, `Slot: POSTCLOSE`, `TimeWindow: 16:20~16:30`, `Track: RuntimeStability`)
   - Source: [threshold_cycle_ev_2026-05-14.json](/home/ubuntu/KORStockScan/data/report/threshold_cycle_ev/threshold_cycle_ev_2026-05-14.json), [swing_lifecycle_audit_2026-05-14.json](/home/ubuntu/KORStockScan/data/report/swing_lifecycle_audit/swing_lifecycle_audit_2026-05-14.json), [report-based-automation-traceability.md](/home/ubuntu/KORStockScan/docs/report-based-automation-traceability.md)
   - 판정 기준: 스캘핑 `scalp_ai_buy_all`/missed probe와 스윙 dry-run/probe가 entry->holding->scale-in->exit 관찰축을 생성하고, daily EV/threshold cycle/code-improvement workorder/runtime approval summary consumer에 누락 없이 들어갔는지 확인한다.
@@ -218,3 +225,18 @@
 ```bash
 PYTHONPATH=. .venv/bin/python -m src.engine.sync_docs_backlog_to_project && PYTHONPATH=. .venv/bin/python -m src.engine.sync_github_project_calendar
 ```
+
+<!-- AUTO_SERVER_COMPARISON_START -->
+### 본서버 vs songstockscan 자동 비교 (`2026-05-15 15:48:21`)
+
+- 기준: `profit-derived metrics are excluded by default because fallback-normalized values such as NULL -> 0 can distort comparison`
+- 상세 리포트: `data/report/server_comparison/server_comparison_2026-05-15.md`
+- `Trade Review`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Performance Tuning`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Post Sell Feedback`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+- `Entry Pipeline Flow`: status=`remote_error`, differing_safe_metrics=`0`
+  - safe 기준 차이 없음
+<!-- AUTO_SERVER_COMPARISON_END -->
