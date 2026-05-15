@@ -140,7 +140,12 @@ def test_build_runbook_operational_checks_for_slot(monkeypatch):
     assert "swing_lifecycle_audit_2026-05-11.md" in "\n".join(postclose.artifact_checks)
     assert "swing_improvement_automation_2026-05-11.json" in "\n".join(postclose.artifact_checks)
     assert "swing_runtime_approval_2026-05-11.json" in "\n".join(postclose.artifact_checks)
+    assert postclose.time_window == "16:10~18:30"
+    assert "swing_model_retrain_2026-05-11.status.json" in "\n".join(postclose.artifact_checks)
+    assert "swing_model_retrain_2026-05-11.json" in "\n".join(postclose.artifact_checks)
+    assert "swing model retrain" in postclose.decision_rule
     assert "real/sim/combined" in postclose.decision_rule
+    assert "스윙 dry-run 해제" in postclose.forbidden
     intraday = next(check for check in all_checks if check.slot == "INTRADAY")
     assert "pipeline_events_2026-05-11.jsonl" in "\n".join(intraday.artifact_checks)
 

@@ -19,6 +19,8 @@ NOTIFY_ENABLED="${PANIC_BUYING_NOTIFY_TELEGRAM_ENABLED:-true}"
 NOTIFY_AUDIENCE="${PANIC_BUYING_NOTIFY_AUDIENCE:-all}"
 NOTIFY_STATE_FILE="${PANIC_BUYING_NOTIFY_STATE_FILE:-$PROJECT_DIR/tmp/panic_state_telegram_notify_state.json}"
 MARKET_BREADTH_COLLECT_ENABLED="${PANIC_MARKET_BREADTH_COLLECT_ENABLED:-true}"
+MARKET_BREADTH_MAX_AGE_SEC="${PANIC_MARKET_BREADTH_MAX_AGE_SEC:-75}"
+MARKET_BREADTH_LOCK_FILE="${PANIC_MARKET_BREADTH_LOCK_FILE:-$PROJECT_DIR/tmp/run_market_panic_breadth.lock}"
 IONICE_CLASS="${PANIC_BUYING_IONICE_CLASS:-2}"
 IONICE_LEVEL="${PANIC_BUYING_IONICE_LEVEL:-7}"
 NICE_LEVEL="${PANIC_BUYING_NICE_LEVEL:-12}"
@@ -39,9 +41,69 @@ validate_int() {
 }
 
 COOLDOWN_SEC="$(validate_int "$COOLDOWN_SEC" 90)"
+MARKET_BREADTH_MAX_AGE_SEC="$(validate_int "$MARKET_BREADTH_MAX_AGE_SEC" 75)"
 IONICE_CLASS="$(validate_int "$IONICE_CLASS" 2)"
 IONICE_LEVEL="$(validate_int "$IONICE_LEVEL" 7)"
 NICE_LEVEL="$(validate_int "$NICE_LEVEL" 12)"
+
+market_breadth_fresh() {
+  local report_file="$PROJECT_DIR/data/report/market_panic_breadth/market_panic_breadth_${TARGET_DATE}.json"
+  if [[ ! -f "$report_file" || "$MARKET_BREADTH_MAX_AGE_SEC" -le 0 ]]; then
+    return 1
+  fi
+  local last_ts now_ts age
+  last_ts="$(date -r "$report_file" +%s 2>/dev/null || echo 0)"
+  now_ts="$(date +%s)"
+  age=$((now_ts - last_ts))
+  [[ "$last_ts" -gt 0 && "$age" -le "$MARKET_BREADTH_MAX_AGE_SEC" ]]
+}
+
+run_market_breadth_collect() {
+  local report_file="$PROJECT_DIR/data/report/market_panic_breadth/market_panic_breadth_${TARGET_DATE}.json"
+  if market_breadth_fresh; then
+    echo "[SKIP] market panic breadth fresh target_date=${TARGET_DATE} max_age_sec=${MARKET_BREADTH_MAX_AGE_SEC} path=${report_file}" | tee -a "$LOG_FILE"
+    return 0
+  fi
+
+  exec 8>"$MARKET_BREADTH_LOCK_FILE"
+  if ! flock -n 8; then
+    echo "[WAIT] market panic breadth already running target_date=${TARGET_DATE}" | tee -a "$LOG_FILE"
+    local waited=0
+    while [[ "$waited" -lt "$MARKET_BREADTH_MAX_AGE_SEC" ]]; do
+      sleep 5
+      waited=$((waited + 5))
+      if market_breadth_fresh; then
+        echo "[SKIP] market panic breadth reused after wait=${waited}s target_date=${TARGET_DATE} path=${report_file}" | tee -a "$LOG_FILE"
+        return 0
+      fi
+    done
+    echo "[WARN] market panic breadth lock wait timeout target_date=${TARGET_DATE}; continuing panic report with prior/missing breadth" | tee -a "$LOG_FILE"
+    return 0
+  fi
+
+  if market_breadth_fresh; then
+    echo "[SKIP] market panic breadth fresh after lock target_date=${TARGET_DATE} max_age_sec=${MARKET_BREADTH_MAX_AGE_SEC} path=${report_file}" | tee -a "$LOG_FILE"
+    return 0
+  fi
+
+  local breadth_cmd=(env PYTHONPATH=. "$VENV_PY" -m src.engine.market_panic_breadth_collector --date "$TARGET_DATE" --print-json)
+  if command -v taskset >/dev/null 2>&1 && [[ -n "$CPU_AFFINITY" ]] && [[ "$(nproc 2>/dev/null || echo 1)" -gt 1 ]]; then
+    breadth_cmd=(taskset -c "$CPU_AFFINITY" "${breadth_cmd[@]}")
+  fi
+  if command -v ionice >/dev/null 2>&1 && [[ "$IONICE_CLASS" -ge 0 ]]; then
+    breadth_cmd=(ionice -c "$IONICE_CLASS" -n "$IONICE_LEVEL" -t "${breadth_cmd[@]}")
+  fi
+  if command -v "$NICE_COMMAND" >/dev/null 2>&1; then
+    breadth_cmd=("$NICE_COMMAND" -n "$NICE_LEVEL" "${breadth_cmd[@]}")
+  fi
+
+  echo "[START] market panic breadth collect target_date=${TARGET_DATE} affinity=${CPU_AFFINITY} max_age_sec=${MARKET_BREADTH_MAX_AGE_SEC}" | tee -a "$LOG_FILE"
+  if "${breadth_cmd[@]}" 2>&1 | tee -a "$LOG_FILE"; then
+    echo "[DONE] market panic breadth collect target_date=${TARGET_DATE}" | tee -a "$LOG_FILE"
+  else
+    echo "[WARN] market panic breadth collect failed target_date=${TARGET_DATE}; continuing panic report with prior/missing breadth" | tee -a "$LOG_FILE"
+  fi
+}
 
 if [[ -f "$COOLDOWN_STATE_FILE" && "$COOLDOWN_SEC" -gt 0 ]]; then
   last_ts="$(date -r "$COOLDOWN_STATE_FILE" +%s 2>/dev/null || echo 0)"
@@ -81,12 +143,7 @@ started_at="$(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S')"
 echo "[START] panic buying target_date=${TARGET_DATE} started_at=${started_at} dry_run=${DRY_RUN}" | tee -a "$LOG_FILE"
 
 if [[ "$MARKET_BREADTH_COLLECT_ENABLED" != "0" && "$MARKET_BREADTH_COLLECT_ENABLED" != "false" && "$MARKET_BREADTH_COLLECT_ENABLED" != "no" && "$MARKET_BREADTH_COLLECT_ENABLED" != "off" ]]; then
-  echo "[START] market panic breadth collect target_date=${TARGET_DATE}" | tee -a "$LOG_FILE"
-  if env PYTHONPATH=. "$VENV_PY" -m src.engine.market_panic_breadth_collector --date "$TARGET_DATE" --print-json 2>&1 | tee -a "$LOG_FILE"; then
-    echo "[DONE] market panic breadth collect target_date=${TARGET_DATE}" | tee -a "$LOG_FILE"
-  else
-    echo "[WARN] market panic breadth collect failed target_date=${TARGET_DATE}; continuing panic report with prior/missing breadth" | tee -a "$LOG_FILE"
-  fi
+  run_market_breadth_collect
 fi
 
 if "${cmd[@]}" 2>&1 | tee -a "$LOG_FILE"; then

@@ -11,10 +11,10 @@ awk '!/panic buying intraday report-only/ && !/PANIC_BUYING_0905_0955/ && !/PANI
 mv "$TMP_CRON.filtered" "$TMP_CRON"
 
 cat >> "$TMP_CRON" <<EOF
-# panic buying intraday report-only (2m cadence, offset from 5m sentinels)
-6,8,12,14,16,18,22,24,26,28,32,34,36,38,42,44,46,48,52,54,56,58 9 * * 1-5 PANIC_BUYING_COOLDOWN_SEC=90 $PROJECT_DIR/deploy/run_panic_buying_intraday.sh \$(TZ=Asia/Seoul date +\\%F) >> $PROJECT_DIR/logs/run_panic_buying_cron.log 2>&1 # PANIC_BUYING_0905_0955
-2,4,6,8,12,14,16,18,22,24,26,28,32,34,36,38,42,44,46,48,52,54,56,58 10-14 * * 1-5 PANIC_BUYING_COOLDOWN_SEC=90 $PROJECT_DIR/deploy/run_panic_buying_intraday.sh \$(TZ=Asia/Seoul date +\\%F) >> $PROJECT_DIR/logs/run_panic_buying_cron.log 2>&1 # PANIC_BUYING_1000_1455
-2,4,6,8,12,14,16,18,22,24,26,28 15 * * 1-5 PANIC_BUYING_COOLDOWN_SEC=90 $PROJECT_DIR/deploy/run_panic_buying_intraday.sh \$(TZ=Asia/Seoul date +\\%F) >> $PROJECT_DIR/logs/run_panic_buying_cron.log 2>&1 # PANIC_BUYING_1500_1530
+# panic buying intraday report-only (2m cadence, staggered 1m after panic sell defense and offset from 5m sentinels)
+7,9,13,15,17,19,23,25,27,29,33,35,37,39,43,45,47,49,53,55,57,59 9 * * 1-5 PANIC_BUYING_COOLDOWN_SEC=90 $PROJECT_DIR/deploy/run_panic_buying_intraday.sh \$(TZ=Asia/Seoul date +\\%F) >> $PROJECT_DIR/logs/run_panic_buying_cron.log 2>&1 # PANIC_BUYING_0905_0955
+3,5,7,9,13,15,17,19,23,25,27,29,33,35,37,39,43,45,47,49,53,55,57,59 10-14 * * 1-5 PANIC_BUYING_COOLDOWN_SEC=90 $PROJECT_DIR/deploy/run_panic_buying_intraday.sh \$(TZ=Asia/Seoul date +\\%F) >> $PROJECT_DIR/logs/run_panic_buying_cron.log 2>&1 # PANIC_BUYING_1000_1455
+3,5,7,9,13,15,17,19,23,25,27,29 15 * * 1-5 PANIC_BUYING_COOLDOWN_SEC=90 $PROJECT_DIR/deploy/run_panic_buying_intraday.sh \$(TZ=Asia/Seoul date +\\%F) >> $PROJECT_DIR/logs/run_panic_buying_cron.log 2>&1 # PANIC_BUYING_1500_1530
 EOF
 
 crontab "$TMP_CRON"
